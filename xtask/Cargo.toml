@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Dependency-free repository policy checks for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+readme = "README.md"
+license.workspace = true
+keywords = ["development", "governance", "tooling"]
+categories = ["development-tools"]
+publish = false
+
+[lints]
+workspace = true

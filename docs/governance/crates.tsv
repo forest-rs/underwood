@@ -1,0 +1,3 @@
+# underwood-crate-registry-v1
+path	name	class	no_std	published	fence
+xtask	xtask	tooling	no	no	This crate owns repository policy validation; it explicitly does not own product behavior or architectural decisions.

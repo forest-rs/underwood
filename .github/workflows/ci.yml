@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Keep synchronized with rust-toolchain.toml.
+  RUST_STABLE_VER: "1.96"
+  # Keep synchronized with workspace.package.rust-version and clippy.toml.
+  RUST_MIN_VER: "1.92"
+
+jobs:
+  formatting:
+    name: formatting and text policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: install stable Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        with:
+          toolchain: ${{ env.RUST_STABLE_VER }}
+          components: rustfmt
+
+      - name: check Rust formatting
+        run: cargo fmt --all --check
+
+      - name: install Taplo
+        uses: uncenter/setup-taplo@09968a8ae38d66ddd3d23802c44bf6122d7aa991 # v1
+        with:
+          version: "0.10.0"
+
+      - name: check TOML formatting
+        run: taplo fmt --check --diff
+
+      - name: check source headers
+        run: bash .github/copyright.sh
+
+      - name: check spelling
+        uses: crate-ci/typos@bee27e3a4fd1ea2111cf90ab89cd076c870fce14 # v1.48.0
+
+  quality:
+    name: clippy and tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: install stable Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        with:
+          toolchain: ${{ env.RUST_STABLE_VER }}
+          components: clippy
+
+      - name: run clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: run tests
+        run: cargo test --workspace --all-features --locked
+
+  policy:
+    name: repository policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: install stable Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        with:
+          toolchain: ${{ env.RUST_STABLE_VER }}
+
+      - name: validate Cargo metadata
+        run: cargo metadata --locked --no-deps --format-version 1
+
+      - name: validate constitution, proof, crates, and Beads export
+        run: cargo xtask check
+
+  msrv:
+    name: minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - name: check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: install MSRV
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        with:
+          toolchain: ${{ env.RUST_MIN_VER }}
+
+      - name: check workspace at MSRV
+        run: cargo check --workspace --all-targets --locked
+
+  documentation:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - name: check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: install stable Rust
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        with:
+          toolchain: ${{ env.RUST_STABLE_VER }}
+
+      - name: build documentation
+        run: cargo doc --workspace --all-features --no-deps --locked
+        env:
+          RUSTDOCFLAGS: "-D warnings"

@@ -1,0 +1,10 @@
+[default.extend-words]
+AccessKit = "AccessKit"
+Fontique = "Fontique"
+Loro = "Loro"
+Parley = "Parley"
+Understory = "Understory"
+Underwood = "Underwood"
+
+[files]
+extend-exclude = [".beads/**"]

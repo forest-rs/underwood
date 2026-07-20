@@ -1,0 +1,15 @@
+# underwood-proof-ledger-v1
+capability	state	proof	owner	spec	evidence	product
+governance	active	executable	project	docs/CONSTITUTION.md	AGENTS.md;docs/governance/README.md;xtask/src/main.rs	-
+parley-alignment	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#332-upstream-parley-alignment	-	-
+document-transactions	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#333-document-and-transaction-foundation	-	-
+style-projection	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#334-style-and-projection-foundation	-	-
+layout-scene	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#335-layout-and-scene-foundation	-	-
+editing-experience	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#336-editing-and-experience-foundation	-	-
+international-text-data	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#337-text-data-and-international-conformance	-	-
+agent-operations	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#338-agent-operation-substrate	-	-
+portable-output	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#339-portable-output-and-distributed-scenes	-	-
+living-agent-document	gated	specified	project	UNDERWOOD_HANDOVER.md#281-the-spearhead-the-living-agent-document	-	living-agent-document
+conformance-institution	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#29-fitness-tests-and-conformance	-	-
+mandatory-foundation-decisions	gated	specified	human	UNDERWOOD_HANDOVER.md#351-mandatory-before-repository-foundations	-	-
+first-semantic-to-scene-spine	gated	specified	project	docs/charter/000-spearhead-proof-stewardship.md	-	living-agent-document
