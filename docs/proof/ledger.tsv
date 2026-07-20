@@ -10,6 +10,6 @@ international-text-data	dormant	specified	unassigned	docs/adr/0003-text-data-pro
 agent-operations	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#338-agent-operation-substrate	-	-
 portable-output	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#339-portable-output-and-distributed-scenes	-	-
 living-agent-document	gated	specified	project	UNDERWOOD_HANDOVER.md#281-the-spearhead-the-living-agent-document	-	living-agent-document
-conformance-institution	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#29-fitness-tests-and-conformance	-	-
-mandatory-foundation-decisions	gated	specified	human	UNDERWOOD_HANDOVER.md#351-mandatory-before-repository-foundations	-	-
-first-semantic-to-scene-spine	gated	specified	project	docs/charter/000-spearhead-proof-stewardship.md	-	living-agent-document
+conformance-institution	active	specified	bootstrap-steward	docs/charter/000-spearhead-proof-stewardship.md	-	-
+mandatory-foundation-decisions	dormant	executable	human	UNDERWOOD_HANDOVER.md#351-mandatory-before-repository-foundations	docs/adr/README.md;docs/charter/000-spearhead-proof-stewardship.md;.beads/issues.jsonl	-
+first-semantic-to-scene-spine	active	specified	project	docs/charter/000-spearhead-proof-stewardship.md	-	living-agent-document

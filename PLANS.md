@@ -2,7 +2,7 @@
 
 ## Foundation decision-support campaign
 
-**Status:** Active
+**Status:** Complete — all five records ratified 2026-07-21
 
 **Beads:** `und-oh0.11.1.1`, `und-oh0.2.1.1`, `und-oh0.7.1.1`,
 `und-oh0.5.1.1`, `und-oh0.3.1.1`
@@ -57,3 +57,7 @@ on the human's behalf.
 The campaign is complete when all five records are ready for a human decision,
 their support beads contain validation and unresolved-choice notes, and the
 repository is green. The records remain Open until explicitly ratified.
+
+All five records are Accepted. Their private proof obligations continue as
+`und-oh0.10.1.1` through `und-oh0.10.1.4`; the first permanent-slice design is
+`und-oh0.10.1.5`.
