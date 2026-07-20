@@ -27,6 +27,19 @@ Create or update an ADR before changing:
 
 Open and Experimental ADRs must not be cited as settled public contracts.
 
+## Mandatory foundation decisions
+
+| Record | Status | Accepted |
+| --- | --- | --- |
+| [ADR-0001](0001-position-and-canonical-storage.md) — position and canonical storage | Accepted | 2026-07-21 |
+| [ADR-0002](0002-resumable-flow-and-virtual-extents.md) — resumable flow and virtual extents | Accepted | 2026-07-21 |
+| [ADR-0003](0003-text-data-provisioning.md) — text-data provisioning and identity | Accepted | 2026-07-21 |
+| [ADR-0004](0004-parley-boundary-and-contingency.md) — Parley boundary and contingency | Accepted | 2026-07-21 |
+
+Acceptance ratifies the decisions and experiment gates stated in each record.
+It does not upgrade a capability's proof status beyond the evidence in the
+proof ledger.
+
 ## Ownership
 
 A cross-crate decision belongs to the crate that owns the invariant. Before
