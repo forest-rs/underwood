@@ -1,0 +1,20 @@
+# The bootstrap steward is the review owner until scoped maintainers are
+# appointed under Charter-000.
+* @waywardmonkeys
+
+# Foundation contracts and proof claims require explicit steward review.
+/AGENTS.md @waywardmonkeys
+/PLANS.md @waywardmonkeys
+/Cargo.toml @waywardmonkeys
+/rust-toolchain.toml @waywardmonkeys
+/docs/CONSTITUTION.md @waywardmonkeys
+/docs/adr/ @waywardmonkeys
+/docs/charter/ @waywardmonkeys
+/docs/governance/ @waywardmonkeys
+/docs/proof/ @waywardmonkeys
+
+# Changes to the enforcement machinery route to the same accountable owner.
+/.cargo/ @waywardmonkeys
+/.github/ @waywardmonkeys
+/.beads/ @waywardmonkeys
+/xtask/ @waywardmonkeys

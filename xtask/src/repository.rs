@@ -16,6 +16,7 @@ const HEADER: [&str; 6] = ["path", "name", "class", "no_std", "published", "fenc
 const REQUIRED_PATHS: &[&str] = &[
     ".beads/issues.jsonl",
     ".cargo/config.toml",
+    ".github/CODEOWNERS",
     ".github/PULL_REQUEST_TEMPLATE.md",
     ".github/copyright.sh",
     ".github/workflows/ci.yml",
