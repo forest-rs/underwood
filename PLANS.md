@@ -239,7 +239,7 @@ use the canonical workflow, and the repository and remote CI are green.
 
 ## Fontique-backed font-request campaign
 
-**Status:** Active
+**Status:** Complete — executable proof validated in CI run 29854892508
 
 **Bead:** `und-oh0.4.3`
 

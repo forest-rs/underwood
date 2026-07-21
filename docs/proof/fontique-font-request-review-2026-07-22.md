@@ -163,3 +163,10 @@ and an explicit removal gate.
 - Preserve an exact pixel snapshot for the synthetic-skew specimen, while
   keeping semantic assertions primary so a stable but incorrect picture cannot
   pass alone.
+
+### Validation result
+
+GitHub Actions run 29854892508 passed all eight jobs on Linux, macOS, and
+Windows, including stable Clippy and tests, Rust 1.92 MSRV, denied-warning
+rustdoc, repository policy, formatting and text policy, and bare-metal and
+WebAssembly portability checks.
