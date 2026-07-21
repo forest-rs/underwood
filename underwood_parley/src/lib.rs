@@ -17,8 +17,9 @@ use fontique::{
     QueryStatus, SourceCache, SourceId, SourceInfo, SourceKind, Synthesis,
 };
 use parley_core::{
-    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, ShapeOptions, Shaper,
-    shape::{CharCluster, Status},
+    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, ShapeOptions,
+    ShapedText, Shaper,
+    shape::{CharCluster, ClusterData, Status},
 };
 use underwood::adapter::{
     FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
@@ -226,7 +227,8 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 self.cache[index].analysis = analyze_text(&mut self.analyzer, input.text());
                 self.cache[index].shaping_styles.clear();
                 self.cache[index].shaping_runs.clear();
-                self.cache[index].runs.clear();
+                self.cache[index].shaped_text.clear();
+                self.cache[index].scripts.clear();
                 (index, true)
             }
         } else {
@@ -236,7 +238,8 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 analysis: analyze_text(&mut self.analyzer, input.text()),
                 shaping_styles: Vec::new(),
                 shaping_runs: Vec::new(),
-                runs: Vec::new(),
+                shaped_text: ShapedText::new(),
+                scripts: Vec::new(),
                 selected_clusters: 0,
             });
             (self.cache.len() - 1, true)
@@ -245,51 +248,53 @@ impl ParagraphPreparation for ParleyParagraphEngine {
         let shaped = self.cache[cache_index].shaping_styles != input.shaping_styles()
             || self.cache[cache_index].shaping_runs != input.shaping_runs();
         if shaped {
-            let (runs, selected_clusters) = shape_paragraph(
+            self.cache[cache_index].shaping_styles.clear();
+            self.cache[cache_index].shaping_runs.clear();
+            let cache = &mut self.cache[cache_index];
+            let selected_clusters = shape_paragraph(
                 &mut self.shaper,
-                &self.cache[cache_index].analysis,
+                &cache.analysis,
                 &mut self.fonts,
                 input.text(),
                 input.shaping_styles(),
                 input.shaping_runs(),
+                &mut cache.shaped_text,
+                &mut cache.scripts,
             )?;
-            self.cache[cache_index].shaping_styles = input.shaping_styles().to_vec();
-            self.cache[cache_index].shaping_runs = input.shaping_runs().to_vec();
-            self.cache[cache_index].runs = runs;
-            self.cache[cache_index].selected_clusters = selected_clusters;
+            cache.shaping_styles = input.shaping_styles().to_vec();
+            cache.shaping_runs = input.shaping_runs().to_vec();
+            cache.selected_clusters = selected_clusters;
         }
 
         let physics = &self.cache[cache_index];
-        let mut prepared_runs = Vec::with_capacity(physics.runs.len());
+        if physics.shaped_text.runs().len() != physics.scripts.len() {
+            return Err(PreparationError::invalid_output());
+        }
+        let mut prepared_runs = Vec::with_capacity(physics.shaped_text.runs().len());
         let mut glyph_count = 0_u32;
-        for run in &physics.runs {
-            let mut prepared_glyphs = Vec::with_capacity(run.glyphs.len());
-            for glyph in &run.glyphs {
-                let paint = paint_coverage(
-                    input.text(),
-                    glyph.source.clone(),
-                    glyph.advance,
-                    run.font_size,
-                    input.paint_runs(),
-                    run.bidi_level & 1 == 1,
-                )?;
-                prepared_glyphs.push(PreparedGlyph::try_new(
-                    glyph.id,
-                    glyph.source.clone(),
-                    glyph.advance,
-                    glyph.offset,
-                    paint,
-                )?);
-                glyph_count = glyph_count.saturating_add(1);
-            }
+        for (run, script) in physics.shaped_text.runs().iter().zip(&physics.scripts) {
+            let prepared_glyphs =
+                lower_glyphs(input.text(), &physics.shaped_text, run, input.paint_runs())?;
+            glyph_count = glyph_count
+                .saturating_add(u32::try_from(prepared_glyphs.len()).unwrap_or(u32::MAX));
+            let font = physics
+                .shaped_text
+                .fonts()
+                .get(run.font_index)
+                .ok_or_else(PreparationError::invalid_output)?;
+            let normalized_coords = physics
+                .shaped_text
+                .normalized_coords()
+                .get(run.normalized_coords_range.clone())
+                .ok_or_else(PreparationError::invalid_output)?;
             prepared_runs.push(PreparedRun::try_new(
-                run.source.clone(),
+                checked_source_range(&run.range.byte_range)?,
                 run.bidi_level,
-                run.script,
-                run.font.clone(),
+                *script,
+                font.font.clone(),
                 run.font_size,
-                portable_synthesis(run.synthesis)?,
-                run.normalized_coords.iter().copied(),
+                portable_synthesis(font.synthesis)?,
+                normalized_coords.iter().map(|coord| coord.to_bits()),
                 prepared_glyphs,
             )?);
         }
@@ -305,7 +310,7 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 shaped,
                 if shaped { physics.selected_clusters } else { 0 },
                 if shaped {
-                    u32::try_from(physics.runs.len()).unwrap_or(u32::MAX)
+                    u32::try_from(physics.shaped_text.runs().len()).unwrap_or(u32::MAX)
                 } else {
                     0
                 },
@@ -323,28 +328,9 @@ struct PhysicsCache {
     analysis: Analysis,
     shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
-    runs: Vec<PhysicsRun>,
+    shaped_text: ShapedText,
+    scripts: Vec<[u8; 4]>,
     selected_clusters: u32,
-}
-
-#[derive(Clone, Debug)]
-struct PhysicsRun {
-    source: Range<u32>,
-    bidi_level: u8,
-    script: [u8; 4],
-    font: FontData,
-    font_size: f32,
-    synthesis: Synthesis,
-    normalized_coords: Vec<i16>,
-    glyphs: Vec<PhysicsGlyph>,
-}
-
-#[derive(Clone, Debug)]
-struct PhysicsGlyph {
-    id: u32,
-    source: Range<u32>,
-    advance: Vec2,
-    offset: Vec2,
 }
 
 fn analyze_text(analyzer: &mut Analyzer, text: &str) -> Analysis {
@@ -367,9 +353,12 @@ fn shape_paragraph(
     text: &str,
     shaping_styles: &[ShapingStyle],
     shaping_runs: &[ShapingRun],
-) -> Result<(Vec<PhysicsRun>, u32), PreparationError> {
+    shaped_text: &mut ShapedText,
+    scripts: &mut Vec<[u8; 4]>,
+) -> Result<u32, PreparationError> {
     let analysis_data = AnalysisDataSources::new();
-    let char_offsets = char_byte_offsets(text);
+    shaped_text.clear();
+    scripts.clear();
     let mut style_indices = Vec::with_capacity(text.chars().count());
     for run in shaping_runs {
         let index =
@@ -380,7 +369,6 @@ fn shape_paragraph(
             .ok_or_else(PreparationError::invalid_output)?;
         style_indices.extend(core::iter::repeat_n(index, run_text.chars().count()));
     }
-    let mut runs = Vec::new();
     let selected_clusters = Cell::new(0_u32);
 
     let split_after = |range: parley_core::itemize::TextRange| {
@@ -399,7 +387,7 @@ fn shape_paragraph(
         ));
         let language = style.language();
         query.set_fallbacks(FallbackKey::new(item.script, language.as_ref()));
-        shaper.shape_item(
+        let appended = shaper.shape_item(
             text,
             analysis,
             &item,
@@ -414,8 +402,7 @@ fn shape_paragraph(
                 Some(font) => {
                     selected_clusters.set(selected_clusters.get().saturating_add(1));
                     Some(FontInstance {
-                        blob: font.blob,
-                        index: font.index,
+                        font: FontData::new(font.blob, font.index),
                         synthesis: font.synthesis,
                     })
                 }
@@ -425,24 +412,20 @@ fn shape_paragraph(
                 }
             },
             &analysis_data,
-            |shaped| {
-                runs.push(copy_run(
-                    shaped,
-                    item.bidi_level,
-                    script,
-                    style.font_size(),
-                    &char_offsets,
-                ));
-            },
+            shaped_text,
         );
         if missing_font.get() {
+            shaped_text.clear();
+            scripts.clear();
             return Err(PreparationError::missing_font());
         }
+        scripts.extend(core::iter::repeat_n(script, appended.len()));
     }
-    if !text.is_empty() && runs.is_empty() {
+    if !text.is_empty() && shaped_text.runs().is_empty() {
+        scripts.clear();
         return Err(PreparationError::missing_font());
     }
-    Ok((runs, selected_clusters.get()))
+    Ok(selected_clusters.get())
 }
 
 fn query_families<'a>(names: &'a [FontFamilyName<'static>]) -> Vec<QueryFamily<'a>> {
@@ -484,64 +467,151 @@ fn select_font(
     selected
 }
 
-fn copy_run(
-    run: parley_core::ShapedRun<'_>,
-    bidi_level: u8,
-    script: [u8; 4],
-    font_size: f32,
-    char_offsets: &[usize],
-) -> PhysicsRun {
-    let infos = run.glyph_buffer.glyph_infos();
-    let positions = run.glyph_buffer.glyph_positions();
-    let mut cluster_starts: Vec<usize> = infos
-        .iter()
-        .map(|info| {
-            run.range.char_range.start
-                + usize::try_from(info.cluster).expect("glyph cluster must fit usize")
+fn lower_glyphs(
+    text: &str,
+    shaped_text: &ShapedText,
+    run: &parley_core::ShapedRun,
+    paint_runs: &[underwood::adapter::PaintRun],
+) -> Result<Vec<PreparedGlyph>, PreparationError> {
+    let clusters = shaped_text
+        .clusters()
+        .get(run.clusters_range.clone())
+        .ok_or_else(PreparationError::invalid_output)?;
+    let mut prepared = Vec::with_capacity(run.glyphs_range.len());
+    let mut lower_cluster = |index: usize| -> Result<(), PreparationError> {
+        let cluster = clusters
+            .get(index)
+            .ok_or_else(PreparationError::invalid_output)?;
+        if cluster.is_ligature_component() {
+            return Ok(());
+        }
+        let source = cluster_source(run, clusters, index)?;
+        if text
+            .get(source.start as usize..source.end as usize)
+            .is_none()
+        {
+            return Err(PreparationError::invalid_output());
+        }
+        lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
+            let advance = Vec2::new(f64::from(glyph.advance), 0.0);
+            let paint = paint_coverage(
+                text,
+                source.clone(),
+                advance,
+                run.font_size,
+                paint_runs,
+                run.bidi_level & 1 == 1,
+            )?;
+            prepared.push(PreparedGlyph::try_new(
+                glyph.id,
+                source.clone(),
+                advance,
+                Vec2::new(f64::from(glyph.x), -f64::from(glyph.y)),
+                paint,
+            )?);
+            Ok(())
         })
-        .collect();
-    cluster_starts.sort_unstable();
-    cluster_starts.dedup();
-    let units_per_em = units_per_em(run.font.blob.as_ref(), run.font.index)
-        .expect("Fontique selected a previously validated font");
-    let scale = font_size / f32::from(units_per_em);
-    let glyphs = infos
-        .iter()
-        .zip(positions)
-        .map(|(info, position)| {
-            let cluster = run.range.char_range.start
-                + usize::try_from(info.cluster).expect("glyph cluster must fit usize");
-            let next = cluster_starts
-                .iter()
-                .copied()
-                .find(|candidate| *candidate > cluster)
-                .unwrap_or(run.range.char_range.end);
-            PhysicsGlyph {
-                id: info.glyph_id,
-                source: u32::try_from(char_offsets[cluster]).expect("text length was validated")
-                    ..u32::try_from(char_offsets[next]).expect("text length was validated"),
-                advance: Vec2::new(
-                    f64::from(position.x_advance) * f64::from(scale),
-                    f64::from(position.y_advance) * f64::from(scale),
-                ),
-                offset: Vec2::new(
-                    f64::from(position.x_offset) * f64::from(scale),
-                    f64::from(position.y_offset) * f64::from(scale),
-                ),
-            }
-        })
-        .collect();
-    PhysicsRun {
-        source: u32::try_from(run.range.byte_range.start).expect("text length was validated")
-            ..u32::try_from(run.range.byte_range.end).expect("text length was validated"),
-        bidi_level,
-        script,
-        font: FontData::new(run.font.blob.clone(), run.font.index),
-        font_size,
-        synthesis: run.font.synthesis,
-        normalized_coords: run.coords.iter().map(|coord| coord.to_bits()).collect(),
-        glyphs,
+    };
+    if run.bidi_level & 1 == 1 {
+        for index in (0..clusters.len()).rev() {
+            lower_cluster(index)?;
+        }
+    } else {
+        for index in 0..clusters.len() {
+            lower_cluster(index)?;
+        }
     }
+    Ok(prepared)
+}
+
+fn cluster_source(
+    run: &parley_core::ShapedRun,
+    clusters: &[ClusterData],
+    index: usize,
+) -> Result<Range<u32>, PreparationError> {
+    let cluster = clusters
+        .get(index)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let run_start = run.range.byte_range.start;
+    let mut start = run_start
+        .checked_add(usize::from(cluster.text_offset))
+        .ok_or_else(PreparationError::invalid_output)?;
+    let mut end = start
+        .checked_add(usize::from(cluster.text_len))
+        .ok_or_else(PreparationError::invalid_output)?;
+    if cluster.is_ligature_start() {
+        if run.bidi_level & 1 == 1 {
+            for component in clusters[..index].iter().rev() {
+                if !component.is_ligature_component() {
+                    break;
+                }
+                let component_start = run_start
+                    .checked_add(usize::from(component.text_offset))
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let component_end = component_start
+                    .checked_add(usize::from(component.text_len))
+                    .ok_or_else(PreparationError::invalid_output)?;
+                if component_end != start {
+                    return Err(PreparationError::invalid_output());
+                }
+                start = component_start;
+            }
+        } else {
+            for component in clusters.iter().skip(index + 1) {
+                if !component.is_ligature_component() {
+                    break;
+                }
+                let component_start = run_start
+                    .checked_add(usize::from(component.text_offset))
+                    .ok_or_else(PreparationError::invalid_output)?;
+                if component_start != end {
+                    return Err(PreparationError::invalid_output());
+                }
+                end = end
+                    .checked_add(usize::from(component.text_len))
+                    .ok_or_else(PreparationError::invalid_output)?;
+            }
+        }
+    }
+    checked_source_range(&(start..end))
+}
+
+fn lower_cluster_glyphs(
+    shaped_text: &ShapedText,
+    run: &parley_core::ShapedRun,
+    cluster: &ClusterData,
+    mut lower: impl FnMut(parley_core::Glyph) -> Result<(), PreparationError>,
+) -> Result<(), PreparationError> {
+    if cluster.glyph_len == u8::MAX {
+        return lower(parley_core::Glyph {
+            id: cluster.glyph_offset,
+            x: 0.0,
+            y: 0.0,
+            advance: cluster.advance,
+        });
+    }
+    let start = run
+        .glyphs_range
+        .start
+        .checked_add(cluster.glyph_offset as usize)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let end = start
+        .checked_add(usize::from(cluster.glyph_len))
+        .ok_or_else(PreparationError::invalid_output)?;
+    for glyph in shaped_text
+        .glyphs()
+        .get(start..end)
+        .ok_or_else(PreparationError::invalid_output)?
+    {
+        lower(*glyph)?;
+    }
+    Ok(())
+}
+
+fn checked_source_range(range: &Range<usize>) -> Result<Range<u32>, PreparationError> {
+    let start = u32::try_from(range.start).map_err(|_| PreparationError::invalid_output())?;
+    let end = u32::try_from(range.end).map_err(|_| PreparationError::invalid_output())?;
+    Ok(start..end)
 }
 
 fn portable_synthesis(synthesis: Synthesis) -> Result<FontSynthesis, PreparationError> {
@@ -681,13 +751,6 @@ fn validate_run_coverage(
     Ok(())
 }
 
-fn char_byte_offsets(text: &str) -> Vec<usize> {
-    text.char_indices()
-        .map(|(offset, _)| offset)
-        .chain(core::iter::once(text.len()))
-        .collect()
-}
-
 fn units_per_em(bytes: &[u8], face_index: u32) -> Option<u16> {
     let font_offset = if bytes.get(0..4)? == b"ttcf" {
         let index = usize::try_from(face_index).ok()?;
@@ -775,9 +838,16 @@ impl core::error::Error for AdapterError {}
 
 #[cfg(test)]
 mod tests {
-    use underwood::{GenericFamily, Language, Script};
+    use underwood::{
+        Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFamily,
+        GenericFamily, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole,
+        SceneRequest, ShapingStyle, StyleMap,
+    };
+    use underwood::{Language, Script};
 
-    use super::{AdapterErrorKind, Font, FontSet, read_u16, read_u32};
+    use super::{
+        AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, TextData, read_u16, read_u32,
+    };
 
     const LATIN_FONT: &[u8] =
         include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
@@ -815,6 +885,50 @@ mod tests {
             unsupported.kind(),
             AdapterErrorKind::UnsupportedFallback,
             "unsupported fallback configuration must retain a stable category"
+        );
+    }
+
+    #[test]
+    fn control_only_paragraph_emits_no_phantom_glyph() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"shaped-control-1"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph is valid");
+        edit.append_text(paragraph, InlineRole::TEXT, "\n")
+            .expect("test control source is valid");
+        let published = edit.commit().expect("test edit is valid");
+
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 16.0).expect("test style is valid"),
+            underwood::InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let fonts = FontSet::try_from_fonts([
+            Font::from_bytes("latin", LATIN_FONT).expect("fixture font is valid")
+        ])
+        .expect("fixture catalog is valid");
+        let paragraphs = ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
+            .expect("test adapter is valid");
+        let mut layout = LayoutEngine::new(paragraphs);
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.0).expect("test width is finite"),
+            &styles,
+            &paint,
+        );
+        let output = layout
+            .prepare(published.snapshot(), &request)
+            .expect("control-only source must prepare without a phantom glyph");
+        assert!(
+            output.scene().fragments().is_empty(),
+            "newline shaping must not manufacture renderable glyphs"
+        );
+        assert_eq!(
+            output.work().shape().records(),
+            0,
+            "shape work must report the renderable glyph count"
         );
     }
 }

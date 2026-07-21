@@ -79,6 +79,17 @@ The remaining gaps are equally concrete:
 - data providers and their identities are not injectable through the public
   core pipeline.
 
+### Implementation update — 2026-07-22
+
+Parley `main` at
+[`6c81e1dd9b67793cdd959c65cc650c96a1262fb7`](https://github.com/linebender/parley/commit/6c81e1dd9b67793cdd959c65cc650c96a1262fb7)
+contains the owned reusable `parley_core::ShapedText` introduced by PR #679.
+Underwood adopts that immutable revision under Design-0005 and removes its
+callback-shaped `PhysicsRun`/`PhysicsGlyph` copy. The original audit above
+remains the evidence that justified the contingency; its retained-output gap
+is now resolved. Bounded break reshaping, vertical shaping, core inline
+objects, and identified text-data provisioning remain open.
+
 ## Seam matrix
 
 | Capability | Current upstream seam | Underwood position | Readiness |

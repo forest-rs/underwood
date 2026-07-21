@@ -47,6 +47,11 @@ this document is approved.
 | `underwood_parley` | `fontique` | same git revision, `default-features = false`, `features = ["libm"]` | caller-supplied font blobs and instances |
 | `underwood_parley` | `parlance` | same git revision, `default-features = false` | shaping feature and variation values |
 
+Design-0005 supersedes only the immutable Parley selection in this approved
+table: all three Parley dependencies now resolve together from
+`6c81e1dd9b67793cdd959c65cc650c96a1262fb7`. Crate ownership, features, and the
+no-system-font policy are unchanged.
+
 The local forest consistently uses Kurbo 0.13.x without default features;
 Overstory uses Kurbo 0.13.1 and Peniko 0.6.1 with `libm`. The audited releases
 are Apache-2.0 OR MIT and have MSRVs below Underwood's Rust 1.92. The Parley

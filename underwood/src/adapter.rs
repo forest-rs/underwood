@@ -384,6 +384,9 @@ pub struct PreparedRun {
 
 impl PreparedRun {
     /// Validates and owns one shaped run.
+    ///
+    /// A run may contain no glyphs when its source consists only of controls
+    /// such as a mandatory line break. Its source range remains significant.
     pub fn try_new(
         source: Range<u32>,
         bidi_level: u8,
@@ -398,10 +401,9 @@ impl PreparedRun {
             return Err(PreparationError::invalid_output());
         }
         let glyphs: Vec<_> = glyphs.into_iter().collect();
-        if glyphs.is_empty()
-            || glyphs
-                .iter()
-                .any(|glyph| glyph.source.start < source.start || glyph.source.end > source.end)
+        if glyphs
+            .iter()
+            .any(|glyph| glyph.source.start < source.start || glyph.source.end > source.end)
         {
             return Err(PreparationError::invalid_output());
         }
@@ -460,6 +462,8 @@ impl PreparedRun {
     }
 
     /// Returns glyphs in backend-provided visual order.
+    ///
+    /// This is empty for a control-only shaped run.
     #[must_use]
     pub fn glyphs(&self) -> &[PreparedGlyph] {
         &self.glyphs
@@ -759,6 +763,25 @@ mod tests {
             error.kind(),
             PreparationErrorKind::InvalidOutput,
             "a source gap is invalid adapter output"
+        );
+    }
+
+    #[test]
+    fn prepared_run_accepts_control_only_source_without_a_phantom_glyph() {
+        let run = PreparedRun::try_new(
+            0..1,
+            0,
+            *b"Zyyy",
+            FontData::new(Blob::from(vec![0_u8]), 0),
+            16.,
+            FontSynthesis::default(),
+            [],
+            [],
+        )
+        .expect("control-only source does not require a fabricated glyph");
+        assert!(
+            run.glyphs().is_empty(),
+            "control-only runs must retain an honest empty glyph sequence"
         );
     }
 

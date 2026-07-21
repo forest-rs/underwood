@@ -119,3 +119,29 @@ to stabilize a production `underwood_parley` contract:
 
 These gaps block completion of the Parley conformance bead, creation of the
 production adapter without its human gates, and proof promotion.
+
+## Retained-result follow-up — 2026-07-22
+
+Design-0005 reran this wind tunnel after `ShapedText` landed, against exact
+Parley revision `6c81e1dd9b67793cdd959c65cc650c96a1262fb7`. The executable now
+shapes into owned `ShapedText`, reads retained source clusters, fonts, glyphs,
+positions, and normalized coordinates, and keeps only deterministic
+observation records for comparison. It no longer receives a borrowed shaped
+run callback.
+
+```text
+parley=6c81e1dd9b67793cdd959c65cc650c96a1262fb7 analysis=cfdddc2f29b0a50b items=f92022fbdf3a152a physics=3e1d17966180319d slots=f7b2494a3759e8a3 paint=b118c17a87887d7a items_count=2 runs=2 glyphs=29 gaps=4
+fonts=RobotoFlex-VariableFont.ttf:aecc087879796a24,NotoKufiArabic-Regular.otf:4e4306d5a30a1500
+```
+
+All six deterministic tests pass. The analysis, item, paint-slot, and paint
+digests remain unchanged. The physics digest changes because it now records
+Parley's scaled `f32` retained glyph values rather than raw HarfRust integer
+positions. The retained-shaped-output gap is removed from the enum-backed
+matrix. The remaining four gaps are bounded break reshaping, vertical shaping,
+core inline objects, and text-data identity.
+
+Production conformance additionally proves exact `ffi` source union, logical-
+to-visual RTL lowering, glyphless newline handling, family/fallback/synthesis
+selection, and unchanged CPU poster pixels through `underwood_parley` and the
+public Underwood scene path.

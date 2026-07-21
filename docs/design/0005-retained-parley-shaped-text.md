@@ -52,11 +52,13 @@ Underwood ParagraphInput
 5. Cluster source offsets are interpreted relative to the containing shaped
    run and checked as UTF-8 byte ranges before entering portable output.
 6. A glyph-bearing ligature-start cluster owns the union of its source range
-   and all immediately following ligature-component clusters. Continuation
-   clusters never create phantom glyphs.
+   and its adjacent ligature-component clusters: following in LTR logical order
+   and preceding in RTL logical order. Continuation clusters never create
+   phantom glyphs.
 7. Regular clusters lower their inline or external glyph storage without
-   changing Parley's scaled advances or offsets. RTL glyph order remains the
-   order exposed for that cluster by Parley.
+   changing Parley's scaled advances or offsets. Parley's logical cluster
+   storage is traversed forward for LTR and backward for RTL so portable glyphs
+   retain visual order.
 8. Control-only shaped runs may contain no renderable glyphs. Underwood retains
    their source coverage without inventing a `.notdef` or zero-advance phantom
    glyph.
