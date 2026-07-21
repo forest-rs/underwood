@@ -3,12 +3,12 @@
 - **Scope:** `examples/visual-proof`, its CPU snapshot, and repository claims
 - **Review modes:** Lynx adversarial correctness; Rook real-versus-mirage audit
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
-  `a523c21aa890dfb575fa545ee53e9f2a2a9822583a129eeb283f8dd15863e51b`
+  `819b569234f555ca10622c5d7f86dd448809e6d5712fa3e2279c2acc4dae6e08`
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust
-- **Remote gate:** GitHub Actions run `29825978976`; all eight jobs passed,
-  including exact snapshot reproduction on Linux, macOS, and Windows
-- **Result:** all review findings are resolved; the final three-OS matrix earns
-  the deterministic CPU snapshot claim
+- **Remote gate:** pending revalidation of the clarified caption; run
+  `29825978976` passed for the prior pixels
+- **Result:** all review findings are resolved locally; the clarified pixels
+  must pass the three-OS matrix before this proof lands
 
 ## Lynx review
 
@@ -46,6 +46,13 @@ Renderer and PNG dependencies remain outside both production crates.
    evidence.** The decorative target was removed. The slogans were replaced by
    `ffi`, `fi`, `ff`, and `fl` specimens, each required to shape from one source
    token to exactly one glyph before the evidence caption is constructed.
+8. **The displayed numeric glyph ID was exact but meaningless to a reader.**
+   The poster now names the semantic fact—one shaped ligature through two source
+   clips—while exact font-internal glyph-ID and position equality remain enforced
+   in the executable evidence.
+9. **The three work counters needed a plain-language interpretation.** Each card
+   now explains the operation represented by its measured value without adding
+   a new implementation claim.
 
 Good catch: the font-resource comparison turns “real fallback” from a plausible
 caption into an executable fact.
@@ -105,8 +112,24 @@ caption into an executable fact.
 
 ### Most dangerous gap
 
-The original high-consequence uncertainty was exact CPU pixel identity across
+The original high-consequence uncertainty is exact CPU pixel identity across
 operating systems. GitHub Actions run `29825978976` closed that gap for the
-final specimen-driven image on Linux, macOS, and Windows. The remaining limit
+prior pixels; the clarified caption must repeat the result. The remaining limit
 is scope: one poster proves this path and these fonts, not general renderer
 conformance.
+
+### Follow-on obligations
+
+The proof deliberately exposes work that is not complete. These are tracked as
+separately closeable Beads rather than source TODOs:
+
+- `und-oh0.2.2`: replace provisional glyph wrapping with Parley-backed paragraph
+  breaking;
+- `und-oh0.2.3`: move cluster hit and caret geometry behind the paragraph seam;
+- `und-oh0.2.4`: replace proportional ligature paint coverage with
+  conformance-backed coverage;
+- `und-oh0.2.5`: retire callback-shaped copy-out when retained Parley results
+  land upstream;
+- `und-oh0.4.1`: add shaping styles for OpenType features and variable-font
+  axes; and
+- `und-oh0.4.2`: converge a canonical rich-document preparation call site.

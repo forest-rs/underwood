@@ -233,7 +233,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         ],
     )?;
 
-    let (ligature_id, _, ligature_clips) = split_ligature_evidence(&hero)
+    let (_, _, ligature_clips) = split_ligature_evidence(&hero)
         .expect("poster must paint one real ligature through multiple source clips");
     assert_eq!(
         hero.fragments()[0].font().data.as_ref(),
@@ -306,7 +306,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         &mut layout,
         0x2d,
         18.0,
-        &format!("GLYPH {ligature_id} / {ligature_clips} SOURCE CLIPS"),
+        &format!("ONE SHAPED LIGATURE / {ligature_clips} SOURCE CLIPS"),
         CORAL,
     )?;
     let mixed_direction_evidence = layout_label(
@@ -323,9 +323,23 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     let edit_label = layout_label(&mut layout, 0x26, 18.0, "LOCAL EDIT", CORAL)?;
     let edit_number = layout_label(&mut layout, 0x27, 60.0, &proof.reshaped.to_string(), CORAL)?;
     let edit_detail = layout_label(&mut layout, 0x2f, 19.0, "PARAGRAPH RESHAPED", INK)?;
+    let edit_explanation = layout_label(
+        &mut layout,
+        0x36,
+        14.0,
+        "A local text edit sent only its paragraph back through shaping.",
+        MUTED,
+    )?;
     let reuse_label = layout_label(&mut layout, 0x28, 18.0, "RETAINED", CYAN)?;
     let reuse_number = layout_label(&mut layout, 0x29, 60.0, &proof.reused.to_string(), CYAN)?;
     let reuse_detail = layout_label(&mut layout, 0x30, 19.0, "SIBLING REUSED", INK)?;
+    let reuse_explanation = layout_label(
+        &mut layout,
+        0x37,
+        14.0,
+        "The unchanged sibling reused its already-prepared scene work.",
+        MUTED,
+    )?;
     let paint_label = layout_label(&mut layout, 0x2a, 18.0, "PAINT ONLY", GOLD)?;
     let paint_number = layout_label(
         &mut layout,
@@ -335,6 +349,13 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         GOLD,
     )?;
     let paint_detail = layout_label(&mut layout, 0x31, 19.0, "PARAGRAPHS RESHAPED", INK)?;
+    let paint_explanation = layout_label(
+        &mut layout,
+        0x38,
+        14.0,
+        "Changing one brush reused analysis, shaping, and flow.",
+        MUTED,
+    )?;
     let footer = layout_label(
         &mut layout,
         0x2c,
@@ -382,12 +403,15 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         TextSceneAdapter::new(&edit_label, 148.0, 738.0).paint_into(&mut painter);
         TextSceneAdapter::new(&edit_number, 148.0, 770.0).paint_into(&mut painter);
         TextSceneAdapter::new(&edit_detail, 206.0, 806.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&edit_explanation, 148.0, 844.0).paint_into(&mut painter);
         TextSceneAdapter::new(&reuse_label, 616.0, 738.0).paint_into(&mut painter);
         TextSceneAdapter::new(&reuse_number, 616.0, 770.0).paint_into(&mut painter);
         TextSceneAdapter::new(&reuse_detail, 674.0, 806.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&reuse_explanation, 616.0, 844.0).paint_into(&mut painter);
         TextSceneAdapter::new(&paint_label, 1_084.0, 738.0).paint_into(&mut painter);
         TextSceneAdapter::new(&paint_number, 1_084.0, 770.0).paint_into(&mut painter);
         TextSceneAdapter::new(&paint_detail, 1_142.0, 806.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&paint_explanation, 1_084.0, 844.0).paint_into(&mut painter);
         TextSceneAdapter::new(&footer, 124.0, 936.0).paint_into(&mut painter);
     }
     scene.validate()?;
@@ -575,9 +599,9 @@ fn paint_card<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>, rect: Rect, a
     painter.fill_rect(
         Rect::new(
             rect.x0 + 28.0,
-            rect.y1 - 24.0,
+            rect.y1 - 14.0,
             rect.x1 - 28.0,
-            rect.y1 - 22.0,
+            rect.y1 - 12.0,
         ),
         Color::from_rgba8(0x78, 0x8a, 0xa3, 0x24),
     );
