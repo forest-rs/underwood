@@ -4,6 +4,9 @@
 - **Review modes:** Lynx adversarial correctness; Rook real-versus-mirage audit
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust; no system-font feature
 - **Result:** all Must findings resolved; Should and Could limits remain explicit
+- **Remote gate:** GitHub Actions run `29820819717`; all eight required jobs passed
+- **Proof effect:** first semantic-to-scene spine promoted from `Specified` to
+  `Executable`
 
 ## Lynx findings
 
