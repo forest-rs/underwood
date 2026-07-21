@@ -109,6 +109,8 @@ evidence updates:
   `wasm32-unknown-unknown` with exact Rust 1.96.0;
 - `cargo xtask check`, `bd lint --status all`, and `bd dep cycles`.
 
-Remote three-OS and exact-pixel validation remains pending for the draft pull
-request. Passing it will validate this checkpoint but will not satisfy the
-upstream break-reshape gate.
+GitHub Actions run `29870025982` passed all eight jobs. Linux, macOS, and Windows
+each passed workspace Clippy and tests, including exact reproduction of the CPU
+poster; formatting/text policy, repository policy, MSRV, denied-warning
+rustdoc, bare-metal, and WebAssembly jobs also passed. This validates the
+safe-break checkpoint but does not satisfy the upstream break-reshape gate.

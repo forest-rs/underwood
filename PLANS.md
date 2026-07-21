@@ -401,9 +401,10 @@ same-machine benchmark are recorded in
 `docs/proof/parley-formation-benchmark-2026-07-22.md`.
 
 The full local stable, MSRV, rustdoc, repository/text policy, Beads,
-bare-metal, and WebAssembly matrix passes. Remote CI remains checkpoint
-validation, not permission to close the upstream-dependent acceptance
-criterion.
+bare-metal, and WebAssembly matrix passes. GitHub Actions run `29870025982`
+passes all eight jobs across Linux, macOS, and Windows, including exact poster
+pixels. Remote success validates the checkpoint; it is not permission to close
+the upstream-dependent acceptance criterion.
 
 Step 5 remains a hard completion gate. The adapter reports zero bounded break
 reshapes because pinned Parley Core does not expose them; the bead and draft PR
