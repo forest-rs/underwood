@@ -294,7 +294,7 @@ validation matrices pass.
 
 ## Retained Parley ShapedText uptake
 
-**Status:** Active
+**Status:** Complete — local and remote proof green in PR #8
 
 **Beads:** `und-oh0.2.5`, `und-oh0.10.1.4`
 
@@ -344,3 +344,8 @@ The campaign is complete when Underwood retains Parley's native `ShapedText`,
 the duplicate callback representation is absent, public conformance and
 invalidation proofs pass on the new pin, the measured cost is recorded, and
 local plus remote validation are green.
+
+GitHub Actions run `29864780006` passed all eight jobs on Linux, macOS, and
+Windows, including MSRV, rustdoc, repository/text policy, bare-metal, and
+WebAssembly gates. Paragraph breaking continues independently as
+`und-oh0.2.2`.
