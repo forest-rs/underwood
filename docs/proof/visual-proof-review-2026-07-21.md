@@ -5,10 +5,10 @@
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
   `a523c21aa890dfb575fa545ee53e9f2a2a9822583a129eeb283f8dd15863e51b`
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust
-- **Remote gate:** pending revalidation of this final specimen-driven snapshot;
-  run `29825344441` passed for its predecessor
-- **Result:** all review findings are resolved locally; the final pixels must
-  pass the three-OS matrix before this proof lands
+- **Remote gate:** GitHub Actions run `29825978976`; all eight jobs passed,
+  including exact snapshot reproduction on Linux, macOS, and Windows
+- **Result:** all review findings are resolved; the final three-OS matrix earns
+  the deterministic CPU snapshot claim
 
 ## Lynx review
 
@@ -105,8 +105,8 @@ caption into an executable fact.
 
 ### Most dangerous gap
 
-The original high-consequence uncertainty is exact CPU pixel identity across
-operating systems. GitHub Actions run `29825344441` closed that gap for the
-predecessor snapshot; this final specimen-driven image must repeat the result.
-The remaining limit is scope: one poster proves this path and these fonts, not
-general renderer conformance.
+The original high-consequence uncertainty was exact CPU pixel identity across
+operating systems. GitHub Actions run `29825978976` closed that gap for the
+final specimen-driven image on Linux, macOS, and Windows. The remaining limit
+is scope: one poster proves this path and these fonts, not general renderer
+conformance.
