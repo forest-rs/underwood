@@ -108,17 +108,20 @@ The adapter returns portable `FontSynthesis` evidence with every prepared and
 scene run:
 
 ```rust
-pub struct FontSynthesis {
-    variations: Arc<[FontVariation]>,
-    embolden: bool,
-    skew_degrees: Option<f32>,
+pub struct FontSynthesis;
+
+impl FontSynthesis {
+    pub fn variations(&self) -> &[FontVariation];
+    pub fn embolden(&self) -> bool;
+    pub fn skew_degrees(&self) -> Option<f32>;
 }
 ```
 
 This preserves Fontique's chosen variable-axis settings and renderer-facing
 embolden/skew suggestions without exposing Fontique's `Synthesis` type.
 Normalized coordinates remain separately available as proof of the settings
-actually consumed by shaping.
+actually consumed by shaping. Absent synthesis is represented without an
+allocation; non-empty evidence is shared across the fragments of a run.
 
 ## Selection and shaping sequence
 

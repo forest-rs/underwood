@@ -26,8 +26,8 @@ use underwood::adapter::{
     PreparedParagraph, PreparedRun, ShapingRun,
 };
 use underwood::{
-    FontData, FontFamily, FontFamilyName, FontVariation, GenericFamily, Language, ParagraphId,
-    Rect, Script, ShapingStyle, Tag, Vec2,
+    FontData, FontFamilyName, FontVariation, GenericFamily, Language, ParagraphId, Rect, Script,
+    ShapingStyle, Tag, Vec2,
 };
 
 /// Owned validated font bytes and a face within them.
@@ -391,7 +391,7 @@ fn shape_paragraph(
         let script = item.script.to_bytes();
         let missing_font = Cell::new(false);
         let mut query = fonts.collection.query(&mut fonts.source_cache);
-        query.set_families(query_families(style.font_family()));
+        query.set_families(query_families(style.font_families()));
         query.set_attributes(Attributes::new(
             style.font_width(),
             style.font_style(),
@@ -445,12 +445,7 @@ fn shape_paragraph(
     Ok((runs, selected_clusters.get()))
 }
 
-fn query_families<'a>(font_family: &'a FontFamily<'static>) -> Vec<QueryFamily<'a>> {
-    let names: &[FontFamilyName<'_>] = match font_family {
-        FontFamily::Single(name) => core::slice::from_ref(name),
-        FontFamily::List(names) => names.as_ref(),
-        FontFamily::Source(_) => return Vec::new(),
-    };
+fn query_families<'a>(names: &'a [FontFamilyName<'static>]) -> Vec<QueryFamily<'a>> {
     names
         .iter()
         .map(|name| match name {

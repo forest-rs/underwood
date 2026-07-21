@@ -243,9 +243,14 @@ impl PreparationWork {
 /// suggestions whose execution depends on renderer capabilities.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FontSynthesis {
-    variations: Arc<[FontVariation]>,
+    evidence: Option<Arc<FontSynthesisEvidence>>,
+}
+
+#[derive(Debug, PartialEq)]
+struct FontSynthesisEvidence {
+    variations: Vec<FontVariation>,
     embolden: bool,
-    skew_degrees: Option<f32>,
+    skew_degrees: f32,
 }
 
 impl FontSynthesis {
@@ -275,29 +280,40 @@ impl FontSynthesis {
         }
         variations.sort_by_key(|variation| variation.tag);
         let skew_degrees = skew_degrees.filter(|angle| *angle != 0.0);
-        Ok(Self {
-            variations: variations.into(),
-            embolden,
-            skew_degrees,
-        })
+        let evidence = (!variations.is_empty() || embolden || skew_degrees.is_some()).then(|| {
+            Arc::new(FontSynthesisEvidence {
+                variations,
+                embolden,
+                skew_degrees: skew_degrees.unwrap_or(0.0),
+            })
+        });
+        Ok(Self { evidence })
     }
 
     /// Returns variation settings suggested by the font resolver.
     #[must_use]
     pub fn variations(&self) -> &[FontVariation] {
-        &self.variations
+        self.evidence
+            .as_ref()
+            .map_or(&[], |evidence| evidence.variations.as_slice())
     }
 
     /// Returns whether the renderer should apply synthetic emboldening.
     #[must_use]
-    pub const fn embolden(&self) -> bool {
-        self.embolden
+    pub fn embolden(&self) -> bool {
+        match &self.evidence {
+            Some(evidence) => evidence.embolden,
+            None => false,
+        }
     }
 
     /// Returns a synthetic skew angle in degrees, when requested.
     #[must_use]
-    pub const fn skew_degrees(&self) -> Option<f32> {
-        self.skew_degrees
+    pub fn skew_degrees(&self) -> Option<f32> {
+        match &self.evidence {
+            Some(evidence) if evidence.skew_degrees != 0.0 => Some(evidence.skew_degrees),
+            Some(_) | None => None,
+        }
     }
 }
 

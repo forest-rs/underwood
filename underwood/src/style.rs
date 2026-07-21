@@ -1,7 +1,6 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -33,7 +32,7 @@ impl PaintSlot {
 /// deterministic no-op for a selected font.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapingStyle {
-    font_family: FontFamily<'static>,
+    font_families: Arc<[FontFamilyName<'static>]>,
     font_weight: FontWeight,
     font_width: FontWidth,
     font_style: FontStyle,
@@ -51,7 +50,7 @@ impl ShapingStyle {
             return Err(StyleError::new(StyleErrorKind::InvalidNumber));
         }
         Ok(Self {
-            font_family: canonical_font_family(font_family)?,
+            font_families: canonical_font_family(font_family)?,
             font_weight: FontWeight::NORMAL,
             font_width: FontWidth::NORMAL,
             font_style: FontStyle::Normal,
@@ -64,7 +63,7 @@ impl ShapingStyle {
 
     /// Returns a copy with a new owned canonical family request.
     pub fn with_font_family(mut self, font_family: FontFamily<'_>) -> Result<Self, StyleError> {
-        self.font_family = canonical_font_family(font_family)?;
+        self.font_families = canonical_font_family(font_family)?;
         Ok(self)
     }
 
@@ -118,10 +117,10 @@ impl ShapingStyle {
         Ok(self)
     }
 
-    /// Returns the ordered family request.
+    /// Returns the ordered canonical family names.
     #[must_use]
-    pub const fn font_family(&self) -> &FontFamily<'static> {
-        &self.font_family
+    pub fn font_families(&self) -> &[FontFamilyName<'static>] {
+        &self.font_families
     }
 
     /// Returns the requested font weight.
@@ -167,7 +166,9 @@ impl ShapingStyle {
     }
 }
 
-fn canonical_font_family(font_family: FontFamily<'_>) -> Result<FontFamily<'static>, StyleError> {
+fn canonical_font_family(
+    font_family: FontFamily<'_>,
+) -> Result<Arc<[FontFamilyName<'static>]>, StyleError> {
     let names: Vec<FontFamilyName<'static>> = match font_family {
         FontFamily::Source(source) => FontFamilyName::parse_css_list(source.as_ref())
             .map(|name| name.map(FontFamilyName::into_owned))
@@ -191,19 +192,7 @@ fn canonical_font_family(font_family: FontFamily<'_>) -> Result<FontFamily<'stat
     {
         return Err(StyleError::new(StyleErrorKind::InvalidFontFamily));
     }
-    let mut names = names.into_iter();
-    let first = names
-        .next()
-        .ok_or_else(|| StyleError::new(StyleErrorKind::InvalidFontFamily))?;
-    let remaining: Vec<_> = names.collect();
-    if remaining.is_empty() {
-        Ok(FontFamily::Single(first))
-    } else {
-        let mut canonical = Vec::with_capacity(remaining.len() + 1);
-        canonical.push(first);
-        canonical.extend(remaining);
-        Ok(FontFamily::List(Cow::Owned(canonical)))
-    }
+    Ok(names.into())
 }
 
 fn canonical_features(features: impl IntoIterator<Item = FontFeature>) -> Arc<[FontFeature]> {
@@ -446,11 +435,11 @@ mod tests {
         let style = ShapingStyle::new(FontFamily::from("Roboto Flex, sans-serif"), 16.0)
             .expect("CSS family source is valid");
         assert_eq!(
-            style.font_family(),
-            &FontFamily::List(Cow::Owned(alloc::vec![
+            style.font_families(),
+            &[
                 FontFamilyName::named("Roboto Flex").into_owned(),
                 FontFamilyName::Generic(parlance::GenericFamily::SansSerif),
-            ]))
+            ]
         );
         assert!(ShapingStyle::new(FontFamily::from("Roboto Flex,, serif"), 16.0).is_err());
         assert!(

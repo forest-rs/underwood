@@ -12,9 +12,9 @@ use crate::adapter::{
 };
 use crate::document::Paragraph;
 use crate::{
-    Affine, ComputedInlineStyle, DocumentRevision, DocumentSnapshot, FontData, InlineFlowStyle,
-    InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError,
-    SceneErrorKind, SceneRequest, SemanticId, ShapingStyle, TextId, Vec2,
+    Affine, DocumentRevision, DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, PaintSlot,
+    PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError, SceneErrorKind, SceneRequest,
+    SemanticId, ShapingStyle, TextId, Vec2,
 };
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
@@ -58,21 +58,24 @@ impl LayoutEngine {
 
         for paragraph in snapshot.paragraphs() {
             let projection = Projection::new(paragraph, request)?;
-            let preparation_key = PreparationKey {
-                version: paragraph.version,
-                shaping_styles: projection.shaping_styles.clone(),
-                shaping_runs: projection.shaping_runs.clone(),
-            };
             let cache_index = self
                 .cache
                 .iter()
                 .position(|entry| entry.paragraph == paragraph.id);
-
-            let needs_preparation = cache_index.is_none_or(|index| {
-                self.cache[index].preparation_key != preparation_key
-                    || self.cache[index].paint_runs != projection.paint_runs
+            let preparation_matches = cache_index.is_some_and(|index| {
+                self.cache[index]
+                    .preparation_key
+                    .matches(paragraph.version, &projection)
             });
+            let paint_matches = cache_index
+                .is_some_and(|index| self.cache[index].paint_runs == projection.paint_runs);
+            let needs_preparation = !preparation_matches || !paint_matches;
             let cache_index = if needs_preparation {
+                let shaping_styles: Vec<_> = projection
+                    .shaping_styles
+                    .iter()
+                    .map(|style| (*style).clone())
+                    .collect();
                 let text_len = u32::try_from(projection.text.len()).map_err(|_| {
                     SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
                 })?;
@@ -81,7 +84,7 @@ impl LayoutEngine {
                     .prepare(ParagraphInput::new(
                         paragraph.id,
                         &projection.text,
-                        &projection.shaping_styles,
+                        &shaping_styles,
                         &projection.shaping_runs,
                         &projection.paint_runs,
                     ))
@@ -96,27 +99,37 @@ impl LayoutEngine {
                 }
                 validate_prepared(output.paragraph(), &projection)?;
                 record_preparation_work(&mut work, output.work());
-                let mut geometry = cache_index.and_then(|index| {
-                    (output.work().shaped_runs() == 0
-                        && self.cache[index].preparation_key == preparation_key)
-                        .then(|| self.cache[index].geometry.take())
-                        .flatten()
-                });
-                if let Some(cached) = geometry.as_mut() {
-                    update_cached_paint(cached, output.paragraph(), &projection)?;
-                }
-                let entry = ParagraphCache {
-                    paragraph: paragraph.id,
-                    preparation_key,
-                    paint_runs: projection.paint_runs.clone(),
-                    prepared: output.into_paragraph(),
-                    geometry,
-                };
                 if let Some(index) = cache_index {
-                    self.cache[index] = entry;
+                    let reuse_geometry = output.work().shaped_runs() == 0 && preparation_matches;
+                    if reuse_geometry && let Some(geometry) = self.cache[index].geometry.as_mut() {
+                        update_cached_paint(geometry, output.paragraph(), &projection)?;
+                    }
+                    let entry = &mut self.cache[index];
+                    if !preparation_matches {
+                        entry.preparation_key = PreparationKey::new(
+                            paragraph.version,
+                            shaping_styles,
+                            projection.shaping_runs.clone(),
+                        );
+                    }
+                    entry.paint_runs = projection.paint_runs.clone();
+                    entry.prepared = output.into_paragraph();
+                    if !reuse_geometry {
+                        entry.geometry = None;
+                    }
                     index
                 } else {
-                    self.cache.push(entry);
+                    self.cache.push(ParagraphCache {
+                        paragraph: paragraph.id,
+                        preparation_key: PreparationKey::new(
+                            paragraph.version,
+                            shaping_styles,
+                            projection.shaping_runs.clone(),
+                        ),
+                        paint_runs: projection.paint_runs.clone(),
+                        prepared: output.into_paragraph(),
+                        geometry: None,
+                    });
                     self.cache.len() - 1
                 }
             } else {
@@ -186,6 +199,27 @@ struct PreparationKey {
     shaping_runs: Vec<ShapingRun>,
 }
 
+impl PreparationKey {
+    fn new(version: u64, shaping_styles: Vec<ShapingStyle>, shaping_runs: Vec<ShapingRun>) -> Self {
+        Self {
+            version,
+            shaping_styles,
+            shaping_runs,
+        }
+    }
+
+    fn matches(&self, version: u64, projection: &Projection<'_>) -> bool {
+        self.version == version
+            && self.shaping_styles.len() == projection.shaping_styles.len()
+            && self
+                .shaping_styles
+                .iter()
+                .zip(&projection.shaping_styles)
+                .all(|(cached, projected)| cached == *projected)
+            && self.shaping_runs == projection.shaping_runs
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ParagraphCache {
     paragraph: ParagraphId,
@@ -196,22 +230,23 @@ struct ParagraphCache {
 }
 
 #[derive(Clone, Debug)]
-struct Projection {
+struct Projection<'a> {
     paragraph: ParagraphId,
     text: alloc::string::String,
     spans: Vec<LeafSpan>,
-    shaping_styles: Vec<ShapingStyle>,
+    shaping_styles: Vec<&'a ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
     inline_flow_styles: Vec<InlineFlowStyle>,
     inline_flow_runs: Vec<InlineFlowRun>,
     paint_runs: Vec<PaintRun>,
-    default_style: ComputedInlineStyle,
+    default_font_size: f32,
+    default_inline_flow: InlineFlowStyle,
     paragraph_semantic: SemanticId,
     paragraph_role: ParagraphRole,
 }
 
-impl Projection {
-    fn new(paragraph: &Paragraph, request: &SceneRequest<'_>) -> Result<Self, SceneError> {
+impl<'a> Projection<'a> {
+    fn new(paragraph: &Paragraph, request: &'a SceneRequest<'_>) -> Result<Self, SceneError> {
         let text = paragraph.projected_text();
         let mut spans = Vec::with_capacity(paragraph.leaves.len());
         let mut shaping_styles = Vec::new();
@@ -262,7 +297,8 @@ impl Projection {
             inline_flow_styles,
             inline_flow_runs,
             paint_runs,
-            default_style: request.styles.default_style().clone(),
+            default_font_size: request.styles.default_style().shaping().font_size(),
+            default_inline_flow: request.styles.default_style().inline_flow(),
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -300,7 +336,7 @@ impl Projection {
             })
             .fold(0.0_f32, f32::max);
         let multiplier = if multiplier == 0.0 {
-            self.default_style.inline_flow().line_height().multiplier()
+            self.default_inline_flow.line_height().multiplier()
         } else {
             multiplier
         };
@@ -309,8 +345,8 @@ impl Projection {
 
     fn empty_line_height_key(&self) -> u64 {
         if self.text.is_empty() {
-            (f64::from(self.default_style.shaping().font_size())
-                * f64::from(self.default_style.inline_flow().line_height().multiplier()))
+            (f64::from(self.default_font_size)
+                * f64::from(self.default_inline_flow.line_height().multiplier()))
             .to_bits()
         } else {
             0
@@ -335,14 +371,14 @@ struct InlineFlowRun {
     style: InlineFlowStyleId,
 }
 
-fn append_shaping_run(
-    styles: &mut Vec<ShapingStyle>,
+fn append_shaping_run<'a>(
+    styles: &mut Vec<&'a ShapingStyle>,
     runs: &mut Vec<ShapingRun>,
     bytes: Range<u32>,
-    style: &ShapingStyle,
+    style: &'a ShapingStyle,
     paragraph: ParagraphId,
 ) -> Result<(), SceneError> {
-    let style = if let Some(index) = styles.iter().position(|candidate| candidate == style) {
+    let style = if let Some(index) = styles.iter().position(|candidate| *candidate == style) {
         ShapingStyleId::new(
             u16::try_from(index)
                 .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?,
@@ -350,7 +386,7 @@ fn append_shaping_run(
     } else {
         let index = u16::try_from(styles.len())
             .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?;
-        styles.push(style.clone());
+        styles.push(style);
         ShapingStyleId::new(index)
     };
     if let Some(last) = runs.last_mut()
@@ -432,7 +468,7 @@ fn validate_styles(
 
 fn validate_prepared(
     prepared: &PreparedParagraph,
-    projection: &Projection,
+    projection: &Projection<'_>,
 ) -> Result<(), SceneError> {
     for run in prepared.runs() {
         let source = run.source();
@@ -564,17 +600,11 @@ struct PendingGlyph<'a> {
 
 fn build_geometry(
     prepared: &PreparedParagraph,
-    projection: &Projection,
+    projection: &Projection<'_>,
     width: f64,
 ) -> Result<CachedGeometry, SceneError> {
-    let empty_line_height = f64::from(projection.default_style.shaping().font_size())
-        * f64::from(
-            projection
-                .default_style
-                .inline_flow()
-                .line_height()
-                .multiplier(),
-        );
+    let empty_line_height = f64::from(projection.default_font_size)
+        * f64::from(projection.default_inline_flow.line_height().multiplier());
     let mut x = 0.0;
     let mut line_top = 0.0;
     let mut line_above = 0.0_f64;
@@ -687,7 +717,7 @@ fn build_geometry(
 
 fn flush_line(
     paragraph: ParagraphId,
-    projection: &Projection,
+    projection: &Projection<'_>,
     pending: &[PendingGlyph<'_>],
     line_top: f64,
     line_above: f64,
@@ -758,7 +788,7 @@ fn flush_line(
 fn update_cached_paint(
     geometry: &mut CachedGeometry,
     prepared: &PreparedParagraph,
-    projection: &Projection,
+    projection: &Projection<'_>,
 ) -> Result<(), SceneError> {
     let mut fragments = geometry.fragments.iter_mut();
     for run in prepared.runs() {
@@ -1453,7 +1483,7 @@ mod tests {
             paragraph,
         )
         .expect("repeated style must intern");
-        assert_eq!(shaping_styles, [first, second]);
+        assert_eq!(shaping_styles, [&first, &second]);
         assert_eq!(shaping_runs[0].style().index(), 0);
         assert_eq!(shaping_runs[1].style().index(), 1);
         assert_eq!(shaping_runs[2].style().index(), 0);
