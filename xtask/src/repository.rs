@@ -119,6 +119,7 @@ fn check_root_policy(root: &Path) -> Vec<String> {
         "workflow_dispatch:",
         "permissions:\n  contents: read",
         "bash .github/audit-remote.sh",
+        "secrets.UNDERWOOD_GOVERNANCE_TOKEN",
     ] {
         if !governance.contains(required) {
             errors.push(format!(

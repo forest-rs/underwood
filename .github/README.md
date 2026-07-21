@@ -23,6 +23,14 @@ workflow permissions, immutable Action pinning, vulnerability alerts, the
 protected-main ruleset, or its exact required checks. `cargo xtask check`
 protects both files from accidental removal.
 
+The built-in workflow token cannot read repository Actions policy or
+vulnerability-alert settings. The workflow therefore requires the
+`UNDERWOOD_GOVERNANCE_TOKEN` Actions secret. It must be a fine-grained token
+selected only for `forest-rs/underwood`, with repository `Administration: read`
+and an explicit expiration. Do not substitute a broad classic personal access
+token. After creating or rotating the secret, dispatch `Governance Audit`
+manually and record the successful run in `und-oh0.11.2`.
+
 `und-oh0.11.2` owns that audit and a durable Beads Dolt remote plus independent
 backup. Git history and the scrubbed JSONL export are review and recovery aids;
 they do not replace the authoritative Dolt remote.
