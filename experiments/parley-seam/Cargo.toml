@@ -17,6 +17,9 @@ fontique = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b
 parlance = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
   "std",
 ] }
+parley = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
+  "std",
+] }
 parley_core = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
   "std",
 ] }

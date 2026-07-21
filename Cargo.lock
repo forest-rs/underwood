@@ -444,6 +444,19 @@ version = "0.1.0"
 source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
 
 [[package]]
+name = "parley"
+version = "0.11.0"
+source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
+dependencies = [
+ "fontique",
+ "hashbrown",
+ "linebender_resource_handle",
+ "parlance",
+ "parley_core",
+ "skrifa 0.43.2",
+]
+
+[[package]]
 name = "parley_core"
 version = "0.11.0"
 source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
@@ -730,6 +743,7 @@ version = "0.0.1"
 dependencies = [
  "fontique",
  "parlance",
+ "parley",
  "parley_core",
  "parley_dev",
 ]

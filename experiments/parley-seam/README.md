@@ -4,6 +4,9 @@ This research crate consumes current `parley_core::ShapedText` and lowers it
 into deterministic observation records. It proves the retained analysis,
 itemization, font-selection, source-cluster, and horizontal-shaping seams
 without turning Parley types into Underwood's public adapter contract.
+It also drives the same pinned revision's high-level `parley::Layout` as a
+private line-breaking oracle. That oracle checks policy and metric expectations;
+it is deliberately not a production dependency or an alternate adapter.
 
 ```text
 corpus + licensed Parley test fonts

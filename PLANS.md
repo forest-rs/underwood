@@ -349,3 +349,68 @@ GitHub Actions run `29864780006` passed all eight jobs on Linux, macOS, and
 Windows, including MSRV, rustdoc, repository/text policy, bare-metal, and
 WebAssembly gates. Paragraph breaking continues independently as
 `und-oh0.2.2`.
+
+## Parley-backed paragraph formation
+
+**Status:** Active
+
+**Bead:** `und-oh0.2.2`
+
+### Goal
+
+Delete scene construction's glyph-by-glyph wrapping and hard-coded 80/20 line
+box split. Form lines from Parley Core's Unicode boundaries and font metrics,
+retain analysis and shaping across width-only changes, and prove mandatory,
+legal, bidi, and break-sensitive behavior through the public scene path.
+
+### Fence
+
+Parley owns Unicode analysis, break opportunities, font metrics, and bounded
+break reshaping. `underwood_parley` owns the narrow adapter from those retained
+results to portable formed-line records. Underwood owns document/region flow,
+paragraph stacking, scene lowering, and future resumable checkpoints. This
+campaign does not adopt high-level `parley::Layout`, duplicate its private
+layout engine, add pagination, or claim that an absent upstream reshaping seam
+exists.
+
+### Steps
+
+1. Audit exact Parley revision `6c81e1d`, high-level breaker behavior, current
+   Underwood geometry, and draft PR #634's break/concat contract.
+2. Ratify Design-0006: move width and inline-flow inputs across a paragraph-
+   formation contract and return source-valid, visual-order lines with real
+   metrics; include the draft-API migration.
+3. Add a high-level Parley oracle to the private seam experiment for legal and
+   mandatory breaks, CRLF, overflow, bidi line ranges, and line metrics.
+4. Implement retained Core-backed line formation in `underwood_parley`, remove
+   text physics from scene construction, and prove width-only reuse.
+5. Exercise and record the break-sensitive case against the upstream bounded
+   reshape seam; do not close or land the campaign with a counterfeit local
+   substitute.
+6. Update the visual proof, run Cedar/Lynx/Rook review, measure the product
+   path, and pass all local and remote gates before landing.
+
+### Risks and controls
+
+- **Second text engine:** use Core boundary/metric truth and a small explicit
+  greedy policy; do not copy high-level Parley's `LayoutData` or 1,500-line
+  breaker.
+- **Portable-record theater:** the final scene must consume formed-line output;
+  retaining unused line records does not count.
+- **Bidi corruption:** choose breaks in logical source order, then apply UAX #9
+  L2 run reordering per line and preserve visual glyph order within each run.
+- **Break reshape mirage:** a committed unsafe boundary must change Arabic
+  joining or split a ligature and concat must restore the original output.
+- **Invalidation collapse:** width and line height enter formation identity,
+  never analysis or shaping identity; tests assert zero analyzer/itemizer/
+  shaper work on width-only and line-height-only changes.
+- **Upstream drift:** the oracle, production adapter, and documentation name one
+  immutable revision; any pin change reruns the seam matrix.
+
+### Completion
+
+The campaign is complete only when legal and mandatory breaks, real line
+metrics, mixed bidi, width-only retained shaping, and break/concat reshaping all
+execute through the product path; the provisional scene breaker is deleted;
+the migration and upstream lifecycle are recorded; the visual specimen exposes
+the improvement; and local plus remote validation are green.
