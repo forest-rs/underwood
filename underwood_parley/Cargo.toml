@@ -1,0 +1,20 @@
+[package]
+name = "underwood_parley"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Pinned Parley preparation adapter for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+fontique.workspace = true
+parlance.workspace = true
+parley_core.workspace = true
+underwood.workspace = true
+
+[lints]
+workspace = true

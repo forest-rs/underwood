@@ -1,0 +1,18 @@
+[package]
+name = "underwood_headless_example"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "External headless semantic-to-scene example for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+underwood.workspace = true
+underwood_parley.workspace = true
+
+[lints]
+workspace = true

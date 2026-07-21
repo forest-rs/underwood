@@ -1,3 +1,11 @@
 # underwood-crate-registry-v1
 path	name	class	no_std	published	fence
+benches/semantic-scene	underwood_semantic_scene_benchmark	benchmark	no	no	This crate owns measurements of the real public semantic-to-scene path; it explicitly does not own product algorithms, private shortcuts, or alternate implementations.
+examples/headless	underwood_headless_example	example	no	no	This crate owns the first external public-path consumer and bundled licensed font fixtures; it explicitly does not own product behavior or private implementation shortcuts.
+experiments/flow	underwood_flow_experiment	test	no	no	This crate owns private flow-trace-v0 checkpoint and virtual-extent experiments; it explicitly does not own production layout, product benchmarks, or public checkpoint formats.
+experiments/parley-seam	underwood_parley_seam_experiment	test	no	no	This crate owns historical retained-Parley seam observations and conformance gaps; it explicitly does not own the production adapter, product benchmarks, or public prepared-text APIs.
+experiments/position	underwood_position_experiment	test	no	no	This crate owns private identity-trace-v0 canonical-storage candidates and measurements; it explicitly does not own production storage, product benchmarks, or public position APIs.
+experiments/text-data	underwood_text_data_experiment	test	no	no	This crate owns private text-data tier artifact and replay measurements; it explicitly does not own production providers, product benchmarks, or text-data APIs.
+underwood	underwood	core	yes	no	This crate owns Underwood's semantic-to-scene façade and private foundational modules; it explicitly does not own text shaping physics, host policy, or rendering.
+underwood_parley	underwood_parley	adapter	yes	no	This crate owns conversion between Underwood preparation contracts and pinned Parley; it explicitly does not own documents, flow, scenes, renderers, or public Parley leakage.
 xtask	xtask	tooling	no	no	This crate owns repository policy validation; it explicitly does not own product behavior or architectural decisions.

@@ -1,0 +1,695 @@
+// Copyright 2026 the Underwood Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+//! Private retained-Parley adapter and conformance wind tunnel.
+
+use std::fs;
+use std::io;
+use std::ops::Range;
+use std::path::PathBuf;
+
+use fontique::{Blob, Synthesis};
+use parlance::{FontFeature, FontVariation};
+use parley_core::{
+    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, Boundary, FontInstance, ShapeOptions,
+    Shaper,
+};
+
+const PARLEY_REVISION: &str = "45da4a90248b1600277a4294b70d8bfde5ca8e97";
+const CORPUS: &str = "office affinity — مرحبا بالعالم";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FontChoice {
+    Latin,
+    Arabic,
+}
+
+#[derive(Clone, Debug)]
+struct FontAsset {
+    choice: FontChoice,
+    source_name: &'static str,
+    source_digest: u64,
+    instance: FontInstance,
+}
+
+#[derive(Clone, Debug)]
+struct FontSet {
+    latin: FontAsset,
+    arabic: FontAsset,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ItemRecord {
+    byte_range: Range<usize>,
+    char_range: Range<usize>,
+    bidi_level: u8,
+    script: [u8; 4],
+    font: FontChoice,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GlyphRecord {
+    id: u32,
+    cluster: usize,
+    source_bytes: Range<usize>,
+    source_chars: Range<usize>,
+    x_advance: i32,
+    y_advance: i32,
+    x_offset: i32,
+    y_offset: i32,
+    paint_slots: Vec<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RunRecord {
+    byte_range: Range<usize>,
+    char_range: Range<usize>,
+    bidi_level: u8,
+    script: [u8; 4],
+    font: FontChoice,
+    font_digest: u64,
+    normalized_coords: Vec<i16>,
+    glyphs: Vec<GlyphRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PreparedObservation {
+    analysis_digest: u64,
+    item_digest: u64,
+    physics_digest: u64,
+    slot_digest: u64,
+    items: Vec<ItemRecord>,
+    runs: Vec<RunRecord>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ShapeConfig<'a> {
+    font_size: f32,
+    features: &'a [FontFeature],
+    variations: &'a [FontVariation],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CurrentGap {
+    RetainedShapedText,
+    BoundedBreakReshaping,
+    VerticalShaping,
+    CoreInlineObjects,
+    TextDataIdentity,
+}
+
+fn current_gaps() -> &'static [CurrentGap] {
+    &[
+        CurrentGap::RetainedShapedText,
+        CurrentGap::BoundedBreakReshaping,
+        CurrentGap::VerticalShaping,
+        CurrentGap::CoreInlineObjects,
+        CurrentGap::TextDataIdentity,
+    ]
+}
+
+fn load_fonts() -> io::Result<FontSet> {
+    Ok(FontSet {
+        latin: load_font(
+            FontChoice::Latin,
+            "RobotoFlex-VariableFont.ttf",
+            "RobotoFlex-VariableFont.ttf",
+        )?,
+        arabic: load_font(
+            FontChoice::Arabic,
+            "NotoKufiArabic-Regular.otf",
+            "NotoKufiArabic-Regular.otf",
+        )?,
+    })
+}
+
+fn load_font(
+    choice: FontChoice,
+    file_name: &'static str,
+    source_name: &'static str,
+) -> io::Result<FontAsset> {
+    let path = find_font(file_name)?;
+    let bytes = fs::read(path)?;
+    let source_digest = digest_bytes(&bytes);
+    Ok(FontAsset {
+        choice,
+        source_name,
+        source_digest,
+        instance: FontInstance {
+            blob: Blob::from(bytes),
+            index: 0,
+            synthesis: Synthesis::default(),
+        },
+    })
+}
+
+fn find_font(file_name: &str) -> io::Result<PathBuf> {
+    for directory in parley_dev::font_dirs() {
+        let candidate = directory.join(file_name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("pinned parley_dev font `{file_name}` is missing"),
+    ))
+}
+
+fn prepare(
+    text: &str,
+    fonts: &FontSet,
+    paint_slots: &[u16],
+    config: ShapeConfig<'_>,
+) -> PreparedObservation {
+    let char_count = text.chars().count();
+    assert_eq!(
+        paint_slots.len(),
+        char_count,
+        "paint slots must cover every source character"
+    );
+
+    let mut analyzer = Analyzer::new();
+    let mut analysis = Analysis::new();
+    analyzer.analyze(
+        text,
+        &AnalysisOptions {
+            word_break: &[],
+            line_break_override: None,
+        },
+        &mut analysis,
+    );
+    let analysis_digest = digest_analysis(&analysis);
+    let analysis_data_sources = AnalysisDataSources::new();
+    let byte_offsets = char_byte_offsets(text);
+    let mut shaper = Shaper::default();
+    let mut items = Vec::new();
+    let mut runs = Vec::new();
+
+    for item in analysis.itemize(text, |_| false) {
+        let script = item.script.to_bytes();
+        let font = if script == *b"Arab" {
+            &fonts.arabic
+        } else {
+            &fonts.latin
+        };
+        items.push(ItemRecord {
+            byte_range: item.range.byte_range.clone(),
+            char_range: item.range.char_range.clone(),
+            bidi_level: item.bidi_level,
+            script,
+            font: font.choice,
+        });
+
+        shaper.shape_item(
+            text,
+            &analysis,
+            &item,
+            &ShapeOptions {
+                font_size: config.font_size,
+                language: None,
+                features: config.features,
+                variations: config.variations,
+                char_style_indices: paint_slots,
+            },
+            |_| Some(font.instance.clone()),
+            &analysis_data_sources,
+            |run| {
+                runs.push(copy_run(
+                    run,
+                    item.bidi_level,
+                    script,
+                    font,
+                    paint_slots,
+                    &byte_offsets,
+                ));
+            },
+        );
+    }
+
+    let item_digest = digest_items(&items);
+    let physics_digest = digest_physics(&runs);
+    let slot_digest = digest_slots(&runs);
+    PreparedObservation {
+        analysis_digest,
+        item_digest,
+        physics_digest,
+        slot_digest,
+        items,
+        runs,
+    }
+}
+
+fn copy_run(
+    run: parley_core::ShapedRun<'_>,
+    bidi_level: u8,
+    script: [u8; 4],
+    font: &FontAsset,
+    paint_slots: &[u16],
+    byte_offsets: &[usize],
+) -> RunRecord {
+    let infos = run.glyph_buffer.glyph_infos();
+    let positions = run.glyph_buffer.glyph_positions();
+    let mut cluster_starts: Vec<usize> = infos
+        .iter()
+        .map(|info| {
+            run.range.char_range.start
+                + usize::try_from(info.cluster).expect("glyph cluster must fit usize")
+        })
+        .collect();
+    cluster_starts.sort_unstable();
+    cluster_starts.dedup();
+
+    let glyphs = infos
+        .iter()
+        .zip(positions)
+        .map(|(info, position)| {
+            let cluster = run.range.char_range.start
+                + usize::try_from(info.cluster).expect("glyph cluster must fit usize");
+            let next = cluster_starts
+                .iter()
+                .copied()
+                .find(|candidate| *candidate > cluster)
+                .unwrap_or(run.range.char_range.end);
+            let source_chars = cluster..next;
+            let mut slots: Vec<u16> = paint_slots[source_chars.clone()].to_vec();
+            slots.sort_unstable();
+            slots.dedup();
+            GlyphRecord {
+                id: info.glyph_id,
+                cluster,
+                source_bytes: byte_offsets[source_chars.start]..byte_offsets[source_chars.end],
+                source_chars,
+                x_advance: position.x_advance,
+                y_advance: position.y_advance,
+                x_offset: position.x_offset,
+                y_offset: position.y_offset,
+                paint_slots: slots,
+            }
+        })
+        .collect();
+
+    RunRecord {
+        byte_range: run.range.byte_range,
+        char_range: run.range.char_range,
+        bidi_level,
+        script,
+        font: font.choice,
+        font_digest: font.source_digest,
+        normalized_coords: run.coords.iter().map(|coord| coord.to_bits()).collect(),
+        glyphs,
+    }
+}
+
+fn char_byte_offsets(text: &str) -> Vec<usize> {
+    text.char_indices()
+        .map(|(offset, _)| offset)
+        .chain(std::iter::once(text.len()))
+        .collect()
+}
+
+fn digest_analysis(analysis: &Analysis) -> u64 {
+    let mut digest = Digest::new();
+    digest.usize(analysis.char_info().len());
+    digest.u8(analysis.paragraph_level());
+    for info in analysis.char_info() {
+        digest.u8(match info.boundary {
+            Boundary::None => 0,
+            Boundary::Word => 1,
+            Boundary::Line => 2,
+            Boundary::Mandatory => 3,
+        });
+        digest.u8(u8::from(info.is_emoji_or_pictograph()));
+        digest.u8(u8::from(info.force_normalize()));
+        digest.u8(u8::from(info.contributes_to_shaping()));
+    }
+    for level in analysis.bidi_levels() {
+        digest.u8(*level);
+    }
+    digest.finish()
+}
+
+fn digest_items(items: &[ItemRecord]) -> u64 {
+    let mut digest = Digest::new();
+    for item in items {
+        digest.range(&item.byte_range);
+        digest.range(&item.char_range);
+        digest.u8(item.bidi_level);
+        digest.bytes(&item.script);
+        digest.u8(font_choice_byte(item.font));
+    }
+    digest.finish()
+}
+
+fn digest_physics(runs: &[RunRecord]) -> u64 {
+    let mut digest = Digest::new();
+    for run in runs {
+        digest.range(&run.byte_range);
+        digest.range(&run.char_range);
+        digest.u8(run.bidi_level);
+        digest.bytes(&run.script);
+        digest.u8(font_choice_byte(run.font));
+        digest.u64(run.font_digest);
+        for coord in &run.normalized_coords {
+            digest.bytes(&coord.to_le_bytes());
+        }
+        for glyph in &run.glyphs {
+            digest.u32(glyph.id);
+            digest.usize(glyph.cluster);
+            digest.range(&glyph.source_bytes);
+            digest.range(&glyph.source_chars);
+            digest.bytes(&glyph.x_advance.to_le_bytes());
+            digest.bytes(&glyph.y_advance.to_le_bytes());
+            digest.bytes(&glyph.x_offset.to_le_bytes());
+            digest.bytes(&glyph.y_offset.to_le_bytes());
+        }
+    }
+    digest.finish()
+}
+
+fn digest_slots(runs: &[RunRecord]) -> u64 {
+    let mut digest = Digest::new();
+    for glyph in runs.iter().flat_map(|run| &run.glyphs) {
+        digest.range(&glyph.source_chars);
+        for slot in &glyph.paint_slots {
+            digest.bytes(&slot.to_le_bytes());
+        }
+    }
+    digest.finish()
+}
+
+fn lower_paint(prepared: &PreparedObservation, paint_values: &[u32]) -> Option<u64> {
+    let mut digest = Digest::new();
+    for glyph in prepared.runs.iter().flat_map(|run| &run.glyphs) {
+        digest.u32(glyph.id);
+        for slot in &glyph.paint_slots {
+            digest.u32(*paint_values.get(usize::from(*slot))?);
+        }
+    }
+    Some(digest.finish())
+}
+
+const fn font_choice_byte(choice: FontChoice) -> u8 {
+    match choice {
+        FontChoice::Latin => 0,
+        FontChoice::Arabic => 1,
+    }
+}
+
+fn digest_bytes(bytes: &[u8]) -> u64 {
+    let mut digest = Digest::new();
+    digest.bytes(bytes);
+    digest.finish()
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Digest(u64);
+
+impl Digest {
+    const fn new() -> Self {
+        Self(0xcbf2_9ce4_8422_2325)
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn u8(&mut self, value: u8) {
+        self.bytes(&[value]);
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.bytes(&value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.bytes(&value.to_le_bytes());
+    }
+
+    fn usize(&mut self, value: usize) {
+        self.u64(u64::try_from(value).expect("trace values must fit u64"));
+    }
+
+    fn range(&mut self, value: &Range<usize>) {
+        self.usize(value.start);
+        self.usize(value.end);
+    }
+
+    const fn finish(self) -> u64 {
+        self.0
+    }
+}
+
+fn default_slots(text: &str) -> Vec<u16> {
+    vec![0; text.chars().count()]
+}
+
+fn slots_with_paint_boundaries(text: &str) -> Vec<u16> {
+    let mut slots = default_slots(text);
+    let latin_i = text
+        .chars()
+        .position(|ch| ch == 'i')
+        .expect("corpus must contain an fi ligature candidate");
+    slots[latin_i] = 1;
+    let arabic_start = text
+        .chars()
+        .position(|ch| ch == 'م')
+        .expect("corpus must contain Arabic");
+    slots[arabic_start + 1] = 2;
+    slots
+}
+
+fn config<'a>(features: &'a [FontFeature], variations: &'a [FontVariation]) -> ShapeConfig<'a> {
+    ShapeConfig {
+        font_size: 16.0,
+        features,
+        variations,
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let fonts = load_fonts()?;
+    let slots = slots_with_paint_boundaries(CORPUS);
+    let prepared = prepare(CORPUS, &fonts, &slots, config(&[], &[]));
+    let paint_digest = lower_paint(&prepared, &[0xff00_00ff, 0x00ff_00ff, 0x0000_ffff])
+        .expect("all benchmark paint slots must resolve");
+    let glyph_count: usize = prepared.runs.iter().map(|run| run.glyphs.len()).sum();
+
+    println!(
+        "parley={} analysis={:016x} items={:016x} physics={:016x} slots={:016x} paint={:016x} items_count={} runs={} glyphs={} gaps={}",
+        PARLEY_REVISION,
+        prepared.analysis_digest,
+        prepared.item_digest,
+        prepared.physics_digest,
+        prepared.slot_digest,
+        paint_digest,
+        prepared.items.len(),
+        prepared.runs.len(),
+        glyph_count,
+        current_gaps().len(),
+    );
+    println!(
+        "fonts={}:{:016x},{}:{:016x}",
+        fonts.latin.source_name,
+        fonts.latin.source_digest,
+        fonts.arabic.source_name,
+        fonts.arabic.source_digest,
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use parlance::Tag;
+
+    use super::{
+        CORPUS, CurrentGap, FontChoice, FontFeature, FontVariation, config, current_gaps,
+        default_slots, load_fonts, lower_paint, prepare, slots_with_paint_boundaries,
+    };
+
+    const FEATURE_CORPUS: &str = "AV";
+
+    #[test]
+    fn current_callback_seam_copies_owned_deterministic_observations() {
+        let fonts = load_fonts().expect("pinned Parley fonts must load");
+        let slots = default_slots(CORPUS);
+        let first = prepare(CORPUS, &fonts, &slots, config(&[], &[]));
+        let second = prepare(CORPUS, &fonts, &slots, config(&[], &[]));
+        assert_eq!(first, second, "identical inputs must prepare identically");
+        assert!(!first.items.is_empty(), "analysis must emit owned items");
+        assert!(!first.runs.is_empty(), "shaping must emit owned runs");
+        assert!(
+            first.runs.iter().all(|run| !run.glyphs.is_empty()),
+            "every retained run must own copied glyph observations"
+        );
+    }
+
+    #[test]
+    fn paint_values_and_boundaries_never_change_text_physics() {
+        let fonts = load_fonts().expect("pinned Parley fonts must load");
+        let flat = prepare(CORPUS, &fonts, &default_slots(CORPUS), config(&[], &[]));
+        let divided = prepare(
+            CORPUS,
+            &fonts,
+            &slots_with_paint_boundaries(CORPUS),
+            config(&[], &[]),
+        );
+
+        assert_eq!(
+            flat.analysis_digest, divided.analysis_digest,
+            "paint topology must not invalidate analysis"
+        );
+        assert_eq!(
+            flat.item_digest, divided.item_digest,
+            "paint topology must not alter shaping itemization"
+        );
+        assert_eq!(
+            flat.physics_digest, divided.physics_digest,
+            "paint topology must not alter glyphs or advances"
+        );
+        assert_ne!(
+            flat.slot_digest, divided.slot_digest,
+            "paint-slot coverage must remain observable"
+        );
+
+        let latin_i = CORPUS
+            .chars()
+            .position(|ch| ch == 'i')
+            .expect("corpus must contain an fi ligature candidate");
+        let ligature = divided
+            .runs
+            .iter()
+            .flat_map(|run| &run.glyphs)
+            .find(|glyph| {
+                glyph.source_chars.contains(&latin_i)
+                    && glyph.source_chars.end - glyph.source_chars.start > 1
+            })
+            .expect("fixture must shape the paint boundary inside a ligature");
+        assert_eq!(
+            ligature.paint_slots,
+            [0, 1],
+            "one ligature glyph must retain both source paint slots"
+        );
+        assert!(
+            divided
+                .runs
+                .iter()
+                .flat_map(|run| &run.glyphs)
+                .any(|glyph| glyph.paint_slots.contains(&2)),
+            "Arabic cursive shaping must retain the second paint boundary"
+        );
+
+        let first_paint = lower_paint(&divided, &[0xff00_00ff, 0x00ff_00ff, 0x0000_ffff])
+            .expect("all paint slots must resolve");
+        let second_paint = lower_paint(&divided, &[0x1010_10ff, 0x2020_20ff, 0x3030_30ff])
+            .expect("all paint slots must resolve");
+        assert_ne!(
+            first_paint, second_paint,
+            "paint-table changes must affect only lowering"
+        );
+    }
+
+    #[test]
+    fn weight_and_kerning_changes_preserve_earlier_stages() {
+        let fonts = load_fonts().expect("pinned Parley fonts must load");
+        let slots = default_slots(FEATURE_CORPUS);
+        let baseline = prepare(FEATURE_CORPUS, &fonts, &slots, config(&[], &[]));
+        let weight = [FontVariation::new(Tag::from_bytes(*b"wght"), 700.0)];
+        let weighted = prepare(FEATURE_CORPUS, &fonts, &slots, config(&[], &weight));
+        let no_kerning = [FontFeature::new(Tag::from_bytes(*b"kern"), 0)];
+        let unkerned = prepare(FEATURE_CORPUS, &fonts, &slots, config(&no_kerning, &[]));
+
+        for candidate in [&weighted, &unkerned] {
+            assert_eq!(
+                baseline.analysis_digest, candidate.analysis_digest,
+                "shaping values must not invalidate Unicode analysis"
+            );
+            assert_eq!(
+                baseline.item_digest, candidate.item_digest,
+                "constant shaping values must not change item topology"
+            );
+            assert_ne!(
+                baseline.physics_digest, candidate.physics_digest,
+                "weight and kerning settings must change shaped physics"
+            );
+        }
+    }
+
+    #[test]
+    fn corpus_exercises_latin_ltr_and_arabic_rtl_items() {
+        let fonts = load_fonts().expect("pinned Parley fonts must load");
+        let prepared = prepare(CORPUS, &fonts, &default_slots(CORPUS), config(&[], &[]));
+
+        assert!(
+            prepared.items.iter().any(|item| {
+                item.script == *b"Latn"
+                    && item.bidi_level & 1 == 0
+                    && item.font == FontChoice::Latin
+            }),
+            "corpus must exercise a Latin left-to-right item"
+        );
+        assert!(
+            prepared.items.iter().any(|item| {
+                item.script == *b"Arab"
+                    && item.bidi_level & 1 == 1
+                    && item.font == FontChoice::Arabic
+            }),
+            "corpus must exercise an Arabic right-to-left item"
+        );
+    }
+
+    #[test]
+    fn items_and_glyph_sources_stay_inside_the_semantic_text() {
+        let fonts = load_fonts().expect("pinned Parley fonts must load");
+        let prepared = prepare(
+            CORPUS,
+            &fonts,
+            &slots_with_paint_boundaries(CORPUS),
+            config(&[], &[]),
+        );
+        let mut cursor = 0;
+        for item in &prepared.items {
+            assert_eq!(
+                item.byte_range.start, cursor,
+                "items must tile source bytes without gaps"
+            );
+            cursor = item.byte_range.end;
+        }
+        assert_eq!(cursor, CORPUS.len(), "items must cover all source bytes");
+
+        let source_chars = CORPUS.chars().count();
+        for glyph in prepared.runs.iter().flat_map(|run| &run.glyphs) {
+            assert!(
+                glyph.source_bytes.start <= glyph.source_bytes.end
+                    && glyph.source_bytes.end <= CORPUS.len(),
+                "glyph byte coverage must remain inside the source"
+            );
+            assert!(
+                glyph.source_chars.start < glyph.source_chars.end
+                    && glyph.source_chars.end <= source_chars,
+                "glyph character coverage must be nonempty and in range"
+            );
+            assert!(
+                !glyph.paint_slots.is_empty(),
+                "every copied glyph must retain paint-slot coverage"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_current_main_seams_remain_explicit_gaps() {
+        assert_eq!(
+            current_gaps(),
+            &[
+                CurrentGap::RetainedShapedText,
+                CurrentGap::BoundedBreakReshaping,
+                CurrentGap::VerticalShaping,
+                CurrentGap::CoreInlineObjects,
+                CurrentGap::TextDataIdentity,
+            ],
+            "the wind tunnel must not impersonate absent upstream seams"
+        );
+    }
+}

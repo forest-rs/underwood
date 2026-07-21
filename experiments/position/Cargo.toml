@@ -1,0 +1,14 @@
+[package]
+name = "underwood_position_experiment"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Private position and canonical-storage experiment for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

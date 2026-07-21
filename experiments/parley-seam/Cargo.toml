@@ -1,0 +1,26 @@
+[package]
+name = "underwood_parley_seam_experiment"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Historical retained-Parley seam experiment for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+fontique = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+  "std",
+] }
+parlance = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+  "std",
+] }
+parley_core = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+  "std",
+] }
+parley_dev = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97" }
+
+[lints]
+workspace = true

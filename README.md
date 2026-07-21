@@ -13,17 +13,29 @@ physics. Overstory is the flagship experience layer.
 
 ## Current status
 
-Underwood is in its executable-constitution bootstrap. The complete
-architecture is [specified in the handover](UNDERWOOD_HANDOVER.md), but no
-foundational product API has been ratified or implemented.
+Underwood has completed its executable-constitution bootstrap and is executing
+the first semantic-to-scene campaign. The complete architecture is
+[specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
+first pre-stable public slice and its exact dependency fence: `underwood` owns
+the `no_std + alloc` document, flow, and scene path, while
+`underwood_parley` owns adaptation to pinned Parley Core.
 
-The first product campaign remains gated on:
+The five mandatory foundation records are accepted:
 
 - Charter-000: spearhead, proof, and stewardship;
 - ADR-0001: position and canonical storage;
 - ADR-0002: resumable flow and virtual extents;
 - ADR-0003: text-data provisioning and identity;
 - ADR-0004: the Parley boundary and contingency.
+
+The external `examples/headless` crate now exercises real mixed-script shaping,
+source and semantic observations, editing, and retained-work assertions through
+public APIs only. Earlier synthetic wind tunnels remain research evidence, not
+product benchmarks or substitutes for this permanent path.
+
+Product performance lives in `benches/semantic-scene` and measures those same
+public crates. Pre-product hypothesis implementations live under
+`experiments/` and are explicitly barred from product performance claims.
 
 The machine-readable [proof ledger](docs/proof/ledger.tsv) is authoritative for
 capability status.
@@ -56,6 +68,7 @@ cargo xtask check
 typos
 bd lint --status all
 bd dep cycles
+cargo run --profile wind-tunnel -p underwood_semantic_scene_benchmark
 ```
 
 The workspace MSRV is Rust 1.92. The bootstrap CI stable toolchain is Rust

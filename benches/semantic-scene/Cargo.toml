@@ -1,0 +1,18 @@
+[package]
+name = "underwood_semantic_scene_benchmark"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Public-path semantic-to-scene benchmark for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+underwood.workspace = true
+underwood_parley.workspace = true
+
+[lints]
+workspace = true
