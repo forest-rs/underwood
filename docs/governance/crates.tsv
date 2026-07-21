@@ -1,3 +1,4 @@
 # underwood-crate-registry-v1
 path	name	class	no_std	published	fence
+benches/position	underwood_position_wind_tunnel	benchmark	no	no	This crate owns private identity-trace-v0 canonical-storage candidates and measurements; it explicitly does not own production storage or public position APIs.
 xtask	xtask	tooling	no	no	This crate owns repository policy validation; it explicitly does not own product behavior or architectural decisions.

@@ -1,0 +1,282 @@
+// Copyright 2026 the Underwood Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+use std::time::{Duration, Instant};
+
+use crate::model::{
+    AuthoredSpan, Bias, CanonicalBaseline, EdgeBehavior, anchor_record_bytes, authored_span_bytes,
+    baseline_inline_bytes, derived_range_bytes,
+};
+use crate::trace::{TraceOutcome, run_semantic_suite};
+
+const SAMPLE_COUNT: usize = 200;
+const DENSE_SPAN_COUNT: usize = 1_000_000;
+const EDITOR_LINE_COUNT: usize = 1_000_000;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Status {
+    Pass,
+    Fail,
+    NotRun,
+    Screen,
+}
+
+impl Status {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "PASS",
+            Self::Fail => "FAIL",
+            Self::NotRun => "NOT_RUN",
+            Self::Screen => "SCREEN",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct Gate {
+    id: &'static str,
+    status: Status,
+    observed: String,
+    limit: &'static str,
+    note: &'static str,
+}
+
+pub(crate) fn run() -> bool {
+    let traces = run_semantic_suite();
+    print_metadata();
+    print_traces(&traces);
+    print_gates(&measure_gates());
+    traces.iter().all(|trace| trace.passed)
+}
+
+fn print_metadata() {
+    println!("identity-trace-v0");
+    println!("candidate\tcanonical-contiguous-baseline-v0");
+    println!(
+        "machine\t{}-{}\tallocator=system\tsamples={SAMPLE_COUNT}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    println!("status-key\tPASS=semantic-or-complete-gate\tSCREEN=preliminary-not-proof");
+}
+
+fn print_traces(traces: &[TraceOutcome]) {
+    println!("semantic_case\tstatus\tdigest\tanchors\tspans\tcopied_bytes\tdetail");
+    for trace in traces {
+        println!(
+            "{}\t{}\t{:016x}\t{}\t{}\t{}\t{}",
+            trace.id,
+            if trace.passed { "PASS" } else { "FAIL" },
+            trace.digest,
+            trace.work.anchors_visited,
+            trace.work.authored_spans_visited,
+            trace.work.source_bytes_copied,
+            trace.detail
+        );
+    }
+}
+
+fn print_gates(gates: &[Gate]) {
+    println!("gate\tstatus\tobserved\tlimit\tnote");
+    for gate in gates {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            gate.id,
+            gate.status.as_str(),
+            gate.observed,
+            gate.limit,
+            gate.note
+        );
+    }
+}
+
+fn measure_gates() -> Vec<Gate> {
+    let (label_heap, snapshot_clone_shares) = label_measurements();
+    let p95 = localized_edit_p95();
+    let (dense_visited, dense_resolved) = dense_authored_work();
+    let (editor_copied, editor_visited) = editor_local_edit_work();
+
+    vec![
+        Gate {
+            id: "label-64-fixed-heap",
+            status: Status::Screen,
+            observed: format!(
+                "{label_heap} byte structural lower bound; below_limit={}",
+                label_heap <= 4 * 1024
+            ),
+            limit: "<=4096 bytes",
+            note: "allocator instrumentation must include control blocks and capacity slack",
+        },
+        Gate {
+            id: "snapshot-clone",
+            status: pass_if(snapshot_clone_shares),
+            observed: format!("source_arc_shared={snapshot_clone_shares} copied_bytes=0"),
+            limit: "no source copy; <=256 allocated bytes",
+            note: "Arc clone performs no candidate allocation",
+        },
+        Gate {
+            id: "sparse-anchor-retained",
+            status: Status::Screen,
+            observed: format!("{} bytes/record", anchor_record_bytes()),
+            limit: "<=128 bytes/anchor",
+            note: "requires allocator measurement amortized over 10000 anchors",
+        },
+        Gate {
+            id: "dense-authored-retained",
+            status: Status::Screen,
+            observed: format!("{} bytes/flat record", authored_span_bytes()),
+            limit: "<=48 bytes/span",
+            note: "requires allocator measurement including the eventual index",
+        },
+        Gate {
+            id: "dense-derived-retained",
+            status: Status::Screen,
+            observed: format!("{} bytes/flat record", derived_range_bytes()),
+            limit: "<=32 bytes/range",
+            note: "revision law passes; retained allocation needs instrumentation",
+        },
+        Gate {
+            id: "form-10k-local-edit-p95",
+            status: Status::Screen,
+            observed: format!(
+                "{} ns; below_limit={}",
+                p95.as_nanos(),
+                p95 < Duration::from_millis(16)
+            ),
+            limit: "<16000000 ns",
+            note: "no confidence interval or calibrated reference machine yet",
+        },
+        Gate {
+            id: "dense-million-transform-work",
+            status: pass_if(dense_visited <= 4_096 && dense_resolved == 0),
+            observed: format!("visited={dense_visited} sparse_resolutions={dense_resolved}"),
+            limit: "<=4096 index records plus overlaps; no sparse resolution",
+            note: "expected baseline failure exposes the need for an indexed range set",
+        },
+        Gate {
+            id: "editor-million-local-edit-work",
+            status: pass_if(editor_copied == 0 && editor_visited <= 4_096),
+            observed: format!("copied_bytes={editor_copied} records={editor_visited}"),
+            limit: "no source copy; <=4096 index records plus frontier",
+            note: "expected baseline failure exposes the need for persistent chunking",
+        },
+        Gate {
+            id: "append-gib",
+            status: Status::NotRun,
+            observed: String::from("candidate has no append-tail strategy"),
+            limit: "p95 <16 ms; <=2 unpublished batches",
+            note: "must be implemented before candidate selection",
+        },
+        Gate {
+            id: "collab-rich-tree-history",
+            status: Status::NotRun,
+            observed: String::from("no collaboration candidate dependency approved"),
+            limit: "semantic equivalence and merge/publication budgets",
+            note: "Loro or another authority candidate remains a human dependency gate",
+        },
+    ]
+}
+
+fn label_measurements() -> (usize, bool) {
+    let text = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    let mut model = CanonicalBaseline::new(text);
+    for offset in [0, 16, 32, 64] {
+        model
+            .create_anchor(offset, Bias::Before)
+            .expect("label trace boundary is valid");
+    }
+    model.replace_authored(
+        (0_u32..8)
+            .map(|value| {
+                let start = usize::try_from(value).expect("small value") * 8;
+                AuthoredSpan {
+                    range: start..start + 8,
+                    edges: EdgeBehavior {
+                        start: Bias::Before,
+                        end: Bias::After,
+                    },
+                    value,
+                }
+            })
+            .collect(),
+    );
+    let estimated_heap = baseline_inline_bytes()
+        + model.text_len()
+        + 4 * anchor_record_bytes()
+        + 8 * authored_span_bytes();
+    let (snapshot, _) = model.snapshot();
+    let clone = snapshot.clone();
+    (estimated_heap, snapshot.shares_text_with(&clone))
+}
+
+fn localized_edit_p95() -> Duration {
+    let source = "x".repeat(10 * 1024);
+    let mut samples = Vec::with_capacity(SAMPLE_COUNT);
+    for sample in 0..SAMPLE_COUNT {
+        let mut model = CanonicalBaseline::new(&source);
+        let at = 5_000 + sample % 100;
+        let started = Instant::now();
+        model
+            .replace(at..at + 1, "y")
+            .expect("ASCII edit boundary is valid");
+        samples.push(started.elapsed());
+    }
+    samples.sort_unstable();
+    samples[(SAMPLE_COUNT * 95).div_ceil(100) - 1]
+}
+
+fn dense_authored_work() -> (usize, usize) {
+    let source = "x".repeat(DENSE_SPAN_COUNT);
+    let mut model = CanonicalBaseline::new(&source);
+    model.replace_authored(
+        (0..DENSE_SPAN_COUNT)
+            .map(|value| AuthoredSpan {
+                range: value..value + 1,
+                edges: EdgeBehavior {
+                    start: Bias::Before,
+                    end: Bias::After,
+                },
+                value: u32::try_from(value).expect("one million fits in u32"),
+            })
+            .collect(),
+    );
+    let middle = DENSE_SPAN_COUNT / 2;
+    let edit = model
+        .replace(middle..middle + 1, "y")
+        .expect("ASCII edit boundary is valid");
+    (edit.work.authored_spans_visited, edit.work.anchors_resolved)
+}
+
+fn editor_local_edit_work() -> (usize, usize) {
+    let source = "x\n".repeat(EDITOR_LINE_COUNT);
+    let mut model = CanonicalBaseline::new(&source);
+    let middle = source.len() / 2;
+    let edit = model
+        .replace(middle..middle + 1, "y")
+        .expect("ASCII edit boundary is valid");
+    (
+        edit.work.source_bytes_copied,
+        edit.work.snapshot_records_visited,
+    )
+}
+
+const fn pass_if(condition: bool) -> Status {
+    if condition {
+        Status::Pass
+    } else {
+        Status::Fail
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::localized_edit_p95;
+
+    #[test]
+    fn p95_runner_produces_a_nonzero_observation() {
+        assert!(
+            !localized_edit_p95().is_zero(),
+            "timer must observe the edit"
+        );
+    }
+}
