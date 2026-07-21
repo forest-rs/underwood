@@ -33,6 +33,13 @@ source and semantic observations, editing, and retained-work assertions through
 public APIs only. Earlier synthetic wind tunnels remain research evidence, not
 product benchmarks or substitutes for this permanent path.
 
+The external `examples/visual-proof` crate lowers that real scene through
+`imaging` and `imaging_vello_cpu` into a deterministic poster snapshot. Its
+typography, diagnostics, and displayed work counters all come from public
+Underwood output.
+
+![Underwood visual proof](examples/visual-proof/snapshots/underwood-visual-proof.png)
+
 Product performance lives in `benches/semantic-scene` and measures those same
 public crates. Pre-product hypothesis implementations live under
 `experiments/` and are explicitly barred from product performance claims.

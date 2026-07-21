@@ -17,6 +17,8 @@ Underwood does not yet make compatibility promises.
 
 ### Added
 
+- Deterministic CPU-rendered visual proof through `imaging` and
+  `imaging_vello_cpu`, kept in a separate top-level example crate.
 - Executable repository constitution and governance workflow.
 - Beads capability, decision, and proof planning graph.
 - Machine-readable proof ledger.

@@ -1,0 +1,21 @@
+[package]
+name = "underwood_visual_proof"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Deterministic CPU-rendered visual proof for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+imaging.workspace = true
+imaging_vello_cpu.workspace = true
+png.workspace = true
+underwood.workspace = true
+underwood_parley.workspace = true
+
+[lints]
+workspace = true
