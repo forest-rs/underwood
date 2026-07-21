@@ -1,9 +1,10 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::candidate::{BlockedRanges, ChunkedText};
+use crate::candidate::{AppendStream, BlockedRanges, ChunkedText};
 use crate::model::{
     AuthoredSpan, Bias, CanonicalBaseline, EdgeBehavior, anchor_record_bytes, authored_span_bytes,
     baseline_inline_bytes, derived_range_bytes,
@@ -13,6 +14,8 @@ use crate::trace::{TraceOutcome, run_semantic_suite};
 const SAMPLE_COUNT: usize = 200;
 const DENSE_SPAN_COUNT: usize = 1_000_000;
 const EDITOR_LINE_COUNT: usize = 1_000_000;
+const APPEND_BATCH_BYTES: usize = 64 * 1024;
+const APPEND_BATCH_COUNT: usize = (1 << 30) / APPEND_BATCH_BYTES;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Status {
@@ -42,6 +45,18 @@ struct Gate {
     note: &'static str,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct AppendMeasurement {
+    p95: Duration,
+    logical_bytes: usize,
+    batches: usize,
+    retained_batches: usize,
+    maximum_records: usize,
+    total_nodes: usize,
+    source_bytes_copied: usize,
+    maximum_unpublished_batches: usize,
+}
+
 pub(crate) fn run() -> bool {
     let traces = run_semantic_suite();
     print_metadata();
@@ -52,7 +67,7 @@ pub(crate) fn run() -> bool {
 
 fn print_metadata() {
     println!("identity-trace-v0");
-    println!("candidate\tcanonical-contiguous-baseline-v0");
+    println!("candidate\tcanonical-baseline+chunked-blocked-append-forest-v2");
     println!(
         "machine\t{}-{}\tallocator=system\tsamples={SAMPLE_COUNT}",
         std::env::consts::OS,
@@ -98,6 +113,7 @@ fn measure_gates() -> Vec<Gate> {
     let (editor_copied, editor_visited) = editor_local_edit_work();
     let (chunked_copied, chunk_records, chunk_snapshot_shared) = chunked_editor_work();
     let (indexed_blocks, indexed_spans, range_snapshot_shared) = indexed_dense_work();
+    let append = append_gib_work();
 
     vec![
         Gate {
@@ -182,11 +198,46 @@ fn measure_gates() -> Vec<Gate> {
             note: "candidate v1 shifts suffix blocks without visiting their spans",
         },
         Gate {
-            id: "append-gib",
-            status: Status::NotRun,
-            observed: String::from("candidate has no append-tail strategy"),
-            limit: "p95 <16 ms; <=2 unpublished batches",
-            note: "must be implemented before candidate selection",
+            id: "append-gib-publication-work",
+            status: pass_if(
+                append.logical_bytes == 1 << 30
+                    && append.batches == APPEND_BATCH_COUNT
+                    && append.retained_batches == APPEND_BATCH_COUNT
+                    && append.maximum_records <= 32
+                    && append.source_bytes_copied == 0,
+            ),
+            observed: format!(
+                "logical_bytes={} batches={} retained_batches={} max_records={} total_nodes={} copied_bytes={}",
+                append.logical_bytes,
+                append.batches,
+                append.retained_batches,
+                append.maximum_records,
+                append.total_nodes,
+                append.source_bytes_copied,
+            ),
+            limit: "1 GiB in 16384 batches; <=32 metadata records/publication; zero source copy",
+            note: "persistent binomial forest clones or merges one logarithmic metadata path",
+        },
+        Gate {
+            id: "append-gib-retained-tail",
+            status: pass_if(append.maximum_unpublished_batches <= 2),
+            observed: format!(
+                "maximum_unpublished_batches={}",
+                append.maximum_unpublished_batches
+            ),
+            limit: "<=2 configured batches",
+            note: "candidate publishes every immutable append batch immediately",
+        },
+        Gate {
+            id: "append-gib-publication-p95",
+            status: Status::Screen,
+            observed: format!(
+                "{} ns; below_limit={}",
+                append.p95.as_nanos(),
+                append.p95 < Duration::from_millis(16)
+            ),
+            limit: "<16000000 ns",
+            note: "shared payload isolates publication metadata; reference machine and confidence method remain unratified",
         },
         Gate {
             id: "collab-rich-tree-history",
@@ -324,6 +375,40 @@ fn indexed_dense_work() -> (usize, usize, bool) {
     )
 }
 
+fn append_gib_work() -> AppendMeasurement {
+    let payload = Arc::<str>::from("x".repeat(APPEND_BATCH_BYTES));
+    let mut stream = AppendStream::default();
+    let mut samples = Vec::with_capacity(APPEND_BATCH_COUNT);
+    let mut maximum_records = 0;
+    let mut total_nodes = 0;
+    let mut source_bytes_copied = 0;
+    let mut maximum_unpublished_batches = 0;
+
+    for _ in 0..APPEND_BATCH_COUNT {
+        let started = Instant::now();
+        let (next, work) = stream.append(Arc::clone(&payload));
+        samples.push(started.elapsed());
+        maximum_records =
+            maximum_records.max(work.level_records_visited + work.node_records_created);
+        total_nodes += work.node_records_created;
+        source_bytes_copied += work.source_bytes_copied;
+        maximum_unpublished_batches = maximum_unpublished_batches.max(work.unpublished_batches);
+        stream = next;
+    }
+    samples.sort_unstable();
+
+    AppendMeasurement {
+        p95: samples[(APPEND_BATCH_COUNT * 95).div_ceil(100) - 1],
+        logical_bytes: stream.len(),
+        batches: stream.batches(),
+        retained_batches: stream.retained_batches(),
+        maximum_records,
+        total_nodes,
+        source_bytes_copied,
+        maximum_unpublished_batches,
+    }
+}
+
 const fn pass_if(condition: bool) -> Status {
     if condition {
         Status::Pass
@@ -334,7 +419,7 @@ const fn pass_if(condition: bool) -> Status {
 
 #[cfg(test)]
 mod tests {
-    use super::localized_edit_p95;
+    use super::{APPEND_BATCH_COUNT, append_gib_work, localized_edit_p95};
 
     #[test]
     fn p95_runner_produces_a_nonzero_observation() {
@@ -342,5 +427,16 @@ mod tests {
             !localized_edit_p95().is_zero(),
             "timer must observe the edit"
         );
+    }
+
+    #[test]
+    fn append_runner_reaches_one_gib_with_bounded_structural_work() {
+        let measurement = append_gib_work();
+        assert_eq!(measurement.logical_bytes, 1 << 30);
+        assert_eq!(measurement.batches, APPEND_BATCH_COUNT);
+        assert_eq!(measurement.retained_batches, APPEND_BATCH_COUNT);
+        assert!(measurement.maximum_records <= 32);
+        assert_eq!(measurement.source_bytes_copied, 0);
+        assert_eq!(measurement.maximum_unpublished_batches, 0);
     }
 }

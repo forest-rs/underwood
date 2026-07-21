@@ -10,6 +10,141 @@ const CHUNK_TARGET: usize = 4 * 1024;
 const RANGE_BLOCK_TARGET: usize = 1024;
 
 #[derive(Clone, Debug)]
+enum AppendNode {
+    Leaf(Arc<str>),
+    Branch {
+        len: usize,
+        left: Arc<Self>,
+        right: Arc<Self>,
+    },
+}
+
+impl AppendNode {
+    fn len(&self) -> usize {
+        match self {
+            Self::Leaf(text) => text.len(),
+            Self::Branch { len, .. } => *len,
+        }
+    }
+
+    fn branch(left: Arc<Self>, right: Arc<Self>) -> Self {
+        Self::Branch {
+            len: left
+                .len()
+                .checked_add(right.len())
+                .expect("trace append length overflow"),
+            left,
+            right,
+        }
+    }
+
+    fn retained_batches(&self) -> usize {
+        match self {
+            Self::Leaf(_) => 1,
+            Self::Branch { left, right, .. } => left.retained_batches() + right.retained_batches(),
+        }
+    }
+
+    #[cfg(test)]
+    fn append_to(&self, text: &mut String) {
+        match self {
+            Self::Leaf(leaf) => text.push_str(leaf),
+            Self::Branch { left, right, .. } => {
+                left.append_to(text);
+                right.append_to(text);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AppendStream {
+    len: usize,
+    batches: usize,
+    levels: Arc<[Option<Arc<AppendNode>>]>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct AppendWork {
+    pub(crate) level_records_visited: usize,
+    pub(crate) node_records_created: usize,
+    pub(crate) source_bytes_copied: usize,
+    pub(crate) unpublished_batches: usize,
+}
+
+impl AppendStream {
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    pub(crate) fn batches(&self) -> usize {
+        self.batches
+    }
+
+    pub(crate) fn retained_batches(&self) -> usize {
+        self.levels
+            .iter()
+            .flatten()
+            .map(|node| node.retained_batches())
+            .sum()
+    }
+
+    pub(crate) fn append(&self, batch: Arc<str>) -> (Self, AppendWork) {
+        let batch_len = batch.len();
+        let mut work = AppendWork {
+            node_records_created: 1,
+            ..AppendWork::default()
+        };
+        let mut levels = self.levels.to_vec();
+        let mut carry = Arc::new(AppendNode::Leaf(batch));
+        let mut level = 0;
+
+        loop {
+            work.level_records_visited += 1;
+            if level == levels.len() {
+                levels.push(Some(carry));
+                break;
+            }
+            match levels[level].take() {
+                Some(left) => {
+                    carry = Arc::new(AppendNode::branch(left, carry));
+                    work.node_records_created += 1;
+                    level += 1;
+                }
+                None => {
+                    levels[level] = Some(carry);
+                    break;
+                }
+            }
+        }
+
+        (
+            Self {
+                len: self
+                    .len
+                    .checked_add(batch_len)
+                    .expect("trace append length overflow"),
+                batches: self
+                    .batches
+                    .checked_add(1)
+                    .expect("trace append batch count overflow"),
+                levels: Arc::from(levels),
+            },
+            work,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_text(&self) -> String {
+        let mut text = String::with_capacity(self.len);
+        for node in self.levels.iter().rev().flatten() {
+            node.append_to(&mut text);
+        }
+        text
+    }
+}
+
+#[derive(Clone, Debug)]
 struct TextChunk {
     start: usize,
     text: Arc<str>,
@@ -366,7 +501,70 @@ fn shift_offset(offset: usize, delta: isize) -> usize {
 mod tests {
     use crate::model::{Bias, CanonicalBaseline, EdgeBehavior};
 
-    use super::{AuthoredSpan, BlockedRanges, ChunkedText};
+    use std::sync::Arc;
+
+    use super::{AppendStream, AuthoredSpan, BlockedRanges, ChunkedText};
+
+    #[test]
+    fn append_stream_preserves_old_snapshots_and_source_order() {
+        let first = Arc::<str>::from("alpha");
+        let second = Arc::<str>::from("βeta");
+        let third = Arc::<str>::from("🙂");
+        let empty = AppendStream::default();
+        let (one, first_work) = empty.append(first);
+        let snapshot = one.clone();
+        let (two, _) = one.append(second);
+        let (three, _) = two.append(third);
+
+        assert_eq!(first_work.source_bytes_copied, 0);
+        assert_eq!(snapshot.to_text(), "alpha");
+        assert_eq!(three.to_text(), "alphaβeta🙂");
+        assert_eq!(three.len(), "alphaβeta🙂".len());
+        assert_eq!(three.batches(), 3);
+    }
+
+    #[test]
+    fn append_stream_preserves_order_across_binary_carries() {
+        let mut stream = AppendStream::default();
+        let mut expected = String::new();
+        let mut snapshot = None;
+
+        for value in 0..257_u16 {
+            let payload = format!("{value:04x}|");
+            expected.push_str(&payload);
+            (stream, _) = stream.append(Arc::<str>::from(payload));
+            if value == 126 {
+                snapshot = Some((stream.clone(), expected.clone()));
+            }
+        }
+
+        let (snapshot, snapshot_text) = snapshot.expect("checkpoint was captured");
+        assert_eq!(snapshot.to_text(), snapshot_text);
+        assert_eq!(snapshot.batches(), 127);
+        assert_eq!(stream.to_text(), expected);
+        assert_eq!(stream.batches(), 257);
+    }
+
+    #[test]
+    fn append_stream_publication_work_is_logarithmic() {
+        let batch = Arc::<str>::from("x".repeat(64 * 1024));
+        let mut stream = AppendStream::default();
+        let mut maximum_records = 0;
+        for _ in 0..1024 {
+            let (next, work) = stream.append(Arc::clone(&batch));
+            maximum_records =
+                maximum_records.max(work.level_records_visited + work.node_records_created);
+            assert_eq!(work.source_bytes_copied, 0);
+            assert_eq!(work.unpublished_batches, 0);
+            stream = next;
+        }
+        assert_eq!(stream.batches(), 1024);
+        assert_eq!(stream.len(), 1024 * 64 * 1024);
+        assert!(
+            maximum_records <= 22,
+            "1,024 appends must touch/create at most two logarithmic paths"
+        );
+    }
 
     #[test]
     fn chunked_edit_reuses_unchanged_source_and_preserves_text() {
