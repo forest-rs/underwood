@@ -291,3 +291,56 @@ The campaign is complete when all Design-0004 proofs run through one public
 workflow, the poster visibly demonstrates the real resolved instances and
 fallback, all public callers are migrated, and the full local and remote
 validation matrices pass.
+
+## Retained Parley ShapedText uptake
+
+**Status:** Active
+
+**Beads:** `und-oh0.2.5`, `und-oh0.10.1.4`
+
+### Goal
+
+Replace the callback-era copied shaped-run cache with Parley Core's upstream
+owned `ShapedText`, preserve Underwood's portable adapter boundary, and leave
+paragraph breaking with one retained cluster and metric truth.
+
+### Fence
+
+This campaign owns the immutable Parley revision uptake, private retained
+shaping storage, source-correct lowering, migration evidence, and conformance
+review. It does not expose Parley types, implement line breaking, change font
+matching ownership, or fold hit testing and paint-coverage follow-ups into the
+same change.
+
+### Steps
+
+1. Ratify `docs/design/0005-retained-parley-shaped-text.md` against exact
+   Parley main and update the existing dependency pins together.
+2. Replace `PhysicsRun`, `PhysicsGlyph`, and callback copy-out with one reusable
+   `ShapedText` plus the minimal script sidecar.
+3. Lower Parley's cluster storage into portable prepared glyphs with explicit
+   ligature, RTL, UTF-8, and control-only source laws.
+4. Preserve public invalidation/work behavior and migrate the private seam
+   experiment from "current gap" to executable retained-result evidence.
+5. Compare correctness and retained-path performance against the previous pin,
+   run Lynx review, and land only after all local and remote gates pass.
+
+### Risks and controls
+
+- **Representation mirage:** delete the local shaped-run and glyph structs;
+  merely copying into renamed equivalents does not complete the campaign.
+- **Ligature source loss:** union start and continuation cluster ranges and
+  assert the exact `ffi` range through the public output.
+- **Control phantom glyphs:** permit honest glyphless prepared runs instead of
+  manufacturing output that Parley intentionally removed.
+- **Upstream drift:** record and pin exact `6c81e1d`; all Parley workspace
+  dependencies resolve from one revision.
+- **Breaking scope creep:** record Parley's boundary and metrics now, but leave
+  line formation to `und-oh0.2.2`.
+
+### Completion
+
+The campaign is complete when Underwood retains Parley's native `ShapedText`,
+the duplicate callback representation is absent, public conformance and
+invalidation proofs pass on the new pin, the measured cost is recorded, and
+local plus remote validation are green.
