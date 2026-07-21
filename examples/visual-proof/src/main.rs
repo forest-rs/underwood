@@ -9,7 +9,7 @@ use std::io::BufReader;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-use imaging::kurbo::{Affine, Circle, Rect, RoundedRect, Stroke};
+use imaging::kurbo::{Affine, Circle, Point, Rect, RoundedRect, Stroke};
 use imaging::peniko::{Color, Fill, Style};
 use imaging::{PaintSink, Painter, RgbaImage, record};
 use imaging_vello_cpu::VelloCpuRenderer;
@@ -39,6 +39,8 @@ const CYAN_COLOR: Color = Color::from_rgb8(0x4d, 0xd5, 0xe7);
 const CORAL_COLOR: Color = Color::from_rgb8(0xff, 0x6b, 0x67);
 const GOLD_COLOR: Color = Color::from_rgb8(0xf5, 0xc4, 0x51);
 const MUTED_COLOR: Color = Color::from_rgb8(0x85, 0x96, 0xad);
+const DIAGNOSTIC_COLOR: Color = Color::from_rgb8(0xb6, 0x9c, 0xff);
+const DIAGNOSTIC_FILL: Color = Color::from_rgba8(0xb6, 0x9c, 0xff, 0x12);
 
 type AnyError = Box<dyn std::error::Error>;
 
@@ -116,52 +118,49 @@ impl<'a> TextSceneAdapter<'a> {
     }
 
     fn paint_diagnostics_behind<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        for line in self.scene.lines() {
-            painter
-                .fill(line.bounds(), Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x08))
-                .transform(self.placement)
-                .draw();
-        }
+        let (glyph_id, glyph_position, _) = split_ligature_evidence(self.scene)
+            .expect("diagnostic scene must contain a split ligature");
         for fragment in self.scene.fragments() {
+            if !fragment
+                .glyphs()
+                .iter()
+                .any(|glyph| glyph.id() == glyph_id && glyph.position() == glyph_position)
+            {
+                continue;
+            }
             painter
-                .fill(fragment.clip(), diagnostic_fill(fragment.paint()))
+                .fill(fragment.clip(), DIAGNOSTIC_FILL)
                 .transform(self.placement)
                 .draw();
         }
     }
 
     fn paint_diagnostics_above<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        let line_stroke = Stroke::new(1.0);
-        for line in self.scene.lines() {
-            painter
-                .stroke(
-                    line.bounds(),
-                    &line_stroke,
-                    Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x58),
-                )
-                .transform(self.placement)
-                .draw();
-        }
-
-        let semantic_stroke = Stroke::new(1.0).with_dashes(0.0, [5.0, 5.0]);
-        for semantic in self.scene.semantics() {
-            painter
-                .stroke(
-                    semantic.bounds(),
-                    &semantic_stroke,
-                    Color::from_rgba8(0xf5, 0xc4, 0x51, 0x68),
-                )
-                .transform(self.placement)
-                .draw();
-        }
-
-        let clip_stroke = Stroke::new(1.5);
+        let (glyph_id, glyph_position, _) = split_ligature_evidence(self.scene)
+            .expect("diagnostic scene must contain a split ligature");
+        let clip_stroke = Stroke::new(1.5).with_dashes(0.0, [8.0, 5.0]);
         for fragment in self.scene.fragments() {
+            if !fragment
+                .glyphs()
+                .iter()
+                .any(|glyph| glyph.id() == glyph_id && glyph.position() == glyph_position)
+            {
+                continue;
+            }
             painter
-                .stroke(
-                    fragment.clip(),
-                    &clip_stroke,
-                    diagnostic_edge(fragment.paint()),
+                .stroke(fragment.clip(), &clip_stroke, DIAGNOSTIC_COLOR)
+                .transform(self.placement)
+                .draw();
+            let clip = fragment.clip();
+            painter
+                .fill(
+                    Rect::new(
+                        clip.x0,
+                        clip.y0,
+                        (clip.x0 + 28.0).min(clip.x1),
+                        clip.y0 + 4.0,
+                    ),
+                    DIAGNOSTIC_COLOR,
                 )
                 .transform(self.placement)
                 .draw();
@@ -170,23 +169,31 @@ impl<'a> TextSceneAdapter<'a> {
         let fragment = self
             .scene
             .fragments()
-            .first()
-            .expect("visual proof scene must contain a fragment");
+            .iter()
+            .find(|fragment| {
+                fragment
+                    .glyphs()
+                    .iter()
+                    .any(|glyph| glyph.id() == glyph_id && glyph.position() == glyph_position)
+            })
+            .expect("diagnostic scene must contain a split-ligature fragment");
         let point = fragment.clip().center();
         let hit = self
             .scene
             .hit_test(point)
             .expect("visual proof fragment center must hit");
         let caret = self.scene.caret(&hit);
+        let bounded_caret = caret.bounds().intersect(fragment.clip());
         painter
-            .fill(caret.bounds(), INK_COLOR)
+            .fill(bounded_caret, DIAGNOSTIC_COLOR)
             .transform(self.placement)
             .draw();
         painter
-            .fill(
-                Circle::new(hit.point(), 4.0),
-                Color::from_rgba8(0xee, 0xf3, 0xf8, 0xb0),
-            )
+            .fill(Circle::new(hit.point(), 5.0), BACKGROUND)
+            .transform(self.placement)
+            .draw();
+        painter
+            .fill(Circle::new(hit.point(), 3.0), DIAGNOSTIC_COLOR)
             .transform(self.placement)
             .draw();
     }
@@ -214,15 +221,19 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
             Piece::new("fice", InlineRole::EMPHASIS, CYAN),
         ],
     )?;
-    let arabic = layout_scene(
+    let mixed_direction = layout_scene(
         &mut layout,
         0x22,
-        104.0,
-        1_250.0,
-        &[Piece::new("مرحبا بالعالم", InlineRole::TEXT, GOLD)],
+        48.0,
+        745.0,
+        &[
+            Piece::new("SCENE 42 — ", InlineRole::TEXT, CYAN),
+            Piece::new("مرحبا بالعالم", InlineRole::EMPHASIS, GOLD),
+            Piece::new(" — LIVE", InlineRole::TEXT, CORAL),
+        ],
     )?;
 
-    let (ligature_id, ligature_clips) = split_ligature_evidence(&hero)
+    let (ligature_id, _, ligature_clips) = split_ligature_evidence(&hero)
         .expect("poster must paint one real ligature through multiple source clips");
     assert_eq!(
         hero.fragments()[0].font().data.as_ref(),
@@ -234,11 +245,16 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
             .any(|fragment| fragment.inline_role() == Some(InlineRole::EMPHASIS)),
         "the diagnostic overlay must be backed by real inline semantics"
     );
-    let arabic_fragment = arabic
+    let arabic_fragment = mixed_direction
         .fragments()
         .iter()
         .find(|fragment| fragment.script() == *b"Arab" && fragment.bidi_level() & 1 == 1)
-        .expect("poster must contain real right-to-left Arabic shaping");
+        .expect("poster must contain an Arabic RTL run in a mixed-direction paragraph");
+    let latin_fragment = mixed_direction
+        .fragments()
+        .iter()
+        .find(|fragment| fragment.script() == *b"Latn" && fragment.bidi_level() & 1 == 0)
+        .expect("poster must contain a Latin LTR run in a mixed-direction paragraph");
     assert!(
         arabic_fragment.bidi_level() & 1 == 1,
         "poster must contain real right-to-left Arabic shaping"
@@ -247,6 +263,11 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         arabic_fragment.font().data.as_ref(),
         ARABIC_FONT_BYTES,
         "Arabic poster text must select the bundled Noto Kufi fallback"
+    );
+    assert_eq!(
+        latin_fragment.font().data.as_ref(),
+        LATIN_FONT_BYTES,
+        "Latin poster text must retain the bundled Roboto Flex resource"
     );
 
     let title = layout_label(&mut layout, 0x23, 72.0, "UNDERWOOD", INK)?;
@@ -271,40 +292,32 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         &format!("GLYPH {ligature_id} / {ligature_clips} SOURCE CLIPS"),
         CORAL,
     )?;
-    let arabic_evidence = layout_label(
+    let mixed_direction_evidence = layout_label(
         &mut layout,
         0x2e,
         18.0,
         &format!(
-            "SCRIPT ARAB / BIDI LEVEL {} / REAL FALLBACK",
-            arabic_fragment.bidi_level()
+            "MIXED LTR + RTL / BIDI LEVELS {} + {} / REAL FALLBACK",
+            latin_fragment.bidi_level(),
+            arabic_fragment.bidi_level(),
         ),
-        GOLD,
+        MUTED,
     )?;
     let edit_label = layout_label(&mut layout, 0x26, 18.0, "LOCAL EDIT", CORAL)?;
-    let edit_value = layout_label(
-        &mut layout,
-        0x27,
-        28.0,
-        &format!("{} PARAGRAPH RESHAPED", proof.reshaped),
-        INK,
-    )?;
+    let edit_number = layout_label(&mut layout, 0x27, 60.0, &proof.reshaped.to_string(), CORAL)?;
+    let edit_detail = layout_label(&mut layout, 0x2f, 19.0, "PARAGRAPH RESHAPED", INK)?;
     let reuse_label = layout_label(&mut layout, 0x28, 18.0, "RETAINED", CYAN)?;
-    let reuse_value = layout_label(
-        &mut layout,
-        0x29,
-        28.0,
-        &format!("{} SIBLING REUSED", proof.reused),
-        INK,
-    )?;
+    let reuse_number = layout_label(&mut layout, 0x29, 60.0, &proof.reused.to_string(), CYAN)?;
+    let reuse_detail = layout_label(&mut layout, 0x30, 19.0, "SIBLING REUSED", INK)?;
     let paint_label = layout_label(&mut layout, 0x2a, 18.0, "PAINT ONLY", GOLD)?;
-    let paint_value = layout_label(
+    let paint_number = layout_label(
         &mut layout,
         0x2b,
-        28.0,
-        &format!("{} PARAGRAPHS RESHAPED", proof.paint_reshaped),
-        INK,
+        60.0,
+        &proof.paint_reshaped.to_string(),
+        GOLD,
     )?;
+    let paint_detail = layout_label(&mut layout, 0x31, 19.0, "PARAGRAPHS RESHAPED", INK)?;
     let footer = layout_label(
         &mut layout,
         0x2c,
@@ -320,12 +333,12 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
 
         TextSceneAdapter::new(&kicker, 124.0, 44.0).paint_into(&mut painter);
         TextSceneAdapter::new(&title, 120.0, 70.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&ligature_evidence, 124.0, 180.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&hero, 116.0, 205.0)
+        TextSceneAdapter::new(&ligature_evidence, 124.0, 184.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&hero, 116.0, 228.0)
             .with_diagnostics()
             .paint_into(&mut painter);
-        TextSceneAdapter::new(&arabic_evidence, 856.0, 180.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&arabic, 850.0, 245.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&mixed_direction_evidence, 740.0, 184.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&mixed_direction, 735.0, 286.0).paint_into(&mut painter);
         TextSceneAdapter::new(&statement, 124.0, 608.0).paint_into(&mut painter);
 
         paint_card(
@@ -345,11 +358,14 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         );
 
         TextSceneAdapter::new(&edit_label, 148.0, 738.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&edit_value, 148.0, 786.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&edit_number, 148.0, 770.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&edit_detail, 206.0, 806.0).paint_into(&mut painter);
         TextSceneAdapter::new(&reuse_label, 616.0, 738.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&reuse_value, 616.0, 786.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&reuse_number, 616.0, 770.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&reuse_detail, 674.0, 806.0).paint_into(&mut painter);
         TextSceneAdapter::new(&paint_label, 1_084.0, 738.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&paint_value, 1_084.0, 786.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&paint_number, 1_084.0, 770.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&paint_detail, 1_142.0, 806.0).paint_into(&mut painter);
         TextSceneAdapter::new(&footer, 124.0, 936.0).paint_into(&mut painter);
     }
     scene.validate()?;
@@ -486,7 +502,7 @@ fn assert_split_ligature(scene: &TextScene) {
     );
 }
 
-fn split_ligature_evidence(scene: &TextScene) -> Option<(u32, usize)> {
+fn split_ligature_evidence(scene: &TextScene) -> Option<(u32, Point, usize)> {
     scene.fragments().iter().find_map(|left| {
         let glyph = &left.glyphs()[0];
         let matching = scene.fragments().iter().filter(|right| {
@@ -498,7 +514,7 @@ fn split_ligature_evidence(scene: &TextScene) -> Option<(u32, usize)> {
                 && left.source() != right.source()
                 && left.clip() != right.clip()
         });
-        proves_source_partition.then_some((glyph.id(), clips))
+        proves_source_partition.then_some((glyph.id(), glyph.position(), clips))
     })
 }
 
@@ -556,26 +572,6 @@ fn paint_card<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>, rect: Rect, a
         ),
         Color::from_rgba8(0x78, 0x8a, 0xa3, 0x24),
     );
-}
-
-fn diagnostic_fill(slot: PaintSlot) -> Color {
-    if slot == CORAL {
-        Color::from_rgba8(0xff, 0x6b, 0x67, 0x14)
-    } else if slot == CYAN {
-        Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x14)
-    } else {
-        Color::from_rgba8(0xf5, 0xc4, 0x51, 0x10)
-    }
-}
-
-fn diagnostic_edge(slot: PaintSlot) -> Color {
-    if slot == CORAL {
-        Color::from_rgba8(0xff, 0x6b, 0x67, 0xa0)
-    } else if slot == CYAN {
-        Color::from_rgba8(0x4d, 0xd5, 0xe7, 0xa0)
-    } else {
-        Color::from_rgba8(0xf5, 0xc4, 0x51, 0x90)
-    }
 }
 
 #[expect(

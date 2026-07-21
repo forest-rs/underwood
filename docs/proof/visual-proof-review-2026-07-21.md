@@ -3,12 +3,12 @@
 - **Scope:** `examples/visual-proof`, its CPU snapshot, and repository claims
 - **Review modes:** Lynx adversarial correctness; Rook real-versus-mirage audit
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
-  `389d86c6cace10667e76c27e5b732d790ccfa75d49fcb31ea28e39884e42294a`
+  `2383792f36e61d6a9aff38e9636a29dfec3a1e033dd754ce6564d3415f6c1911`
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust
-- **Remote gate:** GitHub Actions run `29824046589`; all eight jobs passed,
-  including exact snapshot reproduction on Linux, macOS, and Windows
-- **Result:** all Must findings resolved; the current three-OS matrix earns the
-  deterministic CPU snapshot claim
+- **Remote gate:** pending revalidation of this revised snapshot on Linux,
+  macOS, and Windows; run `29824046589` passed for its predecessor
+- **Result:** all review findings are resolved locally; the revised pixels must
+  pass the three-OS matrix before this proof lands
 
 ## Lynx review
 
@@ -35,6 +35,13 @@ Renderer and PNG dependencies remain outside both production crates.
 4. **A pretty PNG alone would not be a regression test.** The crate reruns the
    full public path, checks the semantic evidence, decodes the committed PNG,
    and requires exact RGBA equality.
+5. **The original diagnostic caret escaped its evidence region and crossed the
+   poster header.** The proof now intersects caret geometry with the focused
+   split-ligature clip. It outlines only the two fragments that share the glyph,
+   using a distinct violet diagnostic color instead of competing paint colors.
+6. **An isolated Arabic line showed RTL shaping but not mixed-direction
+   behavior.** One paragraph now places an Arabic RTL run between Latin LTR
+   runs and asserts even and odd bidi levels plus both exact font resources.
 
 Good catch: the font-resource comparison turns “real fallback” from a plausible
 caption into an executable fact.
@@ -58,7 +65,7 @@ caption into an executable fact.
 - Exact RGBA comparison with the committed CPU snapshot.
 - Distinct source, paint, and clip evidence for one shared ligature glyph.
 - Exact selected-font resource for Latin and Arabic fragments.
-- RTL script and bidi observation for Arabic.
+- Even Latin and odd Arabic bidi observations in one mixed-direction paragraph.
 - Local-edit reshaping, sibling reuse, and paint-only negative-work assertions.
 
 ## Rook audit
@@ -79,8 +86,8 @@ caption into an executable fact.
   produced by the checked-in Underwood-to-Parley path.
 - **Real:** the split `ffi` color boundary is rendered from two clips over one
   shared shaped glyph without reshaping at the style boundary.
-- **Real:** the Arabic caption is guarded by exact fallback-font, script, and
-  odd-bidi-level checks.
+- **Real:** the mixed-direction line is guarded by exact Latin and Arabic font
+  resources, script tags, and even/odd bidi-level checks.
 - **Real:** the displayed `1 / 1 / 0` work story is formatted from the actual
   edit, retained-sibling, and paint-only `WorkReport` values.
 - **Real:** the snapshot test compares rendered pixels, not a synthetic scene,
@@ -90,5 +97,6 @@ caption into an executable fact.
 
 The original high-consequence uncertainty was exact CPU pixel identity across
 operating systems. GitHub Actions run `29824046589` closed that gap for the
-current Linux, macOS, and Windows matrix. The remaining limit is scope: one
-poster proves this path and these fonts, not general renderer conformance.
+predecessor snapshot. The revised composition must repeat that Linux, macOS,
+and Windows result before landing. The remaining limit is scope: one poster
+proves this path and these fonts, not general renderer conformance.
