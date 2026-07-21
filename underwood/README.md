@@ -15,6 +15,9 @@ The first draft public slice is deliberately complete end to end:
   atomic staged edits;
 - [`LayoutEngine`] retains prepared paragraphs and avoids analysis or shaping
   for unchanged siblings, paint-value changes, and width-only changes;
+- [`ComputedInlineStyle`] keeps [`ShapingStyle`], [`InlineFlowStyle`], and
+  [`PaintSlot`] values in separate invalidation partitions while [`StyleMap`]
+  assigns complete styles to semantic text leaves;
 - [`TextScene`] exposes real glyph resources, paint clips, source mapping, hit
   testing, caret geometry, and semantic observations;
 - document IDs are opaque and document-scoped, while [`SnapshotTextRange`]

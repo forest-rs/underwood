@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-use crate::{FontData, PaintSlot, ParagraphId, Rect, Vec2};
+use crate::{FontData, PaintSlot, ParagraphId, Rect, ShapingStyle, Vec2};
 
 /// Prepares analyzed, itemized, and shaped data for one paragraph.
 pub trait ParagraphPreparation {
@@ -26,7 +26,7 @@ pub trait ParagraphPreparation {
 pub struct ParagraphInput<'a> {
     paragraph: ParagraphId,
     text: &'a str,
-    font_size: f32,
+    shaping_runs: &'a [ShapingRun],
     paint_runs: &'a [PaintRun],
 }
 
@@ -34,13 +34,13 @@ impl<'a> ParagraphInput<'a> {
     pub(crate) const fn new(
         paragraph: ParagraphId,
         text: &'a str,
-        font_size: f32,
+        shaping_runs: &'a [ShapingRun],
         paint_runs: &'a [PaintRun],
     ) -> Self {
         Self {
             paragraph,
             text,
-            font_size,
+            shaping_runs,
             paint_runs,
         }
     }
@@ -57,16 +57,41 @@ impl<'a> ParagraphInput<'a> {
         self.text
     }
 
-    /// Returns the paragraph font size in scene units.
+    /// Returns source-ordered shaping metadata covering the paragraph.
     #[must_use]
-    pub const fn font_size(&self) -> f32 {
-        self.font_size
+    pub const fn shaping_runs(&self) -> &[ShapingRun] {
+        self.shaping_runs
     }
 
     /// Returns source-ordered paint metadata covering the paragraph.
     #[must_use]
     pub const fn paint_runs(&self) -> &[PaintRun] {
         self.paint_runs
+    }
+}
+
+/// Complete shaping values over a paragraph-local UTF-8 byte range.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapingRun {
+    bytes: Range<u32>,
+    style: ShapingStyle,
+}
+
+impl ShapingRun {
+    pub(crate) const fn new(bytes: Range<u32>, style: ShapingStyle) -> Self {
+        Self { bytes, style }
+    }
+
+    /// Returns the paragraph-local UTF-8 byte range.
+    #[must_use]
+    pub fn bytes(&self) -> Range<u32> {
+        self.bytes.clone()
+    }
+
+    /// Returns the complete shaping values for this range.
+    #[must_use]
+    pub const fn style(&self) -> &ShapingStyle {
+        &self.style
     }
 }
 

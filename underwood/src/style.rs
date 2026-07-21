@@ -4,7 +4,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::{Brush, StyleError, StyleErrorKind, TextId};
+use crate::{Brush, FontFeature, FontVariation, Language, StyleError, StyleErrorKind, TextId};
 
 /// Dense caller-defined index into a [`PaintTable`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -22,59 +22,270 @@ impl PaintSlot {
     }
 }
 
-/// Shaping and default-paint values for first-slice text.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TextStyle {
-    pub(crate) font_size: f32,
-    pub(crate) paint: PaintSlot,
+/// Complete computed values that can change text shaping.
+///
+/// Settings are owned and canonicalized by OpenType tag. When the same tag is
+/// supplied more than once, the last value wins. Unsupported settings are a
+/// deterministic no-op for a selected font.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShapingStyle {
+    font_size: f32,
+    language: Option<Language>,
+    features: Arc<[FontFeature]>,
+    variations: Arc<[FontVariation]>,
 }
 
-impl TextStyle {
-    /// Creates a text style with a finite, strictly positive font size.
-    pub fn new(font_size: f32, paint: PaintSlot) -> Result<Self, StyleError> {
+impl ShapingStyle {
+    /// Creates shaping values with a finite, strictly positive font size.
+    pub fn new(font_size: f32) -> Result<Self, StyleError> {
         if !font_size.is_finite() || font_size <= 0.0 {
             return Err(StyleError::new(StyleErrorKind::InvalidNumber));
         }
-        Ok(Self { font_size, paint })
+        Ok(Self {
+            font_size,
+            language: None,
+            features: Arc::from([]),
+            variations: Arc::from([]),
+        })
+    }
+
+    /// Returns a copy with a shaping language.
+    #[must_use]
+    pub fn with_language(mut self, language: Option<Language>) -> Self {
+        self.language = language;
+        self
+    }
+
+    /// Returns a copy with canonicalized OpenType feature settings.
+    #[must_use]
+    pub fn with_features(mut self, features: impl IntoIterator<Item = FontFeature>) -> Self {
+        self.features = canonical_features(features);
+        self
+    }
+
+    /// Returns a copy with validated, canonicalized variation coordinates.
+    pub fn with_variations(
+        mut self,
+        variations: impl IntoIterator<Item = FontVariation>,
+    ) -> Result<Self, StyleError> {
+        self.variations = canonical_variations(variations)?;
+        Ok(self)
+    }
+
+    /// Returns the font size in scene units.
+    #[must_use]
+    pub const fn font_size(&self) -> f32 {
+        self.font_size
+    }
+
+    /// Returns the shaping language.
+    #[must_use]
+    pub const fn language(&self) -> Option<Language> {
+        self.language
+    }
+
+    /// Returns canonicalized OpenType feature settings.
+    #[must_use]
+    pub fn features(&self) -> &[FontFeature] {
+        &self.features
+    }
+
+    /// Returns canonicalized variable-font coordinates.
+    #[must_use]
+    pub fn variations(&self) -> &[FontVariation] {
+        &self.variations
     }
 }
 
-/// Per-leaf style overrides over one default style.
+fn canonical_features(features: impl IntoIterator<Item = FontFeature>) -> Arc<[FontFeature]> {
+    let mut input: Vec<_> = features.into_iter().collect();
+    let mut canonical = Vec::with_capacity(input.len());
+    while let Some(feature) = input.pop() {
+        if !canonical
+            .iter()
+            .any(|candidate: &FontFeature| candidate.tag == feature.tag)
+        {
+            canonical.push(feature);
+        }
+    }
+    canonical.sort_by_key(|feature| feature.tag);
+    canonical.into()
+}
+
+fn canonical_variations(
+    variations: impl IntoIterator<Item = FontVariation>,
+) -> Result<Arc<[FontVariation]>, StyleError> {
+    let mut input: Vec<_> = variations.into_iter().collect();
+    if input.iter().any(|variation| !variation.value.is_finite()) {
+        return Err(StyleError::new(StyleErrorKind::InvalidNumber));
+    }
+    let mut canonical = Vec::with_capacity(input.len());
+    while let Some(mut variation) = input.pop() {
+        if variation.value == 0.0 {
+            variation.value = 0.0;
+        }
+        if !canonical
+            .iter()
+            .any(|candidate: &FontVariation| candidate.tag == variation.tag)
+        {
+            canonical.push(variation);
+        }
+    }
+    canonical.sort_by_key(|variation| variation.tag);
+    Ok(canonical.into())
+}
+
+/// Computed line height as a multiple of the shaping font size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineHeight(f32);
+
+impl LineHeight {
+    /// Underwood's current normal line-height multiplier.
+    pub const NORMAL: Self = Self(1.25);
+
+    /// Validates a finite, strictly positive multiplier.
+    pub fn from_multiplier(multiplier: f32) -> Result<Self, StyleError> {
+        if !multiplier.is_finite() || multiplier <= 0.0 {
+            return Err(StyleError::new(StyleErrorKind::InvalidNumber));
+        }
+        Ok(Self(multiplier))
+    }
+
+    /// Returns the multiplier applied to the shaping font size.
+    #[must_use]
+    pub const fn multiplier(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for LineHeight {
+    fn default() -> Self {
+        Self::NORMAL
+    }
+}
+
+/// Complete computed values consumed only by inline flow and geometry.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct InlineFlowStyle {
+    line_height: LineHeight,
+}
+
+impl InlineFlowStyle {
+    /// Creates inline-flow values from a validated line height.
+    #[must_use]
+    pub const fn new(line_height: LineHeight) -> Self {
+        Self { line_height }
+    }
+
+    /// Returns the computed line height.
+    #[must_use]
+    pub const fn line_height(self) -> LineHeight {
+        self.line_height
+    }
+}
+
+/// One complete computed inline style.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComputedInlineStyle {
+    shaping: ShapingStyle,
+    inline_flow: InlineFlowStyle,
+    paint: PaintSlot,
+}
+
+impl ComputedInlineStyle {
+    /// Joins the three independently invalidated style partitions.
+    #[must_use]
+    pub fn new(shaping: ShapingStyle, inline_flow: InlineFlowStyle, paint: PaintSlot) -> Self {
+        Self {
+            shaping,
+            inline_flow,
+            paint,
+        }
+    }
+
+    /// Returns a copy with new shaping values.
+    #[must_use]
+    pub fn with_shaping(mut self, shaping: ShapingStyle) -> Self {
+        self.shaping = shaping;
+        self
+    }
+
+    /// Returns a copy with new inline-flow values.
+    #[must_use]
+    pub fn with_inline_flow(mut self, inline_flow: InlineFlowStyle) -> Self {
+        self.inline_flow = inline_flow;
+        self
+    }
+
+    /// Returns a copy with a new paint slot.
+    #[must_use]
+    pub fn with_paint(mut self, paint: PaintSlot) -> Self {
+        self.paint = paint;
+        self
+    }
+
+    /// Returns the shaping partition.
+    #[must_use]
+    pub const fn shaping(&self) -> &ShapingStyle {
+        &self.shaping
+    }
+
+    /// Returns the inline-flow partition.
+    #[must_use]
+    pub const fn inline_flow(&self) -> InlineFlowStyle {
+        self.inline_flow
+    }
+
+    /// Returns the paint slot.
+    #[must_use]
+    pub const fn paint(&self) -> PaintSlot {
+        self.paint
+    }
+}
+
+/// Complete per-leaf computed styles over one default style.
 #[derive(Clone, Debug)]
 pub struct StyleMap {
-    pub(crate) default: TextStyle,
-    paint: Vec<(TextId, PaintSlot)>,
+    pub(crate) default: ComputedInlineStyle,
+    styles: Vec<(TextId, ComputedInlineStyle)>,
 }
 
 impl StyleMap {
     /// Creates a style map with no per-leaf overrides.
     #[must_use]
-    pub fn new(default: TextStyle) -> Self {
+    pub fn new(default: ComputedInlineStyle) -> Self {
         Self {
             default,
-            paint: Vec::new(),
+            styles: Vec::new(),
         }
     }
 
-    /// Sets the paint slot for one text identity.
-    pub fn set_paint(&mut self, text: TextId, paint: PaintSlot) -> Result<(), StyleError> {
-        if let Some((_, current)) = self.paint.iter_mut().find(|(id, _)| *id == text) {
-            *current = paint;
+    /// Assigns one complete style to a text identity.
+    pub fn set(&mut self, text: TextId, style: ComputedInlineStyle) {
+        if let Some((_, current)) = self.styles.iter_mut().find(|(id, _)| *id == text) {
+            *current = style;
         } else {
-            self.paint.push((text, paint));
+            self.styles.push((text, style));
         }
-        Ok(())
     }
 
-    pub(crate) fn paint_for(&self, text: TextId) -> PaintSlot {
-        self.paint
+    /// Returns the assigned style or the default when no override exists.
+    #[must_use]
+    pub fn style_for(&self, text: TextId) -> &ComputedInlineStyle {
+        self.styles
             .iter()
-            .find_map(|(id, paint)| (*id == text).then_some(*paint))
-            .unwrap_or(self.default.paint)
+            .find_map(|(id, style)| (*id == text).then_some(style))
+            .unwrap_or(&self.default)
     }
 
-    pub(crate) fn overrides(&self) -> &[(TextId, PaintSlot)] {
-        &self.paint
+    /// Returns the default style.
+    #[must_use]
+    pub const fn default_style(&self) -> &ComputedInlineStyle {
+        &self.default
+    }
+
+    pub(crate) fn overrides(&self) -> &[(TextId, ComputedInlineStyle)] {
+        &self.styles
     }
 }
 
@@ -82,6 +293,65 @@ impl StyleMap {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaintTable {
     values: Arc<[Brush]>,
+}
+
+#[cfg(test)]
+mod tests {
+    use parlance::{FontFeature, FontVariation, Tag};
+
+    use super::{LineHeight, ShapingStyle};
+
+    #[test]
+    fn shaping_numbers_are_validated() {
+        assert!(ShapingStyle::new(0.0).is_err());
+        assert!(ShapingStyle::new(f32::NAN).is_err());
+        assert!(LineHeight::from_multiplier(-1.0).is_err());
+        assert!(LineHeight::from_multiplier(f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn feature_settings_are_canonical_and_last_wins() {
+        let liga = Tag::new(b"liga");
+        let kern = Tag::new(b"kern");
+        let style = ShapingStyle::new(16.0)
+            .expect("font size is valid")
+            .with_features([
+                FontFeature::new(liga, 1),
+                FontFeature::new(kern, 0),
+                FontFeature::new(liga, 0),
+            ]);
+        assert_eq!(
+            style.features(),
+            &[FontFeature::new(kern, 0), FontFeature::new(liga, 0)]
+        );
+    }
+
+    #[test]
+    fn variation_settings_are_canonical_validated_and_last_wins() {
+        let opsz = Tag::new(b"opsz");
+        let wght = Tag::new(b"wght");
+        let style = ShapingStyle::new(16.0)
+            .expect("font size is valid")
+            .with_variations([
+                FontVariation::new(wght, 400.0),
+                FontVariation::new(opsz, 16.0),
+                FontVariation::new(wght, 700.0),
+            ])
+            .expect("coordinates are finite");
+        assert_eq!(
+            style.variations(),
+            &[
+                FontVariation::new(opsz, 16.0),
+                FontVariation::new(wght, 700.0),
+            ]
+        );
+        assert!(
+            ShapingStyle::new(16.0)
+                .expect("font size is valid")
+                .with_variations([FontVariation::new(wght, f32::NAN)])
+                .is_err()
+        );
+    }
 }
 
 impl PaintTable {

@@ -4,9 +4,11 @@
 //! External headless exercise of Underwood's first semantic-to-scene slice.
 
 use underwood::{
-    Brush, Color, Document, DocumentId, FiniteWidth, InlineRole, LayoutEngine, PaintSlot,
-    PaintTable, ParagraphRole, SceneRequest, StyleMap, TextStyle,
+    Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, InlineFlowStyle,
+    InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole,
+    SceneRequest, ShapingStyle, StyleMap, Tag, TextId, TextScene,
 };
+use underwood::{FontFeature, FontVariation};
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,13 +20,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let first_suffix = edit.append_text(first, InlineRole::EMPHASIS, "fice مرحبا")?;
     let second = edit.append_paragraph(ParagraphRole::BODY)?;
     let second_text = edit.append_text(second, InlineRole::TEXT, "unchanged sibling")?;
+    let variable = edit.append_paragraph(ParagraphRole::BODY)?;
+    let variable_light = edit.append_text(variable, InlineRole::TEXT, "Flex")?;
+    let variable_black = edit.append_text(variable, InlineRole::EMPHASIS, "Flex")?;
+    let features = edit.append_paragraph(ParagraphRole::BODY)?;
+    let ligatures_on = edit.append_text(features, InlineRole::TEXT, "office")?;
+    let ligatures_off = edit.append_text(features, InlineRole::EMPHASIS, "office")?;
     let published = edit.commit()?;
     let old_snapshot = published.snapshot().clone();
 
-    let base = TextStyle::new(16.0, PaintSlot::new(0))?;
-    let mut styles = StyleMap::new(base);
-    styles.set_paint(first_prefix, PaintSlot::new(0))?;
-    styles.set_paint(first_suffix, PaintSlot::new(1))?;
+    let english = Language::parse("en")?;
+    let wght = Tag::new(b"wght");
+    let opsz = Tag::new(b"opsz");
+    let liga = Tag::new(b"liga");
+    let base_shaping = ShapingStyle::new(16.0)?.with_language(Some(english));
+    let base = ComputedInlineStyle::new(
+        base_shaping.clone(),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let light_style = ComputedInlineStyle::new(
+        ShapingStyle::new(24.0)?
+            .with_language(Some(english))
+            .with_variations([
+                FontVariation::new(wght, 100.0),
+                FontVariation::new(opsz, 8.0),
+            ])?,
+        InlineFlowStyle::new(LineHeight::from_multiplier(1.1)?),
+        PaintSlot::new(0),
+    );
+    let black_style = ComputedInlineStyle::new(
+        ShapingStyle::new(42.0)?
+            .with_language(Some(english))
+            .with_variations([
+                FontVariation::new(wght, 900.0),
+                FontVariation::new(opsz, 144.0),
+            ])?,
+        InlineFlowStyle::new(LineHeight::from_multiplier(1.4)?),
+        PaintSlot::new(1),
+    );
+    let ligatures_on_style = base.clone().with_shaping(
+        base_shaping
+            .clone()
+            .with_features([FontFeature::new(liga, 1)]),
+    );
+    let ligatures_off_style = base
+        .clone()
+        .with_shaping(base_shaping.with_features([FontFeature::new(liga, 0)]));
+    let mut styles = StyleMap::new(base.clone());
+    styles.set(first_prefix, base.clone());
+    styles.set(first_suffix, base.clone().with_paint(PaintSlot::new(1)));
+    styles.set(variable_light, light_style.clone());
+    styles.set(variable_black, black_style);
+    styles.set(ligatures_on, ligatures_on_style.clone());
+    styles.set(ligatures_off, ligatures_off_style);
 
     let paint = PaintTable::from_brushes([
         Brush::Solid(Color::from_rgb8(0x20, 0x20, 0x20)),
@@ -48,8 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let first_scene = layout.prepare(published.snapshot(), &request)?;
     assert!(
-        first_scene.scene().lines().len() >= 2,
-        "two semantic paragraphs must produce at least two visual lines"
+        first_scene.scene().lines().len() >= 4,
+        "four semantic paragraphs must produce at least four visual lines"
     );
     let fragment = &first_scene.scene().fragments()[0];
     assert!(
@@ -109,6 +158,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .any(|fragment| { fragment.inline_role() == Some(InlineRole::EMPHASIS) }),
         "inline emphasis must survive projection into scene semantics"
     );
+    assert_eq!(
+        glyph_count(first_scene.scene(), ligatures_on),
+        4,
+        "explicit liga-on office must substitute ffi to one glyph"
+    );
+    assert_eq!(
+        glyph_count(first_scene.scene(), ligatures_off),
+        6,
+        "explicit liga-off office must preserve six glyphs"
+    );
+    let light_coords = coordinates(first_scene.scene(), variable_light);
+    let black_coords = coordinates(first_scene.scene(), variable_black);
+    assert!(
+        !light_coords.is_empty(),
+        "explicit axes must resolve coordinates"
+    );
+    assert_ne!(
+        light_coords, black_coords,
+        "wght and opsz specimens must produce distinct font instances"
+    );
+    assert!(
+        first_scene
+            .scene()
+            .fragments()
+            .iter()
+            .any(|fragment| fragment.font_size() == 42.0),
+        "one document must carry heterogeneous font sizes"
+    );
 
     let mut edit = document.edit();
     edit.replace_text(first_suffix, "fices مرحبا")?;
@@ -132,8 +209,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert_eq!(
         second_scene.work().reused_paragraphs(),
-        1,
-        "the unchanged sibling paragraph must be reused"
+        3,
+        "all three unchanged sibling paragraphs must be reused"
     );
 
     let recolored = paint.with_brush(
@@ -163,7 +240,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "paint-only updates must still reach the scene"
     );
 
-    let narrow_request = SceneRequest::new(FiniteWidth::new(90.0)?, &styles, &recolored);
+    let mut reassigned_paint = styles.clone();
+    reassigned_paint.set(first_suffix, base);
+    let reassigned_request =
+        SceneRequest::new(FiniteWidth::new(420.0)?, &reassigned_paint, &recolored);
+    let reassigned_scene = layout.prepare(changed.snapshot(), &reassigned_request)?;
+    assert_eq!(
+        reassigned_scene.work().shape().paragraphs(),
+        0,
+        "paint-slot assignment must not invalidate shaping"
+    );
+    assert_eq!(
+        reassigned_scene.work().flow().paragraphs(),
+        0,
+        "paint-slot assignment must retain flow geometry"
+    );
+
+    let mut shaping_styles = reassigned_paint.clone();
+    shaping_styles.set(ligatures_off, ligatures_on_style);
+    let shaping_request = SceneRequest::new(FiniteWidth::new(420.0)?, &shaping_styles, &recolored);
+    let shaping_scene = layout.prepare(changed.snapshot(), &shaping_request)?;
+    assert_eq!(
+        shaping_scene.work().analysis().paragraphs(),
+        0,
+        "feature changes must reuse Unicode analysis"
+    );
+    assert_eq!(
+        shaping_scene.work().itemization().paragraphs(),
+        1,
+        "only the feature-changed paragraph may be reitemized"
+    );
+    assert_eq!(
+        shaping_scene.work().shape().paragraphs(),
+        1,
+        "only the feature-changed paragraph may be reshaped"
+    );
+
+    let mut flow_styles = shaping_styles.clone();
+    flow_styles.set(
+        variable_light,
+        light_style.with_inline_flow(InlineFlowStyle::new(LineHeight::from_multiplier(1.8)?)),
+    );
+    let flow_request = SceneRequest::new(FiniteWidth::new(420.0)?, &flow_styles, &recolored);
+    let flow_scene = layout.prepare(changed.snapshot(), &flow_request)?;
+    assert_eq!(
+        flow_scene.work().analysis().paragraphs(),
+        0,
+        "line height must not invalidate analysis"
+    );
+    assert_eq!(
+        flow_scene.work().itemization().paragraphs(),
+        0,
+        "line height must not invalidate itemization"
+    );
+    assert_eq!(
+        flow_scene.work().shape().paragraphs(),
+        0,
+        "line height must not invalidate shaping"
+    );
+    assert_eq!(
+        flow_scene.work().flow().paragraphs(),
+        1,
+        "line height must rebuild only its paragraph geometry"
+    );
+
+    let narrow_request = SceneRequest::new(FiniteWidth::new(90.0)?, &flow_styles, &recolored);
     let narrow_scene = layout.prepare(changed.snapshot(), &narrow_request)?;
     assert_eq!(
         narrow_scene.work().analysis().paragraphs(),
@@ -177,8 +318,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert_eq!(
         narrow_scene.work().flow().paragraphs(),
-        2,
-        "width must reflow both paragraphs"
+        4,
+        "width must reflow all four paragraphs"
     );
     assert!(
         narrow_scene.scene().lines().len() > paint_scene.scene().lines().len(),
@@ -192,6 +333,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         first_scene.scene().paint().len(),
     );
     Ok(())
+}
+
+fn glyph_count(scene: &TextScene, text: TextId) -> usize {
+    scene
+        .fragments()
+        .iter()
+        .filter(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == text)
+        })
+        .map(|fragment| fragment.glyphs().len())
+        .sum()
+}
+
+fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
+    scene
+        .fragments()
+        .iter()
+        .find(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == text)
+        })
+        .map(|fragment| fragment.normalized_coords().to_vec())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

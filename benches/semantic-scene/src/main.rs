@@ -7,8 +7,9 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use underwood::{
-    Brush, Color, Document, DocumentId, FiniteWidth, InlineRole, LayoutEngine, PaintSlot,
-    PaintTable, ParagraphRole, SceneRequest, StyleMap, TextId, TextStyle,
+    Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, InlineFlowStyle,
+    InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole, SceneRequest, ShapingStyle,
+    StyleMap, TextId,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
 
@@ -199,9 +200,14 @@ fn document_fixture() -> Result<DocumentFixture, Box<dyn std::error::Error>> {
     }
     edit.commit()?;
 
-    let mut styles = StyleMap::new(TextStyle::new(16.0, PaintSlot::new(0))?);
-    styles.set_paint(first_prefix, PaintSlot::new(0))?;
-    styles.set_paint(edited_text, PaintSlot::new(1))?;
+    let base = ComputedInlineStyle::new(
+        ShapingStyle::new(16.0)?,
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let mut styles = StyleMap::new(base.clone());
+    styles.set(first_prefix, base.clone());
+    styles.set(edited_text, base.with_paint(PaintSlot::new(1)));
     let dark = PaintTable::from_brushes([
         Brush::Solid(Color::from_rgb8(0x20, 0x20, 0x20)),
         Brush::Solid(Color::from_rgb8(0x20, 0x50, 0xa0)),

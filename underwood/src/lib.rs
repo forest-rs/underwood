@@ -19,9 +19,13 @@ pub use document::{
 };
 pub use error::{EditError, EditErrorKind, SceneError, SceneErrorKind, StyleError, StyleErrorKind};
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
+pub use parlance::{FontFeature, FontVariation, Language, Tag};
 pub use peniko::{Brush, Color, FontData};
 pub use scene::{
     LayoutEngine, SceneCaret, SceneFragment, SceneFragmentId, SceneGlyph, SceneLine, SceneOutput,
     SemanticFragment, SnapshotTextRange, StageWork, TextHit, TextScene, WorkReport,
 };
-pub use style::{FiniteWidth, PaintSlot, PaintTable, SceneRequest, StyleMap, TextStyle};
+pub use style::{
+    ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, PaintSlot, PaintTable,
+    SceneRequest, ShapingStyle, StyleMap,
+};

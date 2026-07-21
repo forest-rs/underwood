@@ -14,8 +14,9 @@ use imaging::peniko::{Color, Fill, Style};
 use imaging::{PaintSink, Painter, RgbaImage, record};
 use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{
-    Brush, Document, DocumentId, FiniteWidth, InlineRole, LayoutEngine, PaintSlot, PaintTable,
-    ParagraphRole, SceneRequest, StyleMap, TextScene, TextStyle,
+    Brush, ComputedInlineStyle, Document, DocumentId, FiniteWidth, InlineFlowStyle, InlineRole,
+    LayoutEngine, PaintSlot, PaintTable, ParagraphRole, SceneRequest, ShapingStyle, StyleMap,
+    TextScene,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
 
@@ -439,9 +440,10 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     edit.append_text(second, InlineRole::TEXT, "unchanged sibling")?;
     let published = edit.commit()?;
 
-    let mut styles = StyleMap::new(TextStyle::new(40.0, INK)?);
-    styles.set_paint(prefix, CORAL)?;
-    styles.set_paint(suffix, CYAN)?;
+    let base = ComputedInlineStyle::new(ShapingStyle::new(40.0)?, InlineFlowStyle::default(), INK);
+    let mut styles = StyleMap::new(base.clone());
+    styles.set(prefix, base.clone().with_paint(CORAL));
+    styles.set(suffix, base.with_paint(CYAN));
     let paint = poster_paints();
     let request = SceneRequest::new(FiniteWidth::new(700.0)?, &styles, &paint);
     let initial = layout.prepare(published.snapshot(), &request)?;
@@ -521,9 +523,14 @@ fn layout_scene(
     }
     let published = edit.commit()?;
 
-    let mut styles = StyleMap::new(TextStyle::new(font_size, INK)?);
+    let base = ComputedInlineStyle::new(
+        ShapingStyle::new(font_size)?,
+        InlineFlowStyle::default(),
+        INK,
+    );
+    let mut styles = StyleMap::new(base.clone());
     for (text, paint) in authored {
-        styles.set_paint(text, paint)?;
+        styles.set(text, base.clone().with_paint(paint));
     }
     let paints = poster_paints();
     let request = SceneRequest::new(FiniteWidth::new(width)?, &styles, &paints);
