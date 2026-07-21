@@ -183,7 +183,7 @@ evidence assertions and exact snapshot test pass, and the repository is green.
 
 ## Computed inline-style campaign
 
-**Status:** Active
+**Status:** Complete — executable proof landed through PR #6
 
 **Beads:** `und-oh0.4.1`, `und-oh0.4.2`
 
@@ -236,3 +236,58 @@ The campaign is complete when one heterogeneous document exercises the public
 style path, each property has the intended invalidation evidence, the accepted
 CPU snapshot is regenerated from real shaped output, all checked-in callers
 use the canonical workflow, and the repository and remote CI are green.
+
+## Fontique-backed font-request campaign
+
+**Status:** Active
+
+**Bead:** `und-oh0.4.3`
+
+### Goal
+
+Replace the provisional ordered-font shortcut with real Fontique family,
+attribute, fallback, coverage, and synthesis selection while preserving
+Underwood's backend-neutral computed-style and scene boundaries.
+
+### Fence
+
+This campaign owns computed font requests, their projection into Fontique, a
+deterministic caller-supplied catalog, selection work reporting, exact resolved
+font/synthesis evidence, and the executable proof. It does not move matching
+into Underwood, expose engine types, enable system font discovery, add unsafe,
+or claim renderer effects that the proof backend does not execute.
+
+### Steps
+
+1. Ratify `docs/design/0004-fontique-backed-font-requests.md` and migrate
+   `ShapingStyle` to the shared Parlance request vocabulary.
+2. Turn `underwood_parley::FontSet` into a Fontique catalog with explicit
+   generic and script/language fallback configuration.
+3. Query Fontique per item/cluster, pass the selected instance and synthesis to
+   Parley Core, and retain portable synthesis evidence in the scene.
+4. Make selection work and request invalidation observable, including
+   paragraph-local negative-work proofs.
+5. Migrate the headless example and benchmark, then extend the CPU poster with
+   named families, variable instances, fallback, and supported synthetic style.
+6. Run API, real-vs-mirage, and workspace-green reviews; commit coherent slices,
+   publish a draft PR, and land only after local and remote gates pass.
+
+### Risks and controls
+
+- **Matcher duplication:** adapter code is limited to Fontique query setup and
+  the cluster callback required by Parley Core.
+- **Unstable style identity:** family sources are parsed and canonicalized once;
+  every numeric request is validated before entering a cache key.
+- **Hidden selection cost:** selection receives its own deterministic work
+  counter and cache-hit assertions.
+- **Synthesis theater:** final normalized coordinates and raw synthesis evidence
+  are asserted; the visual proof uses only effects its renderer executes.
+- **Machine-dependent output:** system fonts stay disabled and all proof fonts
+  remain checked in.
+
+### Completion
+
+The campaign is complete when all Design-0004 proofs run through one public
+workflow, the poster visibly demonstrates the real resolved instances and
+fallback, all public callers are migrated, and the full local and remote
+validation matrices pass.

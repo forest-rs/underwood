@@ -236,8 +236,8 @@ following:
 
 ## Deferred properties
 
-Font family/weight/width/style requests wait for an executable font-matching
-contract. Letter and word spacing wait for the Parley tracking-topology seam so
+Font family/weight/width/style requests are specified by Design-0004 and execute
+through Fontique. Letter and word spacing wait for the Parley tracking-topology seam so
 Underwood does not invent ligature behavior. Baseline shift waits for explicit
 cluster behavior at style boundaries. Word breaking, overflow wrapping,
 hyphenation, whitespace transformation, decorations, block styles, cascade,
@@ -251,8 +251,8 @@ and authored expressions remain in their owning campaigns.
 - More executable used values extend `InlineFlowStyle` and the geometry key.
 - A second real consumer may justify extracting the private complete-run IR;
   this design does not assume that extraction.
-- Font request values can be added when `underwood_parley` can execute them
-  through an approved resolver seam.
+- Font request values execute through the approved resolver seam in
+  Design-0004.
 
 ## Validation
 
