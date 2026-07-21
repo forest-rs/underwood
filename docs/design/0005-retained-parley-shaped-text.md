@@ -51,6 +51,8 @@ Underwood ParagraphInput
    read from the run's range in `ShapedText`.
 5. Cluster source offsets are interpreted relative to the containing shaped
    run and checked as UTF-8 byte ranges before entering portable output.
+   Itemization creates a safe boundary before another character could exceed
+   the current `u16`-relative `ClusterData` offset representation.
 6. A glyph-bearing ligature-start cluster owns the union of its source range
    and its adjacent ligature-component clusters: following in LTR logical order
    and preceding in RTL logical order. Continuation clusters never create
@@ -113,8 +115,9 @@ Existing non-empty runs retain their validation and behavior.
 - A control-only run retains its source without a fabricated glyph.
 - Font-request, shaping-style, paint-only, and full cache-hit work counters
   preserve their existing invalidation behavior.
-- The retained cache demonstrably reuses `ShapedText` storage across reshapes;
-  wall-time benchmarks are compared with the previous pin on the same machine.
+- The same cache-owned `ShapedText` value survives across reshapes; wall-time
+  benchmarks are compared with the previous pin on the same machine. This is
+  not an allocation-count claim.
 
 ## Deferred work
 

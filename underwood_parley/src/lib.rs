@@ -371,9 +371,8 @@ fn shape_paragraph(
     }
     let selected_clusters = Cell::new(0_u32);
 
-    let split_after = |range: parley_core::itemize::TextRange| {
-        style_indices[range.char_range.start] != style_indices[range.char_range.end]
-    };
+    let split_after =
+        |range: parley_core::itemize::TextRange| split_item_after(&range, &style_indices);
     for item in analysis.itemize(text, split_after) {
         let style = &shaping_styles[usize::from(style_indices[item.range.char_range.start])];
         let script = item.script.to_bytes();
@@ -426,6 +425,11 @@ fn shape_paragraph(
         return Err(PreparationError::missing_font());
     }
     Ok(selected_clusters.get())
+}
+
+fn split_item_after(range: &parley_core::itemize::TextRange, style_indices: &[u16]) -> bool {
+    style_indices[range.char_range.start] != style_indices[range.char_range.end]
+        || range.byte_range.len() > usize::from(u16::MAX)
 }
 
 fn query_families<'a>(names: &'a [FontFamilyName<'static>]) -> Vec<QueryFamily<'a>> {
@@ -838,6 +842,8 @@ impl core::error::Error for AdapterError {}
 
 #[cfg(test)]
 mod tests {
+    use alloc::{vec, vec::Vec};
+
     use underwood::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFamily,
         GenericFamily, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole,
@@ -846,7 +852,8 @@ mod tests {
     use underwood::{Language, Script};
 
     use super::{
-        AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, TextData, read_u16, read_u32,
+        AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, TextData, analyze_text, read_u16,
+        read_u32, split_item_after,
     };
 
     const LATIN_FONT: &[u8] =
@@ -930,5 +937,18 @@ mod tests {
             0,
             "shape work must report the renderable glyph count"
         );
+    }
+
+    #[test]
+    fn itemization_bounds_shaped_text_relative_offsets() {
+        let text = "a".repeat(usize::from(u16::MAX) + 2);
+        let analysis = analyze_text(&mut parley_core::Analyzer::new(), &text);
+        let style_indices = vec![0; text.chars().count()];
+        let items: Vec<_> = analysis
+            .itemize(&text, |range| split_item_after(&range, &style_indices))
+            .collect();
+        assert_eq!(items.len(), 2, "the oversized item must split once");
+        assert_eq!(items[0].range.byte_range, 0..usize::from(u16::MAX) + 1);
+        assert_eq!(items[1].range.byte_range, text.len() - 1..text.len());
     }
 }
