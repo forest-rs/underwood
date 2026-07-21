@@ -26,3 +26,8 @@ The tree-anchor model executes local text-container split, adjacent join,
 sibling move, and delete laws. Its node identifiers and flat representation are
 private semantic-test machinery, not a production tree choice or evidence for
 recursive/collaborative tree operations.
+
+The `form-10k` corpus is exactly 10 KiB with 256 authored spans and 64 sparse
+anchors. Four successive replacements model an active IME composition ending
+in `日本語`; every published frontier is checked against both the canonical
+model and private chunked/blocked candidates.
