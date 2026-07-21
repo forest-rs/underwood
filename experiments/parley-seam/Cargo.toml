@@ -1,10 +1,10 @@
 [package]
-name = "underwood_parley_seam_wind_tunnel"
+name = "underwood_parley_seam_experiment"
 version.workspace = true
 authors = ["Underwood Contributors"]
 edition.workspace = true
 rust-version.workspace = true
-description = "Private retained-Parley seam wind tunnel for Underwood"
+description = "Historical retained-Parley seam experiment for Underwood"
 homepage = "https://github.com/forest-rs/underwood"
 repository.workspace = true
 license.workspace = true

@@ -17,6 +17,10 @@ impl DocumentId {
     pub const fn from_bytes(value: [u8; 16]) -> Self {
         Self(value)
     }
+
+    pub(crate) const fn opaque_bytes(self) -> [u8; 16] {
+        self.0
+    }
 }
 
 /// Monotonic revision within one document.
@@ -181,8 +185,9 @@ pub struct Edit<'document> {
 impl Edit<'_> {
     /// Appends an empty paragraph and returns its document-scoped identity.
     pub fn append_paragraph(&mut self, role: ParagraphRole) -> Result<ParagraphId, EditError> {
-        let index = u32::try_from(self.staged.paragraphs.len())
-            .map_err(|_| EditError::new(EditErrorKind::InvalidStructure))?;
+        let index = u32::try_from(self.staged.paragraphs.len()).map_err(|_| {
+            EditError::for_document(EditErrorKind::InvalidStructure, self.staged.id)
+        })?;
         let id = ParagraphId {
             document: self.staged.id,
             index,
@@ -207,7 +212,7 @@ impl Edit<'_> {
         let document_id = self.staged.id;
         let record = self.paragraph_mut(paragraph)?;
         let index = u32::try_from(record.leaves.len())
-            .map_err(|_| EditError::new(EditErrorKind::OversizedText))?;
+            .map_err(|_| EditError::for_paragraph(EditErrorKind::OversizedText, paragraph))?;
         let id = TextId {
             document: document_id,
             paragraph: paragraph.index,
@@ -226,18 +231,18 @@ impl Edit<'_> {
     /// Replaces the complete contents of one text leaf.
     pub fn replace_text(&mut self, text: TextId, replacement: &str) -> Result<(), EditError> {
         if text.document != self.staged.id {
-            return Err(EditError::new(EditErrorKind::WrongDocument));
+            return Err(EditError::for_text(EditErrorKind::WrongDocument, text));
         }
         let paragraph = self
             .staged
             .paragraphs
             .get_mut(text.paragraph as usize)
-            .ok_or_else(|| EditError::new(EditErrorKind::InvalidStructure))?;
+            .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
         let leaf = paragraph
             .leaves
             .get_mut(text.index as usize)
             .filter(|leaf| leaf.id == text)
-            .ok_or_else(|| EditError::new(EditErrorKind::InvalidStructure))?;
+            .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
         leaf.text = Arc::from(replacement);
         paragraph.version = paragraph.version.saturating_add(1);
         let paragraph_id = paragraph.id;
@@ -248,14 +253,15 @@ impl Edit<'_> {
     /// Atomically publishes the staged revision.
     pub fn commit(mut self) -> Result<Publication, EditError> {
         if self.document.state.revision != self.base_revision {
-            return Err(EditError::new(EditErrorKind::RevisionConflict));
+            return Err(EditError::for_document(
+                EditErrorKind::RevisionConflict,
+                self.staged.id,
+            ));
         }
-        self.staged.revision = DocumentRevision(
-            self.base_revision
-                .0
-                .checked_add(1)
-                .ok_or_else(|| EditError::new(EditErrorKind::RevisionConflict))?,
-        );
+        self.staged.revision =
+            DocumentRevision(self.base_revision.0.checked_add(1).ok_or_else(|| {
+                EditError::for_document(EditErrorKind::RevisionConflict, self.staged.id)
+            })?);
         let state = Arc::new(self.staged);
         self.document.state = Arc::clone(&state);
         Ok(Publication {
@@ -268,13 +274,13 @@ impl Edit<'_> {
 
     fn paragraph_mut(&mut self, id: ParagraphId) -> Result<&mut Paragraph, EditError> {
         if id.document != self.staged.id {
-            return Err(EditError::new(EditErrorKind::WrongDocument));
+            return Err(EditError::for_paragraph(EditErrorKind::WrongDocument, id));
         }
         self.staged
             .paragraphs
             .get_mut(id.index as usize)
             .filter(|paragraph| paragraph.id == id)
-            .ok_or_else(|| EditError::new(EditErrorKind::InvalidStructure))
+            .ok_or_else(|| EditError::for_paragraph(EditErrorKind::InvalidStructure, id))
     }
 
     fn mark_changed(&mut self, paragraph: ParagraphId) {

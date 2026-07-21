@@ -10,8 +10,8 @@
 ## Reproduction
 
 ```sh
-cargo test -p underwood_flow_wind_tunnel
-cargo run -p underwood_flow_wind_tunnel
+cargo test -p underwood_flow_experiment
+cargo run -p underwood_flow_experiment
 ```
 
 The recorded run used Rust 1.96.0

@@ -1,10 +1,11 @@
 [workspace]
 members = [
-  "benches/flow",
-  "benches/parley-seam",
-  "benches/position",
-  "benches/text-data",
+  "benches/semantic-scene",
   "examples/headless",
+  "experiments/flow",
+  "experiments/parley-seam",
+  "experiments/position",
+  "experiments/text-data",
   "underwood",
   "underwood_parley",
   "xtask",

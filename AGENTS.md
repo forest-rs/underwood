@@ -202,5 +202,9 @@ Invoke the matching skill when the role is clear:
 - `$shepherd` — human decision gates
 
 If a request changes crate ownership, `$otter` defers to `$alder`. Correctness
-Must-fixes precede polish or optimization. Performance work without a benchmark
-first creates the appropriate wind-tunnel benchmark crate.
+Must-fixes precede polish or optimization. Product benchmarks under `benches/`
+must call the real public product crates and exercise the same path as external
+callers. Hypothesis implementations and duplicated algorithms belong under
+`experiments/`; their measurements are research evidence, never product
+benchmarks. Performance work without a product benchmark creates one against
+the actual implementation before making optimization claims.

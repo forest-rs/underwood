@@ -51,14 +51,14 @@ dependency is approved:
 underwood/             calm façade plus private document, projection, retained
                        preparation, finite-flow, and scene modules
 underwood_parley/      the only production adaptation seam to pinned Parley
-benches/position/      private canonical-storage and identity wind tunnel
+experiments/position/  private canonical-storage and identity experiment
 ```
 
 `underwood` is a foundational `#![no_std]` crate using `alloc`; it is
 unpublished while the first product trace is changing the draft API.
 `underwood_parley` depends inward on Underwood-owned prepared contracts and
 outward on Parley. No Parley type crosses the façade. The wind tunnel is a
-`std`, unpublished benchmark crate and may not be imported by production code.
+`std`, unpublished experiment crate and may not be imported by production code.
 
 Document, style, layout, and scene begin as explicit private modules inside
 `underwood`. They become crates only when one of these facts exists:
@@ -97,7 +97,7 @@ capability-first.
 
 ## Private experiment boundary
 
-`benches/position` owns candidates, trace generation, observations, work
+`experiments/position` owns candidates, trace generation, observations, work
 counters, and machine-specific timing for ADR-0001. Candidate types are
 crate-private. Its first dependency-free baseline must:
 

@@ -10,9 +10,9 @@
 ## Reproduction
 
 ```sh
-cargo test -p underwood_text_data_wind_tunnel
-cargo test -p underwood_text_data_wind_tunnel --features complex-scripts
-bash benches/text-data/measure.sh
+cargo test -p underwood_text_data_experiment
+cargo test -p underwood_text_data_experiment --features complex-scripts
+bash experiments/text-data/measure.sh
 ```
 
 The recorded run used Rust 1.96.0

@@ -33,6 +33,10 @@ source and semantic observations, editing, and retained-work assertions through
 public APIs only. Earlier synthetic wind tunnels remain research evidence, not
 product benchmarks or substitutes for this permanent path.
 
+Product performance lives in `benches/semantic-scene` and measures those same
+public crates. Pre-product hypothesis implementations live under
+`experiments/` and are explicitly barred from product performance claims.
+
 The machine-readable [proof ledger](docs/proof/ledger.tsv) is authoritative for
 capability status.
 
@@ -64,6 +68,7 @@ cargo xtask check
 typos
 bd lint --status all
 bd dep cycles
+cargo run --profile wind-tunnel -p underwood_semantic_scene_benchmark
 ```
 
 The workspace MSRV is Rust 1.92. The bootstrap CI stable toolchain is Rust

@@ -64,6 +64,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         !fragment.font().data.is_empty(),
         "scene fragments must retain exact font bytes"
     );
+    assert_eq!(
+        fragment.font_size(),
+        16.0,
+        "scene fragments must retain the font scale required for rendering"
+    );
     assert!(
         first_scene.scene().fragments().iter().any(|left| {
             first_scene.scene().fragments().iter().any(|right| {

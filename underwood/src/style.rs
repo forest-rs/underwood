@@ -98,7 +98,7 @@ impl PaintTable {
         let mut values = self.values.to_vec();
         let target = values
             .get_mut(slot.index() as usize)
-            .ok_or_else(|| StyleError::new(StyleErrorKind::AbsentPaintSlot))?;
+            .ok_or_else(|| StyleError::for_paint(StyleErrorKind::AbsentPaintSlot, slot))?;
         *target = value;
         Ok(Self {
             values: values.into(),

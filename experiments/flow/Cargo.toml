@@ -1,10 +1,10 @@
 [package]
-name = "underwood_position_wind_tunnel"
+name = "underwood_flow_experiment"
 version.workspace = true
 authors = ["Underwood Contributors"]
 edition.workspace = true
 rust-version.workspace = true
-description = "Private position and canonical-storage wind tunnel for Underwood"
+description = "Private resumable-flow and virtual-extent experiment for Underwood"
 homepage = "https://github.com/forest-rs/underwood"
 repository.workspace = true
 license.workspace = true

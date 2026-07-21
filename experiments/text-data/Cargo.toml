@@ -1,15 +1,15 @@
 [package]
-name = "underwood_text_data_wind_tunnel"
+name = "underwood_text_data_experiment"
 version.workspace = true
 authors = ["Underwood Contributors"]
 edition.workspace = true
 rust-version.workspace = true
-description = "Private text-data distribution wind tunnel for Underwood"
+description = "Private text-data distribution experiment for Underwood"
 homepage = "https://github.com/forest-rs/underwood"
 repository.workspace = true
 license.workspace = true
 publish = false
-default-run = "underwood_text_data_wind_tunnel"
+default-run = "underwood_text_data_experiment"
 
 [features]
 complex-scripts = ["parley_core/complex-scripts"]

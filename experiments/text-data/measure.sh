@@ -5,7 +5,7 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel)"
-package="underwood_text_data_wind_tunnel"
+package="underwood_text_data_experiment"
 target="wasm32-unknown-unknown"
 profile="wind-tunnel"
 build_dir="${root}/target/${target}/${profile}"
@@ -53,7 +53,7 @@ report="${output_dir}/sizes.tsv"
 
 cat "${report}"
 
-node "${root}/benches/text-data/inspect.mjs" "${output_dir}" \
+node "${root}/experiments/text-data/inspect.mjs" "${output_dir}" \
   >"${output_dir}/memory.tsv"
 cat "${output_dir}/memory.tsv"
 

@@ -8,13 +8,15 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::cell::Cell;
 use core::fmt;
 use core::ops::Range;
 
-use fontique::{Blob, FontInfo, SourceId, SourceInfo, SourceKind, Synthesis};
+use fontique::{Blob, CharmapIndex, FontInfo, SourceId, SourceInfo, SourceKind, Synthesis};
 use parlance::{FontFeature, FontVariation};
 use parley_core::{
     Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, ShapeOptions, Shaper,
+    shape::{CharCluster, Status},
 };
 use underwood::adapter::{
     GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
@@ -31,6 +33,7 @@ pub struct Font {
     blob: Blob<u8>,
     index: u32,
     units_per_em: u16,
+    charmap: CharmapIndex,
 }
 
 impl fmt::Debug for Font {
@@ -46,14 +49,14 @@ impl fmt::Debug for Font {
 }
 
 impl Font {
-    /// Copies and validates the first usable face in a font file or collection.
+    /// Copies the bytes and validates face zero in a font file or collection.
     pub fn from_bytes(diagnostic_name: &str, bytes: &[u8]) -> Result<Self, AdapterError> {
         let index = 0;
         let units_per_em = units_per_em(bytes, index)
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidFont))?;
         let blob = Blob::from(bytes.to_vec());
         let source = SourceInfo::new(SourceId::new(), SourceKind::Memory(blob.clone()));
-        FontInfo::from_source(source, index)
+        let info = FontInfo::from_source(source, index)
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidFont))?;
         Ok(Self {
             diagnostic_name: Arc::from(diagnostic_name),
@@ -61,6 +64,7 @@ impl Font {
             blob,
             index,
             units_per_em,
+            charmap: info.charmap_index(),
         })
     }
 
@@ -74,6 +78,13 @@ impl Font {
 
     fn data(&self) -> FontData {
         FontData::new(self.blob.clone(), self.index)
+    }
+
+    fn covers(&self, character: char) -> bool {
+        self.charmap
+            .charmap(self.blob.as_ref())
+            .and_then(|charmap| charmap.map(character))
+            .is_some()
     }
 }
 
@@ -95,12 +106,26 @@ impl FontSet {
         })
     }
 
-    fn for_script(&self, script: [u8; 4]) -> &Font {
-        if script == *b"Arab" && self.fonts.len() > 1 {
-            self.fonts.last().expect("font set is non-empty")
-        } else {
-            self.fonts.first().expect("font set is non-empty")
+    fn select<'a>(
+        &'a self,
+        cluster: &mut CharCluster,
+        data: &AnalysisDataSources,
+    ) -> Option<&'a Font> {
+        let mut best = None;
+        for font in self.fonts.iter() {
+            match cluster.map(|character| font.covers(character), data) {
+                Status::Complete => return Some(font),
+                Status::Keep => best = Some(font),
+                Status::Discard => {}
+            }
         }
+        best
+    }
+
+    fn by_instance(&self, instance: &FontInstance) -> Option<&Font> {
+        self.fonts
+            .iter()
+            .find(|font| font.blob.id() == instance.blob.id() && font.index == instance.index)
     }
 }
 
@@ -280,7 +305,7 @@ fn shape_paragraph(
 
     for item in analysis.itemize(text, |_| false) {
         let script = item.script.to_bytes();
-        let font = fonts.for_script(script);
+        let missing_font = Cell::new(false);
         shaper.shape_item(
             text,
             &analysis,
@@ -292,9 +317,18 @@ fn shape_paragraph(
                 variations: &data.variations,
                 char_style_indices: &style_indices,
             },
-            |_| Some(font.instance()),
+            |cluster| match fonts.select(cluster, &analysis_data) {
+                Some(font) => Some(font.instance()),
+                None => {
+                    missing_font.set(true);
+                    None
+                }
+            },
             &analysis_data,
             |shaped| {
+                let font = fonts
+                    .by_instance(&shaped.font)
+                    .expect("Parley must return the selected immutable font instance");
                 runs.push(copy_run(
                     shaped,
                     item.bidi_level,
@@ -305,6 +339,9 @@ fn shape_paragraph(
                 ));
             },
         );
+        if missing_font.get() {
+            return Err(PreparationError::missing_font());
+        }
     }
     if !text.is_empty() && runs.is_empty() {
         return Err(PreparationError::missing_font());
@@ -389,6 +426,21 @@ fn paint_coverage(
         .ok_or_else(PreparationError::unsupported_paint_coverage)?;
     let total_chars = source_text.chars().count();
     if total_chars == 0 {
+        return Err(PreparationError::unsupported_paint_coverage());
+    }
+    let intersecting_runs = paint_runs
+        .iter()
+        .filter(|paint| {
+            let bytes = paint.bytes();
+            bytes.start < source.end && bytes.end > source.start
+        })
+        .count();
+    if intersecting_runs > 1
+        && (advance.x == 0.0
+            || !source_text
+                .chars()
+                .all(|character| character.is_ascii_alphabetic()))
+    {
         return Err(PreparationError::unsupported_paint_coverage());
     }
     let mut segments = Vec::new();

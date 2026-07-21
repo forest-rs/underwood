@@ -1,6 +1,6 @@
-# Underwood text-data wind tunnel
+# Underwood text-data experiment
 
-This unpublished benchmark crate measures the exact compiled Parley Core path
+This unpublished research crate measures the compiled Parley Core dependency
 audited by ADR-0003. It produces separate size artifacts for:
 
 - an empty Rust WebAssembly harness;
@@ -14,9 +14,13 @@ model tests the accepted cache/replay and missing-capability laws; it is not a
 production provider API.
 
 ```sh
-cargo run -p underwood_text_data_wind_tunnel
-bash benches/text-data/measure.sh
+cargo run -p underwood_text_data_experiment
+bash experiments/text-data/measure.sh
 ```
+
+This is dependency-distribution evidence, not a product benchmark. Product
+performance measurements execute `underwood_parley` through
+`benches/semantic-scene`.
 
 `measure.sh` requires the pinned Rust toolchain's
 `wasm32-unknown-unknown` target, Brotli, and Node.js. It writes untracked

@@ -1,16 +1,17 @@
-# Underwood position wind tunnel
+# Underwood position experiment
 
-This unpublished crate begins executing the private `identity-trace-v0`
+This unpublished research crate executes the private `identity-trace-v0`
 contract from ADR-0001. Its candidates, event model, digests, and counters are
 experiment machinery, not production storage or public position APIs.
 
 Run the current dependency-free canonical baseline with:
 
 ```sh
-cargo run -p underwood_position_wind_tunnel
+cargo run -p underwood_position_experiment
 ```
 
-The report distinguishes semantic or complete-gate `PASS` results from
+This is not a product benchmark. The report distinguishes semantic or
+complete-gate `PASS` results from
 preliminary `SCREEN` observations and is deliberately honest about
 unimplemented corpora and failed budgets. A failing baseline establishes
 measurement and semantic controls; it does not select the production

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;
 
@@ -59,18 +60,20 @@ impl LayoutEngine {
             let preparation_key = PreparationKey {
                 version: paragraph.version,
                 font_size: request.styles.default.font_size.to_bits(),
-                paint_topology: projection.paint_topology,
             };
             let cache_index = self
                 .cache
                 .iter()
                 .position(|entry| entry.paragraph == paragraph.id);
 
-            let needs_preparation = cache_index
-                .is_none_or(|index| self.cache[index].preparation_key != preparation_key);
+            let needs_preparation = cache_index.is_none_or(|index| {
+                self.cache[index].preparation_key != preparation_key
+                    || self.cache[index].paint_runs != projection.paint_runs
+            });
             let cache_index = if needs_preparation {
-                let text_len = u32::try_from(projection.text.len())
-                    .map_err(|_| SceneError::new(SceneErrorKind::SourceCoverage))?;
+                let text_len = u32::try_from(projection.text.len()).map_err(|_| {
+                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
+                })?;
                 let output = self
                     .paragraphs
                     .prepare(ParagraphInput::new(
@@ -79,16 +82,21 @@ impl LayoutEngine {
                         request.styles.default.font_size,
                         &projection.paint_runs,
                     ))
-                    .map_err(|_| SceneError::new(SceneErrorKind::Preparation))?;
+                    .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
                 if output.paragraph().paragraph() != paragraph.id
                     || output.paragraph().text_len() != text_len
                 {
-                    return Err(SceneError::new(SceneErrorKind::SourceCoverage));
+                    return Err(SceneError::for_paragraph(
+                        SceneErrorKind::SourceCoverage,
+                        paragraph.id,
+                    ));
                 }
+                validate_prepared(output.paragraph(), &projection)?;
                 record_preparation_work(&mut work, output.work());
                 let entry = ParagraphCache {
                     paragraph: paragraph.id,
                     preparation_key,
+                    paint_runs: projection.paint_runs.clone(),
                     prepared: output.into_paragraph(),
                     geometry: None,
                 };
@@ -159,23 +167,23 @@ impl LayoutEngine {
 struct PreparationKey {
     version: u64,
     font_size: u32,
-    paint_topology: u64,
 }
 
 #[derive(Clone, Debug)]
 struct ParagraphCache {
     paragraph: ParagraphId,
     preparation_key: PreparationKey,
+    paint_runs: Vec<PaintRun>,
     prepared: PreparedParagraph,
     geometry: Option<CachedGeometry>,
 }
 
 #[derive(Clone, Debug)]
 struct Projection {
+    paragraph: ParagraphId,
     text: alloc::string::String,
     spans: Vec<LeafSpan>,
     paint_runs: Vec<PaintRun>,
-    paint_topology: u64,
     paragraph_semantic: SemanticId,
     paragraph_role: ParagraphRole,
 }
@@ -186,13 +194,13 @@ impl Projection {
         let mut spans = Vec::with_capacity(paragraph.leaves.len());
         let mut paint_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut start = 0_u32;
-        let mut digest = 0xcbf2_9ce4_8422_2325_u64;
         for leaf in &paragraph.leaves {
-            let len = u32::try_from(leaf.text.len())
-                .map_err(|_| SceneError::new(SceneErrorKind::SourceCoverage))?;
-            let end = start
-                .checked_add(len)
-                .ok_or_else(|| SceneError::new(SceneErrorKind::SourceCoverage))?;
+            let len = u32::try_from(leaf.text.len()).map_err(|_| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
+            })?;
+            let end = start.checked_add(len).ok_or_else(|| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
+            })?;
             let slot = request.styles.paint_for(leaf.id);
             spans.push(LeafSpan {
                 paragraph: start..end,
@@ -202,17 +210,14 @@ impl Projection {
             });
             if start != end {
                 paint_runs.push(PaintRun::new(start..end, slot));
-                digest_bytes(&mut digest, &start.to_le_bytes());
-                digest_bytes(&mut digest, &end.to_le_bytes());
-                digest_bytes(&mut digest, &slot.index().to_le_bytes());
             }
             start = end;
         }
         Ok(Self {
+            paragraph: paragraph.id,
             text,
             spans,
             paint_runs,
-            paint_topology: digest,
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -225,7 +230,13 @@ impl Projection {
             .find(|span| {
                 paragraph.start >= span.paragraph.start && paragraph.end <= span.paragraph.end
             })
-            .ok_or_else(|| SceneError::new(SceneErrorKind::SourceCoverage))?;
+            .ok_or_else(|| {
+                SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    self.paragraph,
+                    paragraph.clone(),
+                )
+            })?;
         Ok(LocalRange {
             text: span.text,
             bytes: (paragraph.start - span.paragraph.start)..(paragraph.end - span.paragraph.start),
@@ -241,12 +252,6 @@ struct LeafSpan {
     semantic: SemanticId,
 }
 
-fn digest_bytes(digest: &mut u64, bytes: &[u8]) {
-    for byte in bytes {
-        *digest = (*digest ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-}
-
 fn validate_styles(
     snapshot: &DocumentSnapshot,
     request: &SceneRequest<'_>,
@@ -257,7 +262,10 @@ fn validate_styles(
         .iter()
         .any(|(text, _)| snapshot.text(*text).is_none())
     {
-        return Err(SceneError::new(SceneErrorKind::InvalidStyle));
+        return Err(SceneError::for_document(
+            SceneErrorKind::InvalidStyle,
+            snapshot.id(),
+        ));
     }
     for paragraph in snapshot.paragraphs() {
         for leaf in &paragraph.leaves {
@@ -266,7 +274,60 @@ fn validate_styles(
                 .brush(request.styles.paint_for(leaf.id))
                 .is_none()
             {
-                return Err(SceneError::new(SceneErrorKind::InvalidStyle));
+                return Err(SceneError::for_paragraph(
+                    SceneErrorKind::InvalidStyle,
+                    paragraph.id,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_prepared(
+    prepared: &PreparedParagraph,
+    projection: &Projection,
+) -> Result<(), SceneError> {
+    for run in prepared.runs() {
+        let source = run.source();
+        if projection
+            .text
+            .get(source.start as usize..source.end as usize)
+            .is_none()
+        {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                prepared.paragraph(),
+                source,
+            ));
+        }
+        for glyph in run.glyphs() {
+            let source = glyph.source();
+            if projection
+                .text
+                .get(source.start as usize..source.end as usize)
+                .is_none()
+            {
+                return Err(SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    prepared.paragraph(),
+                    source,
+                ));
+            }
+            for segment in glyph.paint().segments() {
+                let source = segment.source();
+                if projection
+                    .text
+                    .get(source.start as usize..source.end as usize)
+                    .is_none()
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                        source,
+                    ));
+                }
+                projection.local_range(source)?;
             }
         }
     }
@@ -311,6 +372,8 @@ struct CachedFragment {
     bounds: Rect,
     clip: Rect,
     font: FontData,
+    font_size: f32,
+    normalized_coords: Arc<[i16]>,
     bidi_level: u8,
     script: [u8; 4],
 }
@@ -328,7 +391,7 @@ struct CachedSemantic {
     semantic_id: SemanticId,
     paragraph_role: Option<ParagraphRole>,
     inline_role: Option<InlineRole>,
-    source: LocalRange,
+    source: Option<LocalRange>,
     bounds: Rect,
 }
 
@@ -351,6 +414,7 @@ fn build_geometry(
     let mut fragments = Vec::new();
 
     for run in prepared.runs() {
+        let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
         for glyph in run.glyphs() {
             let advance = glyph.advance();
             let horizontal_advance = advance.x.abs();
@@ -383,6 +447,8 @@ fn build_geometry(
                     bounds: clip,
                     clip,
                     font: run.font().clone(),
+                    font_size: run.font_size(),
+                    normalized_coords: Arc::clone(&normalized_coords),
                     bidi_level: run.bidi_level(),
                     script: run.script(),
                 });
@@ -417,7 +483,9 @@ fn build_geometry(
     }
 
     let mut semantics = Vec::new();
-    if let (Some(first), Some(first_line)) = (projection.spans.first(), lines.first()) {
+    if !projection.spans.is_empty()
+        && let Some(first_line) = lines.first()
+    {
         let bounds = lines
             .iter()
             .skip(1)
@@ -426,10 +494,7 @@ fn build_geometry(
             semantic_id: projection.paragraph_semantic,
             paragraph_role: Some(projection.paragraph_role),
             inline_role: None,
-            source: LocalRange {
-                text: first.text,
-                bytes: 0..(first.paragraph.end - first.paragraph.start),
-            },
+            source: None,
             bounds,
         });
     }
@@ -454,7 +519,7 @@ fn build_geometry(
             semantic_id: span.semantic,
             paragraph_role: None,
             inline_role: Some(span.role),
-            source,
+            source: Some(source),
             bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, line_height)),
         });
     }
@@ -473,7 +538,17 @@ fn build_geometry(
 }
 
 fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 {
-    (u64::from(paragraph.index) << 32) | (u64::try_from(fragment).unwrap_or(u64::MAX) & 0xffff_ffff)
+    let mut identity = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in paragraph.document.opaque_bytes() {
+        identity = (identity ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for byte in paragraph.index.to_le_bytes() {
+        identity = (identity ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for byte in u64::try_from(fragment).unwrap_or(u64::MAX).to_le_bytes() {
+        identity = (identity ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    identity
 }
 
 fn materialize_geometry(
@@ -508,16 +583,23 @@ fn materialize_geometry(
             bounds: fragment.bounds + translate,
             clip: fragment.clip + translate,
             font: fragment.font.clone(),
+            font_size: fragment.font_size,
+            normalized_coords: Arc::clone(&fragment.normalized_coords),
             bidi_level: fragment.bidi_level,
             script: fragment.script,
         }
     }));
-    semantics.extend(geometry.semantics.iter().map(|semantic| SemanticFragment {
-        semantic_id: semantic.semantic_id,
-        paragraph_role: semantic.paragraph_role,
-        inline_role: semantic.inline_role,
-        source: Some(materialize_range(&semantic.source, revision)),
-        bounds: semantic.bounds + translate,
+    semantics.extend(geometry.semantics.iter().map(|semantic| {
+        SemanticFragment {
+            semantic_id: semantic.semantic_id,
+            paragraph_role: semantic.paragraph_role,
+            inline_role: semantic.inline_role,
+            source: semantic
+                .source
+                .as_ref()
+                .map(|source| materialize_range(source, revision)),
+            bounds: semantic.bounds + translate,
+        }
     }));
 }
 
@@ -731,6 +813,8 @@ pub struct SceneFragment {
     bounds: Rect,
     clip: Rect,
     font: FontData,
+    font_size: f32,
+    normalized_coords: Arc<[i16]>,
     bidi_level: u8,
     script: [u8; 4],
 }
@@ -770,6 +854,18 @@ impl SceneFragment {
     #[must_use]
     pub const fn font(&self) -> &FontData {
         &self.font
+    }
+
+    /// Returns the scene-unit font size used to shape and position these glyphs.
+    #[must_use]
+    pub const fn font_size(&self) -> f32 {
+        self.font_size
+    }
+
+    /// Returns normalized variation coordinates for the exact font instance.
+    #[must_use]
+    pub fn normalized_coords(&self) -> &[i16] {
+        &self.normalized_coords
     }
 
     /// Returns the scene-space clip preserving this fragment's paint coverage.
@@ -936,5 +1032,130 @@ impl SnapshotTextRange {
     #[must_use]
     pub fn bytes(&self) -> Range<u32> {
         self.bytes.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use peniko::Blob;
+
+    use super::LayoutEngine;
+    use crate::adapter::{
+        GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
+        ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
+        PreparedParagraph, PreparedRun,
+    };
+    use crate::{
+        Brush, Color, Document, DocumentId, FiniteWidth, FontData, InlineRole, PaintSlot,
+        PaintTable, ParagraphRole, Rect, SceneErrorKind, SceneRequest, StyleMap, TextStyle, Vec2,
+    };
+
+    #[derive(Debug)]
+    struct EchoAdapter {
+        split_utf8: bool,
+    }
+
+    impl ParagraphPreparation for EchoAdapter {
+        fn prepare(
+            &mut self,
+            input: ParagraphInput<'_>,
+        ) -> Result<ParagraphPreparationOutput, PreparationError> {
+            let text_len = u32::try_from(input.text().len())
+                .map_err(|_| PreparationError::invalid_output())?;
+            let glyph_source = if self.split_utf8 {
+                1..text_len
+            } else {
+                0..text_len
+            };
+            let segment = GlyphPaintSegment::new(
+                glyph_source.clone(),
+                input.paint_runs()[0].slot(),
+                Rect::new(0., -16., 10., 4.),
+            )?;
+            let coverage = GlyphPaintCoverage::try_from_segments([segment])?;
+            let glyph =
+                PreparedGlyph::try_new(7, glyph_source, Vec2::new(10., 0.), Vec2::ZERO, coverage)?;
+            let run = PreparedRun::try_new(
+                0..text_len,
+                0,
+                *b"Latn",
+                FontData::new(Blob::from(vec![0_u8]), 0),
+                input.font_size(),
+                [],
+                [glyph],
+            )?;
+            let paragraph = PreparedParagraph::try_from_runs(input.paragraph(), text_len, [run])?;
+            Ok(ParagraphPreparationOutput::new(
+                paragraph,
+                PreparationWork::new(true, true, 1, 1),
+            ))
+        }
+    }
+
+    #[test]
+    fn layout_rejects_adapter_ranges_inside_a_utf8_scalar() {
+        let (document, styles, paint) = one_leaf_document(*b"scene-test-doc01", "é");
+        let mut layout = LayoutEngine::new(EchoAdapter { split_utf8: true });
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let error = layout
+            .prepare(&document.snapshot(), &request)
+            .expect_err("mid-scalar adapter source must be rejected");
+        assert_eq!(
+            error.kind(),
+            SceneErrorKind::SourceCoverage,
+            "invalid UTF-8 coverage must be a source-coverage error"
+        );
+        assert!(
+            error.paragraph().is_some(),
+            "source-coverage diagnostics must identify the paragraph"
+        );
+        assert_eq!(
+            error.source(),
+            Some(1..2),
+            "source-coverage diagnostics must retain the invalid range"
+        );
+    }
+
+    #[test]
+    fn fragment_identity_is_distinct_across_documents() {
+        let (first, first_styles, first_paint) = one_leaf_document(*b"scene-test-doc02", "a");
+        let (second, second_styles, second_paint) = one_leaf_document(*b"scene-test-doc03", "b");
+        let mut layout = LayoutEngine::new(EchoAdapter { split_utf8: false });
+        let width = FiniteWidth::new(100.).expect("test width is valid");
+        let first_request = SceneRequest::new(width, &first_styles, &first_paint);
+        let first_scene = layout
+            .prepare(&first.snapshot(), &first_request)
+            .expect("first scene must prepare");
+        let second_request = SceneRequest::new(width, &second_styles, &second_paint);
+        let second_scene = layout
+            .prepare(&second.snapshot(), &second_request)
+            .expect("second scene must prepare");
+        assert_ne!(
+            first_scene.scene().fragments()[0].id(),
+            second_scene.scene().fragments()[0].id(),
+            "document identity must participate in retained fragment identity"
+        );
+    }
+
+    fn one_leaf_document(identity: [u8; 16], text: &str) -> (Document, StyleMap, PaintTable) {
+        let mut document = Document::new(DocumentId::from_bytes(identity));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph must append");
+        edit.append_text(paragraph, InlineRole::TEXT, text)
+            .expect("test text must append");
+        edit.commit().expect("test document must commit");
+        let styles = StyleMap::new(
+            TextStyle::new(16., PaintSlot::new(0)).expect("test style must be valid"),
+        );
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        (document, styles, paint)
     }
 }

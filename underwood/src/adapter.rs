@@ -190,15 +190,12 @@ impl PreparedParagraph {
         let runs: Vec<_> = runs.into_iter().collect();
         let mut previous_end = 0;
         for run in &runs {
-            if run.source.start < previous_end || run.source.end > text_len {
+            if run.source.start != previous_end || run.source.end > text_len {
                 return Err(PreparationError::invalid_output());
             }
             previous_end = run.source.end;
         }
-        if text_len > 0
-            && (runs.first().map_or(0, |run| run.source.start) != 0
-                || runs.last().map_or(0, |run| run.source.end) != text_len)
-        {
+        if previous_end != text_len {
             return Err(PreparationError::invalid_output());
         }
         Ok(Self {
@@ -547,3 +544,56 @@ impl fmt::Display for PreparationError {
 }
 
 impl core::error::Error for PreparationError {}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use peniko::Blob;
+
+    use super::{
+        GlyphPaintCoverage, GlyphPaintSegment, PreparationErrorKind, PreparedGlyph,
+        PreparedParagraph, PreparedRun,
+    };
+    use crate::{DocumentId, FontData, PaintSlot, ParagraphId, Rect, Vec2};
+
+    #[test]
+    fn prepared_paragraph_rejects_a_gap_between_runs() {
+        let paragraph = ParagraphId {
+            document: DocumentId::from_bytes(*b"adapter-test-001"),
+            index: 0,
+        };
+        let first = run(0..1);
+        let second = run(2..3);
+        let error = PreparedParagraph::try_from_runs(paragraph, 3, [first, second])
+            .expect_err("source gaps must be rejected at the adapter boundary");
+        assert_eq!(
+            error.kind(),
+            PreparationErrorKind::InvalidOutput,
+            "a source gap is invalid adapter output"
+        );
+    }
+
+    fn run(source: core::ops::Range<u32>) -> PreparedRun {
+        let coverage = GlyphPaintCoverage::try_from_segments([GlyphPaintSegment::new(
+            source.clone(),
+            PaintSlot::new(0),
+            Rect::new(0., 0., 1., 1.),
+        )
+        .expect("test coverage is finite")])
+        .expect("test coverage is contiguous");
+        let glyph =
+            PreparedGlyph::try_new(1, source.clone(), Vec2::new(1., 0.), Vec2::ZERO, coverage)
+                .expect("test glyph is valid");
+        PreparedRun::try_new(
+            source,
+            0,
+            *b"Latn",
+            FontData::new(Blob::from(vec![0_u8]), 0),
+            16.,
+            [],
+            [glyph],
+        )
+        .expect("test run is internally valid")
+    }
+}
