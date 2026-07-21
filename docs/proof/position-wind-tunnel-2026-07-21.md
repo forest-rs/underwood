@@ -3,7 +3,7 @@
 - **Capability:** document transactions and identity
 - **Bead:** `und-oh0.10.1.1`
 - **Trace:** private `identity-trace-v0`
-- **Implementation commit:** `85c6500`
+- **Implementation commit:** `3734c6c`
 - **Candidate:** dependency-free canonical baseline plus persistent candidate v1
 - **Proof effect:** evidence at `Specified`; no promotion to `Executable`
 

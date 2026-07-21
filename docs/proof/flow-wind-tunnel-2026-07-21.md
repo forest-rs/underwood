@@ -3,7 +3,7 @@
 - **Capability:** layout and scene
 - **Bead:** `und-oh0.10.1.2`
 - **Trace:** private `flow-trace-v0`
-- **Implementation commit:** `138a092`
+- **Implementation commit:** `e1fc9a6`
 - **Candidate:** synthetic continuation and virtual-extent model v0
 - **Proof effect:** evidence at `Specified`; no promotion to `Executable`
 
