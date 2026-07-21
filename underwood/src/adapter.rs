@@ -26,6 +26,7 @@ pub trait ParagraphPreparation {
 pub struct ParagraphInput<'a> {
     paragraph: ParagraphId,
     text: &'a str,
+    shaping_styles: &'a [ShapingStyle],
     shaping_runs: &'a [ShapingRun],
     paint_runs: &'a [PaintRun],
 }
@@ -34,15 +35,23 @@ impl<'a> ParagraphInput<'a> {
     pub(crate) const fn new(
         paragraph: ParagraphId,
         text: &'a str,
+        shaping_styles: &'a [ShapingStyle],
         shaping_runs: &'a [ShapingRun],
         paint_runs: &'a [PaintRun],
     ) -> Self {
         Self {
             paragraph,
             text,
+            shaping_styles,
             shaping_runs,
             paint_runs,
         }
+    }
+
+    /// Returns the paragraph-local table of unique shaping values.
+    #[must_use]
+    pub const fn shaping_styles(&self) -> &[ShapingStyle] {
+        self.shaping_styles
     }
 
     /// Returns the paragraph identity.
@@ -70,15 +79,31 @@ impl<'a> ParagraphInput<'a> {
     }
 }
 
+/// Dense paragraph-local identity for one entry in the shaping-style table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShapingStyleId(u16);
+
+impl ShapingStyleId {
+    pub(crate) const fn new(index: u16) -> Self {
+        Self(index)
+    }
+
+    /// Returns the paragraph-local table index.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// Complete shaping values over a paragraph-local UTF-8 byte range.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShapingRun {
     bytes: Range<u32>,
-    style: ShapingStyle,
+    style: ShapingStyleId,
 }
 
 impl ShapingRun {
-    pub(crate) const fn new(bytes: Range<u32>, style: ShapingStyle) -> Self {
+    pub(crate) const fn new(bytes: Range<u32>, style: ShapingStyleId) -> Self {
         Self { bytes, style }
     }
 
@@ -88,10 +113,10 @@ impl ShapingRun {
         self.bytes.clone()
     }
 
-    /// Returns the complete shaping values for this range.
+    /// Returns the paragraph-local shaping-style identity for this range.
     #[must_use]
-    pub const fn style(&self) -> &ShapingStyle {
-        &self.style
+    pub const fn style(&self) -> ShapingStyleId {
+        self.style
     }
 }
 

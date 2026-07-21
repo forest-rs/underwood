@@ -115,14 +115,14 @@ impl InlineFlowStyle {
 }
 
 impl ComputedInlineStyle {
-    pub const fn new(
+    pub fn new(
         shaping: ShapingStyle,
         inline_flow: InlineFlowStyle,
         paint: PaintSlot,
     ) -> Self;
     pub fn with_shaping(self, shaping: ShapingStyle) -> Self;
-    pub const fn with_inline_flow(self, inline_flow: InlineFlowStyle) -> Self;
-    pub const fn with_paint(self, paint: PaintSlot) -> Self;
+    pub fn with_inline_flow(self, inline_flow: InlineFlowStyle) -> Self;
+    pub fn with_paint(self, paint: PaintSlot) -> Self;
 }
 
 impl StyleMap {
@@ -132,8 +132,8 @@ impl StyleMap {
 ```
 
 Read-only accessors for every public value are part of the implementation.
-Dense shaping and inline-flow IDs are paragraph-local implementation details,
-not public stable identities or serialized values.
+Dense shaping and inline-flow IDs are paragraph-local, backend-facing adapter
+details, not stable facade identities or serialized values.
 
 ### Before
 

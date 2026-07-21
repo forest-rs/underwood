@@ -22,7 +22,7 @@ use underwood::adapter::{
     ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
     PreparedParagraph, PreparedRun, ShapingRun,
 };
-use underwood::{FontData, ParagraphId, Rect, Vec2};
+use underwood::{FontData, ParagraphId, Rect, ShapingStyle, Vec2};
 
 /// Owned validated font bytes and a face within them.
 #[derive(Clone)]
@@ -181,6 +181,7 @@ impl ParagraphPreparation for ParleyParagraphEngine {
             } else {
                 self.cache[index].text = Arc::from(input.text());
                 self.cache[index].analysis = analyze_text(&mut self.analyzer, input.text());
+                self.cache[index].shaping_styles.clear();
                 self.cache[index].shaping_runs.clear();
                 self.cache[index].runs.clear();
                 (index, true)
@@ -190,21 +191,25 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 paragraph: input.paragraph(),
                 text: Arc::from(input.text()),
                 analysis: analyze_text(&mut self.analyzer, input.text()),
+                shaping_styles: Vec::new(),
                 shaping_runs: Vec::new(),
                 runs: Vec::new(),
             });
             (self.cache.len() - 1, true)
         };
 
-        let shaped = self.cache[cache_index].shaping_runs != input.shaping_runs();
+        let shaped = self.cache[cache_index].shaping_styles != input.shaping_styles()
+            || self.cache[cache_index].shaping_runs != input.shaping_runs();
         if shaped {
             let runs = shape_paragraph(
                 &mut self.shaper,
                 &self.cache[cache_index].analysis,
                 &self.fonts,
                 input.text(),
+                input.shaping_styles(),
                 input.shaping_runs(),
             )?;
+            self.cache[cache_index].shaping_styles = input.shaping_styles().to_vec();
             self.cache[cache_index].shaping_runs = input.shaping_runs().to_vec();
             self.cache[cache_index].runs = runs;
         }
@@ -269,6 +274,7 @@ struct PhysicsCache {
     paragraph: ParagraphId,
     text: Arc<str>,
     analysis: Analysis,
+    shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
     runs: Vec<PhysicsRun>,
 }
@@ -310,13 +316,15 @@ fn shape_paragraph(
     analysis: &Analysis,
     fonts: &FontSet,
     text: &str,
+    shaping_styles: &[ShapingStyle],
     shaping_runs: &[ShapingRun],
 ) -> Result<Vec<PhysicsRun>, PreparationError> {
     let analysis_data = AnalysisDataSources::new();
     let char_offsets = char_byte_offsets(text);
     let mut style_indices = Vec::with_capacity(text.chars().count());
-    for (index, run) in shaping_runs.iter().enumerate() {
-        let index = u16::try_from(index).map_err(|_| PreparationError::invalid_output())?;
+    for run in shaping_runs {
+        let index =
+            u16::try_from(run.style().index()).map_err(|_| PreparationError::invalid_output())?;
         let range = run.bytes();
         let run_text = text
             .get(range.start as usize..range.end as usize)
@@ -329,7 +337,7 @@ fn shape_paragraph(
         style_indices[range.char_range.start] != style_indices[range.char_range.end]
     };
     for item in analysis.itemize(text, split_after) {
-        let style = shaping_runs[usize::from(style_indices[item.range.char_range.start])].style();
+        let style = &shaping_styles[usize::from(style_indices[item.range.char_range.start])];
         let script = item.script.to_bytes();
         let missing_font = Cell::new(false);
         shaper.shape_item(
@@ -517,6 +525,14 @@ fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationErro
         text_len,
         PreparationError::invalid_output,
     )?;
+    if input.shaping_styles().len() > usize::from(u16::MAX) + 1
+        || input
+            .shaping_runs()
+            .iter()
+            .any(|run| run.style().index() >= input.shaping_styles().len())
+    {
+        return Err(PreparationError::invalid_output());
+    }
     validate_run_coverage(
         input,
         input.paint_runs().iter().map(|run| run.bytes()),

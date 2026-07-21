@@ -255,6 +255,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
         "paint-slot assignment must retain flow geometry"
     );
+    assert!(
+        reassigned_scene
+            .scene()
+            .fragments()
+            .iter()
+            .filter(|fragment| {
+                fragment
+                    .source()
+                    .is_some_and(|source| source.text() == first_suffix)
+            })
+            .all(|fragment| fragment.paint() == PaintSlot::new(0)),
+        "retained geometry must still receive the new paint-slot assignment"
+    );
 
     let mut shaping_styles = reassigned_paint.clone();
     shaping_styles.set(ligatures_off, ligatures_on_style);

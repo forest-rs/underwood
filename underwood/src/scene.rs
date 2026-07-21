@@ -8,13 +8,13 @@ use core::ops::Range;
 
 use crate::adapter::{
     PaintRun, ParagraphInput, ParagraphPreparation, PreparationWork, PreparedGlyph,
-    PreparedParagraph, PreparedRun, ShapingRun,
+    PreparedParagraph, PreparedRun, ShapingRun, ShapingStyleId,
 };
 use crate::document::Paragraph;
 use crate::{
     Affine, ComputedInlineStyle, DocumentRevision, DocumentSnapshot, FontData, InlineFlowStyle,
     InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError,
-    SceneErrorKind, SceneRequest, SemanticId, TextId, Vec2,
+    SceneErrorKind, SceneRequest, SemanticId, ShapingStyle, TextId, Vec2,
 };
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
@@ -60,6 +60,7 @@ impl LayoutEngine {
             let projection = Projection::new(paragraph, request)?;
             let preparation_key = PreparationKey {
                 version: paragraph.version,
+                shaping_styles: projection.shaping_styles.clone(),
                 shaping_runs: projection.shaping_runs.clone(),
             };
             let cache_index = self
@@ -80,6 +81,7 @@ impl LayoutEngine {
                     .prepare(ParagraphInput::new(
                         paragraph.id,
                         &projection.text,
+                        &projection.shaping_styles,
                         &projection.shaping_runs,
                         &projection.paint_runs,
                     ))
@@ -128,7 +130,9 @@ impl LayoutEngine {
                 .as_ref()
                 .is_none_or(|geometry| {
                     geometry.width != width_key
+                        || geometry.inline_flow_styles != projection.inline_flow_styles
                         || geometry.inline_flow_runs != projection.inline_flow_runs
+                        || geometry.empty_line_height != projection.empty_line_height_key()
                 })
             {
                 let geometry = build_geometry(
@@ -178,6 +182,7 @@ impl LayoutEngine {
 #[derive(Clone, Debug, PartialEq)]
 struct PreparationKey {
     version: u64,
+    shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
 }
 
@@ -195,7 +200,9 @@ struct Projection {
     paragraph: ParagraphId,
     text: alloc::string::String,
     spans: Vec<LeafSpan>,
+    shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
+    inline_flow_styles: Vec<InlineFlowStyle>,
     inline_flow_runs: Vec<InlineFlowRun>,
     paint_runs: Vec<PaintRun>,
     default_style: ComputedInlineStyle,
@@ -207,7 +214,9 @@ impl Projection {
     fn new(paragraph: &Paragraph, request: &SceneRequest<'_>) -> Result<Self, SceneError> {
         let text = paragraph.projected_text();
         let mut spans = Vec::with_capacity(paragraph.leaves.len());
+        let mut shaping_styles = Vec::new();
         let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len());
+        let mut inline_flow_styles = Vec::new();
         let mut inline_flow_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut paint_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut start = 0_u32;
@@ -226,8 +235,20 @@ impl Projection {
                 semantic: leaf.semantic_id(),
             });
             if start != end {
-                append_shaping_run(&mut shaping_runs, start..end, style.shaping());
-                append_inline_flow_run(&mut inline_flow_runs, start..end, style.inline_flow());
+                append_shaping_run(
+                    &mut shaping_styles,
+                    &mut shaping_runs,
+                    start..end,
+                    style.shaping(),
+                    paragraph.id,
+                )?;
+                append_inline_flow_run(
+                    &mut inline_flow_styles,
+                    &mut inline_flow_runs,
+                    start..end,
+                    style.inline_flow(),
+                    paragraph.id,
+                )?;
                 append_paint_run(&mut paint_runs, start..end, style.paint());
             }
             start = end;
@@ -236,7 +257,9 @@ impl Projection {
             paragraph: paragraph.id,
             text,
             spans,
+            shaping_styles,
             shaping_runs,
+            inline_flow_styles,
             inline_flow_runs,
             paint_runs,
             default_style: request.styles.default_style().clone(),
@@ -270,7 +293,11 @@ impl Projection {
             .inline_flow_runs
             .iter()
             .filter(|run| run.bytes.start < source.end && run.bytes.end > source.start)
-            .map(|run| run.style.line_height().multiplier())
+            .map(|run| {
+                self.inline_flow_styles[usize::from(run.style.0)]
+                    .line_height()
+                    .multiplier()
+            })
             .fold(0.0_f32, f32::max);
         let multiplier = if multiplier == 0.0 {
             self.default_style.inline_flow().line_height().multiplier()
@@ -278,6 +305,16 @@ impl Projection {
             multiplier
         };
         f64::from(font_size) * f64::from(multiplier)
+    }
+
+    fn empty_line_height_key(&self) -> u64 {
+        if self.text.is_empty() {
+            (f64::from(self.default_style.shaping().font_size())
+                * f64::from(self.default_style.inline_flow().line_height().multiplier()))
+            .to_bits()
+        } else {
+            0
+        }
     }
 }
 
@@ -289,29 +326,63 @@ struct LeafSpan {
     semantic: SemanticId,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InlineFlowStyleId(u16);
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct InlineFlowRun {
     bytes: Range<u32>,
-    style: InlineFlowStyle,
+    style: InlineFlowStyleId,
 }
 
-fn append_shaping_run(runs: &mut Vec<ShapingRun>, bytes: Range<u32>, style: &crate::ShapingStyle) {
+fn append_shaping_run(
+    styles: &mut Vec<ShapingStyle>,
+    runs: &mut Vec<ShapingRun>,
+    bytes: Range<u32>,
+    style: &ShapingStyle,
+    paragraph: ParagraphId,
+) -> Result<(), SceneError> {
+    let style = if let Some(index) = styles.iter().position(|candidate| candidate == style) {
+        ShapingStyleId::new(
+            u16::try_from(index)
+                .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?,
+        )
+    } else {
+        let index = u16::try_from(styles.len())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?;
+        styles.push(style.clone());
+        ShapingStyleId::new(index)
+    };
     if let Some(last) = runs.last_mut()
         && last.bytes().end == bytes.start
         && last.style() == style
     {
         let start = last.bytes().start;
-        *last = ShapingRun::new(start..bytes.end, style.clone());
+        *last = ShapingRun::new(start..bytes.end, style);
     } else {
-        runs.push(ShapingRun::new(bytes, style.clone()));
+        runs.push(ShapingRun::new(bytes, style));
     }
+    Ok(())
 }
 
 fn append_inline_flow_run(
+    styles: &mut Vec<InlineFlowStyle>,
     runs: &mut Vec<InlineFlowRun>,
     bytes: Range<u32>,
     style: InlineFlowStyle,
-) {
+    paragraph: ParagraphId,
+) -> Result<(), SceneError> {
+    let style = if let Some(index) = styles.iter().position(|candidate| *candidate == style) {
+        InlineFlowStyleId(
+            u16::try_from(index)
+                .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?,
+        )
+    } else {
+        let index = u16::try_from(styles.len())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?;
+        styles.push(style);
+        InlineFlowStyleId(index)
+    };
     if let Some(last) = runs.last_mut()
         && last.bytes.end == bytes.start
         && last.style == style
@@ -320,6 +391,7 @@ fn append_inline_flow_run(
     } else {
         runs.push(InlineFlowRun { bytes, style });
     }
+    Ok(())
 }
 
 fn append_paint_run(runs: &mut Vec<PaintRun>, bytes: Range<u32>, slot: PaintSlot) {
@@ -424,7 +496,9 @@ fn record_preparation_work(report: &mut WorkReport, work: PreparationWork) {
 #[derive(Clone, Debug)]
 struct CachedGeometry {
     width: u64,
+    inline_flow_styles: Vec<InlineFlowStyle>,
     inline_flow_runs: Vec<InlineFlowRun>,
+    empty_line_height: u64,
     height: f64,
     lines: Vec<CachedLine>,
     fragments: Vec<CachedFragment>,
@@ -592,7 +666,9 @@ fn build_geometry(
 
     Ok(CachedGeometry {
         width: width.to_bits(),
+        inline_flow_styles: projection.inline_flow_styles.clone(),
         inline_flow_runs: projection.inline_flow_runs.clone(),
+        empty_line_height: projection.empty_line_height_key(),
         height: if fragments.is_empty() {
             empty_line_height
         } else {
@@ -1208,11 +1284,11 @@ impl SnapshotTextRange {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
+    use alloc::{vec, vec::Vec};
 
     use peniko::Blob;
 
-    use super::LayoutEngine;
+    use super::{LayoutEngine, append_inline_flow_run, append_shaping_run};
     use crate::adapter::{
         GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
         ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
@@ -1236,6 +1312,13 @@ mod tests {
         ) -> Result<ParagraphPreparationOutput, PreparationError> {
             let text_len = u32::try_from(input.text().len())
                 .map_err(|_| PreparationError::invalid_output())?;
+            if text_len == 0 {
+                let paragraph = PreparedParagraph::try_from_runs(input.paragraph(), text_len, [])?;
+                return Ok(ParagraphPreparationOutput::new(
+                    paragraph,
+                    PreparationWork::new(true, true, 0, 0),
+                ));
+            }
             let glyph_source = if self.split_utf8 {
                 1..text_len
             } else {
@@ -1254,7 +1337,7 @@ mod tests {
                 0,
                 *b"Latn",
                 FontData::new(Blob::from(vec![0_u8]), 0),
-                input.shaping_runs()[0].style().font_size(),
+                input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size(),
                 [],
                 [glyph],
             )?;
@@ -1313,6 +1396,114 @@ mod tests {
             second_scene.scene().fragments()[0].id(),
             "document identity must participate in retained fragment identity"
         );
+    }
+
+    #[test]
+    fn paragraph_projection_interns_repeated_style_partitions() {
+        let (document, _, _) = one_leaf_document(*b"scene-test-doc04", "abc");
+        let paragraph = document.snapshot().paragraphs()[0].id;
+        let first = ShapingStyle::new(16.).expect("test style is valid");
+        let second = ShapingStyle::new(24.).expect("test style is valid");
+        let mut shaping_styles = Vec::new();
+        let mut shaping_runs = Vec::new();
+        append_shaping_run(
+            &mut shaping_styles,
+            &mut shaping_runs,
+            0..1,
+            &first,
+            paragraph,
+        )
+        .expect("first style must intern");
+        append_shaping_run(
+            &mut shaping_styles,
+            &mut shaping_runs,
+            1..2,
+            &second,
+            paragraph,
+        )
+        .expect("second style must intern");
+        append_shaping_run(
+            &mut shaping_styles,
+            &mut shaping_runs,
+            2..3,
+            &first,
+            paragraph,
+        )
+        .expect("repeated style must intern");
+        assert_eq!(shaping_styles, [first, second]);
+        assert_eq!(shaping_runs[0].style().index(), 0);
+        assert_eq!(shaping_runs[1].style().index(), 1);
+        assert_eq!(shaping_runs[2].style().index(), 0);
+
+        let compact = InlineFlowStyle::new(
+            crate::LineHeight::from_multiplier(1.0).expect("line height is valid"),
+        );
+        let spacious = InlineFlowStyle::new(
+            crate::LineHeight::from_multiplier(2.0).expect("line height is valid"),
+        );
+        let mut flow_styles = Vec::new();
+        let mut flow_runs = Vec::new();
+        append_inline_flow_run(&mut flow_styles, &mut flow_runs, 0..1, compact, paragraph)
+            .expect("first flow style must intern");
+        append_inline_flow_run(&mut flow_styles, &mut flow_runs, 1..2, spacious, paragraph)
+            .expect("second flow style must intern");
+        append_inline_flow_run(&mut flow_styles, &mut flow_runs, 2..3, compact, paragraph)
+            .expect("repeated flow style must intern");
+        assert_eq!(flow_styles, [compact, spacious]);
+        assert_eq!(flow_runs[0].style.0, 0);
+        assert_eq!(flow_runs[1].style.0, 1);
+        assert_eq!(flow_runs[2].style.0, 0);
+    }
+
+    #[test]
+    fn empty_paragraph_line_height_has_a_flow_identity() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"scene-test-doc05"));
+        let mut edit = document.edit();
+        edit.append_paragraph(ParagraphRole::BODY)
+            .expect("empty paragraph must append");
+        let second = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("second paragraph must append");
+        let text = edit
+            .append_text(second, InlineRole::TEXT, "a")
+            .expect("second paragraph text must append");
+        edit.commit().expect("test document must commit");
+
+        let shaping = ShapingStyle::new(10.).expect("test style is valid");
+        let compact = ComputedInlineStyle::new(
+            shaping.clone(),
+            InlineFlowStyle::new(
+                crate::LineHeight::from_multiplier(1.0).expect("line height is valid"),
+            ),
+            PaintSlot::new(0),
+        );
+        let spacious = ComputedInlineStyle::new(
+            shaping,
+            InlineFlowStyle::new(
+                crate::LineHeight::from_multiplier(2.0).expect("line height is valid"),
+            ),
+            PaintSlot::new(0),
+        );
+        let mut compact_styles = StyleMap::new(compact.clone());
+        compact_styles.set(text, compact.clone());
+        let mut spacious_styles = StyleMap::new(spacious);
+        spacious_styles.set(text, compact);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let width = FiniteWidth::new(100.).expect("test width is valid");
+        let mut layout = LayoutEngine::new(EchoAdapter { split_utf8: false });
+
+        let compact_request = SceneRequest::new(width, &compact_styles, &paint);
+        let compact_scene = layout
+            .prepare(&document.snapshot(), &compact_request)
+            .expect("compact scene must prepare");
+        let spacious_request = SceneRequest::new(width, &spacious_styles, &paint);
+        let spacious_scene = layout
+            .prepare(&document.snapshot(), &spacious_request)
+            .expect("spacious scene must prepare");
+        assert_eq!(spacious_scene.work().shape().paragraphs(), 0);
+        assert_eq!(spacious_scene.work().flow().paragraphs(), 1);
+        assert_eq!(compact_scene.scene().lines()[0].bounds().y0, 10.0);
+        assert_eq!(spacious_scene.scene().lines()[0].bounds().y0, 20.0);
     }
 
     fn one_leaf_document(identity: [u8; 16], text: &str) -> (Document, StyleMap, PaintTable) {
