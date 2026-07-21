@@ -3,8 +3,8 @@
 - **Capability:** document transactions and identity
 - **Bead:** `und-oh0.10.1.1`
 - **Trace:** private `identity-trace-v0`
-- **Implementation commits:** `3734c6c`, `9d2b878`
-- **Candidate:** dependency-free canonical baseline plus persistent candidate v2
+- **Implementation commits:** `3734c6c`, `9d2b878`, `a6e2e59`
+- **Candidate:** dependency-free canonical baseline plus persistent candidate v3
 - **Proof effect:** evidence at `Specified`; no promotion to `Executable`
 
 ## Reproduction
@@ -22,7 +22,7 @@ confidence method are not yet sufficient for an accepted timing claim.
 
 ## Correctness evidence
 
-Fifteen wind-tunnel tests pass. The load-bearing cases are:
+Eighteen wind-tunnel tests pass. The load-bearing cases are:
 
 - insert and delete-collapse bias for sparse anchors;
 - rejection of stale derived ranges;
@@ -36,7 +36,17 @@ Fifteen wind-tunnel tests pass. The load-bearing cases are:
 - source order across binary-counter carry cascades using 257 distinct append
   payloads, with an earlier 127-batch snapshot remaining immutable; and
 - an exact one-GiB logical append run in 16,384 batches with bounded structural
-  work and no unpublished tail.
+  work and no unpublished tail;
+- text-container split and adjacent join at a shared boundary, proving that a
+  `Before` anchor remains on the left, an `After` anchor follows the right, and
+  both recover their byte position and bias after join; and
+- sibling move followed by delete, proving that an anchor follows its private
+  node identity through the move and becomes explicitly unresolved after
+  deletion.
+
+The semantic suite is executed twice in one test and every trace id and digest
+must match. The tree observation digest covers node order, node text, anchor
+node, byte position, bias, and the unresolved state.
 
 The range differential test initially failed on edit 2. Independent boundary
 blocks became globally misordered after deletion collapsed spans with different
@@ -89,8 +99,9 @@ instrumentation measures retained allocations under the accepted corpus.
 - The append trace isolates publication metadata with a shared payload; a
   distinct-payload one-GiB ingestion and retained-memory run remains absent.
 - No Loro or other collaboration-authority candidate is present.
-- Split/join/move/delete node identity, compaction, selective undo, and
-  collaboration convergence traces are not implemented.
+- The tree model covers flat sibling text containers only. Recursive parent
+  splices, subtree moves, schema payloads, concurrent move/delete, compaction,
+  selective undo, and collaboration convergence remain unimplemented.
 - Allocator sensitivity and confidence intervals are absent.
 - Candidate representations are private and have not been reviewed as
   production storage.

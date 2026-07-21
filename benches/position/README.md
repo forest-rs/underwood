@@ -21,3 +21,8 @@ The one-GiB append pressure run reuses one immutable 64-KiB payload across
 does not measure one GiB of source ingestion, distinct retained payload memory,
 or allocator overhead. Distinct-payload tests separately cover source order and
 snapshot preservation.
+
+The tree-anchor model executes local text-container split, adjacent join,
+sibling move, and delete laws. Its node identifiers and flat representation are
+private semantic-test machinery, not a production tree choice or evidence for
+recursive/collaborative tree operations.
