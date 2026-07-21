@@ -11,8 +11,10 @@ runs, and renders deterministic RGBA pixels with `imaging_vello_cpu`.
 The poster deliberately exposes difficult evidence: one `ffi` ligature painted
 through two focused source clips; one paragraph mixing Latin LTR and Arabic RTL
 runs with real font fallback; and one heterogeneous document carrying three
-explicit Roboto Flex `wght`/`opsz` instances, mixed font sizes and line heights,
-paint slots, and `liga` on/off shaping with asserted glyph counts. A bounded
+Fontique-selected Roboto Flex weight/width instances plus explicit `opsz`, mixed
+font sizes and line heights, paint slots, and `liga` on/off shaping with asserted
+glyph counts. An absent primary family reaches Noto Kufi through an `Arab`/`ar`
+fallback and executes a retained 14° synthetic-oblique transform. A bounded
 hit-derived caret, local edit, retained sibling, and paint-only update expose
 the corresponding semantic and invalidation paths.
 

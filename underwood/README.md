@@ -18,6 +18,9 @@ The first draft public slice is deliberately complete end to end:
 - [`ComputedInlineStyle`] keeps [`ShapingStyle`], [`InlineFlowStyle`], and
   [`PaintSlot`] values in separate invalidation partitions while [`StyleMap`]
   assigns complete styles to semantic text leaves;
+- [`ShapingStyle`] carries backend-neutral family, weight, width, style,
+  language, feature, and variation requests; the separate adapter resolves
+  them without moving font matching into this crate;
 - [`TextScene`] exposes real glyph resources, paint clips, source mapping, hit
   testing, caret geometry, and semantic observations;
 - document IDs are opaque and document-scoped, while [`SnapshotTextRange`]
@@ -35,7 +38,7 @@ partitions, then assign it to the [`TextId`] returned by an edit:
 
 ```rust
 use underwood::{
-    ComputedInlineStyle, Document, DocumentId, FontFeature, InlineFlowStyle,
+    ComputedInlineStyle, Document, DocumentId, FontFamily, FontFeature, InlineFlowStyle,
     InlineRole, PaintSlot, ParagraphRole, ShapingStyle, StyleMap, Tag,
 };
 
@@ -46,7 +49,7 @@ let emphasis = edit
     .append_text(paragraph, InlineRole::EMPHASIS, "office")
     .unwrap();
 
-let shaping = ShapingStyle::new(16.0).unwrap();
+let shaping = ShapingStyle::new(FontFamily::named("Roboto Flex"), 16.0).unwrap();
 let body = ComputedInlineStyle::new(
     shaping.clone(),
     InlineFlowStyle::default(),
@@ -66,3 +69,10 @@ styles.set(emphasis, no_ligatures);
 This replaces the pre-stable `TextStyle { font_size, paint }` shortcut and
 `StyleMap::set_paint`: migrate by constructing the complete override from the
 default style and assigning it with [`StyleMap::set`].
+
+Font-family CSS source is parsed and owned when a shaping style is built.
+Family, weight, width, and style changes reuse Unicode analysis but invalidate
+font selection and shaping for the affected paragraph. Resolved scene
+fragments retain exact font bytes, normalized variation coordinates, and
+portable synthesis evidence; [`WorkReport::font_selection`] exposes the
+clusters resolved instead of hiding that work under shaping.

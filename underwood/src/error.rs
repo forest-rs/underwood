@@ -97,7 +97,9 @@ impl core::error::Error for EditError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StyleErrorKind {
-    /// A numeric value is negative or not finite.
+    /// A font-family request is empty, duplicated, or syntactically invalid.
+    InvalidFontFamily,
+    /// A numeric value is non-finite or not strictly positive when required.
     InvalidNumber,
     /// A text identity is unknown to the relevant snapshot.
     UnknownText,

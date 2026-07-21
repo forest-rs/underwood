@@ -201,7 +201,7 @@ fn document_fixture() -> Result<DocumentFixture, Box<dyn std::error::Error>> {
     edit.commit()?;
 
     let base = ComputedInlineStyle::new(
-        ShapingStyle::new(16.0)?,
+        ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 16.0)?,
         InlineFlowStyle::default(),
         PaintSlot::new(0),
     );
@@ -235,7 +235,12 @@ fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {
             "arabic",
             include_bytes!("../../../examples/headless/fonts/NotoKufiArabic-Regular.otf"),
         )?,
-    ])?)
+    ])?
+    .with_fallbacks(
+        underwood::Script::from_bytes(*b"Arab"),
+        None,
+        ["Noto Kufi Arabic"],
+    )?)
 }
 
 fn measure(iterations: usize, mut operation: impl FnMut()) -> Duration {
