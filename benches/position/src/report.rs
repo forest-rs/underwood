@@ -1,10 +1,12 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::candidate::{AppendStream, BlockedRanges, ChunkedText};
+use crate::form;
 use crate::model::{
     AuthoredSpan, Bias, CanonicalBaseline, EdgeBehavior, anchor_record_bytes, authored_span_bytes,
     baseline_inline_bytes, derived_range_bytes,
@@ -108,7 +110,7 @@ fn print_gates(gates: &[Gate]) {
 
 fn measure_gates() -> Vec<Gate> {
     let (label_heap, snapshot_clone_shares) = label_measurements();
-    let p95 = localized_edit_p95();
+    let p95 = form_ime_commit_p95();
     let (dense_visited, dense_resolved) = dense_authored_work();
     let (editor_copied, editor_visited) = editor_local_edit_work();
     let (chunked_copied, chunk_records, chunk_snapshot_shared) = chunked_editor_work();
@@ -155,7 +157,7 @@ fn measure_gates() -> Vec<Gate> {
             note: "revision law passes; retained allocation needs instrumentation",
         },
         Gate {
-            id: "form-10k-local-edit-p95",
+            id: "form-10k-ime-commit-p95",
             status: Status::Screen,
             observed: format!(
                 "{} ns; below_limit={}",
@@ -163,7 +165,7 @@ fn measure_gates() -> Vec<Gate> {
                 p95 < Duration::from_millis(16)
             ),
             limit: "<16000000 ns",
-            note: "no confidence interval or calibrated reference machine yet",
+            note: "final IME transaction through snapshot publication; no calibrated reference machine or confidence interval",
         },
         Gate {
             id: "dense-million-transform-work",
@@ -281,16 +283,31 @@ fn label_measurements() -> (usize, bool) {
     (estimated_heap, snapshot.shares_text_with(&clone))
 }
 
-fn localized_edit_p95() -> Duration {
-    let source = "x".repeat(10 * 1024);
+fn form_ime_commit_p95() -> Duration {
+    let edits = form::ime_edits();
     let mut samples = Vec::with_capacity(SAMPLE_COUNT);
-    for sample in 0..SAMPLE_COUNT {
-        let mut model = CanonicalBaseline::new(&source);
-        let at = 5_000 + sample % 100;
+    for _ in 0..SAMPLE_COUNT {
+        let mut fixture = form::fixture();
+        for edit in &edits[..3] {
+            fixture
+                .model
+                .replace(edit.replaced.clone(), edit.inserted)
+                .expect("IME setup edit is valid");
+        }
+        let commit = &edits[3];
         let started = Instant::now();
-        model
-            .replace(at..at + 1, "y")
-            .expect("ASCII edit boundary is valid");
+        let summary = fixture
+            .model
+            .replace(commit.replaced.clone(), commit.inserted)
+            .expect("IME commit edit is valid");
+        let (snapshot, publication) = fixture.model.snapshot();
+        black_box((
+            summary.after,
+            snapshot.revision(),
+            snapshot.text().len(),
+            snapshot.authored().len(),
+            publication.snapshot_records_visited,
+        ));
         samples.push(started.elapsed());
     }
     samples.sort_unstable();
@@ -419,12 +436,12 @@ const fn pass_if(condition: bool) -> Status {
 
 #[cfg(test)]
 mod tests {
-    use super::{APPEND_BATCH_COUNT, append_gib_work, localized_edit_p95};
+    use super::{APPEND_BATCH_COUNT, append_gib_work, form_ime_commit_p95};
 
     #[test]
     fn p95_runner_produces_a_nonzero_observation() {
         assert!(
-            !localized_edit_p95().is_zero(),
+            !form_ime_commit_p95().is_zero(),
             "timer must observe the edit"
         );
     }

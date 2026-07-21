@@ -1,6 +1,8 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use crate::candidate::{BlockedRanges, ChunkedText};
+use crate::form;
 use crate::model::{AuthoredSpan, Bias, CanonicalBaseline, EdgeBehavior, ModelError, WorkCounters};
 use crate::tree::{NodeId, TreeBaseline, TreeError};
 
@@ -23,6 +25,7 @@ pub(crate) fn run_semantic_suite() -> Vec<TraceOutcome> {
         immutable_snapshot(),
         stale_derived_range(),
         authored_edge_behavior(),
+        form_ime_corpus(),
         tree_split_join_anchor_lifecycle(),
         tree_move_delete_anchor_lifecycle(),
         deterministic_replay(),
@@ -186,6 +189,97 @@ fn authored_edge_behavior() -> TraceOutcome {
         detail: format!(
             "spans={spans:?} sparse-resolutions={}",
             edit.work.anchors_resolved
+        ),
+    }
+}
+
+fn form_ime_corpus() -> TraceOutcome {
+    let source = form::source();
+    let spans = form::authored_spans();
+    let mut fixture = form::fixture();
+    let mut text_candidate = ChunkedText::new(&source);
+    let mut range_candidate = BlockedRanges::new(spans);
+    let mut baseline_work = WorkCounters::default();
+    let mut candidate_text_bytes = 0;
+    let mut candidate_text_records = 0;
+    let mut candidate_range_blocks = 0;
+    let mut candidate_spans = 0;
+    let mut every_publication_matches = true;
+    let mut positions = Vec::new();
+    let mut final_snapshot = None;
+
+    for edit in form::ime_edits() {
+        let summary = fixture
+            .model
+            .replace(edit.replaced.clone(), edit.inserted)
+            .expect("form IME edit is valid");
+        baseline_work = add_work(baseline_work, summary.work);
+        let (next_text, text_work) = text_candidate
+            .replace(edit.replaced.clone(), edit.inserted)
+            .expect("candidate form IME edit is valid");
+        let (next_ranges, range_work) =
+            range_candidate.transform(edit.replaced, edit.inserted.len());
+        text_candidate = next_text;
+        range_candidate = next_ranges;
+        candidate_text_bytes += text_work.source_bytes_copied;
+        candidate_text_records += text_work.chunk_records_visited;
+        candidate_range_blocks += range_work.block_records_visited;
+        candidate_spans += range_work.spans_visited;
+        positions = fixture
+            .anchors
+            .iter()
+            .map(|anchor| {
+                fixture
+                    .model
+                    .resolve_anchor(anchor.token)
+                    .expect("form anchor remains resolved")
+            })
+            .collect();
+        let anchors_match = fixture
+            .anchors
+            .iter()
+            .zip(&positions)
+            .all(|(anchor, resolved)| {
+                *resolved == form::expected_anchor_offset(*anchor, edit.inserted.len())
+            });
+        let (snapshot, publication) = fixture.model.snapshot();
+        baseline_work = add_work(baseline_work, publication);
+        every_publication_matches &= anchors_match
+            && text_candidate.to_text() == snapshot.text()
+            && range_candidate.materialize() == snapshot.authored();
+        final_snapshot = Some(snapshot);
+    }
+
+    let snapshot = final_snapshot.expect("form corpus contains IME edits");
+    let final_text = text_candidate.to_text();
+    let final_ranges = range_candidate.materialize();
+    let passed = every_publication_matches
+        && snapshot.text().len() == form::FORM_BYTES + "日本語".len()
+        && &snapshot.text()[form::COMPOSITION_START..form::COMPOSITION_START + "日本語".len()]
+            == "日本語"
+        && final_text == snapshot.text()
+        && final_ranges == snapshot.authored();
+    let digest = fixture.anchors.iter().zip(&positions).fold(
+        digest_observation(&fixture.model, &positions),
+        |hash, (anchor, position)| mix(mix(hash, usize_tag(*position)), bias_tag(anchor.bias)),
+    );
+
+    TraceOutcome {
+        id: "form-10k-ime",
+        passed,
+        digest,
+        work: baseline_work,
+        detail: format!(
+            "bytes={} spans={} anchors={} center=({},{}) candidate_text_bytes={} candidate_text_records={} candidate_range_blocks={} candidate_spans={}",
+            snapshot.text().len(),
+            snapshot.authored().len(),
+            positions.len(),
+            positions[form::FORM_ANCHORS - 2],
+            positions[form::FORM_ANCHORS - 1],
+            candidate_text_bytes,
+            candidate_text_records,
+            candidate_range_blocks,
+            candidate_spans,
         ),
     }
 }

@@ -185,7 +185,6 @@ impl ChunkedText {
         Arc::ptr_eq(&self.chunks, &other.chunks)
     }
 
-    #[cfg(test)]
     pub(crate) fn to_text(&self) -> String {
         let mut text = String::with_capacity(self.len);
         for chunk in self.chunks.iter() {
@@ -445,7 +444,6 @@ impl BlockedRanges {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn materialize(&self) -> Vec<AuthoredSpan> {
         let mut spans = Vec::with_capacity(self.len);
         for block in self.blocks.iter() {
