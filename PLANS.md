@@ -133,7 +133,7 @@ owners exist.
 
 ## CPU visual-proof slice
 
-**Status:** Active
+**Status:** Complete
 
 **Bead:** `und-oh0.10.1.8`
 

@@ -5,8 +5,10 @@
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
   `389d86c6cace10667e76c27e5b732d790ccfa75d49fcb31ea28e39884e42294a`
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust
-- **Result:** all local Must findings resolved; cross-platform CI remains the
-  final snapshot-determinism gate
+- **Remote gate:** GitHub Actions run `29824046589`; all eight jobs passed,
+  including exact snapshot reproduction on Linux, macOS, and Windows
+- **Result:** all Must findings resolved; the current three-OS matrix earns the
+  deterministic CPU snapshot claim
 
 ## Lynx review
 
@@ -41,8 +43,8 @@ caption into an executable fact.
 
 - Keep the adapter example-local until more consumers establish a reusable
   renderer contract and fallible error surface.
-- Do not close the Bead or call the snapshot cross-platform deterministic until
-  the Linux, macOS, and Windows jobs all reproduce it exactly.
+- Keep exact snapshot equality in every supported host job so any future
+  cross-platform drift fails at the renderer boundary.
 
 ### Could
 
@@ -86,6 +88,7 @@ caption into an executable fact.
 
 ### Most dangerous gap
 
-The only remaining high-consequence uncertainty is exact CPU pixel identity on
-all three CI operating systems. Until that remote matrix passes, local
-determinism must not be generalized into a cross-platform claim.
+The original high-consequence uncertainty was exact CPU pixel identity across
+operating systems. GitHub Actions run `29824046589` closed that gap for the
+current Linux, macOS, and Windows matrix. The remaining limit is scope: one
+poster proves this path and these fonts, not general renderer conformance.
