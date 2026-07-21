@@ -1,0 +1,22 @@
+name: Governance Audit
+
+on:
+  schedule:
+    - cron: "47 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  remote-controls:
+    name: remote repository controls
+    runs-on: ubuntu-latest
+    steps:
+      - name: check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: audit live GitHub controls
+        run: bash .github/audit-remote.sh
+        env:
+          GH_TOKEN: ${{ github.token }}

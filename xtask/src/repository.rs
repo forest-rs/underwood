@@ -18,8 +18,10 @@ const REQUIRED_PATHS: &[&str] = &[
     ".cargo/config.toml",
     ".github/CODEOWNERS",
     ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/audit-remote.sh",
     ".github/copyright.sh",
     ".github/workflows/ci.yml",
+    ".github/workflows/governance.yml",
     ".typos.toml",
     "AGENTS.md",
     "AUTHORS",
@@ -107,6 +109,20 @@ fn check_root_policy(root: &Path) -> Vec<String> {
         if !ci.contains(required) {
             errors.push(format!(
                 ".github/workflows/ci.yml must contain `{required}`"
+            ));
+        }
+    }
+
+    let governance = read(root, ".github/workflows/governance.yml", &mut errors);
+    for required in [
+        "schedule:",
+        "workflow_dispatch:",
+        "permissions:\n  contents: read",
+        "bash .github/audit-remote.sh",
+    ] {
+        if !governance.contains(required) {
+            errors.push(format!(
+                ".github/workflows/governance.yml must contain `{required}`"
             ));
         }
     }

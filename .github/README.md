@@ -17,10 +17,15 @@ Repository settings must allow squash merges only, delete merged branches,
 enable automatic merge, pin Actions to immutable commit SHAs, keep the default
 workflow token read-only, and retain vulnerability alerts.
 
-`und-oh0.11.2` owns verification of those remote settings, the scheduled
-constitutional audit, and a durable Beads Dolt remote plus independent backup.
-Git history and the scrubbed JSONL export are review and recovery aids; they do
-not replace the authoritative Dolt remote.
+The scheduled `governance.yml` workflow runs `audit-remote.sh` against the live
+repository every Monday and on demand. It rejects drift in merge policy,
+workflow permissions, immutable Action pinning, vulnerability alerts, the
+protected-main ruleset, or its exact required checks. `cargo xtask check`
+protects both files from accidental removal.
+
+`und-oh0.11.2` owns that audit and a durable Beads Dolt remote plus independent
+backup. Git history and the scrubbed JSONL export are review and recovery aids;
+they do not replace the authoritative Dolt remote.
 
 The bootstrap CI intentionally checks only the tooling workspace. It does not
 claim `no_std`, WebAssembly, package, or product conformance before product
