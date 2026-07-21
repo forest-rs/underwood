@@ -10,8 +10,9 @@ runs, and renders deterministic RGBA pixels with `imaging_vello_cpu`.
 
 The poster deliberately exposes difficult evidence: one `ffi` ligature painted
 through two focused source clips, one paragraph mixing Latin LTR and Arabic RTL
-runs with real font fallback, a bounded hit-derived caret, a local text edit,
-retained sibling reuse, and a paint-only update that performs no shaping.
+runs with real font fallback, four default OpenType ligature substitutions, a
+bounded hit-derived caret, a local text edit, retained sibling reuse, and a
+paint-only update that performs no shaping.
 
 Generate the committed snapshot from the repository root:
 

@@ -271,19 +271,36 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     );
 
     let title = layout_label(&mut layout, 0x23, 72.0, "UNDERWOOD", INK)?;
-    let kicker = layout_label(
-        &mut layout,
-        0x24,
-        18.0,
-        "SEMANTIC TEXT / RETAINED SCENE / DETERMINISTIC PIXELS",
-        MUTED,
-    )?;
-    let statement = layout_label(
+    let ligature_specimens = [
+        layout_label(&mut layout, 0x32, 84.0, "ffi", CORAL)?,
+        layout_label(&mut layout, 0x33, 84.0, "fi", CYAN)?,
+        layout_label(&mut layout, 0x34, 84.0, "ff", GOLD)?,
+        layout_label(&mut layout, 0x35, 84.0, "fl", INK)?,
+    ];
+    let specimen_glyphs: usize = ligature_specimens
+        .iter()
+        .map(|scene| {
+            let glyphs = scene
+                .fragments()
+                .iter()
+                .map(|fragment| fragment.glyphs().len())
+                .sum::<usize>();
+            assert_eq!(
+                glyphs, 1,
+                "each default ligature specimen must substitute to one glyph"
+            );
+            glyphs
+        })
+        .sum();
+    let ligature_specimen_evidence = layout_label(
         &mut layout,
         0x25,
-        24.0,
-        "ONE GLYPH / TWO PAINTS / ZERO SHORTCUTS",
-        INK,
+        18.0,
+        &format!(
+            "DEFAULT OPENTYPE LIGATURES / {} TOKENS / {specimen_glyphs} GLYPHS",
+            ligature_specimens.len()
+        ),
+        MUTED,
     )?;
     let ligature_evidence = layout_label(
         &mut layout,
@@ -331,15 +348,20 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         let mut painter = Painter::new(&mut scene);
         paint_backdrop(&mut painter);
 
-        TextSceneAdapter::new(&kicker, 124.0, 44.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&title, 120.0, 70.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&title, 120.0, 52.0).paint_into(&mut painter);
         TextSceneAdapter::new(&ligature_evidence, 124.0, 184.0).paint_into(&mut painter);
         TextSceneAdapter::new(&hero, 116.0, 228.0)
             .with_diagnostics()
             .paint_into(&mut painter);
         TextSceneAdapter::new(&mixed_direction_evidence, 740.0, 184.0).paint_into(&mut painter);
         TextSceneAdapter::new(&mixed_direction, 735.0, 286.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&statement, 124.0, 608.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&ligature_specimen_evidence, 124.0, 552.0).paint_into(&mut painter);
+        for (specimen, x) in ligature_specimens
+            .iter()
+            .zip([124.0, 460.0, 800.0, 1_140.0])
+        {
+            TextSceneAdapter::new(specimen, x, 580.0).paint_into(&mut painter);
+        }
 
         paint_card(
             &mut painter,
@@ -536,19 +558,6 @@ fn paint_backdrop<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>) {
         Rect::new(120.0, 675.0, 1_480.0, 676.0),
         Color::from_rgba8(0x78, 0x8a, 0xa3, 0x38),
     );
-
-    for radius in [22.0, 39.0, 58.0] {
-        painter
-            .stroke(
-                Circle::new((1_408.0, 102.0), radius),
-                &Stroke::new(1.0),
-                Color::from_rgba8(0x78, 0x8a, 0xa3, 0x30),
-            )
-            .draw();
-    }
-    painter
-        .fill(Circle::new((1_408.0, 102.0), 4.0), GOLD_COLOR)
-        .draw();
 }
 
 fn paint_card<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>, rect: Rect, accent: Color) {

@@ -3,12 +3,12 @@
 - **Scope:** `examples/visual-proof`, its CPU snapshot, and repository claims
 - **Review modes:** Lynx adversarial correctness; Rook real-versus-mirage audit
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
-  `2383792f36e61d6a9aff38e9636a29dfec3a1e033dd754ce6564d3415f6c1911`
+  `a523c21aa890dfb575fa545ee53e9f2a2a9822583a129eeb283f8dd15863e51b`
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust
-- **Remote gate:** GitHub Actions run `29825344441`; all eight jobs passed,
-  including exact snapshot reproduction on Linux, macOS, and Windows
-- **Result:** all review findings are resolved; the current three-OS matrix
-  earns the deterministic CPU snapshot claim
+- **Remote gate:** pending revalidation of this final specimen-driven snapshot;
+  run `29825344441` passed for its predecessor
+- **Result:** all review findings are resolved locally; the final pixels must
+  pass the three-OS matrix before this proof lands
 
 ## Lynx review
 
@@ -42,6 +42,10 @@ Renderer and PNG dependencies remain outside both production crates.
 6. **An isolated Arabic line showed RTL shaping but not mixed-direction
    behavior.** One paragraph now places an Arabic RTL run between Latin LTR
    runs and asserts even and odd bidi levels plus both exact font resources.
+7. **Unexplained ornament and generic slogans consumed space without adding
+   evidence.** The decorative target was removed. The slogans were replaced by
+   `ffi`, `fi`, `ff`, and `fl` specimens, each required to shape from one source
+   token to exactly one glyph before the evidence caption is constructed.
 
 Good catch: the font-resource comparison turns “real fallback” from a plausible
 caption into an executable fact.
@@ -66,6 +70,7 @@ caption into an executable fact.
 - Distinct source, paint, and clip evidence for one shared ligature glyph.
 - Exact selected-font resource for Latin and Arabic fragments.
 - Even Latin and odd Arabic bidi observations in one mixed-direction paragraph.
+- One-glyph substitution for each displayed default ligature specimen.
 - Local-edit reshaping, sibling reuse, and paint-only negative-work assertions.
 
 ## Rook audit
@@ -79,6 +84,9 @@ caption into an executable fact.
   document with heterogeneous font sizes.
 - **Mirage:** one Latin/Arabic snapshot is executable evidence, not renderer or
   international-text conformance.
+- **Mirage:** the Roboto Flex resource is genuinely variable, but this first
+  public style path cannot select variation axes or toggle OpenType features.
+  The poster claims only the default ligature substitutions it executes.
 
 ### Real strengths
 
@@ -88,6 +96,8 @@ caption into an executable fact.
   shared shaped glyph without reshaping at the style boundary.
 - **Real:** the mixed-direction line is guarded by exact Latin and Arabic font
   resources, script tags, and even/odd bidi-level checks.
+- **Real:** each displayed default ligature token is asserted to produce one
+  shaped glyph through the same public path.
 - **Real:** the displayed `1 / 1 / 0` work story is formatted from the actual
   edit, retained-sibling, and paint-only `WorkReport` values.
 - **Real:** the snapshot test compares rendered pixels, not a synthetic scene,
@@ -95,7 +105,8 @@ caption into an executable fact.
 
 ### Most dangerous gap
 
-The original high-consequence uncertainty was exact CPU pixel identity across
+The original high-consequence uncertainty is exact CPU pixel identity across
 operating systems. GitHub Actions run `29825344441` closed that gap for the
-revised composition on Linux, macOS, and Windows. The remaining limit is scope:
-one poster proves this path and these fonts, not general renderer conformance.
+predecessor snapshot; this final specimen-driven image must repeat the result.
+The remaining limit is scope: one poster proves this path and these fonts, not
+general renderer conformance.
