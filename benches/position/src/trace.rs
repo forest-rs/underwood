@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::model::{AuthoredSpan, Bias, CanonicalBaseline, EdgeBehavior, ModelError, WorkCounters};
+use crate::tree::{NodeId, TreeBaseline, TreeError};
 
 const TRACE_SCHEMA: &str = "identity-trace-v0";
 const TRACE_SEED: u64 = 0x5EED_0000_0000_0001;
@@ -22,6 +23,8 @@ pub(crate) fn run_semantic_suite() -> Vec<TraceOutcome> {
         immutable_snapshot(),
         stale_derived_range(),
         authored_edge_behavior(),
+        tree_split_join_anchor_lifecycle(),
+        tree_move_delete_anchor_lifecycle(),
         deterministic_replay(),
     ]
 }
@@ -187,6 +190,131 @@ fn authored_edge_behavior() -> TraceOutcome {
     }
 }
 
+fn tree_split_join_anchor_lifecycle() -> TraceOutcome {
+    let left = NodeId::new(10);
+    let tail = NodeId::new(20);
+    let right = NodeId::new(30);
+    let mut tree = TreeBaseline::new([(left, "abcd"), (tail, "ef")]);
+    let before = tree
+        .create_anchor(left, 2, Bias::Before)
+        .expect("trace tree anchor is valid");
+    let after = tree
+        .create_anchor(left, 2, Bias::After)
+        .expect("trace tree anchor is valid");
+    let suffix = tree
+        .create_anchor(left, 3, Bias::Before)
+        .expect("trace tree anchor is valid");
+
+    tree.split(left, 2, right).expect("trace split is valid");
+    let split_before = tree
+        .resolve_anchor(before)
+        .expect("before anchor remains on the left");
+    let split_after = tree
+        .resolve_anchor(after)
+        .expect("after anchor follows the right");
+    let split_suffix = tree
+        .resolve_anchor(suffix)
+        .expect("suffix anchor follows the right");
+    let split_order = tree.node_order();
+    let split_digest = digest_tree_observation(
+        &tree,
+        &[
+            Some((split_before.node, split_before.offset, split_before.bias)),
+            Some((split_after.node, split_after.offset, split_after.bias)),
+            Some((split_suffix.node, split_suffix.offset, split_suffix.bias)),
+        ],
+    );
+
+    tree.join(left, right).expect("trace join is valid");
+    let joined_before = tree
+        .resolve_anchor(before)
+        .expect("before anchor survives the join");
+    let joined_after = tree
+        .resolve_anchor(after)
+        .expect("after anchor survives the join");
+    let joined_suffix = tree
+        .resolve_anchor(suffix)
+        .expect("suffix anchor survives the join");
+    let joined_order = tree.node_order();
+
+    let passed = split_before.node == left
+        && split_before.offset == 2
+        && split_before.bias == Bias::Before
+        && split_after.node == right
+        && split_after.offset == 0
+        && split_after.bias == Bias::After
+        && split_suffix.node == right
+        && split_suffix.offset == 1
+        && split_order == [left, right, tail]
+        && joined_before.node == left
+        && joined_before.offset == 2
+        && joined_before.bias == Bias::Before
+        && joined_after.node == left
+        && joined_after.offset == 2
+        && joined_after.bias == Bias::After
+        && joined_suffix.node == left
+        && joined_suffix.offset == 3
+        && tree.text(left) == Ok("abcd")
+        && joined_order == [left, tail];
+    let joined_digest = digest_tree_observation(
+        &tree,
+        &[
+            Some((joined_before.node, joined_before.offset, joined_before.bias)),
+            Some((joined_after.node, joined_after.offset, joined_after.bias)),
+            Some((joined_suffix.node, joined_suffix.offset, joined_suffix.bias)),
+        ],
+    );
+    TraceOutcome {
+        id: "tree-split-join-anchor",
+        passed,
+        digest: mix(split_digest, joined_digest),
+        work: WorkCounters::default(),
+        detail: format!(
+            "split_order={split_order:?} split=({split_before:?},{split_after:?},{split_suffix:?}) joined_order={joined_order:?} joined=({joined_before:?},{joined_after:?},{joined_suffix:?})"
+        ),
+    }
+}
+
+fn tree_move_delete_anchor_lifecycle() -> TraceOutcome {
+    let first = NodeId::new(10);
+    let moved = NodeId::new(20);
+    let last = NodeId::new(30);
+    let mut tree = TreeBaseline::new([(first, "a"), (moved, "β"), (last, "c")]);
+    let anchor = tree
+        .create_anchor(moved, "β".len(), Bias::After)
+        .expect("trace tree anchor is valid");
+
+    tree.move_before(moved, first).expect("trace move is valid");
+    let after_move = tree
+        .resolve_anchor(anchor)
+        .expect("anchor follows the moved node");
+    let moved_order = tree.node_order();
+    let moved_digest = digest_tree_observation(
+        &tree,
+        &[Some((after_move.node, after_move.offset, after_move.bias))],
+    );
+    tree.delete(moved).expect("trace delete is valid");
+    let after_delete = tree.resolve_anchor(anchor);
+    let deleted_order = tree.node_order();
+    let deleted_digest = digest_tree_observation(&tree, &[None]);
+
+    let passed = moved_order == [moved, first, last]
+        && after_move.node == moved
+        && after_move.offset == "β".len()
+        && after_move.bias == Bias::After
+        && matches!(after_delete, Err(TreeError::UnresolvedAnchor(token)) if token == anchor)
+        && deleted_order == [first, last];
+    TraceOutcome {
+        id: "tree-move-delete-anchor",
+        passed,
+        digest: mix(moved_digest, deleted_digest),
+        work: WorkCounters::default(),
+        detail: format!(
+            "moved_order={moved_order:?} moved={after_move:?} deleted_order={deleted_order:?} deleted={after_delete:?}"
+        ),
+    }
+}
+
 fn deterministic_replay() -> TraceOutcome {
     let left = replay_digest();
     let right = replay_digest();
@@ -199,6 +327,32 @@ fn deterministic_replay() -> TraceOutcome {
             "schema={TRACE_SCHEMA} seed={TRACE_SEED:#018x} digests={left:016x}/{right:016x}"
         ),
     }
+}
+
+fn digest_tree_observation(tree: &TreeBaseline, anchors: &[Option<(NodeId, usize, Bias)>]) -> u64 {
+    let mut hash = digest_bytes(TRACE_SCHEMA.as_bytes()) ^ TRACE_SEED;
+    for node in tree.node_order() {
+        hash = mix(hash, u64::from(node.get()));
+        hash = mix(
+            hash,
+            digest_bytes(
+                tree.text(node)
+                    .expect("tree observation contains a known node")
+                    .as_bytes(),
+            ),
+        );
+    }
+    for anchor in anchors {
+        match anchor {
+            Some((node, offset, bias)) => {
+                hash = mix(hash, u64::from(node.get()));
+                hash = mix(hash, usize_tag(*offset));
+                hash = mix(hash, bias_tag(*bias));
+            }
+            None => hash = mix(hash, u64::MAX),
+        }
+    }
+    hash
 }
 
 fn replay_digest() -> u64 {
@@ -298,14 +452,18 @@ mod tests {
     use super::run_semantic_suite;
 
     #[test]
-    fn dependency_free_baseline_passes_implemented_semantic_laws() {
-        let outcomes = run_semantic_suite();
-        assert!(!outcomes.is_empty(), "semantic suite must contain traces");
-        for outcome in outcomes {
-            assert!(
-                outcome.passed,
-                "trace {} failed: {}",
-                outcome.id, outcome.detail
+    fn dependency_free_semantic_suite_is_deterministic_and_passes() {
+        let first = run_semantic_suite();
+        let second = run_semantic_suite();
+        assert!(!first.is_empty(), "semantic suite must contain traces");
+        assert_eq!(first.len(), second.len());
+        for (left, right) in first.iter().zip(&second) {
+            assert!(left.passed, "trace {} failed: {}", left.id, left.detail);
+            assert_eq!(left.id, right.id);
+            assert_eq!(
+                left.digest, right.digest,
+                "trace {} produced a nondeterministic digest",
+                left.id
             );
         }
     }

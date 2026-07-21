@@ -67,7 +67,7 @@ pub(crate) fn run() -> bool {
 
 fn print_metadata() {
     println!("identity-trace-v0");
-    println!("candidate\tcanonical-baseline+chunked-blocked-append-forest-v2");
+    println!("candidate\tcanonical-baseline+chunked-blocked-append-forest+tree-semantics-v3");
     println!(
         "machine\t{}-{}\tallocator=system\tsamples={SAMPLE_COUNT}",
         std::env::consts::OS,

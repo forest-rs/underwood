@@ -7,6 +7,7 @@ mod candidate;
 mod model;
 mod report;
 mod trace;
+mod tree;
 
 use std::process::ExitCode;
 
