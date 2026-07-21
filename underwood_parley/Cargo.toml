@@ -1,18 +1,20 @@
 [package]
-name = "underwood"
+name = "underwood_parley"
 version.workspace = true
 authors = ["Underwood Contributors"]
 edition.workspace = true
 rust-version.workspace = true
-description = "Renderer-independent document composition and editing foundations"
+description = "Pinned Parley preparation adapter for Underwood"
 homepage = "https://github.com/forest-rs/underwood"
 repository.workspace = true
 license.workspace = true
 publish = false
 
 [dependencies]
-kurbo.workspace = true
-peniko.workspace = true
+fontique.workspace = true
+parlance.workspace = true
+parley_core.workspace = true
+underwood.workspace = true
 
 [lints]
 workspace = true

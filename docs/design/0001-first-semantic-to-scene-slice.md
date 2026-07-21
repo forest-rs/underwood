@@ -178,23 +178,20 @@ Implementation of the permanent slice is governed by these explicit approvals:
 | --- | --- | --- |
 | One `underwood` façade plus the `underwood_parley` dependency fence | **Approved 2026-07-21** | The initial ownership shape is selected |
 | Create the dependency-free `underwood` workspace crate | **Approved 2026-07-21** | The real `no_std` package boundary and portability proof may land |
-| Exact production Parley revision and features | **Pending** | `underwood_parley` and any production Parley manifest entry remain blocked |
-| Exact Kurbo and Peniko versions/features | **Pending** | Public scene geometry and paint values remain blocked |
-| First draft public API with complete call sites and migration note | **Pending** | No foundational public product item may land before review |
+| Exact production Parley revision and features | **Approved 2026-07-21** | Design-0002 pins the adapter dependency fence |
+| Exact Kurbo and Peniko versions/features | **Approved 2026-07-21** | Design-0002 pins the core geometry and paint vocabulary |
+| First draft public API with complete call sites and migration note | **Approved 2026-07-21** | Design-0002 authorizes the coherent implementation slice |
 
-Bruce's instruction to begin the actual crates approved the first two gates.
-It is not stretched into silent approval of a production dependency or
-foundational public API. Bead `und-oh0.10.1.6` owns the permanent package
-boundary, portability evidence, and
-[Design-0002](0002-first-public-api-gate.md), the review packet for the next
-gate.
+Bruce separately approved [Design-0002](0002-first-public-api-gate.md) on
+2026-07-21, crossing the remaining dependency and draft-API gates without
+promoting the API to stable or approving any wire identity.
 
 ## Decision
 
 Accepted on 2026-07-21.
 
-Underwood begins with one dependency-free, unpublished, `no_std` production
-crate named `underwood`. The Parley adapter remains a separate production
-crate, created only with an approved immutable Parley revision and feature
-set. The first public API remains review-gated even though the package boundary
-may now be enforced in Cargo and CI.
+Underwood begins with one small, unpublished, `no_std + alloc` production crate
+named `underwood`. The Parley adapter is a separate `no_std + alloc` production
+crate built against the exact revision and features approved by Design-0002.
+The first public API is pre-stable and is exercised atomically by the external
+headless example.

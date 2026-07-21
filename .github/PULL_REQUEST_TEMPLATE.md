@@ -38,7 +38,7 @@ bd dep cycles
 
 - [ ] No new production dependency or core `std` expansion.
 - [ ] No `unsafe` or weakened safety invariant.
-- [ ] No foundational public API or unrecorded migration.
+- [ ] Foundational public API has an approved design record and migration note.
 - [ ] No stable identity, storage, hashing, wire, or on-disk format decision.
 - [ ] No crate/module ownership change.
 - [ ] Or: the required human decision and ADR are linked here.

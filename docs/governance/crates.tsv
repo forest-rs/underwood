@@ -4,5 +4,7 @@ benches/flow	underwood_flow_wind_tunnel	benchmark	no	no	This crate owns private 
 benches/parley-seam	underwood_parley_seam_wind_tunnel	benchmark	no	no	This crate owns private retained-Parley adapter observations and conformance gaps; it explicitly does not own a production adapter or public prepared-text API.
 benches/position	underwood_position_wind_tunnel	benchmark	no	no	This crate owns private identity-trace-v0 canonical-storage candidates and measurements; it explicitly does not own production storage or public position APIs.
 benches/text-data	underwood_text_data_wind_tunnel	benchmark	no	no	This crate owns private text-data tier artifact and replay measurements; it explicitly does not own production providers or text-data APIs.
-underwood	underwood	core	yes	no	This crate owns Underwood's dependency-free semantic-to-scene façade and private foundational modules; it explicitly does not own text shaping physics, host policy, or rendering.
+examples/headless	underwood_headless_example	example	no	no	This crate owns the first external public-path consumer and bundled licensed font fixtures; it explicitly does not own product behavior or private implementation shortcuts.
+underwood	underwood	core	yes	no	This crate owns Underwood's semantic-to-scene façade and private foundational modules; it explicitly does not own text shaping physics, host policy, or rendering.
+underwood_parley	underwood_parley	adapter	yes	no	This crate owns conversion between Underwood preparation contracts and pinned Parley; it explicitly does not own documents, flow, scenes, renderers, or public Parley leakage.
 xtask	xtask	tooling	no	no	This crate owns repository policy validation; it explicitly does not own product behavior or architectural decisions.

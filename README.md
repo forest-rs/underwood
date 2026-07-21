@@ -13,11 +13,12 @@ physics. Overstory is the flagship experience layer.
 
 ## Current status
 
-Underwood has completed its executable-constitution bootstrap and begun the
-first semantic-to-scene campaign. The complete architecture is
-[specified in the handover](UNDERWOOD_HANDOVER.md). The dependency-free
-`no_std` production crate boundary is ratified; its first foundational public
-API and the production Parley dependency remain review-gated.
+Underwood has completed its executable-constitution bootstrap and is executing
+the first semantic-to-scene campaign. The complete architecture is
+[specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
+first pre-stable public slice and its exact dependency fence: `underwood` owns
+the `no_std + alloc` document, flow, and scene path, while
+`underwood_parley` owns adaptation to pinned Parley Core.
 
 The five mandatory foundation records are accepted:
 
@@ -27,8 +28,10 @@ The five mandatory foundation records are accepted:
 - ADR-0003: text-data provisioning and identity;
 - ADR-0004: the Parley boundary and contingency.
 
-Private wind tunnels are now executing their proof obligations. They are
-evidence, not product APIs or substitutes for the permanent public path.
+The external `examples/headless` crate now exercises real mixed-script shaping,
+source and semantic observations, editing, and retained-work assertions through
+public APIs only. Earlier synthetic wind tunnels remain research evidence, not
+product benchmarks or substitutes for this permanent path.
 
 The machine-readable [proof ledger](docs/proof/ledger.tsv) is authoritative for
 capability status.

@@ -1,0 +1,940 @@
+// Copyright 2026 the Underwood Authors
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+
+use alloc::boxed::Box;
+use alloc::vec::Vec;
+use core::ops::Range;
+
+use crate::adapter::{
+    PaintRun, ParagraphInput, ParagraphPreparation, PreparationWork, PreparedParagraph,
+};
+use crate::document::Paragraph;
+use crate::{
+    Affine, DocumentRevision, DocumentSnapshot, FontData, InlineRole, PaintSlot, PaintTable,
+    ParagraphId, ParagraphRole, Point, Rect, SceneError, SceneErrorKind, SceneRequest, SemanticId,
+    TextId, Vec2,
+};
+
+/// Mutable owner of one paragraph adapter and its retained stage caches.
+pub struct LayoutEngine {
+    paragraphs: Box<dyn ParagraphPreparation>,
+    cache: Vec<ParagraphCache>,
+}
+
+impl core::fmt::Debug for LayoutEngine {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("LayoutEngine")
+            .field("cached_paragraphs", &self.cache.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl LayoutEngine {
+    /// Creates an engine owning exactly one configured paragraph adapter.
+    #[must_use]
+    pub fn new(paragraphs: impl ParagraphPreparation + 'static) -> Self {
+        Self {
+            paragraphs: Box::new(paragraphs),
+            cache: Vec::new(),
+        }
+    }
+
+    /// Prepares an immutable scene without publishing partial results on failure.
+    pub fn prepare(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+    ) -> Result<SceneOutput, SceneError> {
+        validate_styles(snapshot, request)?;
+
+        let mut work = WorkReport::default();
+        let mut lines = Vec::new();
+        let mut fragments = Vec::new();
+        let mut semantics = Vec::new();
+        let mut y_offset = 0.0;
+
+        for paragraph in snapshot.paragraphs() {
+            let projection = Projection::new(paragraph, request)?;
+            let preparation_key = PreparationKey {
+                version: paragraph.version,
+                font_size: request.styles.default.font_size.to_bits(),
+                paint_topology: projection.paint_topology,
+            };
+            let cache_index = self
+                .cache
+                .iter()
+                .position(|entry| entry.paragraph == paragraph.id);
+
+            let needs_preparation = cache_index
+                .is_none_or(|index| self.cache[index].preparation_key != preparation_key);
+            let cache_index = if needs_preparation {
+                let text_len = u32::try_from(projection.text.len())
+                    .map_err(|_| SceneError::new(SceneErrorKind::SourceCoverage))?;
+                let output = self
+                    .paragraphs
+                    .prepare(ParagraphInput::new(
+                        paragraph.id,
+                        &projection.text,
+                        request.styles.default.font_size,
+                        &projection.paint_runs,
+                    ))
+                    .map_err(|_| SceneError::new(SceneErrorKind::Preparation))?;
+                if output.paragraph().paragraph() != paragraph.id
+                    || output.paragraph().text_len() != text_len
+                {
+                    return Err(SceneError::new(SceneErrorKind::SourceCoverage));
+                }
+                record_preparation_work(&mut work, output.work());
+                let entry = ParagraphCache {
+                    paragraph: paragraph.id,
+                    preparation_key,
+                    prepared: output.into_paragraph(),
+                    geometry: None,
+                };
+                if let Some(index) = cache_index {
+                    self.cache[index] = entry;
+                    index
+                } else {
+                    self.cache.push(entry);
+                    self.cache.len() - 1
+                }
+            } else {
+                work.reused_paragraphs += 1;
+                cache_index.expect("a reusable cache index must exist")
+            };
+
+            let width_key = request.width.0.to_bits();
+            if self.cache[cache_index]
+                .geometry
+                .as_ref()
+                .is_none_or(|geometry| geometry.width != width_key)
+            {
+                let geometry = build_geometry(
+                    &self.cache[cache_index].prepared,
+                    &projection,
+                    request.width.0,
+                    request.styles.default.font_size,
+                )?;
+                work.flow.add_paragraph(geometry.lines.len());
+                work.geometry.add_paragraph(geometry.fragments.len());
+                self.cache[cache_index].geometry = Some(CachedGeometry {
+                    width: width_key,
+                    ..geometry
+                });
+            }
+
+            let geometry = self.cache[cache_index]
+                .geometry
+                .as_ref()
+                .expect("geometry was installed above");
+            materialize_geometry(
+                geometry,
+                snapshot.revision(),
+                y_offset,
+                &mut lines,
+                &mut fragments,
+                &mut semantics,
+            );
+            y_offset += geometry.height;
+        }
+
+        work.paint = StageWork {
+            paragraphs: snapshot.paragraphs().len(),
+            records: fragments.len(),
+        };
+        Ok(SceneOutput {
+            scene: TextScene {
+                lines,
+                fragments,
+                paint: request.paint.clone(),
+                semantics,
+            },
+            work,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PreparationKey {
+    version: u64,
+    font_size: u32,
+    paint_topology: u64,
+}
+
+#[derive(Clone, Debug)]
+struct ParagraphCache {
+    paragraph: ParagraphId,
+    preparation_key: PreparationKey,
+    prepared: PreparedParagraph,
+    geometry: Option<CachedGeometry>,
+}
+
+#[derive(Clone, Debug)]
+struct Projection {
+    text: alloc::string::String,
+    spans: Vec<LeafSpan>,
+    paint_runs: Vec<PaintRun>,
+    paint_topology: u64,
+    paragraph_semantic: SemanticId,
+    paragraph_role: ParagraphRole,
+}
+
+impl Projection {
+    fn new(paragraph: &Paragraph, request: &SceneRequest<'_>) -> Result<Self, SceneError> {
+        let text = paragraph.projected_text();
+        let mut spans = Vec::with_capacity(paragraph.leaves.len());
+        let mut paint_runs = Vec::with_capacity(paragraph.leaves.len());
+        let mut start = 0_u32;
+        let mut digest = 0xcbf2_9ce4_8422_2325_u64;
+        for leaf in &paragraph.leaves {
+            let len = u32::try_from(leaf.text.len())
+                .map_err(|_| SceneError::new(SceneErrorKind::SourceCoverage))?;
+            let end = start
+                .checked_add(len)
+                .ok_or_else(|| SceneError::new(SceneErrorKind::SourceCoverage))?;
+            let slot = request.styles.paint_for(leaf.id);
+            spans.push(LeafSpan {
+                paragraph: start..end,
+                text: leaf.id,
+                role: leaf.role,
+                semantic: leaf.semantic_id(),
+            });
+            if start != end {
+                paint_runs.push(PaintRun::new(start..end, slot));
+                digest_bytes(&mut digest, &start.to_le_bytes());
+                digest_bytes(&mut digest, &end.to_le_bytes());
+                digest_bytes(&mut digest, &slot.index().to_le_bytes());
+            }
+            start = end;
+        }
+        Ok(Self {
+            text,
+            spans,
+            paint_runs,
+            paint_topology: digest,
+            paragraph_semantic: paragraph.semantic_id(),
+            paragraph_role: paragraph.role,
+        })
+    }
+
+    fn local_range(&self, paragraph: Range<u32>) -> Result<LocalRange, SceneError> {
+        let span = self
+            .spans
+            .iter()
+            .find(|span| {
+                paragraph.start >= span.paragraph.start && paragraph.end <= span.paragraph.end
+            })
+            .ok_or_else(|| SceneError::new(SceneErrorKind::SourceCoverage))?;
+        Ok(LocalRange {
+            text: span.text,
+            bytes: (paragraph.start - span.paragraph.start)..(paragraph.end - span.paragraph.start),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LeafSpan {
+    paragraph: Range<u32>,
+    text: TextId,
+    role: InlineRole,
+    semantic: SemanticId,
+}
+
+fn digest_bytes(digest: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *digest = (*digest ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
+fn validate_styles(
+    snapshot: &DocumentSnapshot,
+    request: &SceneRequest<'_>,
+) -> Result<(), SceneError> {
+    if request
+        .styles
+        .overrides()
+        .iter()
+        .any(|(text, _)| snapshot.text(*text).is_none())
+    {
+        return Err(SceneError::new(SceneErrorKind::InvalidStyle));
+    }
+    for paragraph in snapshot.paragraphs() {
+        for leaf in &paragraph.leaves {
+            if request
+                .paint
+                .brush(request.styles.paint_for(leaf.id))
+                .is_none()
+            {
+                return Err(SceneError::new(SceneErrorKind::InvalidStyle));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn record_preparation_work(report: &mut WorkReport, work: PreparationWork) {
+    if work.analyzed() {
+        report.analysis.add_paragraph(1);
+    }
+    if work.itemized() {
+        report.itemization.add_paragraph(1);
+    }
+    if work.shaped_runs() > 0 {
+        report.shape.paragraphs += 1;
+        report.shape.records += work.shaped_glyphs() as usize;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CachedGeometry {
+    width: u64,
+    height: f64,
+    lines: Vec<CachedLine>,
+    fragments: Vec<CachedFragment>,
+    semantics: Vec<CachedSemantic>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedLine {
+    bounds: Rect,
+    source: LocalRange,
+}
+
+#[derive(Clone, Debug)]
+struct CachedFragment {
+    id: SceneFragmentId,
+    glyphs: Vec<CachedGlyph>,
+    paint: PaintSlot,
+    transform: Affine,
+    source: LocalRange,
+    bounds: Rect,
+    clip: Rect,
+    font: FontData,
+    bidi_level: u8,
+    script: [u8; 4],
+}
+
+#[derive(Clone, Debug)]
+struct CachedGlyph {
+    id: u32,
+    position: Point,
+    advance: Vec2,
+    source: LocalRange,
+}
+
+#[derive(Clone, Debug)]
+struct CachedSemantic {
+    semantic_id: SemanticId,
+    paragraph_role: Option<ParagraphRole>,
+    inline_role: Option<InlineRole>,
+    source: LocalRange,
+    bounds: Rect,
+}
+
+#[derive(Clone, Debug)]
+struct LocalRange {
+    text: TextId,
+    bytes: Range<u32>,
+}
+
+fn build_geometry(
+    prepared: &PreparedParagraph,
+    projection: &Projection,
+    width: f64,
+    font_size: f32,
+) -> Result<CachedGeometry, SceneError> {
+    let line_height = f64::from(font_size) * 1.25;
+    let ascent = f64::from(font_size);
+    let mut x = 0.0;
+    let mut line_top = 0.0;
+    let mut fragments = Vec::new();
+
+    for run in prepared.runs() {
+        for glyph in run.glyphs() {
+            let advance = glyph.advance();
+            let horizontal_advance = advance.x.abs();
+            if x > 0.0 && x + horizontal_advance > width {
+                line_top += line_height;
+                x = 0.0;
+            }
+            let position = Point::new(x + glyph.offset().x, line_top + ascent - glyph.offset().y);
+            for segment in glyph.paint().segments() {
+                let source = projection.local_range(segment.source())?;
+                let local_clip = segment.local_clip();
+                let clip = Rect::new(
+                    position.x + local_clip.x0,
+                    position.y + local_clip.y0,
+                    position.x + local_clip.x1,
+                    position.y + local_clip.y1,
+                );
+                let id = SceneFragmentId(fragment_identity(prepared.paragraph(), fragments.len()));
+                fragments.push(CachedFragment {
+                    id,
+                    glyphs: alloc::vec![CachedGlyph {
+                        id: glyph.id(),
+                        position,
+                        advance,
+                        source: source.clone(),
+                    }],
+                    paint: segment.slot(),
+                    transform: Affine::IDENTITY,
+                    source,
+                    bounds: clip,
+                    clip,
+                    font: run.font().clone(),
+                    bidi_level: run.bidi_level(),
+                    script: run.script(),
+                });
+            }
+            x += horizontal_advance;
+        }
+    }
+
+    let mut lines = Vec::new();
+    let mut current_top = 0.0;
+    while current_top <= line_top && !fragments.is_empty() {
+        let next_top = current_top + line_height;
+        let on_line: Vec<_> = fragments
+            .iter()
+            .filter(|fragment| {
+                fragment.glyphs[0].position.y >= current_top
+                    && fragment.glyphs[0].position.y < next_top
+            })
+            .collect();
+        if let Some(first) = on_line.first() {
+            let right = on_line
+                .iter()
+                .map(|fragment| fragment.bounds.x1)
+                .fold(0.0_f64, f64::max)
+                .max(1.0);
+            lines.push(CachedLine {
+                bounds: Rect::new(0.0, current_top, right.min(width), next_top),
+                source: first.source.clone(),
+            });
+        }
+        current_top = next_top;
+    }
+
+    let mut semantics = Vec::new();
+    if let (Some(first), Some(first_line)) = (projection.spans.first(), lines.first()) {
+        let bounds = lines
+            .iter()
+            .skip(1)
+            .fold(first_line.bounds, |bounds, line| bounds.union(line.bounds));
+        semantics.push(CachedSemantic {
+            semantic_id: projection.paragraph_semantic,
+            paragraph_role: Some(projection.paragraph_role),
+            inline_role: None,
+            source: LocalRange {
+                text: first.text,
+                bytes: 0..(first.paragraph.end - first.paragraph.start),
+            },
+            bounds,
+        });
+    }
+    for span in &projection.spans {
+        if span.paragraph.is_empty() {
+            continue;
+        }
+        let mut bounds: Option<Rect> = None;
+        for fragment in &fragments {
+            if fragment.source.text == span.text {
+                bounds = Some(match bounds {
+                    Some(current) => current.union(fragment.bounds),
+                    None => fragment.bounds,
+                });
+            }
+        }
+        let source = LocalRange {
+            text: span.text,
+            bytes: 0..(span.paragraph.end - span.paragraph.start),
+        };
+        semantics.push(CachedSemantic {
+            semantic_id: span.semantic,
+            paragraph_role: None,
+            inline_role: Some(span.role),
+            source,
+            bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, line_height)),
+        });
+    }
+
+    Ok(CachedGeometry {
+        width: width.to_bits(),
+        height: if fragments.is_empty() {
+            line_height
+        } else {
+            line_top + line_height
+        },
+        lines,
+        fragments,
+        semantics,
+    })
+}
+
+fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 {
+    (u64::from(paragraph.index) << 32) | (u64::try_from(fragment).unwrap_or(u64::MAX) & 0xffff_ffff)
+}
+
+fn materialize_geometry(
+    geometry: &CachedGeometry,
+    revision: DocumentRevision,
+    y_offset: f64,
+    lines: &mut Vec<SceneLine>,
+    fragments: &mut Vec<SceneFragment>,
+    semantics: &mut Vec<SemanticFragment>,
+) {
+    let translate = Vec2::new(0.0, y_offset);
+    lines.extend(geometry.lines.iter().map(|line| SceneLine {
+        bounds: line.bounds + translate,
+        source: materialize_range(&line.source, revision),
+    }));
+    fragments.extend(geometry.fragments.iter().map(|fragment| {
+        SceneFragment {
+            id: fragment.id,
+            glyphs: fragment
+                .glyphs
+                .iter()
+                .map(|glyph| SceneGlyph {
+                    id: glyph.id,
+                    position: glyph.position + translate,
+                    advance: glyph.advance,
+                    source: materialize_range(&glyph.source, revision),
+                })
+                .collect(),
+            paint: fragment.paint,
+            transform: fragment.transform,
+            source: Some(materialize_range(&fragment.source, revision)),
+            bounds: fragment.bounds + translate,
+            clip: fragment.clip + translate,
+            font: fragment.font.clone(),
+            bidi_level: fragment.bidi_level,
+            script: fragment.script,
+        }
+    }));
+    semantics.extend(geometry.semantics.iter().map(|semantic| SemanticFragment {
+        semantic_id: semantic.semantic_id,
+        paragraph_role: semantic.paragraph_role,
+        inline_role: semantic.inline_role,
+        source: Some(materialize_range(&semantic.source, revision)),
+        bounds: semantic.bounds + translate,
+    }));
+}
+
+fn materialize_range(range: &LocalRange, revision: DocumentRevision) -> SnapshotTextRange {
+    SnapshotTextRange {
+        revision,
+        text: range.text,
+        bytes: range.bytes.clone(),
+    }
+}
+
+/// Immutable prepared scene and exact work report.
+#[derive(Clone, Debug)]
+pub struct SceneOutput {
+    scene: TextScene,
+    work: WorkReport,
+}
+
+impl SceneOutput {
+    /// Returns the prepared scene.
+    #[must_use]
+    pub const fn scene(&self) -> &TextScene {
+        &self.scene
+    }
+
+    /// Returns actual work performed for this request.
+    #[must_use]
+    pub const fn work(&self) -> &WorkReport {
+        &self.work
+    }
+}
+
+/// Count of paragraphs and records processed by one stage.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StageWork {
+    paragraphs: usize,
+    records: usize,
+}
+
+impl StageWork {
+    fn add_paragraph(&mut self, records: usize) {
+        self.paragraphs += 1;
+        self.records += records;
+    }
+
+    /// Returns paragraphs processed rather than reused.
+    #[must_use]
+    pub const fn paragraphs(self) -> usize {
+        self.paragraphs
+    }
+
+    /// Returns stage-specific records processed.
+    #[must_use]
+    pub const fn records(self) -> usize {
+        self.records
+    }
+}
+
+/// Exact stage work performed for one scene request.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkReport {
+    analysis: StageWork,
+    itemization: StageWork,
+    shape: StageWork,
+    flow: StageWork,
+    geometry: StageWork,
+    paint: StageWork,
+    reused_paragraphs: usize,
+}
+
+impl WorkReport {
+    /// Returns Unicode analysis work.
+    #[must_use]
+    pub const fn analysis(&self) -> StageWork {
+        self.analysis
+    }
+
+    /// Returns shaping itemization work.
+    #[must_use]
+    pub const fn itemization(&self) -> StageWork {
+        self.itemization
+    }
+
+    /// Returns shaping work.
+    #[must_use]
+    pub const fn shape(&self) -> StageWork {
+        self.shape
+    }
+
+    /// Returns finite-width flow work.
+    #[must_use]
+    pub const fn flow(&self) -> StageWork {
+        self.flow
+    }
+
+    /// Returns scene-geometry work.
+    #[must_use]
+    pub const fn geometry(&self) -> StageWork {
+        self.geometry
+    }
+
+    /// Returns paint lowering work.
+    #[must_use]
+    pub const fn paint(&self) -> StageWork {
+        self.paint
+    }
+
+    /// Returns paragraphs reused without calling the adapter.
+    #[must_use]
+    pub const fn reused_paragraphs(&self) -> usize {
+        self.reused_paragraphs
+    }
+}
+
+/// Immutable renderer-neutral text scene.
+#[derive(Clone, Debug)]
+pub struct TextScene {
+    lines: Vec<SceneLine>,
+    fragments: Vec<SceneFragment>,
+    paint: PaintTable,
+    semantics: Vec<SemanticFragment>,
+}
+
+impl TextScene {
+    /// Returns visual lines in flow order.
+    #[must_use]
+    pub fn lines(&self) -> &[SceneLine] {
+        &self.lines
+    }
+
+    /// Returns paint-homogeneous glyph fragments in visual order.
+    #[must_use]
+    pub fn fragments(&self) -> &[SceneFragment] {
+        &self.fragments
+    }
+
+    /// Returns immutable paint values referenced by fragment slots.
+    #[must_use]
+    pub const fn paint(&self) -> &PaintTable {
+        &self.paint
+    }
+
+    /// Iterates semantic fragments in document order.
+    pub fn semantics(&self) -> impl Iterator<Item = &SemanticFragment> {
+        self.semantics.iter()
+    }
+
+    /// Returns the source under a scene-space point.
+    #[must_use]
+    pub fn hit_test(&self, point: Point) -> Option<TextHit> {
+        self.fragments
+            .iter()
+            .find(|fragment| fragment.bounds.contains(point))
+            .and_then(|fragment| {
+                fragment.source.clone().map(|source| TextHit {
+                    source,
+                    point,
+                    line_height: fragment.bounds.height().max(1.0),
+                })
+            })
+    }
+
+    /// Produces caret geometry for a hit belonging to this scene revision.
+    #[must_use]
+    pub fn caret(&self, hit: &TextHit) -> SceneCaret {
+        SceneCaret {
+            source: hit.source.clone(),
+            bounds: Rect::new(
+                hit.point.x,
+                hit.point.y - hit.line_height,
+                hit.point.x + 1.0,
+                hit.point.y,
+            ),
+        }
+    }
+}
+
+/// One visual line.
+#[derive(Clone, Debug)]
+pub struct SceneLine {
+    bounds: Rect,
+    source: SnapshotTextRange,
+}
+
+impl SceneLine {
+    /// Returns scene-space line bounds.
+    #[must_use]
+    pub const fn bounds(&self) -> Rect {
+        self.bounds
+    }
+
+    /// Returns a snapshot-local source range represented by the line.
+    #[must_use]
+    pub const fn source(&self) -> &SnapshotTextRange {
+        &self.source
+    }
+}
+
+/// Opaque identity of a fragment within the current retained engine context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SceneFragmentId(u64);
+
+/// Paint-homogeneous shaped glyph fragment.
+#[derive(Clone, Debug)]
+pub struct SceneFragment {
+    id: SceneFragmentId,
+    glyphs: Vec<SceneGlyph>,
+    paint: PaintSlot,
+    transform: Affine,
+    source: Option<SnapshotTextRange>,
+    bounds: Rect,
+    clip: Rect,
+    font: FontData,
+    bidi_level: u8,
+    script: [u8; 4],
+}
+
+impl SceneFragment {
+    /// Returns the retained fragment identity.
+    #[must_use]
+    pub const fn id(&self) -> SceneFragmentId {
+        self.id
+    }
+
+    /// Returns shaped glyph observations.
+    #[must_use]
+    pub fn glyphs(&self) -> &[SceneGlyph] {
+        &self.glyphs
+    }
+
+    /// Returns the paint slot.
+    #[must_use]
+    pub const fn paint(&self) -> PaintSlot {
+        self.paint
+    }
+
+    /// Returns the fragment transform.
+    #[must_use]
+    pub const fn transform(&self) -> Affine {
+        self.transform
+    }
+
+    /// Returns snapshot-local source when the fragment represents authored text.
+    #[must_use]
+    pub const fn source(&self) -> Option<&SnapshotTextRange> {
+        self.source.as_ref()
+    }
+
+    /// Returns the exact font bytes and face index for these glyphs.
+    #[must_use]
+    pub const fn font(&self) -> &FontData {
+        &self.font
+    }
+
+    /// Returns the scene-space clip preserving this fragment's paint coverage.
+    #[must_use]
+    pub const fn clip(&self) -> Rect {
+        self.clip
+    }
+
+    /// Returns the resolved Unicode bidi level for the shaped run.
+    #[must_use]
+    pub const fn bidi_level(&self) -> u8 {
+        self.bidi_level
+    }
+
+    /// Returns the resolved ISO 15924 script tag for the shaped run.
+    #[must_use]
+    pub const fn script(&self) -> [u8; 4] {
+        self.script
+    }
+}
+
+/// One shaped glyph observation.
+#[derive(Clone, Debug)]
+pub struct SceneGlyph {
+    id: u32,
+    position: Point,
+    advance: Vec2,
+    source: SnapshotTextRange,
+}
+
+impl SceneGlyph {
+    /// Returns the backend glyph identifier.
+    #[must_use]
+    pub const fn id(&self) -> u32 {
+        self.id
+    }
+
+    /// Returns the glyph origin in scene coordinates.
+    #[must_use]
+    pub const fn position(&self) -> Point {
+        self.position
+    }
+
+    /// Returns the shaped advance.
+    #[must_use]
+    pub const fn advance(&self) -> Vec2 {
+        self.advance
+    }
+
+    /// Returns the snapshot-local source covered by this painted glyph observation.
+    #[must_use]
+    pub const fn source(&self) -> &SnapshotTextRange {
+        &self.source
+    }
+}
+
+/// Semantic observation with scene geometry.
+#[derive(Clone, Debug)]
+pub struct SemanticFragment {
+    semantic_id: SemanticId,
+    paragraph_role: Option<ParagraphRole>,
+    inline_role: Option<InlineRole>,
+    source: Option<SnapshotTextRange>,
+    bounds: Rect,
+}
+
+impl SemanticFragment {
+    /// Returns the source semantic identity.
+    #[must_use]
+    pub const fn semantic_id(&self) -> SemanticId {
+        self.semantic_id
+    }
+
+    /// Returns the paragraph role, or `None` for an inline semantic fragment.
+    #[must_use]
+    pub const fn paragraph_role(&self) -> Option<ParagraphRole> {
+        self.paragraph_role
+    }
+
+    /// Returns the inline role, or `None` for a block-level semantic fragment.
+    #[must_use]
+    pub const fn inline_role(&self) -> Option<InlineRole> {
+        self.inline_role
+    }
+
+    /// Returns snapshot-local source when present.
+    #[must_use]
+    pub const fn source(&self) -> Option<&SnapshotTextRange> {
+        self.source.as_ref()
+    }
+
+    /// Returns scene-space semantic bounds.
+    #[must_use]
+    pub const fn bounds(&self) -> Rect {
+        self.bounds
+    }
+}
+
+/// Result of scene-space hit testing.
+#[derive(Clone, Debug)]
+pub struct TextHit {
+    source: SnapshotTextRange,
+    point: Point,
+    line_height: f64,
+}
+
+impl TextHit {
+    /// Returns the snapshot-local source under the point.
+    #[must_use]
+    pub const fn source(&self) -> &SnapshotTextRange {
+        &self.source
+    }
+
+    /// Returns the queried scene-space point.
+    #[must_use]
+    pub const fn point(&self) -> Point {
+        self.point
+    }
+}
+
+/// Scene-space caret derived from one text hit.
+#[derive(Clone, Debug)]
+pub struct SceneCaret {
+    source: SnapshotTextRange,
+    bounds: Rect,
+}
+
+impl SceneCaret {
+    /// Returns the snapshot-local caret source.
+    #[must_use]
+    pub const fn source(&self) -> &SnapshotTextRange {
+        &self.source
+    }
+
+    /// Returns scene-space caret bounds.
+    #[must_use]
+    pub const fn bounds(&self) -> Rect {
+        self.bounds
+    }
+}
+
+/// Dense source range valid only for one exact immutable snapshot revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotTextRange {
+    revision: DocumentRevision,
+    text: TextId,
+    bytes: Range<u32>,
+}
+
+impl SnapshotTextRange {
+    /// Returns the exact snapshot revision.
+    #[must_use]
+    pub const fn revision(&self) -> DocumentRevision {
+        self.revision
+    }
+
+    /// Returns the text leaf identity.
+    #[must_use]
+    pub const fn text(&self) -> TextId {
+        self.text
+    }
+
+    /// Returns the UTF-8 byte range within the text leaf.
+    #[must_use]
+    pub fn bytes(&self) -> Range<u32> {
+        self.bytes.clone()
+    }
+}

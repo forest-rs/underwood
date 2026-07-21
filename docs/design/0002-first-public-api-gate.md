@@ -1,11 +1,18 @@
 # Design-0002: First semantic-to-scene public API gate
 
-- **Status:** Proposed — human gate required
+- **Status:** Accepted
+- **Accepted:** 2026-07-21 by Bruce Mitchener
 - **Bead:** `und-oh0.10.1.6`
 - **Campaign:** `und-oh0.10.1`
 - **Authority:** Design-0001, ADR-0001 through ADR-0004
 
-## Decision requested
+## Decision
+
+Approved by Bruce Mitchener on 2026-07-21. The dependency, crate, and draft
+public-API gate below is authorized for immediate implementation as one
+coherent semantic-to-scene slice.
+
+## Approved scope
 
 Approve one coherent implementation patch containing:
 
