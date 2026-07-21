@@ -17,7 +17,7 @@ use underwood::{
     Brush, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature, FontStyle,
     FontVariation, FontWeight, FontWidth, InlineFlowStyle, InlineRole, Language, LayoutEngine,
     LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap,
-    Tag, TextId, TextScene,
+    Tag, TextId, TextScene, adapter::LineBreakReason,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
 
@@ -70,6 +70,7 @@ struct TextSceneAdapter<'a> {
     scene: &'a TextScene,
     placement: Affine,
     diagnostics: bool,
+    line_diagnostics: bool,
 }
 
 impl<'a> TextSceneAdapter<'a> {
@@ -78,6 +79,7 @@ impl<'a> TextSceneAdapter<'a> {
             scene,
             placement: Affine::translate((x, y)),
             diagnostics: false,
+            line_diagnostics: false,
         }
     }
 
@@ -86,8 +88,16 @@ impl<'a> TextSceneAdapter<'a> {
         self
     }
 
+    fn with_line_diagnostics(mut self) -> Self {
+        self.line_diagnostics = true;
+        self
+    }
+
     fn paint_into<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
         let fill = Style::Fill(Fill::NonZero);
+        if self.line_diagnostics {
+            self.paint_line_diagnostics_behind(painter);
+        }
         if self.diagnostics {
             self.paint_diagnostics_behind(painter);
         }
@@ -121,6 +131,50 @@ impl<'a> TextSceneAdapter<'a> {
 
         if self.diagnostics {
             self.paint_diagnostics_above(painter);
+        }
+        if self.line_diagnostics {
+            self.paint_line_diagnostics_above(painter);
+        }
+    }
+
+    fn paint_line_diagnostics_behind<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
+        for (index, line) in self.scene.lines().iter().enumerate() {
+            let color = if index % 2 == 0 {
+                Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x0c)
+            } else {
+                Color::from_rgba8(0xf5, 0xc4, 0x51, 0x0c)
+            };
+            painter
+                .fill(line.bounds(), color)
+                .transform(self.placement)
+                .draw();
+        }
+    }
+
+    fn paint_line_diagnostics_above<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
+        let line_stroke = Stroke::new(1.0).with_dashes(0.0, [5.0, 5.0]);
+        for line in self.scene.lines() {
+            let color = match line.break_reason() {
+                LineBreakReason::Regular => CYAN_COLOR,
+                LineBreakReason::Mandatory => CORAL_COLOR,
+                LineBreakReason::End => GOLD_COLOR,
+            };
+            painter
+                .stroke(line.bounds(), &line_stroke, color)
+                .transform(self.placement)
+                .draw();
+            painter
+                .fill(
+                    Rect::new(
+                        line.bounds().x0,
+                        line.baseline(),
+                        line.bounds().x1,
+                        line.baseline() + 1.0,
+                    ),
+                    Color::from_rgba8(0xee, 0xf3, 0xf8, 0x45),
+                )
+                .transform(self.placement)
+                .draw();
         }
     }
 
@@ -232,11 +286,11 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         &mut layout,
         0x22,
         48.0,
-        745.0,
+        640.0,
         &[
             Piece::new("SCENE 42 — ", InlineRole::TEXT, CYAN),
             Piece::new("مرحبا بالعالم", InlineRole::EMPHASIS, GOLD),
-            Piece::new(" — LIVE", InlineRole::TEXT, CORAL),
+            Piece::new(" — LIVE TYPE / OFFICE FLOWS", InlineRole::TEXT, CORAL),
         ],
     )?;
 
@@ -276,6 +330,21 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         LATIN_FONT_BYTES,
         "Latin poster text must retain the bundled Roboto Flex resource"
     );
+    assert_eq!(
+        mixed_direction.lines().len(),
+        2,
+        "the mixed-direction specimen must prove finite-width formation"
+    );
+    assert_eq!(
+        mixed_direction.lines()[0].break_reason(),
+        LineBreakReason::Regular,
+        "the specimen must wrap at a legal Parley opportunity"
+    );
+    assert_eq!(
+        mixed_direction.lines()[1].break_reason(),
+        LineBreakReason::End,
+        "the second line must end with the paragraph"
+    );
 
     let title = layout_label(&mut layout, 0x23, 72.0, "UNDERWOOD", INK)?;
     let computed_styles = computed_style_specimen(&mut layout)?;
@@ -290,11 +359,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         &mut layout,
         0x2e,
         18.0,
-        &format!(
-            "MIXED LTR + RTL / BIDI LEVELS {} + {} / REAL FALLBACK",
-            latin_fragment.bidi_level(),
-            arabic_fragment.bidi_level(),
-        ),
+        "MIXED LTR + RTL / 2 LEGAL LINES / FONT METRICS",
         MUTED,
     )?;
     let edit_label = layout_label(&mut layout, 0x26, 18.0, "LOCAL EDIT", CORAL)?;
@@ -352,7 +417,9 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
             .with_diagnostics()
             .paint_into(&mut painter);
         TextSceneAdapter::new(&mixed_direction_evidence, 740.0, 184.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&mixed_direction, 735.0, 286.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&mixed_direction, 735.0, 286.0)
+            .with_line_diagnostics()
+            .paint_into(&mut painter);
         TextSceneAdapter::new(&computed_styles, 124.0, 548.0).paint_into(&mut painter);
 
         paint_card(

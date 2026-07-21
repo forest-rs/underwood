@@ -17,18 +17,19 @@ use fontique::{
     QueryStatus, SourceCache, SourceId, SourceInfo, SourceKind, Synthesis,
 };
 use parley_core::{
-    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, ShapeOptions,
+    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, Boundary, FontInstance, ShapeOptions,
     ShapedText, Shaper,
-    shape::{CharCluster, ClusterData, Status},
+    shape::{CharCluster, ClusterData, Status, Whitespace},
 };
 use underwood::adapter::{
-    FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
-    ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
-    PreparedParagraph, PreparedRun, ShapingRun,
+    FontSynthesis, FormationWork, GlyphPaintCoverage, GlyphPaintSegment, InlineFlowRun,
+    LineBreakReason, ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput,
+    ParagraphInput, PreparationError, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
+    ShapingRun,
 };
 use underwood::{
-    FontData, FontFamilyName, FontVariation, GenericFamily, Language, ParagraphId, Rect, Script,
-    ShapingStyle, Tag, Vec2,
+    FontData, FontFamilyName, FontVariation, GenericFamily, InlineFlowStyle, Language, ParagraphId,
+    Rect, Script, ShapingStyle, Tag, Vec2,
 };
 
 /// Owned validated font bytes and a face within them.
@@ -209,11 +210,12 @@ impl ParleyParagraphEngine {
     }
 }
 
-impl ParagraphPreparation for ParleyParagraphEngine {
-    fn prepare(
+impl ParagraphFormation for ParleyParagraphEngine {
+    fn form(
         &mut self,
         input: ParagraphInput<'_>,
-    ) -> Result<ParagraphPreparationOutput, PreparationError> {
+        constraints: ParagraphConstraints,
+    ) -> Result<ParagraphFormationOutput, PreparationError> {
         validate_input_runs(&input)?;
         let existing_index = self
             .cache
@@ -229,6 +231,8 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 self.cache[index].shaping_runs.clear();
                 self.cache[index].shaped_text.clear();
                 self.cache[index].scripts.clear();
+                self.cache[index].logical_clusters.clear();
+                self.cache[index].line_plans.clear();
                 (index, true)
             }
         } else {
@@ -240,7 +244,12 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 shaping_runs: Vec::new(),
                 shaped_text: ShapedText::new(),
                 scripts: Vec::new(),
+                logical_clusters: Vec::new(),
                 selected_clusters: 0,
+                inline_flow_styles: Vec::new(),
+                inline_flow_runs: Vec::new(),
+                max_inline_advance: 0,
+                line_plans: Vec::new(),
             });
             (self.cache.len() - 1, true)
         };
@@ -264,60 +273,137 @@ impl ParagraphPreparation for ParleyParagraphEngine {
             cache.shaping_styles = input.shaping_styles().to_vec();
             cache.shaping_runs = input.shaping_runs().to_vec();
             cache.selected_clusters = selected_clusters;
+            cache.logical_clusters = collect_logical_clusters(input.text(), &cache.shaped_text)?;
+            cache.line_plans.clear();
+        }
+
+        let needs_formation = shaped
+            || self.cache[cache_index].inline_flow_styles != input.inline_flow_styles()
+            || self.cache[cache_index].inline_flow_runs != input.inline_flow_runs()
+            || self.cache[cache_index].max_inline_advance
+                != constraints.max_inline_advance().to_bits();
+        if needs_formation {
+            let cache = &mut self.cache[cache_index];
+            form_lines(
+                input.text(),
+                &cache.shaped_text,
+                &cache.logical_clusters,
+                input.inline_flow_styles(),
+                input.inline_flow_runs(),
+                constraints.max_inline_advance(),
+                &mut cache.line_plans,
+            )?;
+            cache.inline_flow_styles = input.inline_flow_styles().to_vec();
+            cache.inline_flow_runs = input.inline_flow_runs().to_vec();
+            cache.max_inline_advance = constraints.max_inline_advance().to_bits();
         }
 
         let physics = &self.cache[cache_index];
         if physics.shaped_text.runs().len() != physics.scripts.len() {
             return Err(PreparationError::invalid_output());
         }
-        let mut prepared_runs = Vec::with_capacity(physics.shaped_text.runs().len());
+        let mut prepared_lines = Vec::with_capacity(physics.line_plans.len());
         let mut glyph_count = 0_u32;
-        for (run, script) in physics.shaped_text.runs().iter().zip(&physics.scripts) {
-            let prepared_glyphs =
-                lower_glyphs(input.text(), &physics.shaped_text, run, input.paint_runs())?;
-            glyph_count = glyph_count
-                .saturating_add(u32::try_from(prepared_glyphs.len()).unwrap_or(u32::MAX));
-            let font = physics
-                .shaped_text
-                .fonts()
-                .get(run.font_index)
-                .ok_or_else(PreparationError::invalid_output)?;
-            let normalized_coords = physics
-                .shaped_text
-                .normalized_coords()
-                .get(run.normalized_coords_range.clone())
-                .ok_or_else(PreparationError::invalid_output)?;
-            prepared_runs.push(PreparedRun::try_new(
-                checked_source_range(&run.range.byte_range)?,
-                run.bidi_level,
-                *script,
-                font.font.clone(),
-                run.font_size,
-                portable_synthesis(font.synthesis)?,
-                normalized_coords.iter().map(|coord| coord.to_bits()),
-                prepared_glyphs,
+        for plan in &physics.line_plans {
+            let mut pieces = line_run_pieces(&physics.shaped_text, plan.clusters.clone())?;
+            reorder_visual_pieces(&physics.shaped_text, &mut pieces);
+            let mut prepared_runs = Vec::with_capacity(pieces.len());
+            for piece in pieces {
+                let run = physics
+                    .shaped_text
+                    .runs()
+                    .get(piece.run)
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let script = physics
+                    .scripts
+                    .get(piece.run)
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let font = physics
+                    .shaped_text
+                    .fonts()
+                    .get(run.font_index)
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let normalized_coords = physics
+                    .shaped_text
+                    .normalized_coords()
+                    .get(run.normalized_coords_range.clone())
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let clusters = physics
+                    .shaped_text
+                    .clusters()
+                    .get(piece.clusters.clone())
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let first = clusters
+                    .first()
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let last = clusters
+                    .last()
+                    .ok_or_else(PreparationError::invalid_output)?;
+                let source = run.range.byte_range.start + usize::from(first.text_offset)
+                    ..run.range.byte_range.start
+                        + usize::from(last.text_offset)
+                        + usize::from(last.text_len);
+                let prepared_glyphs = lower_glyphs(
+                    input.text(),
+                    &physics.analysis,
+                    &physics.shaped_text,
+                    run,
+                    piece.clusters.clone(),
+                    input.paint_runs(),
+                )?;
+                glyph_count = glyph_count
+                    .saturating_add(u32::try_from(prepared_glyphs.len()).unwrap_or(u32::MAX));
+                let unrendered_source = unrendered_source(
+                    input.text(),
+                    &physics.analysis,
+                    source.clone(),
+                    &prepared_glyphs,
+                )?;
+                prepared_runs.push(PreparedRun::try_new(
+                    checked_source_range(&source)?,
+                    run.bidi_level,
+                    *script,
+                    font.font.clone(),
+                    run.font_size,
+                    portable_synthesis(font.synthesis)?,
+                    normalized_coords.iter().map(|coord| coord.to_bits()),
+                    unrendered_source,
+                    prepared_glyphs,
+                )?);
+            }
+            prepared_lines.push(PreparedLine::try_new(
+                checked_source_range(&plan.source)?,
+                plan.reason,
+                plan.advance,
+                plan.baseline,
+                plan.height,
+                plan.content_ascent,
+                plan.content_descent,
+                prepared_runs,
             )?);
         }
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         let paragraph =
-            PreparedParagraph::try_from_runs(input.paragraph(), text_len, prepared_runs)?;
-        let work = if !analyzed && !shaped {
-            PreparationWork::new(false, false, 0, 0, 0)
-        } else {
-            PreparationWork::new(
-                analyzed,
-                shaped,
-                if shaped { physics.selected_clusters } else { 0 },
-                if shaped {
-                    u32::try_from(physics.shaped_text.runs().len()).unwrap_or(u32::MAX)
-                } else {
-                    0
-                },
-                if shaped { glyph_count } else { 0 },
-            )
-        };
-        Ok(ParagraphPreparationOutput::new(paragraph, work))
+            PreparedParagraph::try_from_lines(input.paragraph(), text_len, prepared_lines)?;
+        let work = FormationWork::new(
+            analyzed,
+            shaped,
+            if shaped { physics.selected_clusters } else { 0 },
+            if shaped {
+                u32::try_from(physics.shaped_text.runs().len()).unwrap_or(u32::MAX)
+            } else {
+                0
+            },
+            if shaped { glyph_count } else { 0 },
+            if needs_formation {
+                u32::try_from(physics.line_plans.len()).unwrap_or(u32::MAX)
+            } else {
+                0
+            },
+            0,
+        );
+        Ok(ParagraphFormationOutput::new(paragraph, work))
     }
 }
 
@@ -330,7 +416,340 @@ struct PhysicsCache {
     shaping_runs: Vec<ShapingRun>,
     shaped_text: ShapedText,
     scripts: Vec<[u8; 4]>,
+    logical_clusters: Vec<LogicalCluster>,
     selected_clusters: u32,
+    inline_flow_styles: Vec<InlineFlowStyle>,
+    inline_flow_runs: Vec<InlineFlowRun>,
+    max_inline_advance: u64,
+    line_plans: Vec<LinePlan>,
+}
+
+#[derive(Clone, Debug)]
+struct LinePlan {
+    clusters: Range<usize>,
+    source: Range<usize>,
+    reason: LineBreakReason,
+    advance: f64,
+    baseline: f64,
+    height: f64,
+    content_ascent: f64,
+    content_descent: f64,
+}
+
+#[derive(Clone, Debug)]
+struct LogicalCluster {
+    run: usize,
+    index: usize,
+    source: Range<usize>,
+    boundary: Boundary,
+    source_char: char,
+    whitespace: Whitespace,
+    ligature_component: bool,
+    advance: f64,
+}
+
+#[derive(Clone, Debug)]
+struct RunPiece {
+    run: usize,
+    clusters: Range<usize>,
+}
+
+fn form_lines(
+    text: &str,
+    shaped_text: &ShapedText,
+    clusters: &[LogicalCluster],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_runs: &[InlineFlowRun],
+    max_inline_advance: f64,
+    plans: &mut Vec<LinePlan>,
+) -> Result<(), PreparationError> {
+    plans.clear();
+    if text.is_empty() {
+        return Ok(());
+    }
+    if clusters.is_empty() {
+        return Err(PreparationError::invalid_output());
+    }
+
+    let mut start = 0_usize;
+    while start < clusters.len() {
+        let mut index = start;
+        let mut advance = 0.0_f64;
+        let mut last_opportunity: Option<(usize, f64)> = None;
+        let mut committed = false;
+        while index < clusters.len() {
+            let cluster = &clusters[index];
+            if cluster.boundary == Boundary::Line && !cluster.ligature_component && index > start {
+                last_opportunity = Some((index, advance));
+            }
+
+            let next_advance = advance + cluster.advance;
+            let is_newline = cluster.whitespace == Whitespace::Newline;
+            if is_newline {
+                advance = next_advance;
+                index += 1;
+                let cr_before_lf = cluster.source_char == '\r'
+                    && clusters
+                        .get(index)
+                        .is_some_and(|next| next.source_char == '\n');
+                if cr_before_lf {
+                    continue;
+                }
+                plans.push(make_line_plan(
+                    shaped_text,
+                    clusters,
+                    inline_flow_styles,
+                    inline_flow_runs,
+                    start..index,
+                    LineBreakReason::Mandatory,
+                    advance,
+                    None,
+                )?);
+                start = index;
+                committed = true;
+                break;
+            }
+
+            if next_advance > max_inline_advance
+                && let Some((opportunity, opportunity_advance)) = last_opportunity
+            {
+                plans.push(make_line_plan(
+                    shaped_text,
+                    clusters,
+                    inline_flow_styles,
+                    inline_flow_runs,
+                    start..opportunity,
+                    LineBreakReason::Regular,
+                    opportunity_advance,
+                    None,
+                )?);
+                start = opportunity;
+                committed = true;
+                break;
+            }
+
+            advance = next_advance;
+            index += 1;
+        }
+        if !committed {
+            plans.push(make_line_plan(
+                shaped_text,
+                clusters,
+                inline_flow_styles,
+                inline_flow_runs,
+                start..clusters.len(),
+                LineBreakReason::End,
+                advance,
+                None,
+            )?);
+            start = clusters.len();
+        }
+    }
+
+    if plans
+        .last()
+        .is_some_and(|plan| plan.reason == LineBreakReason::Mandatory)
+    {
+        let previous = plans
+            .last()
+            .cloned()
+            .ok_or_else(PreparationError::invalid_output)?;
+        plans.push(make_line_plan(
+            shaped_text,
+            clusters,
+            inline_flow_styles,
+            inline_flow_runs,
+            clusters.len()..clusters.len(),
+            LineBreakReason::End,
+            0.0,
+            Some(&previous),
+        )?);
+    }
+    Ok(())
+}
+
+fn collect_logical_clusters(
+    text: &str,
+    shaped_text: &ShapedText,
+) -> Result<Vec<LogicalCluster>, PreparationError> {
+    let mut clusters = Vec::with_capacity(shaped_text.clusters().len());
+    for (run_index, run) in shaped_text.runs().iter().enumerate() {
+        for cluster_index in run.clusters_range.clone() {
+            let cluster = shaped_text
+                .clusters()
+                .get(cluster_index)
+                .ok_or_else(PreparationError::invalid_output)?;
+            let start = run
+                .range
+                .byte_range
+                .start
+                .checked_add(usize::from(cluster.text_offset))
+                .ok_or_else(PreparationError::invalid_output)?;
+            let end = start
+                .checked_add(usize::from(cluster.text_len))
+                .ok_or_else(PreparationError::invalid_output)?;
+            if text.get(start..end).is_none() {
+                return Err(PreparationError::invalid_output());
+            }
+            clusters.push(LogicalCluster {
+                run: run_index,
+                index: cluster_index,
+                source: start..end,
+                boundary: cluster.info.boundary(),
+                source_char: cluster.info.source_char(),
+                whitespace: cluster.info.whitespace(),
+                ligature_component: cluster.is_ligature_component(),
+                advance: f64::from(cluster.advance),
+            });
+        }
+    }
+    if !text.is_empty() && clusters.is_empty() {
+        return Err(PreparationError::invalid_output());
+    }
+    Ok(clusters)
+}
+
+fn make_line_plan(
+    shaped_text: &ShapedText,
+    clusters: &[LogicalCluster],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_runs: &[InlineFlowRun],
+    logical_range: Range<usize>,
+    reason: LineBreakReason,
+    advance: f64,
+    empty_metrics: Option<&LinePlan>,
+) -> Result<LinePlan, PreparationError> {
+    if logical_range.is_empty() {
+        let metrics = empty_metrics.ok_or_else(PreparationError::invalid_output)?;
+        let at = clusters.last().map_or(0, |cluster| cluster.source.end);
+        return Ok(LinePlan {
+            clusters: shaped_text.clusters().len()..shaped_text.clusters().len(),
+            source: at..at,
+            reason,
+            advance,
+            baseline: metrics.baseline,
+            height: metrics.height,
+            content_ascent: metrics.content_ascent,
+            content_descent: metrics.content_descent,
+        });
+    }
+
+    let first = clusters
+        .get(logical_range.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let last = clusters
+        .get(logical_range.end - 1)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let mut above = 0.0_f64;
+    let mut below = 0.0_f64;
+    let mut content_ascent = 0.0_f64;
+    let mut content_descent = 0.0_f64;
+    for cluster in &clusters[logical_range.clone()] {
+        let run = shaped_text
+            .runs()
+            .get(cluster.run)
+            .ok_or_else(PreparationError::invalid_output)?;
+        let multiplier =
+            inline_flow_multiplier(&cluster.source, inline_flow_styles, inline_flow_runs)?;
+        let requested_height = f64::from(run.font_size) * f64::from(multiplier);
+        let ascent = f64::from(run.font_metrics.ascent);
+        let descent = f64::from(run.font_metrics.descent);
+        let half_leading = (requested_height - (ascent + descent)) / 2.0;
+        let run_above = ascent + half_leading;
+        above = above.max(run_above);
+        below = below.max(requested_height - run_above);
+        content_ascent = content_ascent.max(ascent);
+        content_descent = content_descent.max(descent);
+    }
+    Ok(LinePlan {
+        clusters: first.index..last.index + 1,
+        source: first.source.start..last.source.end,
+        reason,
+        advance,
+        baseline: above,
+        height: above + below,
+        content_ascent,
+        content_descent,
+    })
+}
+
+fn inline_flow_multiplier(
+    source: &Range<usize>,
+    styles: &[InlineFlowStyle],
+    runs: &[InlineFlowRun],
+) -> Result<f32, PreparationError> {
+    let mut multiplier = 0.0_f32;
+    for run in runs {
+        let bytes = run.bytes();
+        if bytes.start as usize >= source.end || bytes.end as usize <= source.start {
+            continue;
+        }
+        let style = styles
+            .get(run.style().index())
+            .ok_or_else(PreparationError::invalid_output)?;
+        multiplier = multiplier.max(style.line_height().multiplier());
+    }
+    if multiplier <= 0.0 {
+        return Err(PreparationError::invalid_output());
+    }
+    Ok(multiplier)
+}
+
+fn line_run_pieces(
+    shaped_text: &ShapedText,
+    clusters: Range<usize>,
+) -> Result<Vec<RunPiece>, PreparationError> {
+    let mut pieces = Vec::new();
+    for (run_index, run) in shaped_text.runs().iter().enumerate() {
+        let start = run.clusters_range.start.max(clusters.start);
+        let end = run.clusters_range.end.min(clusters.end);
+        if start < end {
+            pieces.push(RunPiece {
+                run: run_index,
+                clusters: start..end,
+            });
+        }
+    }
+    if !clusters.is_empty()
+        && pieces
+            .iter()
+            .map(|piece| piece.clusters.len())
+            .sum::<usize>()
+            != clusters.len()
+    {
+        return Err(PreparationError::invalid_output());
+    }
+    Ok(pieces)
+}
+
+fn reorder_visual_pieces(shaped_text: &ShapedText, pieces: &mut [RunPiece]) {
+    let mut max_level = 0_u8;
+    let mut lowest_odd_level = u8::MAX;
+    for piece in pieces.iter() {
+        let level = shaped_text.runs()[piece.run].bidi_level;
+        max_level = max_level.max(level);
+        if level & 1 != 0 {
+            lowest_odd_level = lowest_odd_level.min(level);
+        }
+    }
+    if lowest_odd_level == u8::MAX {
+        return;
+    }
+    for level in (lowest_odd_level..=max_level).rev() {
+        let mut start = 0_usize;
+        while start < pieces.len() {
+            if shaped_text.runs()[pieces[start].run].bidi_level < level {
+                start += 1;
+                continue;
+            }
+            let mut end = start + 1;
+            while end < pieces.len() && shaped_text.runs()[pieces[end].run].bidi_level >= level {
+                end += 1;
+            }
+            pieces[start..end].reverse();
+            start = end;
+        }
+    }
 }
 
 fn analyze_text(analyzer: &mut Analyzer, text: &str) -> Analysis {
@@ -473,15 +892,28 @@ fn select_font(
 
 fn lower_glyphs(
     text: &str,
+    analysis: &Analysis,
     shaped_text: &ShapedText,
     run: &parley_core::ShapedRun,
+    cluster_range: Range<usize>,
     paint_runs: &[underwood::adapter::PaintRun],
 ) -> Result<Vec<PreparedGlyph>, PreparationError> {
     let clusters = shaped_text
         .clusters()
         .get(run.clusters_range.clone())
         .ok_or_else(PreparationError::invalid_output)?;
-    let mut prepared = Vec::with_capacity(run.glyphs_range.len());
+    let start = cluster_range
+        .start
+        .checked_sub(run.clusters_range.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let end = cluster_range
+        .end
+        .checked_sub(run.clusters_range.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    if start >= end || end > clusters.len() {
+        return Err(PreparationError::invalid_output());
+    }
+    let mut prepared = Vec::with_capacity(cluster_range.len());
     let mut lower_cluster = |index: usize| -> Result<(), PreparationError> {
         let cluster = clusters
             .get(index)
@@ -495,6 +927,9 @@ fn lower_glyphs(
             .is_none()
         {
             return Err(PreparationError::invalid_output());
+        }
+        if !source_contributes_to_shaping(text, analysis, &source)? {
+            return Ok(());
         }
         lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
             let advance = Vec2::new(f64::from(glyph.advance), 0.0);
@@ -517,15 +952,87 @@ fn lower_glyphs(
         })
     };
     if run.bidi_level & 1 == 1 {
-        for index in (0..clusters.len()).rev() {
+        for index in (start..end).rev() {
             lower_cluster(index)?;
         }
     } else {
-        for index in 0..clusters.len() {
+        for index in start..end {
             lower_cluster(index)?;
         }
     }
     Ok(prepared)
+}
+
+fn source_contributes_to_shaping(
+    text: &str,
+    analysis: &Analysis,
+    source: &Range<u32>,
+) -> Result<bool, PreparationError> {
+    let start = source.start as usize;
+    let end = source.end as usize;
+    let before = text
+        .get(..start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let source_text = text
+        .get(start..end)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let char_start = before.chars().count();
+    let char_end = char_start
+        .checked_add(source_text.chars().count())
+        .ok_or_else(PreparationError::invalid_output)?;
+    Ok(analysis
+        .char_info()
+        .get(char_start..char_end)
+        .ok_or_else(PreparationError::invalid_output)?
+        .iter()
+        .any(|info| info.contributes_to_shaping()))
+}
+
+fn unrendered_source(
+    text: &str,
+    analysis: &Analysis,
+    source: Range<usize>,
+    glyphs: &[PreparedGlyph],
+) -> Result<Vec<Range<u32>>, PreparationError> {
+    let before = text
+        .get(..source.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let source_text = text
+        .get(source.clone())
+        .ok_or_else(PreparationError::invalid_output)?;
+    let char_start = before.chars().count();
+    let mut unrendered: Vec<Range<u32>> = Vec::new();
+    for (index, (offset, character)) in source_text.char_indices().enumerate() {
+        let start = source
+            .start
+            .checked_add(offset)
+            .ok_or_else(PreparationError::invalid_output)?;
+        let end = start
+            .checked_add(character.len_utf8())
+            .ok_or_else(PreparationError::invalid_output)?;
+        let range = checked_source_range(&(start..end))?;
+        if glyphs.iter().any(|glyph| {
+            let glyph_source = glyph.source();
+            glyph_source.start <= range.start && glyph_source.end >= range.end
+        }) {
+            continue;
+        }
+        let info = analysis
+            .char_info()
+            .get(char_start + index)
+            .ok_or_else(PreparationError::invalid_output)?;
+        if info.contributes_to_shaping() {
+            return Err(PreparationError::invalid_output());
+        }
+        if let Some(previous) = unrendered.last_mut()
+            && previous.end == range.start
+        {
+            previous.end = range.end;
+        } else {
+            unrendered.push(range);
+        }
+    }
+    Ok(unrendered)
 }
 
 fn cluster_source(
@@ -723,6 +1230,20 @@ fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationErro
     }
     validate_run_coverage(
         input,
+        input.inline_flow_runs().iter().map(InlineFlowRun::bytes),
+        text_len,
+        PreparationError::invalid_output,
+    )?;
+    if input.inline_flow_styles().len() > usize::from(u16::MAX) + 1
+        || input
+            .inline_flow_runs()
+            .iter()
+            .any(|run| run.style().index() >= input.inline_flow_styles().len())
+    {
+        return Err(PreparationError::invalid_output());
+    }
+    validate_run_coverage(
+        input,
         input.paint_runs().iter().map(|run| run.bytes()),
         text_len,
         PreparationError::unsupported_paint_coverage,
@@ -846,8 +1367,8 @@ mod tests {
 
     use underwood::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFamily,
-        GenericFamily, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole,
-        SceneRequest, ShapingStyle, StyleMap,
+        GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot,
+        PaintTable, ParagraphRole, SceneRequest, ShapingStyle, StyleMap,
     };
     use underwood::{Language, Script};
 
@@ -858,6 +1379,8 @@ mod tests {
 
     const LATIN_FONT: &[u8] =
         include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
+    const ARABIC_FONT: &[u8] =
+        include_bytes!("../../examples/headless/fonts/NotoKufiArabic-Regular.otf");
 
     #[test]
     fn big_endian_readers_reject_short_input() {
@@ -908,7 +1431,7 @@ mod tests {
 
         let style = ComputedInlineStyle::new(
             ShapingStyle::new(FontFamily::named("Roboto Flex"), 16.0).expect("test style is valid"),
-            underwood::InlineFlowStyle::default(),
+            InlineFlowStyle::default(),
             PaintSlot::new(0),
         );
         let styles = StyleMap::new(style);
@@ -950,5 +1473,347 @@ mod tests {
         assert_eq!(items.len(), 2, "the oversized item must split once");
         assert_eq!(items[0].range.byte_range, 0..usize::from(u16::MAX) + 1);
         assert_eq!(items[1].range.byte_range, text.len() - 1..text.len());
+    }
+
+    #[test]
+    fn product_path_wraps_only_at_parley_line_boundaries() {
+        let text = "alpha beta gamma";
+        let (document, styles, paint) = fixture_document(text, 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(72.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("legal wrapping must form a scene");
+        let lines = output.scene().lines();
+        assert_eq!(lines.len(), 3, "legal opportunities must form three lines");
+        assert_eq!(
+            lines[0].break_reason(),
+            underwood::adapter::LineBreakReason::Regular
+        );
+        assert_eq!(
+            lines[1].break_reason(),
+            underwood::adapter::LineBreakReason::Regular
+        );
+        assert_eq!(
+            lines[2].break_reason(),
+            underwood::adapter::LineBreakReason::End
+        );
+        assert_eq!(lines[0].sources()[0].bytes(), 0..6);
+        assert_eq!(
+            lines[1].sources()[0].bytes().start,
+            u32::try_from(text.find("beta").expect("beta is present")).expect("fixture range fits")
+        );
+        assert_eq!(
+            lines[2].sources()[0].bytes().start,
+            u32::try_from(text.find("gamma").expect("gamma is present"))
+                .expect("fixture range fits")
+        );
+    }
+
+    #[test]
+    fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
+        let text = "a\r\nb\nc\u{2028}d\u{2029}e";
+        let (document, styles, paint) = fixture_document(text, 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("mandatory breaks must form a scene");
+        let lines = output.scene().lines();
+        let ranges: Vec<_> = lines.iter().map(|line| line.sources()[0].bytes()).collect();
+        assert_eq!(
+            lines.len(),
+            5,
+            "CRLF, LF, LS, and PS form four breaks: {ranges:?}"
+        );
+        assert_eq!(lines[0].sources()[0].bytes(), 0..3, "CRLF stays together");
+        assert!(
+            lines[..4]
+                .iter()
+                .all(|line| line.break_reason() == underwood::adapter::LineBreakReason::Mandatory)
+        );
+        assert_eq!(
+            lines[4].break_reason(),
+            underwood::adapter::LineBreakReason::End
+        );
+        assert_eq!(
+            lines.last().expect("final line exists").sources()[0]
+                .bytes()
+                .end,
+            u32::try_from(text.len()).expect("fixture length fits")
+        );
+    }
+
+    #[test]
+    fn product_path_uses_font_metrics_for_the_baseline() {
+        let (document, styles, paint) = fixture_document("Ag", 1.5);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("metric-backed formation must succeed");
+        let line = &output.scene().lines()[0];
+        assert_eq!(line.bounds().height(), 30.0);
+        assert!(line.baseline() > line.bounds().y0 && line.baseline() < line.bounds().y1);
+        assert_eq!(
+            line.baseline(),
+            output.scene().fragments()[0].glyphs()[0].position().y
+        );
+        assert_ne!(
+            line.baseline() - line.bounds().y0,
+            24.0,
+            "the 80/20 split is gone"
+        );
+        assert!(line.content_ascent() > line.content_descent());
+    }
+
+    #[test]
+    fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"mixed-leaf-test1"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        let small = edit
+            .append_text(paragraph, InlineRole::TEXT, "small ")
+            .expect("first fixture leaf is valid");
+        let large = edit
+            .append_text(paragraph, InlineRole::EMPHASIS, "BIG")
+            .expect("second fixture leaf is valid");
+        edit.commit().expect("fixture edit is valid");
+
+        let small_style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+                .expect("small shaping style is valid"),
+            InlineFlowStyle::new(
+                LineHeight::from_multiplier(1.2).expect("small line height is valid"),
+            ),
+            PaintSlot::new(0),
+        );
+        let large_style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 40.0)
+                .expect("large shaping style is valid"),
+            InlineFlowStyle::new(
+                LineHeight::from_multiplier(1.5).expect("large line height is valid"),
+            ),
+            PaintSlot::new(0),
+        );
+        let mut styles = StyleMap::new(small_style);
+        styles.set(large, large_style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("mixed leaf formation succeeds");
+        let line = &output.scene().lines()[0];
+        assert_eq!(line.sources().len(), 2);
+        assert_eq!(line.sources()[0].text(), small);
+        assert_eq!(line.sources()[0].bytes(), 0..6);
+        assert_eq!(line.sources()[1].text(), large);
+        assert_eq!(line.sources()[1].bytes(), 0..3);
+        assert_eq!(line.bounds().height(), 60.0);
+        assert!(
+            output
+                .scene()
+                .fragments()
+                .iter()
+                .any(|fragment| fragment.font_size() == 20.0)
+        );
+        assert!(
+            output
+                .scene()
+                .fragments()
+                .iter()
+                .any(|fragment| fragment.font_size() == 40.0)
+        );
+    }
+
+    #[test]
+    fn non_breaking_space_and_unbreakable_words_overflow_honestly() {
+        for text in ["alpha\u{a0}beta", "supercalifragilisticexpialidocious"] {
+            let (document, styles, paint) = fixture_document(text, 1.2);
+            let mut engine = fixture_engine();
+            let request = SceneRequest::new(
+                FiniteWidth::new(10.0).expect("test width is valid"),
+                &styles,
+                &paint,
+            );
+            let output = engine
+                .prepare(&document.snapshot(), &request)
+                .expect("an unbreakable unit may overflow");
+            assert_eq!(
+                output.scene().lines().len(),
+                1,
+                "unbreakable source must not be split: {text:?}"
+            );
+            assert_eq!(
+                output.scene().lines()[0].break_reason(),
+                underwood::adapter::LineBreakReason::End
+            );
+            assert!(
+                output.scene().lines()[0].bounds().width() > 10.0,
+                "overflow must remain visible rather than report a false fit: {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn width_and_line_height_reform_without_reshaping() {
+        let text = "alpha beta gamma";
+        let (document, compact_styles, paint) = fixture_document(text, 1.2);
+        let (_, spacious_styles, _) = fixture_document(text, 1.8);
+        let mut engine = fixture_engine();
+        let wide = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &compact_styles,
+            &paint,
+        );
+        engine
+            .prepare(&document.snapshot(), &wide)
+            .expect("initial formation succeeds");
+
+        let narrow = SceneRequest::new(
+            FiniteWidth::new(72.0).expect("test width is valid"),
+            &compact_styles,
+            &paint,
+        );
+        let narrowed = engine
+            .prepare(&document.snapshot(), &narrow)
+            .expect("width-only formation succeeds");
+        assert_eq!(narrowed.work().analysis().paragraphs(), 0);
+        assert_eq!(narrowed.work().itemization().paragraphs(), 0);
+        assert_eq!(narrowed.work().font_selection().paragraphs(), 0);
+        assert_eq!(narrowed.work().shape().paragraphs(), 0);
+        assert_eq!(narrowed.work().flow().paragraphs(), 1);
+
+        let spacious = SceneRequest::new(
+            FiniteWidth::new(72.0).expect("test width is valid"),
+            &spacious_styles,
+            &paint,
+        );
+        let respaced = engine
+            .prepare(&document.snapshot(), &spacious)
+            .expect("line-height-only formation succeeds");
+        assert_eq!(respaced.work().analysis().paragraphs(), 0);
+        assert_eq!(respaced.work().shape().paragraphs(), 0);
+        assert_eq!(respaced.work().flow().paragraphs(), 1);
+        assert!(
+            respaced.scene().lines()[0].bounds().height()
+                > narrowed.scene().lines()[0].bounds().height()
+        );
+    }
+
+    #[test]
+    fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
+        let (document, styles, paint) = fixture_document("office مرحبا world", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("mixed bidi formation succeeds");
+        let arabic: Vec<_> = output
+            .scene()
+            .fragments()
+            .iter()
+            .filter(|fragment| fragment.bidi_level() & 1 == 1)
+            .map(|fragment| {
+                let glyph = &fragment.glyphs()[0];
+                (glyph.position().x, glyph.source().bytes().start)
+            })
+            .collect();
+        assert!(arabic.len() > 1, "Arabic run must expose multiple glyphs");
+        assert!(
+            arabic.windows(2).all(|pair| pair[0].1 >= pair[1].1)
+                && arabic.windows(2).any(|pair| pair[0].1 > pair[1].1),
+            "RTL glyph records run in visual order opposite logical source: {arabic:?}"
+        );
+    }
+
+    #[test]
+    fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
+        let text = "office \u{2067}مرحبا\u{2069} world";
+        let (document, styles, paint) = fixture_document(text, 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("bidi format controls must not become phantom glyphs or source gaps");
+        assert_eq!(output.scene().lines().len(), 1);
+        assert_eq!(
+            output.scene().lines()[0].sources()[0].bytes(),
+            0..u32::try_from(text.len()).expect("fixture length fits")
+        );
+        let isolate = u32::try_from(text.find('\u{2067}').expect("isolate exists"))
+            .expect("fixture range fits");
+        let pop = u32::try_from(text.find('\u{2069}').expect("pop isolate exists"))
+            .expect("fixture range fits");
+        assert!(output.scene().fragments().iter().all(|fragment| {
+            fragment.glyphs().iter().all(|glyph| {
+                let source = glyph.source().bytes();
+                !((source.start <= isolate && source.end >= isolate + 3)
+                    || (source.start <= pop && source.end >= pop + 3))
+            })
+        }));
+    }
+
+    fn fixture_engine() -> LayoutEngine {
+        let fonts = FontSet::try_from_fonts([
+            Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
+            Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
+        ])
+        .expect("fixture catalog is valid")
+        .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
+        .expect("Arabic fallback is valid");
+        LayoutEngine::new(
+            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
+                .expect("fixture adapter is valid"),
+        )
+    }
+
+    fn fixture_document(text: &str, line_height: f32) -> (Document, StyleMap, PaintTable) {
+        let mut document = Document::new(DocumentId::from_bytes(*b"breaking-test-01"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        edit.append_text(paragraph, InlineRole::TEXT, text)
+            .expect("fixture text is valid");
+        edit.commit().expect("fixture edit is valid");
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+                .expect("fixture shaping style is valid"),
+            InlineFlowStyle::new(
+                LineHeight::from_multiplier(line_height).expect("fixture line height is valid"),
+            ),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        (document, styles, paint)
     }
 }

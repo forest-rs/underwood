@@ -126,7 +126,7 @@ impl ParagraphFormation for MyEngine {
         &mut self,
         input: ParagraphInput<'_>,
         constraints: ParagraphConstraints,
-    ) -> Result<ParagraphFormationOutput, FormationError>;
+    ) -> Result<ParagraphFormationOutput, PreparationError>;
 }
 ```
 
@@ -143,17 +143,25 @@ of the first field.
 - advance, baseline-from-top, and line-box height;
 - content ascent/descent evidence;
 - visual-order `PreparedRun`s clipped to the line;
+- explicit source-ordered ranges for controls and format characters which
+  intentionally produce no glyphs;
 - backend-independent glyph, paint coverage, font, synthesis, and source data.
 
-A glyphless line created by a mandatory break is valid. Runs within a line need
-not tile the line because control characters can carry source without glyphs;
-line source ranges must tile the paragraph exactly, including CRLF as one hard
-break event. Visual run order is not source order and constructors validate
-coverage without sorting it away.
+A glyphless run created by a mandatory break is valid. Runs within every
+non-empty line tile its complete source, including controls; the final empty
+line after a terminal hard break carries no runs. Line source ranges tile the
+paragraph exactly, including CRLF as one hard-break event. Visual run order is
+not source order, so constructors validate a temporary source-sorted view
+without changing the retained visual order. Every scalar in a run must be
+covered by either a real glyph source or an explicitly unrendered source range;
+the adapter cannot silently omit ordinary text or manufacture glyphs for bidi
+format controls.
 
 `PreparationWork` becomes `FormationWork`. Existing analyzer/itemizer/selection/
 shaper counters remain, and `formed_lines` plus `break_reshapes` are added. This
-is a breaking draft API change, not a compatibility shim.
+is a breaking draft API change, not a compatibility shim. `WorkReport` exposes
+the committed break-reshape count so the backend observation is not discarded
+at the scene boundary.
 
 ### Call-site result
 

@@ -7,8 +7,9 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::adapter::{
-    FontSynthesis, PaintRun, ParagraphInput, ParagraphPreparation, PreparationWork, PreparedGlyph,
-    PreparedParagraph, PreparedRun, ShapingRun, ShapingStyleId,
+    FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId, LineBreakReason, PaintRun,
+    ParagraphConstraints, ParagraphFormation, ParagraphInput, PreparedParagraph, ShapingRun,
+    ShapingStyleId,
 };
 use crate::document::Paragraph;
 use crate::{
@@ -19,7 +20,7 @@ use crate::{
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
 pub struct LayoutEngine {
-    paragraphs: Box<dyn ParagraphPreparation>,
+    paragraphs: Box<dyn ParagraphFormation>,
     cache: Vec<ParagraphCache>,
 }
 
@@ -35,7 +36,7 @@ impl core::fmt::Debug for LayoutEngine {
 impl LayoutEngine {
     /// Creates an engine owning exactly one configured paragraph adapter.
     #[must_use]
-    pub fn new(paragraphs: impl ParagraphPreparation + 'static) -> Self {
+    pub fn new(paragraphs: impl ParagraphFormation + 'static) -> Self {
         Self {
             paragraphs: Box::new(paragraphs),
             cache: Vec::new(),
@@ -62,15 +63,17 @@ impl LayoutEngine {
                 .cache
                 .iter()
                 .position(|entry| entry.paragraph == paragraph.id);
-            let preparation_matches = cache_index.is_some_and(|index| {
-                self.cache[index]
-                    .preparation_key
-                    .matches(paragraph.version, &projection)
+            let formation_matches = cache_index.is_some_and(|index| {
+                self.cache[index].formation_key.matches(
+                    paragraph.version,
+                    &projection,
+                    request.width.0,
+                )
             });
             let paint_matches = cache_index
                 .is_some_and(|index| self.cache[index].paint_runs == projection.paint_runs);
-            let needs_preparation = !preparation_matches || !paint_matches;
-            let cache_index = if needs_preparation {
+            let needs_formation = !formation_matches || !paint_matches;
+            let cache_index = if needs_formation {
                 let shaping_styles: Vec<_> = projection
                     .shaping_styles
                     .iter()
@@ -79,15 +82,22 @@ impl LayoutEngine {
                 let text_len = u32::try_from(projection.text.len()).map_err(|_| {
                     SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
                 })?;
+                let constraints = ParagraphConstraints::try_new(request.width.0)
+                    .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
                 let output = self
                     .paragraphs
-                    .prepare(ParagraphInput::new(
-                        paragraph.id,
-                        &projection.text,
-                        &shaping_styles,
-                        &projection.shaping_runs,
-                        &projection.paint_runs,
-                    ))
+                    .form(
+                        ParagraphInput::new(
+                            paragraph.id,
+                            &projection.text,
+                            &shaping_styles,
+                            &projection.shaping_runs,
+                            &projection.inline_flow_styles,
+                            &projection.inline_flow_runs,
+                            &projection.paint_runs,
+                        ),
+                        constraints,
+                    )
                     .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
                 if output.paragraph().paragraph() != paragraph.id
                     || output.paragraph().text_len() != text_len
@@ -98,37 +108,33 @@ impl LayoutEngine {
                     ));
                 }
                 validate_prepared(output.paragraph(), &projection)?;
-                record_preparation_work(&mut work, output.work());
+                record_formation_work(&mut work, output.work());
+                if projection.text.is_empty() && !formation_matches {
+                    work.flow.add_paragraph(1);
+                }
+                let geometry = build_geometry(output.paragraph(), &projection)?;
+                work.geometry.add_paragraph(geometry.fragments.len());
+                let formation_key = FormationKey::new(
+                    paragraph.version,
+                    shaping_styles,
+                    projection.shaping_runs.clone(),
+                    projection.inline_flow_styles.clone(),
+                    projection.inline_flow_runs.clone(),
+                    request.width.0,
+                    projection.empty_line_height_key(),
+                );
                 if let Some(index) = cache_index {
-                    let reuse_geometry = output.work().shaped_runs() == 0 && preparation_matches;
-                    if reuse_geometry && let Some(geometry) = self.cache[index].geometry.as_mut() {
-                        update_cached_paint(geometry, output.paragraph(), &projection)?;
-                    }
                     let entry = &mut self.cache[index];
-                    if !preparation_matches {
-                        entry.preparation_key = PreparationKey::new(
-                            paragraph.version,
-                            shaping_styles,
-                            projection.shaping_runs.clone(),
-                        );
-                    }
+                    entry.formation_key = formation_key;
                     entry.paint_runs = projection.paint_runs.clone();
-                    entry.prepared = output.into_paragraph();
-                    if !reuse_geometry {
-                        entry.geometry = None;
-                    }
+                    entry.geometry = geometry;
                     index
                 } else {
                     self.cache.push(ParagraphCache {
                         paragraph: paragraph.id,
-                        preparation_key: PreparationKey::new(
-                            paragraph.version,
-                            shaping_styles,
-                            projection.shaping_runs.clone(),
-                        ),
+                        formation_key,
                         paint_runs: projection.paint_runs.clone(),
-                        prepared: output.into_paragraph(),
-                        geometry: None,
+                        geometry,
                     });
                     self.cache.len() - 1
                 }
@@ -137,34 +143,7 @@ impl LayoutEngine {
                 cache_index.expect("a reusable cache index must exist")
             };
 
-            let width_key = request.width.0.to_bits();
-            if self.cache[cache_index]
-                .geometry
-                .as_ref()
-                .is_none_or(|geometry| {
-                    geometry.width != width_key
-                        || geometry.inline_flow_styles != projection.inline_flow_styles
-                        || geometry.inline_flow_runs != projection.inline_flow_runs
-                        || geometry.empty_line_height != projection.empty_line_height_key()
-                })
-            {
-                let geometry = build_geometry(
-                    &self.cache[cache_index].prepared,
-                    &projection,
-                    request.width.0,
-                )?;
-                work.flow.add_paragraph(geometry.lines.len());
-                work.geometry.add_paragraph(geometry.fragments.len());
-                self.cache[cache_index].geometry = Some(CachedGeometry {
-                    width: width_key,
-                    ..geometry
-                });
-            }
-
-            let geometry = self.cache[cache_index]
-                .geometry
-                .as_ref()
-                .expect("geometry was installed above");
+            let geometry = &self.cache[cache_index].geometry;
             materialize_geometry(
                 geometry,
                 snapshot.revision(),
@@ -193,22 +172,38 @@ impl LayoutEngine {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-struct PreparationKey {
+struct FormationKey {
     version: u64,
     shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
+    inline_flow_styles: Vec<InlineFlowStyle>,
+    inline_flow_runs: Vec<InlineFlowRun>,
+    width: u64,
+    empty_line_height: u64,
 }
 
-impl PreparationKey {
-    fn new(version: u64, shaping_styles: Vec<ShapingStyle>, shaping_runs: Vec<ShapingRun>) -> Self {
+impl FormationKey {
+    fn new(
+        version: u64,
+        shaping_styles: Vec<ShapingStyle>,
+        shaping_runs: Vec<ShapingRun>,
+        inline_flow_styles: Vec<InlineFlowStyle>,
+        inline_flow_runs: Vec<InlineFlowRun>,
+        width: f64,
+        empty_line_height: u64,
+    ) -> Self {
         Self {
             version,
             shaping_styles,
             shaping_runs,
+            inline_flow_styles,
+            inline_flow_runs,
+            width: width.to_bits(),
+            empty_line_height,
         }
     }
 
-    fn matches(&self, version: u64, projection: &Projection<'_>) -> bool {
+    fn matches(&self, version: u64, projection: &Projection<'_>, width: f64) -> bool {
         self.version == version
             && self.shaping_styles.len() == projection.shaping_styles.len()
             && self
@@ -217,16 +212,19 @@ impl PreparationKey {
                 .zip(&projection.shaping_styles)
                 .all(|(cached, projected)| cached == *projected)
             && self.shaping_runs == projection.shaping_runs
+            && self.inline_flow_styles == projection.inline_flow_styles
+            && self.inline_flow_runs == projection.inline_flow_runs
+            && self.width == width.to_bits()
+            && self.empty_line_height == projection.empty_line_height_key()
     }
 }
 
 #[derive(Clone, Debug)]
 struct ParagraphCache {
     paragraph: ParagraphId,
-    preparation_key: PreparationKey,
+    formation_key: FormationKey,
     paint_runs: Vec<PaintRun>,
-    prepared: PreparedParagraph,
-    geometry: Option<CachedGeometry>,
+    geometry: CachedGeometry,
 }
 
 #[derive(Clone, Debug)]
@@ -324,23 +322,56 @@ impl<'a> Projection<'a> {
         })
     }
 
-    fn line_height(&self, source: Range<u32>, font_size: f32) -> f64 {
-        let multiplier = self
-            .inline_flow_runs
-            .iter()
-            .filter(|run| run.bytes.start < source.end && run.bytes.end > source.start)
-            .map(|run| {
-                self.inline_flow_styles[usize::from(run.style.0)]
-                    .line_height()
-                    .multiplier()
-            })
-            .fold(0.0_f32, f32::max);
-        let multiplier = if multiplier == 0.0 {
-            self.default_inline_flow.line_height().multiplier()
-        } else {
-            multiplier
-        };
-        f64::from(font_size) * f64::from(multiplier)
+    fn local_ranges(&self, paragraph: Range<u32>) -> Result<Vec<LocalRange>, SceneError> {
+        if paragraph.is_empty() {
+            let span = self
+                .spans
+                .iter()
+                .rev()
+                .find(|span| span.paragraph.end == paragraph.start)
+                .ok_or_else(|| {
+                    SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        self.paragraph,
+                        paragraph.clone(),
+                    )
+                })?;
+            return Ok(alloc::vec![LocalRange {
+                text: span.text,
+                bytes: (paragraph.start - span.paragraph.start)
+                    ..(paragraph.end - span.paragraph.start),
+            }]);
+        }
+
+        let mut covered = paragraph.start;
+        let mut ranges = Vec::new();
+        for span in &self.spans {
+            let start = paragraph.start.max(span.paragraph.start);
+            let end = paragraph.end.min(span.paragraph.end);
+            if start >= end {
+                continue;
+            }
+            if start != covered {
+                return Err(SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    self.paragraph,
+                    paragraph,
+                ));
+            }
+            ranges.push(LocalRange {
+                text: span.text,
+                bytes: (start - span.paragraph.start)..(end - span.paragraph.start),
+            });
+            covered = end;
+        }
+        if covered != paragraph.end {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph,
+            ));
+        }
+        Ok(ranges)
     }
 
     fn empty_line_height_key(&self) -> u64 {
@@ -360,15 +391,6 @@ struct LeafSpan {
     text: TextId,
     role: InlineRole,
     semantic: SemanticId,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct InlineFlowStyleId(u16);
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct InlineFlowRun {
-    bytes: Range<u32>,
-    style: InlineFlowStyleId,
 }
 
 fn append_shaping_run<'a>(
@@ -409,7 +431,7 @@ fn append_inline_flow_run(
     paragraph: ParagraphId,
 ) -> Result<(), SceneError> {
     let style = if let Some(index) = styles.iter().position(|candidate| *candidate == style) {
-        InlineFlowStyleId(
+        InlineFlowStyleId::new(
             u16::try_from(index)
                 .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?,
         )
@@ -417,15 +439,16 @@ fn append_inline_flow_run(
         let index = u16::try_from(styles.len())
             .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?;
         styles.push(style);
-        InlineFlowStyleId(index)
+        InlineFlowStyleId::new(index)
     };
     if let Some(last) = runs.last_mut()
-        && last.bytes.end == bytes.start
-        && last.style == style
+        && last.bytes().end == bytes.start
+        && last.style() == style
     {
-        last.bytes.end = bytes.end;
+        let start = last.bytes().start;
+        *last = InlineFlowRun::new(start..bytes.end, style);
     } else {
-        runs.push(InlineFlowRun { bytes, style });
+        runs.push(InlineFlowRun::new(bytes, style));
     }
     Ok(())
 }
@@ -470,44 +493,33 @@ fn validate_prepared(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
 ) -> Result<(), SceneError> {
-    for run in prepared.runs() {
-        let source = run.source();
-        let Some(source_text) = projection
+    for line in prepared.lines() {
+        let line_source = line.source();
+        if projection
             .text
-            .get(source.start as usize..source.end as usize)
-        else {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                prepared.paragraph(),
-                source,
-            ));
-        };
-        if run.glyphs().is_empty()
-            && !source_text
-                .chars()
-                .all(|character| matches!(character, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
+            .get(line_source.start as usize..line_source.end as usize)
+            .is_none()
         {
             return Err(SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 prepared.paragraph(),
-                source,
+                line_source,
             ));
         }
-        for glyph in run.glyphs() {
-            let source = glyph.source();
-            if projection
+        for run in line.runs() {
+            let source = run.source();
+            let Some(source_text) = projection
                 .text
                 .get(source.start as usize..source.end as usize)
-                .is_none()
-            {
+            else {
                 return Err(SceneError::for_source(
                     SceneErrorKind::SourceCoverage,
                     prepared.paragraph(),
                     source,
                 ));
-            }
-            for segment in glyph.paint().segments() {
-                let source = segment.source();
+            };
+            for glyph in run.glyphs() {
+                let source = glyph.source();
                 if projection
                     .text
                     .get(source.start as usize..source.end as usize)
@@ -519,14 +531,74 @@ fn validate_prepared(
                         source,
                     ));
                 }
-                projection.local_range(source)?;
+                for segment in glyph.paint().segments() {
+                    let source = segment.source();
+                    if projection
+                        .text
+                        .get(source.start as usize..source.end as usize)
+                        .is_none()
+                    {
+                        return Err(SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            source,
+                        ));
+                    }
+                    projection.local_range(source)?;
+                }
+            }
+            for range in run.unrendered_source() {
+                if projection
+                    .text
+                    .get(range.start as usize..range.end as usize)
+                    .is_none()
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                        range.clone(),
+                    ));
+                }
+            }
+            for (offset, character) in source_text.char_indices() {
+                let scalar_start = source.start
+                    + u32::try_from(offset).map_err(|_| {
+                        SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            source.clone(),
+                        )
+                    })?;
+                let scalar_end = scalar_start
+                    .checked_add(u32::try_from(character.len_utf8()).unwrap_or(u32::MAX))
+                    .ok_or_else(|| {
+                        SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            source.clone(),
+                        )
+                    })?;
+                if !run.glyphs().iter().any(|glyph| {
+                    let glyph_source = glyph.source();
+                    glyph_source.start <= scalar_start && glyph_source.end >= scalar_end
+                }) && !run
+                    .unrendered_source()
+                    .iter()
+                    .any(|range| range.start <= scalar_start && range.end >= scalar_end)
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                        scalar_start..scalar_end,
+                    ));
+                }
             }
         }
     }
     Ok(())
 }
 
-fn record_preparation_work(report: &mut WorkReport, work: PreparationWork) {
+fn record_formation_work(report: &mut WorkReport, work: FormationWork) {
     if work.analyzed() {
         report.analysis.add_paragraph(1);
     }
@@ -541,14 +613,15 @@ fn record_preparation_work(report: &mut WorkReport, work: PreparationWork) {
         report.shape.paragraphs += 1;
         report.shape.records += work.shaped_glyphs() as usize;
     }
+    if work.formed_lines() > 0 {
+        report.flow.paragraphs += 1;
+        report.flow.records += work.formed_lines() as usize;
+    }
+    report.break_reshapes += work.break_reshapes() as usize;
 }
 
 #[derive(Clone, Debug)]
 struct CachedGeometry {
-    width: u64,
-    inline_flow_styles: Vec<InlineFlowStyle>,
-    inline_flow_runs: Vec<InlineFlowRun>,
-    empty_line_height: u64,
     height: f64,
     lines: Vec<CachedLine>,
     fragments: Vec<CachedFragment>,
@@ -558,7 +631,11 @@ struct CachedGeometry {
 #[derive(Clone, Debug)]
 struct CachedLine {
     bounds: Rect,
-    source: LocalRange,
+    sources: Vec<LocalRange>,
+    break_reason: LineBreakReason,
+    baseline: f64,
+    content_ascent: f64,
+    content_descent: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -601,70 +678,69 @@ struct LocalRange {
     bytes: Range<u32>,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct PendingGlyph<'a> {
-    run: &'a PreparedRun,
-    glyph: &'a PreparedGlyph,
-    x: f64,
-}
-
 fn build_geometry(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
-    width: f64,
 ) -> Result<CachedGeometry, SceneError> {
     let empty_line_height = f64::from(projection.default_font_size)
         * f64::from(projection.default_inline_flow.line_height().multiplier());
-    let mut x = 0.0;
     let mut line_top = 0.0;
-    let mut line_above = 0.0_f64;
-    let mut line_below = 0.0_f64;
-    let mut pending = Vec::new();
     let mut lines = Vec::new();
     let mut fragments = Vec::new();
 
-    for run in prepared.runs() {
-        for glyph in run.glyphs() {
-            let advance = glyph.advance();
-            let horizontal_advance = advance.x.abs();
-            if !pending.is_empty() && x + horizontal_advance > width {
-                flush_line(
-                    prepared.paragraph(),
-                    projection,
-                    &pending,
-                    line_top,
-                    line_above,
-                    line_below,
-                    width,
-                    &mut lines,
-                    &mut fragments,
-                )?;
-                line_top += line_above + line_below;
-                x = 0.0;
-                line_above = 0.0;
-                line_below = 0.0;
-                pending.clear();
+    for line in prepared.lines() {
+        let baseline = line_top + line.baseline();
+        let mut x = 0.0_f64;
+        let mut right = line.advance();
+        for run in line.runs() {
+            let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
+            for glyph in run.glyphs() {
+                let position = Point::new(x + glyph.offset().x, baseline - glyph.offset().y);
+                for segment in glyph.paint().segments() {
+                    let source = projection.local_range(segment.source())?;
+                    let local_clip = segment.local_clip();
+                    let clip = Rect::new(
+                        position.x + local_clip.x0,
+                        position.y + local_clip.y0,
+                        position.x + local_clip.x1,
+                        position.y + local_clip.y1,
+                    );
+                    right = right.max(clip.x1);
+                    let id =
+                        SceneFragmentId(fragment_identity(prepared.paragraph(), fragments.len()));
+                    fragments.push(CachedFragment {
+                        id,
+                        glyphs: alloc::vec![CachedGlyph {
+                            id: glyph.id(),
+                            position,
+                            advance: glyph.advance(),
+                            source: source.clone(),
+                        }],
+                        paint: segment.slot(),
+                        transform: Affine::IDENTITY,
+                        source,
+                        bounds: clip,
+                        clip,
+                        font: run.font().clone(),
+                        font_size: run.font_size(),
+                        synthesis: run.synthesis().clone(),
+                        normalized_coords: Arc::clone(&normalized_coords),
+                        bidi_level: run.bidi_level(),
+                        script: run.script(),
+                    });
+                }
+                x += glyph.advance().x;
             }
-            let line_height = projection.line_height(glyph.source(), run.font_size());
-            line_above = line_above.max(line_height * 0.8);
-            line_below = line_below.max(line_height * 0.2);
-            pending.push(PendingGlyph { run, glyph, x });
-            x += horizontal_advance;
         }
-    }
-    if !pending.is_empty() {
-        flush_line(
-            prepared.paragraph(),
-            projection,
-            &pending,
-            line_top,
-            line_above,
-            line_below,
-            width,
-            &mut lines,
-            &mut fragments,
-        )?;
-        line_top += line_above + line_below;
+        lines.push(CachedLine {
+            bounds: Rect::new(0.0, line_top, right.max(1.0), line_top + line.height()),
+            sources: projection.local_ranges(line.source())?,
+            break_reason: line.break_reason(),
+            baseline,
+            content_ascent: line.content_ascent(),
+            content_descent: line.content_descent(),
+        });
+        line_top += line.height();
     }
 
     let mut semantics = Vec::new();
@@ -710,11 +786,7 @@ fn build_geometry(
     }
 
     Ok(CachedGeometry {
-        width: width.to_bits(),
-        inline_flow_styles: projection.inline_flow_styles.clone(),
-        inline_flow_runs: projection.inline_flow_runs.clone(),
-        empty_line_height: projection.empty_line_height_key(),
-        height: if fragments.is_empty() {
+        height: if prepared.lines().is_empty() {
             empty_line_height
         } else {
             line_top
@@ -723,111 +795,6 @@ fn build_geometry(
         fragments,
         semantics,
     })
-}
-
-fn flush_line(
-    paragraph: ParagraphId,
-    projection: &Projection<'_>,
-    pending: &[PendingGlyph<'_>],
-    line_top: f64,
-    line_above: f64,
-    line_below: f64,
-    width: f64,
-    lines: &mut Vec<CachedLine>,
-    fragments: &mut Vec<CachedFragment>,
-) -> Result<(), SceneError> {
-    let baseline = line_top + line_above;
-    let mut line_source = None;
-    let mut right = 0.0_f64;
-    for pending_glyph in pending {
-        let run = pending_glyph.run;
-        let glyph = pending_glyph.glyph;
-        let position = Point::new(
-            pending_glyph.x + glyph.offset().x,
-            baseline - glyph.offset().y,
-        );
-        let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
-        for segment in glyph.paint().segments() {
-            let source = projection.local_range(segment.source())?;
-            let local_clip = segment.local_clip();
-            let clip = Rect::new(
-                position.x + local_clip.x0,
-                position.y + local_clip.y0,
-                position.x + local_clip.x1,
-                position.y + local_clip.y1,
-            );
-            line_source.get_or_insert_with(|| source.clone());
-            right = right.max(clip.x1);
-            let id = SceneFragmentId(fragment_identity(paragraph, fragments.len()));
-            fragments.push(CachedFragment {
-                id,
-                glyphs: alloc::vec![CachedGlyph {
-                    id: glyph.id(),
-                    position,
-                    advance: glyph.advance(),
-                    source: source.clone(),
-                }],
-                paint: segment.slot(),
-                transform: Affine::IDENTITY,
-                source,
-                bounds: clip,
-                clip,
-                font: run.font().clone(),
-                font_size: run.font_size(),
-                synthesis: run.synthesis().clone(),
-                normalized_coords: Arc::clone(&normalized_coords),
-                bidi_level: run.bidi_level(),
-                script: run.script(),
-            });
-        }
-    }
-    let source = line_source
-        .ok_or_else(|| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?;
-    lines.push(CachedLine {
-        bounds: Rect::new(
-            0.0,
-            line_top,
-            right.max(1.0).min(width),
-            line_top + line_above + line_below,
-        ),
-        source,
-    });
-    Ok(())
-}
-
-fn update_cached_paint(
-    geometry: &mut CachedGeometry,
-    prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
-) -> Result<(), SceneError> {
-    let mut fragments = geometry.fragments.iter_mut();
-    for run in prepared.runs() {
-        for glyph in run.glyphs() {
-            for segment in glyph.paint().segments() {
-                let source = projection.local_range(segment.source())?;
-                let fragment = fragments.next().ok_or_else(|| {
-                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
-                })?;
-                if fragment.source.text != source.text
-                    || fragment.source.bytes != source.bytes
-                    || fragment.glyphs[0].id != glyph.id()
-                {
-                    return Err(SceneError::for_paragraph(
-                        SceneErrorKind::SourceCoverage,
-                        prepared.paragraph(),
-                    ));
-                }
-                fragment.paint = segment.slot();
-            }
-        }
-    }
-    if fragments.next().is_some() {
-        return Err(SceneError::for_paragraph(
-            SceneErrorKind::SourceCoverage,
-            prepared.paragraph(),
-        ));
-    }
-    Ok(())
 }
 
 fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 {
@@ -853,9 +820,19 @@ fn materialize_geometry(
     semantics: &mut Vec<SemanticFragment>,
 ) {
     let translate = Vec2::new(0.0, y_offset);
-    lines.extend(geometry.lines.iter().map(|line| SceneLine {
-        bounds: line.bounds + translate,
-        source: materialize_range(&line.source, revision),
+    lines.extend(geometry.lines.iter().map(|line| {
+        SceneLine {
+            bounds: line.bounds + translate,
+            sources: line
+                .sources
+                .iter()
+                .map(|source| materialize_range(source, revision))
+                .collect(),
+            break_reason: line.break_reason,
+            baseline: line.baseline + y_offset,
+            content_ascent: line.content_ascent,
+            content_descent: line.content_descent,
+        }
     }));
     fragments.extend(geometry.fragments.iter().map(|fragment| {
         SceneFragment {
@@ -962,6 +939,7 @@ pub struct WorkReport {
     flow: StageWork,
     geometry: StageWork,
     paint: StageWork,
+    break_reshapes: usize,
     reused_paragraphs: usize,
 }
 
@@ -1006,6 +984,12 @@ impl WorkReport {
     #[must_use]
     pub const fn paint(&self) -> StageWork {
         self.paint
+    }
+
+    /// Returns committed line boundaries that required bounded reshaping.
+    #[must_use]
+    pub const fn break_reshapes(&self) -> usize {
+        self.break_reshapes
     }
 
     /// Returns paragraphs reused without calling the adapter.
@@ -1082,7 +1066,11 @@ impl TextScene {
 #[derive(Clone, Debug)]
 pub struct SceneLine {
     bounds: Rect,
-    source: SnapshotTextRange,
+    sources: Vec<SnapshotTextRange>,
+    break_reason: LineBreakReason,
+    baseline: f64,
+    content_ascent: f64,
+    content_descent: f64,
 }
 
 impl SceneLine {
@@ -1092,10 +1080,36 @@ impl SceneLine {
         self.bounds
     }
 
-    /// Returns a snapshot-local source range represented by the line.
+    /// Returns the source-complete snapshot-local slices represented by the line.
+    ///
+    /// A line has multiple slices when it crosses semantic text leaves.
     #[must_use]
-    pub const fn source(&self) -> &SnapshotTextRange {
-        &self.source
+    pub fn sources(&self) -> &[SnapshotTextRange] {
+        &self.sources
+    }
+
+    /// Returns why this line ended.
+    #[must_use]
+    pub const fn break_reason(&self) -> LineBreakReason {
+        self.break_reason
+    }
+
+    /// Returns the scene-space baseline.
+    #[must_use]
+    pub const fn baseline(&self) -> f64 {
+        self.baseline
+    }
+
+    /// Returns the maximum font ascent contributing to this line.
+    #[must_use]
+    pub const fn content_ascent(&self) -> f64 {
+        self.content_ascent
+    }
+
+    /// Returns the maximum font descent contributing to this line.
+    #[must_use]
+    pub const fn content_descent(&self) -> f64 {
+        self.content_descent
     }
 }
 
@@ -1351,9 +1365,9 @@ mod tests {
 
     use super::{LayoutEngine, append_inline_flow_run, append_shaping_run};
     use crate::adapter::{
-        FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
-        ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
-        PreparedParagraph, PreparedRun,
+        FontSynthesis, FormationWork, GlyphPaintCoverage, GlyphPaintSegment, LineBreakReason,
+        ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput,
+        PreparationError, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
     };
     use crate::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontData, FontFamily,
@@ -1367,18 +1381,19 @@ mod tests {
         glyphless: bool,
     }
 
-    impl ParagraphPreparation for EchoAdapter {
-        fn prepare(
+    impl ParagraphFormation for EchoAdapter {
+        fn form(
             &mut self,
             input: ParagraphInput<'_>,
-        ) -> Result<ParagraphPreparationOutput, PreparationError> {
+            _constraints: ParagraphConstraints,
+        ) -> Result<ParagraphFormationOutput, PreparationError> {
             let text_len = u32::try_from(input.text().len())
                 .map_err(|_| PreparationError::invalid_output())?;
             if text_len == 0 {
-                let paragraph = PreparedParagraph::try_from_runs(input.paragraph(), text_len, [])?;
-                return Ok(ParagraphPreparationOutput::new(
+                let paragraph = PreparedParagraph::try_from_lines(input.paragraph(), text_len, [])?;
+                return Ok(ParagraphFormationOutput::new(
                     paragraph,
-                    PreparationWork::new(true, true, 0, 0, 0),
+                    FormationWork::new(true, true, 0, 0, 0, 0, 0),
                 ));
             }
             let glyph_source = if self.split_utf8 {
@@ -1411,12 +1426,31 @@ mod tests {
                 input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size(),
                 FontSynthesis::default(),
                 [],
+                [],
                 glyphs,
             )?;
-            let paragraph = PreparedParagraph::try_from_runs(input.paragraph(), text_len, [run])?;
-            Ok(ParagraphPreparationOutput::new(
+            let font_size =
+                input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size();
+            let line_height = f64::from(font_size)
+                * f64::from(
+                    input.inline_flow_styles()[input.inline_flow_runs()[0].style().index()]
+                        .line_height()
+                        .multiplier(),
+                );
+            let line = PreparedLine::try_new(
+                0..text_len,
+                LineBreakReason::End,
+                10.0,
+                line_height / 2.0,
+                line_height,
+                f64::from(font_size) * 0.75,
+                f64::from(font_size) * 0.25,
+                [run],
+            )?;
+            let paragraph = PreparedParagraph::try_from_lines(input.paragraph(), text_len, [line])?;
+            Ok(ParagraphFormationOutput::new(
                 paragraph,
-                PreparationWork::new(true, true, 1, 1, 1),
+                FormationWork::new(true, true, 1, 1, 1, 1, 2),
             ))
         }
     }
@@ -1472,6 +1506,25 @@ mod tests {
     }
 
     #[test]
+    fn layout_rejects_partially_unmapped_run_source() {
+        let (document, styles, paint) = one_leaf_document(*b"scene-test-doc07", "ab");
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: true,
+            glyphless: false,
+        });
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let error = layout
+            .prepare(&document.snapshot(), &request)
+            .expect_err("every ordinary source scalar must map to a glyph");
+        assert_eq!(error.kind(), SceneErrorKind::SourceCoverage);
+        assert_eq!(error.source(), Some(0..1));
+    }
+
+    #[test]
     fn fragment_identity_is_distinct_across_documents() {
         let (first, first_styles, first_paint) = one_leaf_document(*b"scene-test-doc02", "a");
         let (second, second_styles, second_paint) = one_leaf_document(*b"scene-test-doc03", "b");
@@ -1484,6 +1537,11 @@ mod tests {
         let first_scene = layout
             .prepare(&first.snapshot(), &first_request)
             .expect("first scene must prepare");
+        assert_eq!(
+            first_scene.work().break_reshapes(),
+            2,
+            "adapter break-reshape work must survive scene reporting"
+        );
         let second_request = SceneRequest::new(width, &second_styles, &second_paint);
         let second_scene = layout
             .prepare(&second.snapshot(), &second_request)
@@ -1548,9 +1606,9 @@ mod tests {
         append_inline_flow_run(&mut flow_styles, &mut flow_runs, 2..3, compact, paragraph)
             .expect("repeated flow style must intern");
         assert_eq!(flow_styles, [compact, spacious]);
-        assert_eq!(flow_runs[0].style.0, 0);
-        assert_eq!(flow_runs[1].style.0, 1);
-        assert_eq!(flow_runs[2].style.0, 0);
+        assert_eq!(flow_runs[0].style().index(), 0);
+        assert_eq!(flow_runs[1].style().index(), 1);
+        assert_eq!(flow_runs[2].style().index(), 0);
     }
 
     #[test]

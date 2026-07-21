@@ -1,7 +1,7 @@
 # Underwood
 
 `underwood` is the small, renderer-independent foundation for immutable
-semantic documents, retained paragraph preparation, finite-width flow, and
+semantic documents, retained paragraph formation, finite-width flow, and
 text scenes.
 
 The crate is `no_std + alloc`. It owns no shaping engine, platform host policy,
@@ -13,8 +13,13 @@ The first draft public slice is deliberately complete end to end:
 
 - [`Document`] publishes immutable [`DocumentSnapshot`] revisions through
   atomic staged edits;
-- [`LayoutEngine`] retains prepared paragraphs and avoids analysis or shaping
+- [`LayoutEngine`] retains formed paragraphs and avoids analysis or shaping
   for unchanged siblings, paint-value changes, and width-only changes;
+- [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
+  and font-derived metrics behind the paragraph-engine boundary instead of
+  hiding text physics in scene construction; formed lines retain complete
+  source slices across semantic leaves and distinguish real glyphs from
+  intentionally unrendered controls;
 - [`ComputedInlineStyle`] keeps [`ShapingStyle`], [`InlineFlowStyle`], and
   [`PaintSlot`] values in separate invalidation partitions while [`StyleMap`]
   assigns complete styles to semantic text leaves;

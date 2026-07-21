@@ -14,6 +14,16 @@ Underwood does not yet make compatibility promises.
 - IDs are document-scoped and not serialized; scene source ranges are valid
   only for their named immutable snapshot.
 - This pre-stable API intentionally replaces no prior public product API.
+- Replaced `adapter::ParagraphPreparation::prepare` with
+  `adapter::ParagraphFormation::form`. Formation now receives validated inline
+  constraints and inline-flow runs and returns source-complete `PreparedLine`
+  records with font-derived metrics. Adapter implementations must move their
+  whole-paragraph `PreparedRun`s into formed lines and report formation work;
+  `LayoutEngine` callers are unchanged. `SceneLine::source` is replaced by
+  `SceneLine::sources` so lines crossing semantic leaves retain complete source
+  instead of exposing only their first slice. `PreparedRun::try_new` now also
+  receives explicit unrendered source ranges for controls and format characters;
+  adapters must account for every scalar without manufacturing phantom glyphs.
 
 ### Added
 
