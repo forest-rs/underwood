@@ -302,7 +302,12 @@ impl CanonicalBaseline {
     }
 }
 
-fn map_boundary(offset: usize, bias: Bias, replaced: &Range<usize>, inserted: usize) -> usize {
+pub(crate) fn map_boundary(
+    offset: usize,
+    bias: Bias,
+    replaced: &Range<usize>,
+    inserted: usize,
+) -> usize {
     if replaced.is_empty() {
         return match offset.cmp(&replaced.start) {
             std::cmp::Ordering::Less => offset,

@@ -3,6 +3,7 @@
 
 //! Private ADR-0001 position and storage wind tunnel.
 
+mod candidate;
 mod model;
 mod report;
 mod trace;

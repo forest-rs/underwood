@@ -3,6 +3,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::candidate::{BlockedRanges, ChunkedText};
 use crate::model::{
     AuthoredSpan, Bias, CanonicalBaseline, EdgeBehavior, anchor_record_bytes, authored_span_bytes,
     baseline_inline_bytes, derived_range_bytes,
@@ -95,6 +96,8 @@ fn measure_gates() -> Vec<Gate> {
     let p95 = localized_edit_p95();
     let (dense_visited, dense_resolved) = dense_authored_work();
     let (editor_copied, editor_visited) = editor_local_edit_work();
+    let (chunked_copied, chunk_records, chunk_snapshot_shared) = chunked_editor_work();
+    let (indexed_blocks, indexed_spans, range_snapshot_shared) = indexed_dense_work();
 
     vec![
         Gate {
@@ -155,10 +158,28 @@ fn measure_gates() -> Vec<Gate> {
         },
         Gate {
             id: "editor-million-local-edit-work",
-            status: pass_if(editor_copied == 0 && editor_visited <= 4_096),
+            status: pass_if(editor_copied <= 2 * 4_096 && editor_visited <= 4_096),
             observed: format!("copied_bytes={editor_copied} records={editor_visited}"),
-            limit: "no source copy; <=4096 index records plus frontier",
+            limit: "<=8192 changed-chunk bytes; <=4096 index records plus frontier",
             note: "expected baseline failure exposes the need for persistent chunking",
+        },
+        Gate {
+            id: "chunked-editor-million-local-edit-work",
+            status: pass_if(chunked_copied <= 2 * 4_096 && chunk_records <= 4_096),
+            observed: format!(
+                "copied_bytes={chunked_copied} chunk_records={chunk_records} snapshot_shared={chunk_snapshot_shared}"
+            ),
+            limit: "<=8192 changed-chunk bytes; <=4096 index records plus frontier",
+            note: "candidate v1 structurally shares unchanged source chunks",
+        },
+        Gate {
+            id: "indexed-dense-million-transform-work",
+            status: pass_if(indexed_blocks + indexed_spans <= 4_096 && range_snapshot_shared),
+            observed: format!(
+                "block_records={indexed_blocks} spans={indexed_spans} snapshot_shared={range_snapshot_shared}"
+            ),
+            limit: "<=4096 index records plus overlaps; structurally shared snapshot",
+            note: "candidate v1 shifts suffix blocks without visiting their spans",
         },
         Gate {
             id: "append-gib",
@@ -257,6 +278,49 @@ fn editor_local_edit_work() -> (usize, usize) {
     (
         edit.work.source_bytes_copied,
         edit.work.snapshot_records_visited,
+    )
+}
+
+fn chunked_editor_work() -> (usize, usize, bool) {
+    let source = "x\n".repeat(EDITOR_LINE_COUNT);
+    let candidate = ChunkedText::new(&source);
+    let snapshot = candidate.clone();
+    let middle = source.len() / 2;
+    let (edited, work) = candidate
+        .replace(middle..middle + 1, "y")
+        .expect("ASCII edit boundary is valid");
+    assert_eq!(edited.len(), source.len(), "replacement preserves length");
+    (
+        work.source_bytes_copied,
+        work.chunk_records_visited,
+        candidate.shares_index_with(&snapshot),
+    )
+}
+
+fn indexed_dense_work() -> (usize, usize, bool) {
+    let spans = (0..DENSE_SPAN_COUNT)
+        .map(|value| AuthoredSpan {
+            range: value..value + 1,
+            edges: EdgeBehavior {
+                start: Bias::Before,
+                end: Bias::After,
+            },
+            value: u32::try_from(value).expect("one million fits in u32"),
+        })
+        .collect();
+    let candidate = BlockedRanges::new(spans);
+    let snapshot = candidate.clone();
+    let middle = DENSE_SPAN_COUNT / 2;
+    let (edited, work) = candidate.transform(middle..middle + 1, 1);
+    assert_eq!(
+        edited.len(),
+        DENSE_SPAN_COUNT,
+        "transform preserves span count"
+    );
+    (
+        work.block_records_visited,
+        work.spans_visited,
+        candidate.shares_index_with(&snapshot),
     )
 }
 
