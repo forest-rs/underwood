@@ -2,7 +2,7 @@
 capability	state	proof	owner	spec	evidence	product
 governance	active	executable	project	docs/CONSTITUTION.md	AGENTS.md;docs/governance/README.md;xtask/src/main.rs	-
 parley-alignment	dormant	specified	unassigned	docs/adr/0004-parley-boundary-and-contingency.md	-	-
-document-transactions	dormant	specified	unassigned	docs/adr/0001-position-and-canonical-storage.md	-	-
+document-transactions	active	specified	project	docs/adr/0001-position-and-canonical-storage.md	docs/proof/position-wind-tunnel-2026-07-21.md	-
 style-projection	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#334-style-and-projection-foundation	-	-
 layout-scene	dormant	specified	unassigned	docs/adr/0002-resumable-flow-and-virtual-extents.md	-	-
 editing-experience	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#336-editing-and-experience-foundation	-	-
@@ -12,4 +12,4 @@ portable-output	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#339-portable-
 living-agent-document	gated	specified	project	UNDERWOOD_HANDOVER.md#281-the-spearhead-the-living-agent-document	-	living-agent-document
 conformance-institution	active	specified	bootstrap-steward	docs/charter/000-spearhead-proof-stewardship.md	-	-
 mandatory-foundation-decisions	dormant	executable	human	UNDERWOOD_HANDOVER.md#351-mandatory-before-repository-foundations	docs/adr/README.md;docs/charter/000-spearhead-proof-stewardship.md;.beads/issues.jsonl	-
-first-semantic-to-scene-spine	active	specified	project	docs/charter/000-spearhead-proof-stewardship.md	-	living-agent-document
+first-semantic-to-scene-spine	active	specified	project	docs/charter/000-spearhead-proof-stewardship.md	docs/design/0001-first-semantic-to-scene-slice.md;docs/proof/position-wind-tunnel-2026-07-21.md	living-agent-document
