@@ -14,3 +14,5 @@ Underwood does not yet make compatibility promises.
 - Machine-readable proof ledger.
 - Tooling-only Cargo workspace and policy validator.
 - Initial CI and review scaffolding.
+- Dependency-free `no_std` `underwood` production crate boundary.
+- Bare-metal and WebAssembly portability checks for foundational crates.

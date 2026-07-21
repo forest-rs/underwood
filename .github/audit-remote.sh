@@ -125,7 +125,8 @@ check_json "required status checks" '
       "clippy and tests (windows-latest)",
       "repository policy",
       "minimum supported Rust",
-      "rustdoc"
+      "rustdoc",
+      "no_std portability"
     ] | sort)
 ' "${ruleset_json}"
 

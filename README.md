@@ -13,17 +13,22 @@ physics. Overstory is the flagship experience layer.
 
 ## Current status
 
-Underwood is in its executable-constitution bootstrap. The complete
-architecture is [specified in the handover](UNDERWOOD_HANDOVER.md), but no
-foundational product API has been ratified or implemented.
+Underwood has completed its executable-constitution bootstrap and begun the
+first semantic-to-scene campaign. The complete architecture is
+[specified in the handover](UNDERWOOD_HANDOVER.md). The dependency-free
+`no_std` production crate boundary is ratified; its first foundational public
+API and the production Parley dependency remain review-gated.
 
-The first product campaign remains gated on:
+The five mandatory foundation records are accepted:
 
 - Charter-000: spearhead, proof, and stewardship;
 - ADR-0001: position and canonical storage;
 - ADR-0002: resumable flow and virtual extents;
 - ADR-0003: text-data provisioning and identity;
 - ADR-0004: the Parley boundary and contingency.
+
+Private wind tunnels are now executing their proof obligations. They are
+evidence, not product APIs or substitutes for the permanent public path.
 
 The machine-readable [proof ledger](docs/proof/ledger.tsv) is authoritative for
 capability status.

@@ -1,6 +1,7 @@
 # Design-0001: First permanent semantic-to-scene slice
 
-- **Status:** Proposed — human gate required
+- **Status:** Accepted — dependency and public-API gates remain
+- **Accepted:** 2026-07-21 by Bruce Mitchener
 - **Bead:** `und-oh0.10.1.5`
 - **Campaign:** `und-oh0.10.1`
 - **Authority:** Charter-000 and ADR-0001 through ADR-0004
@@ -124,7 +125,11 @@ after refreshing ADR-0004's seam table. Approval must name:
 - the conformance cases that can run on the unpatched revision.
 
 No local patch, Loro, geometry, hashing, serialization, or benchmark dependency
-is bundled into that approval.
+is silently bundled into the Parley approval.
+[Design-0002](0002-first-public-api-gate.md) separately names Kurbo and Peniko
+because a real scene needs the forest's shared geometry and paint vocabulary.
+Those rows remain independent production-dependency approvals even when the
+human reviews the coherent end-to-end patch as one packet.
 
 ## Draft public path
 
@@ -167,15 +172,29 @@ and any durable scene or storage format require later decisions.
 
 ## Exact human gates
 
-Implementation of the permanent slice requires explicit approval of:
+Implementation of the permanent slice is governed by these explicit approvals:
 
-1. the chosen initial crate shape: one `underwood` façade plus the
-   `underwood_parley` dependency fence;
-2. creation of those permanent workspace crates;
-3. the exact production Parley revision and features;
-4. the first draft public API patch after its call sites and migration note are
-   reviewable.
+| Gate | Status | Effect |
+| --- | --- | --- |
+| One `underwood` façade plus the `underwood_parley` dependency fence | **Approved 2026-07-21** | The initial ownership shape is selected |
+| Create the dependency-free `underwood` workspace crate | **Approved 2026-07-21** | The real `no_std` package boundary and portability proof may land |
+| Exact production Parley revision and features | **Pending** | `underwood_parley` and any production Parley manifest entry remain blocked |
+| Exact Kurbo and Peniko versions/features | **Pending** | Public scene geometry and paint values remain blocked |
+| First draft public API with complete call sites and migration note | **Pending** | No foundational public product item may land before review |
 
-The current authorization to begin actual crates is applied to the
-dependency-free private wind tunnel. It is not stretched into silent approval
-of a production dependency or foundational public API.
+Bruce's instruction to begin the actual crates approved the first two gates.
+It is not stretched into silent approval of a production dependency or
+foundational public API. Bead `und-oh0.10.1.6` owns the permanent package
+boundary, portability evidence, and
+[Design-0002](0002-first-public-api-gate.md), the review packet for the next
+gate.
+
+## Decision
+
+Accepted on 2026-07-21.
+
+Underwood begins with one dependency-free, unpublished, `no_std` production
+crate named `underwood`. The Parley adapter remains a separate production
+crate, created only with an approved immutable Parley revision and feature
+set. The first public API remains review-gated even though the package boundary
+may now be enforced in Cargo and CI.

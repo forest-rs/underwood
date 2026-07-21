@@ -4,6 +4,7 @@ members = [
   "benches/parley-seam",
   "benches/position",
   "benches/text-data",
+  "underwood",
   "xtask",
 ]
 default-members = ["xtask"]

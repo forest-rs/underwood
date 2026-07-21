@@ -1,0 +1,14 @@
+[package]
+name = "underwood"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Renderer-independent document composition and editing foundations"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true

@@ -128,3 +128,22 @@ jobs:
         run: cargo doc --workspace --all-features --no-deps --locked
         env:
           RUSTDOCFLAGS: "-D warnings"
+
+  portability:
+    name: no_std portability
+    runs-on: ubuntu-latest
+    steps:
+      - name: check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: install stable Rust and no_std targets
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        with:
+          toolchain: ${{ env.RUST_STABLE_VER }}
+          targets: x86_64-unknown-none,wasm32-unknown-unknown
+
+      - name: check bare-metal target
+        run: cargo check -p underwood --target x86_64-unknown-none --locked
+
+      - name: check WebAssembly target
+        run: cargo check -p underwood --target wasm32-unknown-unknown --locked
