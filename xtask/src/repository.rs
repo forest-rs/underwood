@@ -105,6 +105,7 @@ fn check_root_policy(root: &Path) -> Vec<String> {
         "-D warnings",
         "RUST_STABLE_VER: \"1.96\"",
         "RUST_MIN_VER: \"1.92\"",
+        "toolchain: \"1.96.0\"",
     ] {
         if !ci.contains(required) {
             errors.push(format!(
