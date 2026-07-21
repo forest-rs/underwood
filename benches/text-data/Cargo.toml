@@ -1,0 +1,24 @@
+[package]
+name = "underwood_text_data_wind_tunnel"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Private text-data distribution wind tunnel for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+default-run = "underwood_text_data_wind_tunnel"
+
+[features]
+complex-scripts = ["parley_core/complex-scripts"]
+default = []
+
+[dependencies]
+parley_core = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+  "std",
+] }
+
+[lints]
+workspace = true

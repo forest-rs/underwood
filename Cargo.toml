@@ -1,5 +1,10 @@
 [workspace]
-members = ["benches/flow", "benches/position", "xtask"]
+members = [
+  "benches/flow",
+  "benches/position",
+  "benches/text-data",
+  "xtask",
+]
 default-members = ["xtask"]
 resolver = "2"
 
@@ -70,3 +75,11 @@ strip = "debuginfo"
 
 [profile.ci.package."*"]
 debug-assertions = true
+
+[profile.wind-tunnel]
+inherits = "release"
+codegen-units = 1
+lto = "fat"
+opt-level = "z"
+panic = "abort"
+strip = "symbols"
