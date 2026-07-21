@@ -15,3 +15,9 @@ preliminary `SCREEN` observations and is deliberately honest about
 unimplemented corpora and failed budgets. A failing baseline establishes
 measurement and semantic controls; it does not select the production
 representation.
+
+The one-GiB append pressure run reuses one immutable 64-KiB payload across
+16,384 logical batches. This isolates persistent publication-metadata work; it
+does not measure one GiB of source ingestion, distinct retained payload memory,
+or allocator overhead. Distinct-payload tests separately cover source order and
+snapshot preservation.

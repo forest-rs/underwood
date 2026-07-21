@@ -3,8 +3,8 @@
 - **Capability:** document transactions and identity
 - **Bead:** `und-oh0.10.1.1`
 - **Trace:** private `identity-trace-v0`
-- **Implementation commit:** `3734c6c`
-- **Candidate:** dependency-free canonical baseline plus persistent candidate v1
+- **Implementation commits:** `3734c6c`, `9d2b878`
+- **Candidate:** dependency-free canonical baseline plus persistent candidate v2
 - **Proof effect:** evidence at `Specified`; no promotion to `Executable`
 
 ## Reproduction
@@ -22,7 +22,7 @@ confidence method are not yet sufficient for an accepted timing claim.
 
 ## Correctness evidence
 
-Eleven wind-tunnel tests pass. The load-bearing cases are:
+Fifteen wind-tunnel tests pass. The load-bearing cases are:
 
 - insert and delete-collapse bias for sparse anchors;
 - rejection of stale derived ranges;
@@ -32,7 +32,11 @@ Eleven wind-tunnel tests pass. The load-bearing cases are:
 - 500 deterministic Unicode-aware edits differentially checked against
   `String`;
 - 100 deterministic overlapping authored-range edit sequences differentially
-  checked against the flat semantic model.
+  checked against the flat semantic model;
+- source order across binary-counter carry cascades using 257 distinct append
+  payloads, with an earlier 127-batch snapshot remaining immutable; and
+- an exact one-GiB logical append run in 16,384 batches with bounded structural
+  work and no unpublished tail.
 
 The range differential test initially failed on edit 2. Independent boundary
 blocks became globally misordered after deletion collapsed spans with different
@@ -44,16 +48,26 @@ and suffix blocks. The regression sequence passes.
 
 The exact-scale work counters from the recorded debug run were:
 
-| Pressure | Contiguous/flat baseline | Persistent candidate v1 | Gate |
+| Pressure | Contiguous/flat baseline | Persistent candidate | Gate |
 | --- | ---: | ---: | ---: |
 | Million-line localized edit | 2,000,000 source bytes copied | 4,096 source bytes copied; 489 chunk records | at most 8,192 changed-chunk bytes and 4,096 index/frontier records |
 | Million-span localized transform | 1,000,000 spans visited | 977 block records and 1,024 frontier spans | at most 4,096 index records plus overlaps |
 | Snapshot clone | source `Arc` shared, zero source bytes copied | text/range indexes structurally shared | no source-byte copy and at most 256 newly allocated bytes |
+| One-GiB logical append publication | no append strategy | 16,384 retained batch leaves; at most 30 metadata records per publication; 32,767 tree nodes created total; zero reported source-byte copies; zero unpublished batches | at most 32 metadata records per publication, zero source-byte copies, and at most two unpublished batches |
 
 The million-span corpus contains one million ordered, non-overlapping one-byte
 spans and replaces one byte intersecting one span. The earlier all-overlapping
 fixture was rejected during review because visiting every overlap would not
 violate the accepted gate.
+
+The append pressure run reuses one immutable 64-KiB `Arc<str>` payload for all
+16,384 publications. The final forest therefore represents one GiB of logical
+text and retains 16,384 leaf records, but allocates only one distinct payload.
+That controlled setup proves the publication metadata bound without confounding
+it with payload creation. It does **not** prove one-GiB ingestion cost, one-GiB
+retained payload memory, allocator behavior, or source-to-owned-batch copying.
+The recorded publication p95 was 541 ns and remains `SCREEN`: there is still no
+ratified reference machine, warmup policy, noise control, or confidence method.
 
 Preliminary structural screens, not memory proof, observed:
 
@@ -72,8 +86,8 @@ instrumentation measures retained allocations under the accepted corpus.
 
 - The contiguous baseline fails localized source-copy economics.
 - The flat range baseline fails dense localized-transform economics.
-- Candidate v1 has not run the one-GiB append trace and its flat chunk-index
-  metadata is not expected to meet that workload without another tree level.
+- The append trace isolates publication metadata with a shared payload; a
+  distinct-payload one-GiB ingestion and retained-memory run remains absent.
 - No Loro or other collaboration-authority candidate is present.
 - Split/join/move/delete node identity, compaction, selective undo, and
   collaboration convergence traces are not implemented.
