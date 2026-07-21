@@ -2,6 +2,7 @@
 members = [
   "benches/semantic-scene",
   "examples/headless",
+  "examples/visual-proof",
   "experiments/flow",
   "experiments/parley-seam",
   "experiments/position",
@@ -26,12 +27,15 @@ repository = "https://github.com/forest-rs/underwood"
 fontique = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
   "libm",
 ] }
+imaging = "0.0.1"
+imaging_vello_cpu = "0.0.2"
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
 parlance = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false }
 parley_core = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
   "libm",
 ] }
 peniko = { version = "0.6.1", default-features = false, features = ["libm"] }
+png = "0.18.1"
 underwood = { path = "underwood" }
 underwood_parley = { path = "underwood_parley" }
 

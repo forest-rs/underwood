@@ -130,3 +130,53 @@ with no private product shortcut and its repository checks pass. It reaches
 Measured only when all four accepted experiment beads contain checked-in
 evidence. Higher proof stages remain unavailable until their named corpora and
 owners exist.
+
+## CPU visual-proof slice
+
+**Status:** Complete
+
+**Bead:** `und-oh0.10.1.8`
+
+### Goal
+
+Turn the executable semantic-to-scene spine into a compelling, inspectable
+image. A downstream example must lower the real `TextScene` through `imaging`,
+render it with `imaging_vello_cpu`, and retain a deterministic poster snapshot
+that makes the hard text and invalidation evidence visible.
+
+### Fence
+
+This slice owns an external renderer adapter, visual composition, PNG output,
+and snapshot verification. It does not move rendering into `underwood` or
+`underwood_parley`, add production dependencies, broaden the draft public API,
+or substitute decoration for real shaped output.
+
+### Steps
+
+1. Add one unpublished top-level example crate with released `imaging` and
+   `imaging_vello_cpu` dependencies and an explicit governance fence.
+2. Lower public scene fragments into clipped imaging glyph runs, preserving
+   font instance data, glyph positions, transforms, and paint brushes.
+3. Compose a poster from real Latin ligature, Arabic RTL, source, hit/caret,
+   line, semantic, edit, reuse, and paint-only evidence.
+4. Render with Vello CPU, inspect the output, and iterate until the composition
+   is legible and compelling rather than merely technically non-empty.
+5. Commit the accepted PNG, exact pixel snapshot test, and evidence notes; run
+   the full stable, MSRV, policy, text, and Beads gates.
+
+### Risks and controls
+
+- **Pretty mirage:** all text, proof values, and diagnostics derive from real
+  Underwood output; imaging-only primitives are limited to presentation.
+- **Core contamination:** renderer and PNG dependencies stay in the external
+  example crate, and the no-std production targets remain unchanged.
+- **Snapshot gremlins:** use the CPU backend's stable render mode and require an
+  exact RGBA match across the repository's Linux, macOS, and Windows CI jobs.
+- **Font drift:** reuse the checked-in licensed font bytes rather than host
+  font discovery.
+
+### Completion
+
+The slice is complete when a human-inspectable PNG is checked in, its pixels
+are regenerated exclusively through the public Underwood path, the visual
+evidence assertions and exact snapshot test pass, and the repository is green.
