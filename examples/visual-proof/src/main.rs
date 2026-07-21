@@ -14,8 +14,9 @@ use imaging::peniko::{Color, Fill, Style};
 use imaging::{PaintSink, Painter, RgbaImage, record};
 use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{
-    Brush, Document, DocumentId, FiniteWidth, InlineRole, LayoutEngine, PaintSlot, PaintTable,
-    ParagraphRole, SceneRequest, StyleMap, TextScene, TextStyle,
+    Brush, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature, FontVariation,
+    InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable,
+    ParagraphRole, SceneRequest, ShapingStyle, StyleMap, Tag, TextId, TextScene,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
 
@@ -271,37 +272,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     );
 
     let title = layout_label(&mut layout, 0x23, 72.0, "UNDERWOOD", INK)?;
-    let ligature_specimens = [
-        layout_label(&mut layout, 0x32, 84.0, "ffi", CORAL)?,
-        layout_label(&mut layout, 0x33, 84.0, "fi", CYAN)?,
-        layout_label(&mut layout, 0x34, 84.0, "ff", GOLD)?,
-        layout_label(&mut layout, 0x35, 84.0, "fl", INK)?,
-    ];
-    let specimen_glyphs: usize = ligature_specimens
-        .iter()
-        .map(|scene| {
-            let glyphs = scene
-                .fragments()
-                .iter()
-                .map(|fragment| fragment.glyphs().len())
-                .sum::<usize>();
-            assert_eq!(
-                glyphs, 1,
-                "each default ligature specimen must substitute to one glyph"
-            );
-            glyphs
-        })
-        .sum();
-    let ligature_specimen_evidence = layout_label(
-        &mut layout,
-        0x25,
-        18.0,
-        &format!(
-            "DEFAULT OPENTYPE LIGATURES / {} TOKENS / {specimen_glyphs} GLYPHS",
-            ligature_specimens.len()
-        ),
-        MUTED,
-    )?;
+    let computed_styles = computed_style_specimen(&mut layout)?;
     let ligature_evidence = layout_label(
         &mut layout,
         0x2d,
@@ -376,13 +347,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
             .paint_into(&mut painter);
         TextSceneAdapter::new(&mixed_direction_evidence, 740.0, 184.0).paint_into(&mut painter);
         TextSceneAdapter::new(&mixed_direction, 735.0, 286.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&ligature_specimen_evidence, 124.0, 552.0).paint_into(&mut painter);
-        for (specimen, x) in ligature_specimens
-            .iter()
-            .zip([124.0, 460.0, 800.0, 1_140.0])
-        {
-            TextSceneAdapter::new(specimen, x, 580.0).paint_into(&mut painter);
-        }
+        TextSceneAdapter::new(&computed_styles, 124.0, 548.0).paint_into(&mut painter);
 
         paint_card(
             &mut painter,
@@ -439,9 +404,10 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     edit.append_text(second, InlineRole::TEXT, "unchanged sibling")?;
     let published = edit.commit()?;
 
-    let mut styles = StyleMap::new(TextStyle::new(40.0, INK)?);
-    styles.set_paint(prefix, CORAL)?;
-    styles.set_paint(suffix, CYAN)?;
+    let base = ComputedInlineStyle::new(ShapingStyle::new(40.0)?, InlineFlowStyle::default(), INK);
+    let mut styles = StyleMap::new(base.clone());
+    styles.set(prefix, base.clone().with_paint(CORAL));
+    styles.set(suffix, base.with_paint(CYAN));
     let paint = poster_paints();
     let request = SceneRequest::new(FiniteWidth::new(700.0)?, &styles, &paint);
     let initial = layout.prepare(published.snapshot(), &request)?;
@@ -488,6 +454,181 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     })
 }
 
+fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyError> {
+    let mut document = Document::new(DocumentId::from_bytes([0x39; 16]));
+    let mut edit = document.edit();
+
+    let heading = edit.append_paragraph(ParagraphRole::BODY)?;
+    let heading_text = edit.append_text(
+        heading,
+        InlineRole::TEXT,
+        "ONE DOCUMENT  /  wght + opsz  /  COMPUTED SHAPING + FLOW + PAINT",
+    )?;
+
+    let axis_row = edit.append_paragraph(ParagraphRole::BODY)?;
+    edit.append_text(axis_row, InlineRole::TEXT, "100 / 8   ")?;
+    let light_text = edit.append_text(axis_row, InlineRole::EMPHASIS, "Variable")?;
+    edit.append_text(axis_row, InlineRole::TEXT, "          900 / 8   ")?;
+    let regular_text = edit.append_text(axis_row, InlineRole::EMPHASIS, "Variable")?;
+    edit.append_text(axis_row, InlineRole::TEXT, "          900 / 144   ")?;
+    let black_text = edit.append_text(axis_row, InlineRole::EMPHASIS, "Variable")?;
+
+    let feature_row = edit.append_paragraph(ParagraphRole::BODY)?;
+    edit.append_text(feature_row, InlineRole::TEXT, "liga 1  /  4 glyphs   ")?;
+    let ligatures_on = edit.append_text(feature_row, InlineRole::EMPHASIS, "office")?;
+    edit.append_text(
+        feature_row,
+        InlineRole::TEXT,
+        "        liga 0  /  6 glyphs   ",
+    )?;
+    let ligatures_off = edit.append_text(feature_row, InlineRole::EMPHASIS, "office")?;
+    let published = edit.commit()?;
+
+    let english = Language::parse("en")?;
+    let wght = Tag::new(b"wght");
+    let opsz = Tag::new(b"opsz");
+    let liga = Tag::new(b"liga");
+    let label_shaping = ShapingStyle::new(14.0)?.with_language(Some(english));
+    let label_style = ComputedInlineStyle::new(
+        label_shaping.clone(),
+        InlineFlowStyle::new(LineHeight::from_multiplier(1.1)?),
+        MUTED,
+    );
+    let heading_style = ComputedInlineStyle::new(
+        ShapingStyle::new(17.0)?.with_language(Some(english)),
+        InlineFlowStyle::new(LineHeight::from_multiplier(1.2)?),
+        MUTED,
+    );
+    let light_style = variable_style(36.0, 100.0, 8.0, CORAL, english, wght, opsz)?;
+    let regular_style = variable_style(46.0, 900.0, 8.0, CYAN, english, wght, opsz)?;
+    let black_style = variable_style(58.0, 900.0, 144.0, GOLD, english, wght, opsz)?;
+    let feature_shaping = ShapingStyle::new(32.0)?
+        .with_language(Some(english))
+        .with_variations([
+            FontVariation::new(wght, 650.0),
+            FontVariation::new(opsz, 28.0),
+        ])?;
+    let feature_flow = InlineFlowStyle::new(LineHeight::from_multiplier(1.1)?);
+    let ligatures_on_style = ComputedInlineStyle::new(
+        feature_shaping
+            .clone()
+            .with_features([FontFeature::new(liga, 1)]),
+        feature_flow,
+        CYAN,
+    );
+    let ligatures_off_style = ComputedInlineStyle::new(
+        feature_shaping.with_features([FontFeature::new(liga, 0)]),
+        feature_flow,
+        CORAL,
+    );
+
+    let mut styles = StyleMap::new(label_style);
+    styles.set(heading_text, heading_style);
+    styles.set(light_text, light_style);
+    styles.set(regular_text, regular_style);
+    styles.set(black_text, black_style);
+    styles.set(ligatures_on, ligatures_on_style);
+    styles.set(ligatures_off, ligatures_off_style);
+
+    let paints = poster_paints();
+    let request = SceneRequest::new(FiniteWidth::new(1_350.0)?, &styles, &paints);
+    let output = layout.prepare(published.snapshot(), &request)?;
+    let scene = output.scene();
+
+    assert_eq!(
+        scene.lines().len(),
+        3,
+        "the computed-style specimen must remain one three-line document"
+    );
+    assert_eq!(
+        glyph_count(scene, ligatures_on),
+        4,
+        "explicit liga-on office must substitute ffi"
+    );
+    assert_eq!(
+        glyph_count(scene, ligatures_off),
+        6,
+        "explicit liga-off office must preserve six glyphs"
+    );
+    let light_coords = coordinates(scene, light_text);
+    let regular_coords = coordinates(scene, regular_text);
+    let black_coords = coordinates(scene, black_text);
+    assert!(
+        !light_coords.is_empty(),
+        "the variable specimen must retain normalized coordinates"
+    );
+    assert!(
+        light_coords != regular_coords,
+        "changing only wght must produce a distinct normalized instance"
+    );
+    assert!(
+        regular_coords != black_coords,
+        "changing only opsz must produce a distinct normalized instance"
+    );
+    assert!(
+        [36.0, 46.0, 58.0].into_iter().all(|size| scene
+            .fragments()
+            .iter()
+            .any(|fragment| fragment.font_size() == size)),
+        "one document must execute three heterogeneous specimen sizes"
+    );
+    assert!(
+        scene
+            .lines()
+            .windows(2)
+            .any(|lines| lines[0].bounds().height() != lines[1].bounds().height()),
+        "the specimen must execute heterogeneous line heights"
+    );
+    Ok(scene.clone())
+}
+
+fn variable_style(
+    font_size: f32,
+    weight: f32,
+    optical_size: f32,
+    paint: PaintSlot,
+    language: Language,
+    weight_tag: Tag,
+    optical_size_tag: Tag,
+) -> Result<ComputedInlineStyle, AnyError> {
+    Ok(ComputedInlineStyle::new(
+        ShapingStyle::new(font_size)?
+            .with_language(Some(language))
+            .with_variations([
+                FontVariation::new(weight_tag, weight),
+                FontVariation::new(optical_size_tag, optical_size),
+            ])?,
+        InlineFlowStyle::new(LineHeight::from_multiplier(1.05)?),
+        paint,
+    ))
+}
+
+fn glyph_count(scene: &TextScene, text: TextId) -> usize {
+    scene
+        .fragments()
+        .iter()
+        .filter(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == text)
+        })
+        .map(|fragment| fragment.glyphs().len())
+        .sum()
+}
+
+fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
+    scene
+        .fragments()
+        .iter()
+        .find(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == text)
+        })
+        .map(|fragment| fragment.normalized_coords().to_vec())
+        .unwrap_or_default()
+}
+
 fn layout_label(
     layout: &mut LayoutEngine,
     document_byte: u8,
@@ -521,9 +662,14 @@ fn layout_scene(
     }
     let published = edit.commit()?;
 
-    let mut styles = StyleMap::new(TextStyle::new(font_size, INK)?);
+    let base = ComputedInlineStyle::new(
+        ShapingStyle::new(font_size)?,
+        InlineFlowStyle::default(),
+        INK,
+    );
+    let mut styles = StyleMap::new(base.clone());
     for (text, paint) in authored {
-        styles.set_paint(text, paint)?;
+        styles.set(text, base.clone().with_paint(paint));
     }
     let paints = poster_paints();
     let request = SceneRequest::new(FiniteWidth::new(width)?, &styles, &paints);

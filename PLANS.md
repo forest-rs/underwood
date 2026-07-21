@@ -64,7 +64,7 @@ All five records are Accepted. Their private proof obligations continue as
 
 ## First semantic-to-scene campaign
 
-**Status:** Active
+**Status:** Complete — executable proof landed through PR #6
 
 **Beads:** `und-oh0.10.1`, `und-oh0.10.1.1`, `und-oh0.10.1.2`,
 `und-oh0.10.1.3`, `und-oh0.10.1.4`, `und-oh0.10.1.5`
@@ -180,3 +180,59 @@ or substitute decoration for real shaped output.
 The slice is complete when a human-inspectable PNG is checked in, its pixels
 are regenerated exclusively through the public Underwood path, the visual
 evidence assertions and exact snapshot test pass, and the repository is green.
+
+## Computed inline-style campaign
+
+**Status:** Active
+
+**Beads:** `und-oh0.4.1`, `und-oh0.4.2`
+
+### Goal
+
+Replace the monolithic first-slice text style with the permanent computed
+shaping/inline-flow/paint partitions, execute heterogeneous styles through the
+real Parley and scene path, and prove the result with one compelling variable-
+type specimen.
+
+### Fence
+
+This campaign owns complete computed inline values, their paragraph-local run
+projection, stage-specific invalidation, migration of the public callsite, and
+the executable specimen. It does not own cascade, font matching, paragraph-
+break policy, block layout, decorations, tracking behavior, or rendering.
+
+### Steps
+
+1. Ratify `docs/design/0003-computed-inline-style-spine.md` and the shared
+   Parlance vocabulary edge.
+2. Implement validated shaping and inline-flow values plus complete per-leaf
+   style assignment in `underwood`.
+3. Project contiguous partitioned runs and make analysis, shaping, flow, and
+   paint cache identities honest.
+4. Adapt `underwood_parley` to execute language, feature, variation, and
+   heterogeneous-size runs without making paint a shaping input.
+5. Migrate all public callers and turn the CPU proof into a real variable-font
+   and feature specimen built through the new path.
+6. Run adversarial API/invalidation review, the complete local validation
+   matrix, and remote CI before closing the beads.
+
+### Risks and controls
+
+- **Monolithic style identity:** compare and retain each partition separately;
+  assert negative work at every boundary.
+- **Parley invasion:** expose only Parlance vocabulary; contain engine types in
+  `underwood_parley`.
+- **Pretty but fake variable type:** assert normalized coordinates and glyph
+  substitution before painting the specimen.
+- **Placeholder property creep:** expose only values that execute end to end in
+  this campaign.
+- **Run-boundary ambiguity:** canonicalize complete leaf styles into contiguous
+  paragraph runs and test mixed UTF-8, bidi, feature, paint, and empty-leaf
+  boundaries.
+
+### Completion
+
+The campaign is complete when one heterogeneous document exercises the public
+style path, each property has the intended invalidation evidence, the accepted
+CPU snapshot is regenerated from real shaped output, all checked-in callers
+use the canonical workflow, and the repository and remote CI are green.

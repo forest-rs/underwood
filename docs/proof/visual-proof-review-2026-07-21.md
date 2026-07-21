@@ -1,134 +1,127 @@
 # Visual-proof Lynx and Rook review — 2026-07-21
 
-- **Scope:** `examples/visual-proof`, its CPU snapshot, and repository claims
+- **Scope:** computed inline styles, the Parley adapter, public examples, and
+  the deterministic CPU poster
 - **Review modes:** Lynx adversarial correctness; Rook real-versus-mirage audit
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
-  `819b569234f555ca10622c5d7f86dd448809e6d5712fa3e2279c2acc4dae6e08`
+  `8f09637ec658c345dbe4a511082b4c947057d7f4eb4443ec4bf63a70304bdc6a`
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust
-- **Remote gate:** GitHub Actions run `29827588201`; all eight jobs passed,
+- **Remote gate:** GitHub Actions run `29849889488`; all eight jobs passed,
   including exact snapshot reproduction on Linux, macOS, and Windows
-- **Result:** all review findings are resolved; the final three-OS matrix earns
-  the deterministic CPU snapshot claim
+- **Result:** exact snapshot reproduction, the complete semantic evidence
+  suite, MSRV, `no_std`, rustdoc, and repository-policy gates pass
 
 ## Lynx review
 
 ### Summary judgment
 
-The example is a real external integration consumer. It uses public Underwood
-document, adapter, scene, source, semantic, hit, caret, and work-report APIs;
-records imaging commands; and asks `imaging_vello_cpu` for the committed pixels.
-Renderer and PNG dependencies remain outside both production crates.
+The poster is now a real heterogeneous-style consumer, not a collage standing
+in for an absent API. One semantic document projects complete computed styles
+into paragraph-local shaping and flow tables, the Parley adapter executes those
+values, `TextScene` retains the resulting font instances and source identity,
+and `imaging_vello_cpu` renders the checked-in pixels.
 
 ### Must — resolved
 
-1. **The fallback label initially inferred too much from script and bidi data.**
-   The proof now compares the selected fragment's exact font bytes with the
-   bundled Noto Kufi fixture before displaying the fallback claim. The same
-   check binds the Latin hero to Roboto Flex.
-2. **“Two source clips” initially counted only repeated glyph identity and
-   position.** The evidence now also requires different paint slots, different
-   snapshot source ranges, and different clip rectangles for the repeated
-   glyph observation.
-3. **The imaging boundary narrowed scene coordinates from `f64` to `f32`
-   silently.** A documented adapter check now rejects non-finite or out-of-range
-   values before the unavoidable backend conversion.
-4. **A pretty PNG alone would not be a regression test.** The crate reruns the
-   full public path, checks the semantic evidence, decodes the committed PNG,
-   and requires exact RGBA equality.
-5. **The original diagnostic caret escaped its evidence region and crossed the
-   poster header.** The proof now intersects caret geometry with the focused
-   split-ligature clip. It outlines only the two fragments that share the glyph,
-   using a distinct violet diagnostic color instead of competing paint colors.
-6. **An isolated Arabic line showed RTL shaping but not mixed-direction
-   behavior.** One paragraph now places an Arabic RTL run between Latin LTR
-   runs and asserts even and odd bidi levels plus both exact font resources.
-7. **Unexplained ornament and generic slogans consumed space without adding
-   evidence.** The decorative target was removed. The slogans were replaced by
-   `ffi`, `fi`, `ff`, and `fl` specimens, each required to shape from one source
-   token to exactly one glyph before the evidence caption is constructed.
-8. **The displayed numeric glyph ID was exact but meaningless to a reader.**
-   The poster now names the semantic fact—one shaped ligature through two source
-   clips—while exact font-internal glyph-ID and position equality remain enforced
-   in the executable evidence.
-9. **The three work counters needed a plain-language interpretation.** Each card
-   now explains the operation represented by its measured value without adding
-   a new implementation claim.
+1. **The first projection merged adjacent values but did not actually intern
+   style partitions.** Repeated non-adjacent shaping and flow values now reuse
+   deterministic paragraph-local dense IDs, with an executable A/B/A test.
+2. **An empty paragraph's default style was absent from its flow cache key.**
+   The computed empty-line height now has an explicit geometry identity; a
+   default line-height change reflows only the empty paragraph without shaping.
+3. **The first variable specimen changed `wght` and `opsz` together.** The
+   checked-in row now moves from `100/8` to `900/8` and then to `900/144`, while
+   assertions require distinct normalized coordinates at each single-axis step.
+4. **A zero-work paint assertion did not prove that a new slot reached retained
+   fragments.** The headless public path now also locates the affected source
+   fragments and requires their reassigned paint slot.
+5. **The design signature claimed `const` constructors that the owned style
+   representation cannot provide.** The approved API sketch now matches the
+   implemented ordinary functions.
+6. **The old review described four default ligature labels and said the style
+   path could not select axes or features.** It has been replaced by this audit
+   of the computed-style implementation and current snapshot.
 
-Good catch: the font-resource comparison turns “real fallback” from a plausible
-caption into an executable fact.
+Good catch: isolating one variable axis at a time turns a visually plausible
+font specimen into attributable shaping evidence.
 
 ### Should
 
-- Keep the adapter example-local until more consumers establish a reusable
-  renderer contract and fallible error surface.
-- Keep exact snapshot equality in every supported host job so any future
-  cross-platform drift fails at the renderer boundary.
+- Add automatic optical sizing only with a specified used-value contract; an
+  absent `opsz` currently and deliberately means the font default.
+- Keep unsupported feature and axis tags deterministic no-ops, then add a
+  named conformance case if higher-level diagnostics become a product need.
+- Keep the dense style IDs paragraph-local and backend-facing; do not let them
+  become durable document or serialization identities.
 
 ### Could
 
-- Add more scripts only when each one tests a named fallback or shaping risk;
-  visual variety alone is not conformance evidence.
-- Add a deliberately corrupted snapshot test if the acceptance workflow later
-  grows more complex than a direct exact comparison.
+- Extract the complete-run projection only after a second real consumer proves
+  the storage contract.
+- Add another script only when it exercises a named fallback, cluster, or
+  shaping boundary beyond the existing Latin/Arabic proof.
 
 ### Suggested tests
 
-- Exact RGBA comparison with the committed CPU snapshot.
-- Distinct source, paint, and clip evidence for one shared ligature glyph.
-- Exact selected-font resource for Latin and Arabic fragments.
-- Even Latin and odd Arabic bidi observations in one mixed-direction paragraph.
-- One-glyph substitution for each displayed default ligature specimen.
-- Local-edit reshaping, sibling reuse, and paint-only negative-work assertions.
+- Canonical feature and variation ordering, duplicate-last-wins, and finite
+  number validation.
+- A/B/A partition interning for shaping and inline-flow values.
+- `liga` on/off exact glyph counts from the public path.
+- `wght`-only and `opsz`-only normalized-coordinate changes.
+- Shaping-style changes that reuse Unicode analysis.
+- Line-height-only flow work, including an empty paragraph.
+- Paint-slot assignment and brush-value changes with no shaping or flow work.
+- Exact RGBA comparison with the committed CPU snapshot on every host matrix.
 
 ## Rook audit
 
 ### Mirage risks
 
-- **Mirage:** this is not a production renderer package. It is one deliberately
-  local adapter in an unpublished example crate.
-- **Mirage:** the poster's labels are independently shaped Underwood scenes;
-  they do not imply that the first-slice style system supports a full poster
-  document with heterogeneous font sizes.
-- **Mirage:** one Latin/Arabic snapshot is executable evidence, not renderer or
-  international-text conformance.
-- **Mirage:** the Roboto Flex resource is genuinely variable, but this first
-  public style path cannot select variation axes or toggle OpenType features.
-  The poster claims only the default ligature substitutions it executes.
+- **Mirage:** this is not an authored-style system or cascade. Callers provide
+  complete computed values directly.
+- **Mirage:** explicit `wght` coordinates do not implement font-family,
+  weight, width, or style matching.
+- **Mirage:** explicit `opsz` coordinates do not imply automatic optical sizing.
+- **Mirage:** line height is currently a validated multiplier over provisional
+  first-slice line metrics, not CSS inline formatting or mature paragraph flow.
+- **Mirage:** letter spacing, word spacing, baseline shift, decorations,
+  paragraph breaking, and block layout remain deferred.
+- **Mirage:** the example-local imaging adapter is not a production renderer
+  package or a general text-rendering conformance suite.
 
 ### Real strengths
 
-- **Real:** all visible typography is made from glyph IDs and font instances
-  produced by the checked-in Underwood-to-Parley path.
-- **Real:** the split `ffi` color boundary is rendered from two clips over one
-  shared shaped glyph without reshaping at the style boundary.
-- **Real:** the mixed-direction line is guarded by exact Latin and Arabic font
-  resources, script tags, and even/odd bidi-level checks.
-- **Real:** each displayed default ligature token is asserted to produce one
-  shaped glyph through the same public path.
-- **Real:** the displayed `1 / 1 / 0` work story is formatted from the actual
-  edit, retained-sibling, and paint-only `WorkReport` values.
-- **Real:** the snapshot test compares rendered pixels, not a synthetic scene,
-  command count, or non-empty buffer.
+- **Real:** the public style is partitioned into shaping, inline flow, and paint
+  identities with negative-work assertions at each boundary.
+- **Real:** paragraph projection emits interned shaping and flow tables plus
+  complete contiguous runs; it is no longer only described as doing so.
+- **Real:** `underwood_parley` retains Unicode analysis across style changes and
+  passes per-run size, language, features, and variations into Parley shaping.
+- **Real:** one poster specimen is one three-paragraph semantic document with
+  mixed sizes, line heights, paints, feature settings, and variable instances.
+- **Real:** `office` produces four glyphs with `liga=1` and six with `liga=0`.
+- **Real:** the displayed axis instances retain different normalized
+  coordinates after changing exactly one axis at each step.
+- **Real:** the mixed LTR/RTL line, split-ligature clips, local edit, retained
+  sibling, paint-only work, and final pixels all execute through the same public
+  Underwood-to-Parley-to-scene path.
 
 ### Most dangerous gap
 
-The original high-consequence uncertainty was exact CPU pixel identity across
-operating systems. GitHub Actions run `29827588201` closed that gap for the
-final specimen on Linux, macOS, and Windows. The remaining limit is scope: one
-poster proves this path and these fonts, not general renderer conformance.
+Underwood still wraps provisional prepared glyphs itself. Consequently, the
+current line-height and heterogeneous-size proof is genuine for this
+first-slice geometry, but it is not evidence for Parley's future retained
+paragraph breaking, hit testing, or caret topology. Beads `und-oh0.2.2`,
+`und-oh0.2.3`, and `und-oh0.2.5` keep that migration explicit.
 
 ### Follow-on obligations
 
-The proof deliberately exposes work that is not complete. These are tracked as
-separately closeable Beads rather than source TODOs:
-
-- `und-oh0.2.2`: replace provisional glyph wrapping with Parley-backed paragraph
-  breaking;
+- `und-oh0.2.2`: replace provisional glyph wrapping with Parley-backed
+  paragraph breaking;
 - `und-oh0.2.3`: move cluster hit and caret geometry behind the paragraph seam;
 - `und-oh0.2.4`: replace proportional ligature paint coverage with
   conformance-backed coverage;
 - `und-oh0.2.5`: retire callback-shaped copy-out when retained Parley results
-  land upstream;
-- `und-oh0.4.1`: add shaping styles for OpenType features and variable-font
-  axes; and
-- `und-oh0.4.2`: converge a canonical rich-document preparation call site.
+  land upstream; and
+- future style beads: specify font matching, automatic optical sizing, spacing,
+  and baseline behavior before exposing those properties.

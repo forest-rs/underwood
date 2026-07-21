@@ -3,7 +3,7 @@ capability	state	proof	owner	spec	evidence	product
 governance	active	executable	project	docs/CONSTITUTION.md	AGENTS.md;docs/governance/README.md;xtask/src/main.rs	-
 parley-alignment	active	specified	project	docs/adr/0004-parley-boundary-and-contingency.md	docs/proof/parley-seam-wind-tunnel-2026-07-21.md	-
 document-transactions	active	specified	project	docs/adr/0001-position-and-canonical-storage.md	docs/proof/position-wind-tunnel-2026-07-21.md	-
-style-projection	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#334-style-and-projection-foundation	-	-
+style-projection	active	executable	project	docs/design/0003-computed-inline-style-spine.md	underwood/src/style.rs;underwood/src/scene.rs;underwood_parley/src/lib.rs;examples/headless/src/main.rs;examples/visual-proof/src/main.rs;examples/visual-proof/snapshots/underwood-visual-proof.png;docs/proof/visual-proof-review-2026-07-21.md	living-agent-document
 layout-scene	active	specified	project	docs/adr/0002-resumable-flow-and-virtual-extents.md	docs/proof/flow-wind-tunnel-2026-07-21.md	-
 editing-experience	dormant	specified	unassigned	UNDERWOOD_HANDOVER.md#336-editing-and-experience-foundation	-	-
 international-text-data	active	specified	project	docs/adr/0003-text-data-provisioning.md	docs/proof/text-data-wind-tunnel-2026-07-21.md	-

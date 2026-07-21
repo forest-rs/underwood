@@ -9,10 +9,12 @@ inspectable image. It shapes bundled Latin and Arabic fonts through
 runs, and renders deterministic RGBA pixels with `imaging_vello_cpu`.
 
 The poster deliberately exposes difficult evidence: one `ffi` ligature painted
-through two focused source clips, one paragraph mixing Latin LTR and Arabic RTL
-runs with real font fallback, four default OpenType ligature substitutions, a
-bounded hit-derived caret, a local text edit, retained sibling reuse, and a
-paint-only update that performs no shaping.
+through two focused source clips; one paragraph mixing Latin LTR and Arabic RTL
+runs with real font fallback; and one heterogeneous document carrying three
+explicit Roboto Flex `wght`/`opsz` instances, mixed font sizes and line heights,
+paint slots, and `liga` on/off shaping with asserted glyph counts. A bounded
+hit-derived caret, local edit, retained sibling, and paint-only update expose
+the corresponding semantic and invalidation paths.
 
 Generate the committed snapshot from the repository root:
 

@@ -13,7 +13,6 @@ use core::fmt;
 use core::ops::Range;
 
 use fontique::{Blob, CharmapIndex, FontInfo, SourceId, SourceInfo, SourceKind, Synthesis};
-use parlance::{FontFeature, FontVariation};
 use parley_core::{
     Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, ShapeOptions, Shaper,
     shape::{CharCluster, Status},
@@ -21,9 +20,9 @@ use parley_core::{
 use underwood::adapter::{
     GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
     ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
-    PreparedParagraph, PreparedRun,
+    PreparedParagraph, PreparedRun, ShapingRun,
 };
-use underwood::{FontData, ParagraphId, Rect, Vec2};
+use underwood::{FontData, ParagraphId, Rect, ShapingStyle, Vec2};
 
 /// Owned validated font bytes and a face within them.
 #[derive(Clone)]
@@ -129,11 +128,10 @@ impl FontSet {
     }
 }
 
-/// Immutable Unicode and shaping configuration for the compiled minimal path.
+/// Immutable Unicode-data configuration for the compiled minimal path.
 #[derive(Clone, Debug, Default)]
 pub struct TextData {
-    features: Arc<[FontFeature]>,
-    variations: Arc<[FontVariation]>,
+    _private: (),
 }
 
 impl TextData {
@@ -147,7 +145,7 @@ impl TextData {
 /// Retained Parley Core paragraph adapter.
 #[derive(Debug)]
 pub struct ParleyParagraphEngine {
-    data: TextData,
+    _data: TextData,
     fonts: FontSet,
     analyzer: Analyzer,
     shaper: Shaper,
@@ -158,7 +156,7 @@ impl ParleyParagraphEngine {
     /// Creates a retained adapter from immutable text data and fonts.
     pub fn new(data: TextData, fonts: FontSet) -> Result<Self, AdapterError> {
         Ok(Self {
-            data,
+            _data: data,
             fonts,
             analyzer: Analyzer::new(),
             shaper: Shaper::default(),
@@ -172,36 +170,49 @@ impl ParagraphPreparation for ParleyParagraphEngine {
         &mut self,
         input: ParagraphInput<'_>,
     ) -> Result<ParagraphPreparationOutput, PreparationError> {
-        validate_paint_runs(&input)?;
-        let cache_index = self
+        validate_input_runs(&input)?;
+        let existing_index = self
             .cache
             .iter()
             .position(|entry| entry.paragraph == input.paragraph());
-        let physics_reused = cache_index.is_some_and(|index| {
-            self.cache[index].font_size == input.font_size().to_bits()
-                && self.cache[index].text.as_ref() == input.text()
-        });
-
-        let cache_index = if physics_reused {
-            cache_index.expect("a reusable physics cache index must exist")
-        } else {
-            let physics = shape_paragraph(
-                &mut self.analyzer,
-                &mut self.shaper,
-                &self.data,
-                &self.fonts,
-                input.paragraph(),
-                input.text(),
-                input.font_size(),
-            )?;
-            if let Some(index) = cache_index {
-                self.cache[index] = physics;
-                index
+        let (cache_index, analyzed) = if let Some(index) = existing_index {
+            if self.cache[index].text.as_ref() == input.text() {
+                (index, false)
             } else {
-                self.cache.push(physics);
-                self.cache.len() - 1
+                self.cache[index].text = Arc::from(input.text());
+                self.cache[index].analysis = analyze_text(&mut self.analyzer, input.text());
+                self.cache[index].shaping_styles.clear();
+                self.cache[index].shaping_runs.clear();
+                self.cache[index].runs.clear();
+                (index, true)
             }
+        } else {
+            self.cache.push(PhysicsCache {
+                paragraph: input.paragraph(),
+                text: Arc::from(input.text()),
+                analysis: analyze_text(&mut self.analyzer, input.text()),
+                shaping_styles: Vec::new(),
+                shaping_runs: Vec::new(),
+                runs: Vec::new(),
+            });
+            (self.cache.len() - 1, true)
         };
+
+        let shaped = self.cache[cache_index].shaping_styles != input.shaping_styles()
+            || self.cache[cache_index].shaping_runs != input.shaping_runs();
+        if shaped {
+            let runs = shape_paragraph(
+                &mut self.shaper,
+                &self.cache[cache_index].analysis,
+                &self.fonts,
+                input.text(),
+                input.shaping_styles(),
+                input.shaping_runs(),
+            )?;
+            self.cache[cache_index].shaping_styles = input.shaping_styles().to_vec();
+            self.cache[cache_index].shaping_runs = input.shaping_runs().to_vec();
+            self.cache[cache_index].runs = runs;
+        }
 
         let physics = &self.cache[cache_index];
         let mut prepared_runs = Vec::with_capacity(physics.runs.len());
@@ -213,7 +224,7 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                     input.text(),
                     glyph.source.clone(),
                     glyph.advance,
-                    input.font_size(),
+                    run.font_size,
                     input.paint_runs(),
                     run.bidi_level & 1 == 1,
                 )?;
@@ -231,7 +242,7 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 run.bidi_level,
                 run.script,
                 run.font.clone(),
-                input.font_size(),
+                run.font_size,
                 run.normalized_coords.iter().copied(),
                 prepared_glyphs,
             )?);
@@ -240,25 +251,31 @@ impl ParagraphPreparation for ParleyParagraphEngine {
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         let paragraph =
             PreparedParagraph::try_from_runs(input.paragraph(), text_len, prepared_runs)?;
-        let work = if physics_reused {
+        let work = if !analyzed && !shaped {
             PreparationWork::new(false, false, 0, 0)
         } else {
             PreparationWork::new(
-                true,
-                true,
-                u32::try_from(physics.runs.len()).unwrap_or(u32::MAX),
-                glyph_count,
+                analyzed,
+                shaped,
+                if shaped {
+                    u32::try_from(physics.runs.len()).unwrap_or(u32::MAX)
+                } else {
+                    0
+                },
+                if shaped { glyph_count } else { 0 },
             )
         };
         Ok(ParagraphPreparationOutput::new(paragraph, work))
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct PhysicsCache {
     paragraph: ParagraphId,
     text: Arc<str>,
-    font_size: u32,
+    analysis: Analysis,
+    shaping_styles: Vec<ShapingStyle>,
+    shaping_runs: Vec<ShapingRun>,
     runs: Vec<PhysicsRun>,
 }
 
@@ -268,6 +285,7 @@ struct PhysicsRun {
     bidi_level: u8,
     script: [u8; 4],
     font: FontData,
+    font_size: f32,
     normalized_coords: Vec<i16>,
     glyphs: Vec<PhysicsGlyph>,
 }
@@ -280,15 +298,7 @@ struct PhysicsGlyph {
     offset: Vec2,
 }
 
-fn shape_paragraph(
-    analyzer: &mut Analyzer,
-    shaper: &mut Shaper,
-    data: &TextData,
-    fonts: &FontSet,
-    paragraph: ParagraphId,
-    text: &str,
-    font_size: f32,
-) -> Result<PhysicsCache, PreparationError> {
+fn analyze_text(analyzer: &mut Analyzer, text: &str) -> Analysis {
     let mut analysis = Analysis::new();
     analyzer.analyze(
         text,
@@ -298,23 +308,47 @@ fn shape_paragraph(
         },
         &mut analysis,
     );
+    analysis
+}
+
+fn shape_paragraph(
+    shaper: &mut Shaper,
+    analysis: &Analysis,
+    fonts: &FontSet,
+    text: &str,
+    shaping_styles: &[ShapingStyle],
+    shaping_runs: &[ShapingRun],
+) -> Result<Vec<PhysicsRun>, PreparationError> {
     let analysis_data = AnalysisDataSources::new();
     let char_offsets = char_byte_offsets(text);
-    let style_indices = alloc::vec![0_u16; text.chars().count()];
+    let mut style_indices = Vec::with_capacity(text.chars().count());
+    for run in shaping_runs {
+        let index =
+            u16::try_from(run.style().index()).map_err(|_| PreparationError::invalid_output())?;
+        let range = run.bytes();
+        let run_text = text
+            .get(range.start as usize..range.end as usize)
+            .ok_or_else(PreparationError::invalid_output)?;
+        style_indices.extend(core::iter::repeat_n(index, run_text.chars().count()));
+    }
     let mut runs = Vec::new();
 
-    for item in analysis.itemize(text, |_| false) {
+    let split_after = |range: parley_core::itemize::TextRange| {
+        style_indices[range.char_range.start] != style_indices[range.char_range.end]
+    };
+    for item in analysis.itemize(text, split_after) {
+        let style = &shaping_styles[usize::from(style_indices[item.range.char_range.start])];
         let script = item.script.to_bytes();
         let missing_font = Cell::new(false);
         shaper.shape_item(
             text,
-            &analysis,
+            analysis,
             &item,
             &ShapeOptions {
-                font_size,
-                language: None,
-                features: &data.features,
-                variations: &data.variations,
+                font_size: style.font_size(),
+                language: style.language(),
+                features: style.features(),
+                variations: style.variations(),
                 char_style_indices: &style_indices,
             },
             |cluster| match fonts.select(cluster, &analysis_data) {
@@ -334,7 +368,7 @@ fn shape_paragraph(
                     item.bidi_level,
                     script,
                     font,
-                    font_size,
+                    style.font_size(),
                     &char_offsets,
                 ));
             },
@@ -346,12 +380,7 @@ fn shape_paragraph(
     if !text.is_empty() && runs.is_empty() {
         return Err(PreparationError::missing_font());
     }
-    Ok(PhysicsCache {
-        paragraph,
-        text: Arc::from(text),
-        font_size: font_size.to_bits(),
-        runs,
-    })
+    Ok(runs)
 }
 
 fn copy_run(
@@ -406,6 +435,7 @@ fn copy_run(
         bidi_level,
         script,
         font: font.data(),
+        font_size,
         normalized_coords: run.coords.iter().map(|coord| coord.to_bits()).collect(),
         glyphs,
     }
@@ -486,12 +516,39 @@ fn paint_coverage(
     GlyphPaintCoverage::try_from_segments(segments)
 }
 
-fn validate_paint_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationError> {
+fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationError> {
     let text_len =
         u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
+    validate_run_coverage(
+        input,
+        input.shaping_runs().iter().map(ShapingRun::bytes),
+        text_len,
+        PreparationError::invalid_output,
+    )?;
+    if input.shaping_styles().len() > usize::from(u16::MAX) + 1
+        || input
+            .shaping_runs()
+            .iter()
+            .any(|run| run.style().index() >= input.shaping_styles().len())
+    {
+        return Err(PreparationError::invalid_output());
+    }
+    validate_run_coverage(
+        input,
+        input.paint_runs().iter().map(|run| run.bytes()),
+        text_len,
+        PreparationError::unsupported_paint_coverage,
+    )
+}
+
+fn validate_run_coverage(
+    input: &ParagraphInput<'_>,
+    ranges: impl IntoIterator<Item = Range<u32>>,
+    text_len: u32,
+    error: fn() -> PreparationError,
+) -> Result<(), PreparationError> {
     let mut end = 0_u32;
-    for run in input.paint_runs() {
-        let range = run.bytes();
+    for range in ranges {
         if range.start != end
             || range.start >= range.end
             || range.end > text_len
@@ -500,12 +557,12 @@ fn validate_paint_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationErro
                 .get(range.start as usize..range.end as usize)
                 .is_none()
         {
-            return Err(PreparationError::unsupported_paint_coverage());
+            return Err(error());
         }
         end = range.end;
     }
     if end != text_len {
-        return Err(PreparationError::unsupported_paint_coverage());
+        return Err(error());
     }
     Ok(())
 }
