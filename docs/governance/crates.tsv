@@ -1,6 +1,7 @@
 # underwood-crate-registry-v1
 path	name	class	no_std	published	fence
 benches/flow	underwood_flow_wind_tunnel	benchmark	no	no	This crate owns private flow-trace-v0 checkpoint and virtual-extent experiments; it explicitly does not own production layout or public checkpoint formats.
+benches/parley-seam	underwood_parley_seam_wind_tunnel	benchmark	no	no	This crate owns private retained-Parley adapter observations and conformance gaps; it explicitly does not own a production adapter or public prepared-text API.
 benches/position	underwood_position_wind_tunnel	benchmark	no	no	This crate owns private identity-trace-v0 canonical-storage candidates and measurements; it explicitly does not own production storage or public position APIs.
 benches/text-data	underwood_text_data_wind_tunnel	benchmark	no	no	This crate owns private text-data tier artifact and replay measurements; it explicitly does not own production providers or text-data APIs.
 xtask	xtask	tooling	no	no	This crate owns repository policy validation; it explicitly does not own product behavior or architectural decisions.

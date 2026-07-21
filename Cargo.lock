@@ -277,6 +277,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "parley_dev"
+version = "0.0.0"
+source = "git+https://github.com/linebender/parley.git?rev=45da4a90248b1600277a4294b70d8bfde5ca8e97#45da4a90248b1600277a4294b70d8bfde5ca8e97"
+
+[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -405,6 +410,16 @@ dependencies = [
 [[package]]
 name = "underwood_flow_wind_tunnel"
 version = "0.0.1"
+
+[[package]]
+name = "underwood_parley_seam_wind_tunnel"
+version = "0.0.1"
+dependencies = [
+ "fontique",
+ "parlance",
+ "parley_core",
+ "parley_dev",
+]
 
 [[package]]
 name = "underwood_position_wind_tunnel"

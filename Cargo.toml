@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "benches/flow",
+  "benches/parley-seam",
   "benches/position",
   "benches/text-data",
   "xtask",
