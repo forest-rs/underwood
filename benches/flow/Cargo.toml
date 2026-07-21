@@ -1,0 +1,14 @@
+[package]
+name = "underwood_flow_wind_tunnel"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Private resumable-flow and virtual-extent wind tunnel for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
