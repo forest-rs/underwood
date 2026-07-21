@@ -352,7 +352,7 @@ WebAssembly gates. Paragraph breaking continues independently as
 
 ## Parley-backed paragraph formation
 
-**Status:** Active
+**Status:** Active — safe-break product checkpoint committed; upstream reshape gate open
 
 **Bead:** `und-oh0.2.2`
 
@@ -389,6 +389,25 @@ exists.
    substitute.
 6. Update the visual proof, run Cedar/Lynx/Rook review, measure the product
    path, and pass all local and remote gates before landing.
+
+### Executable checkpoint
+
+Commit `023c777` completes the safe-break portion through the public product
+path: legal and mandatory boundaries, real metrics, mixed bidi, complete
+cross-leaf source, explicit unrendered controls, width/line-height retained
+shaping, work evidence, and the two-line CPU poster. The focused local gates and
+same-machine benchmark are recorded in
+`docs/proof/parley-formation-review-2026-07-22.md` and
+`docs/proof/parley-formation-benchmark-2026-07-22.md`.
+
+The full local stable, MSRV, rustdoc, repository/text policy, Beads,
+bare-metal, and WebAssembly matrix passes. Remote CI remains checkpoint
+validation, not permission to close the upstream-dependent acceptance
+criterion.
+
+Step 5 remains a hard completion gate. The adapter reports zero bounded break
+reshapes because pinned Parley Core does not expose them; the bead and draft PR
+stay open rather than promoting this checkpoint as the finished campaign.
 
 ### Risks and controls
 
