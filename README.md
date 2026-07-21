@@ -13,8 +13,9 @@ physics. Overstory is the flagship experience layer.
 
 ## Current status
 
-Underwood has completed its executable-constitution bootstrap and is executing
-the first semantic-to-scene campaign. The complete architecture is
+Underwood has completed its executable constitution, first semantic-to-scene
+slice, computed inline-style spine, and CPU visual proof. It is now executing
+the Fontique-backed font-request campaign. The complete architecture is
 [specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
 first pre-stable public slice and its exact dependency fence: `underwood` owns
 the `no_std + alloc` document, flow, and scene path, while
@@ -29,9 +30,12 @@ The five mandatory foundation records are accepted:
 - ADR-0004: the Parley boundary and contingency.
 
 The external `examples/headless` crate now exercises real mixed-script shaping,
-source and semantic observations, editing, and retained-work assertions through
-public APIs only. Earlier synthetic wind tunnels remain research evidence, not
-product benchmarks or substitutes for this permanent path.
+Fontique family/attribute matching and configured fallback, source and semantic
+observations, editing, and retained-work assertions through public APIs only.
+Fontique owns matching, coverage, fallback, and synthesis; Underwood owns the
+computed request, invalidation, and portable resolved evidence. Earlier
+synthetic wind tunnels remain research evidence, not product benchmarks or
+substitutes for this permanent path.
 
 The external `examples/visual-proof` crate lowers that real scene through
 `imaging` and `imaging_vello_cpu` into a deterministic poster snapshot. Its

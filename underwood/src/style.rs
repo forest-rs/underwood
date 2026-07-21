@@ -1,10 +1,14 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use crate::{Brush, FontFeature, FontVariation, Language, StyleError, StyleErrorKind, TextId};
+use crate::{
+    Brush, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
+    FontWidth, Language, StyleError, StyleErrorKind, TextId,
+};
 
 /// Dense caller-defined index into a [`PaintTable`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -29,6 +33,10 @@ impl PaintSlot {
 /// deterministic no-op for a selected font.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ShapingStyle {
+    font_family: FontFamily<'static>,
+    font_weight: FontWeight,
+    font_width: FontWidth,
+    font_style: FontStyle,
     font_size: f32,
     language: Option<Language>,
     features: Arc<[FontFeature]>,
@@ -36,17 +44,55 @@ pub struct ShapingStyle {
 }
 
 impl ShapingStyle {
-    /// Creates shaping values with a finite, strictly positive font size.
-    pub fn new(font_size: f32) -> Result<Self, StyleError> {
+    /// Creates shaping values with an owned canonical family request and a
+    /// finite, strictly positive font size.
+    pub fn new(font_family: FontFamily<'_>, font_size: f32) -> Result<Self, StyleError> {
         if !font_size.is_finite() || font_size <= 0.0 {
             return Err(StyleError::new(StyleErrorKind::InvalidNumber));
         }
         Ok(Self {
+            font_family: canonical_font_family(font_family)?,
+            font_weight: FontWeight::NORMAL,
+            font_width: FontWidth::NORMAL,
+            font_style: FontStyle::Normal,
             font_size,
             language: None,
             features: Arc::from([]),
             variations: Arc::from([]),
         })
+    }
+
+    /// Returns a copy with a new owned canonical family request.
+    pub fn with_font_family(mut self, font_family: FontFamily<'_>) -> Result<Self, StyleError> {
+        self.font_family = canonical_font_family(font_family)?;
+        Ok(self)
+    }
+
+    /// Returns a copy with a finite, strictly positive font weight request.
+    pub fn with_font_weight(mut self, font_weight: FontWeight) -> Result<Self, StyleError> {
+        if !font_weight.value().is_finite() || font_weight.value() <= 0.0 {
+            return Err(StyleError::new(StyleErrorKind::InvalidNumber));
+        }
+        self.font_weight = font_weight;
+        Ok(self)
+    }
+
+    /// Returns a copy with a finite, strictly positive font width request.
+    pub fn with_font_width(mut self, font_width: FontWidth) -> Result<Self, StyleError> {
+        if !font_width.ratio().is_finite() || font_width.ratio() <= 0.0 {
+            return Err(StyleError::new(StyleErrorKind::InvalidNumber));
+        }
+        self.font_width = font_width;
+        Ok(self)
+    }
+
+    /// Returns a copy with a finite font style request.
+    pub fn with_font_style(mut self, font_style: FontStyle) -> Result<Self, StyleError> {
+        if matches!(font_style, FontStyle::Oblique(Some(angle)) if !angle.is_finite()) {
+            return Err(StyleError::new(StyleErrorKind::InvalidNumber));
+        }
+        self.font_style = font_style;
+        Ok(self)
     }
 
     /// Returns a copy with a shaping language.
@@ -72,6 +118,30 @@ impl ShapingStyle {
         Ok(self)
     }
 
+    /// Returns the ordered family request.
+    #[must_use]
+    pub const fn font_family(&self) -> &FontFamily<'static> {
+        &self.font_family
+    }
+
+    /// Returns the requested font weight.
+    #[must_use]
+    pub const fn font_weight(&self) -> FontWeight {
+        self.font_weight
+    }
+
+    /// Returns the requested font width.
+    #[must_use]
+    pub const fn font_width(&self) -> FontWidth {
+        self.font_width
+    }
+
+    /// Returns the requested font style.
+    #[must_use]
+    pub const fn font_style(&self) -> FontStyle {
+        self.font_style
+    }
+
     /// Returns the font size in scene units.
     #[must_use]
     pub const fn font_size(&self) -> f32 {
@@ -94,6 +164,45 @@ impl ShapingStyle {
     #[must_use]
     pub fn variations(&self) -> &[FontVariation] {
         &self.variations
+    }
+}
+
+fn canonical_font_family(font_family: FontFamily<'_>) -> Result<FontFamily<'static>, StyleError> {
+    let names: Vec<FontFamilyName<'static>> = match font_family {
+        FontFamily::Source(source) => FontFamilyName::parse_css_list(source.as_ref())
+            .map(|name| name.map(FontFamilyName::into_owned))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| StyleError::new(StyleErrorKind::InvalidFontFamily))?,
+        FontFamily::Single(name) => alloc::vec![name.into_owned()],
+        FontFamily::List(names) => names
+            .iter()
+            .cloned()
+            .map(FontFamilyName::into_owned)
+            .collect(),
+    };
+    if names.is_empty()
+        || names
+            .iter()
+            .any(|name| matches!(name, FontFamilyName::Named(name) if name.trim().is_empty()))
+        || names
+            .iter()
+            .enumerate()
+            .any(|(index, name)| names[..index].contains(name))
+    {
+        return Err(StyleError::new(StyleErrorKind::InvalidFontFamily));
+    }
+    let mut names = names.into_iter();
+    let first = names
+        .next()
+        .ok_or_else(|| StyleError::new(StyleErrorKind::InvalidFontFamily))?;
+    let remaining: Vec<_> = names.collect();
+    if remaining.is_empty() {
+        Ok(FontFamily::Single(first))
+    } else {
+        let mut canonical = Vec::with_capacity(remaining.len() + 1);
+        canonical.push(first);
+        canonical.extend(remaining);
+        Ok(FontFamily::List(Cow::Owned(canonical)))
     }
 }
 
@@ -297,23 +406,70 @@ pub struct PaintTable {
 
 #[cfg(test)]
 mod tests {
-    use parlance::{FontFeature, FontVariation, Tag};
+    use alloc::borrow::Cow;
+
+    use parlance::{
+        FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight, FontWidth,
+        Tag,
+    };
 
     use super::{LineHeight, ShapingStyle};
 
     #[test]
     fn shaping_numbers_are_validated() {
-        assert!(ShapingStyle::new(0.0).is_err());
-        assert!(ShapingStyle::new(f32::NAN).is_err());
+        assert!(ShapingStyle::new(FontFamily::named("Test"), 0.0).is_err());
+        assert!(ShapingStyle::new(FontFamily::named("Test"), f32::NAN).is_err());
+        assert!(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0)
+                .expect("base request is valid")
+                .with_font_weight(FontWeight::new(f32::NAN))
+                .is_err()
+        );
+        assert!(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0)
+                .expect("base request is valid")
+                .with_font_width(FontWidth::from_ratio(0.0))
+                .is_err()
+        );
+        assert!(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0)
+                .expect("base request is valid")
+                .with_font_style(FontStyle::Oblique(Some(f32::INFINITY)))
+                .is_err()
+        );
         assert!(LineHeight::from_multiplier(-1.0).is_err());
         assert!(LineHeight::from_multiplier(f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn font_families_are_owned_parsed_and_canonical() {
+        let style = ShapingStyle::new(FontFamily::from("Roboto Flex, sans-serif"), 16.0)
+            .expect("CSS family source is valid");
+        assert_eq!(
+            style.font_family(),
+            &FontFamily::List(Cow::Owned(alloc::vec![
+                FontFamilyName::named("Roboto Flex").into_owned(),
+                FontFamilyName::Generic(parlance::GenericFamily::SansSerif),
+            ]))
+        );
+        assert!(ShapingStyle::new(FontFamily::from("Roboto Flex,, serif"), 16.0).is_err());
+        assert!(
+            ShapingStyle::new(
+                FontFamily::List(Cow::Owned(alloc::vec![
+                    FontFamilyName::named("Roboto Flex").into_owned(),
+                    FontFamilyName::named("Roboto Flex").into_owned(),
+                ])),
+                16.0,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn feature_settings_are_canonical_and_last_wins() {
         let liga = Tag::new(b"liga");
         let kern = Tag::new(b"kern");
-        let style = ShapingStyle::new(16.0)
+        let style = ShapingStyle::new(FontFamily::named("Test"), 16.0)
             .expect("font size is valid")
             .with_features([
                 FontFeature::new(liga, 1),
@@ -330,7 +486,7 @@ mod tests {
     fn variation_settings_are_canonical_validated_and_last_wins() {
         let opsz = Tag::new(b"opsz");
         let wght = Tag::new(b"wght");
-        let style = ShapingStyle::new(16.0)
+        let style = ShapingStyle::new(FontFamily::named("Test"), 16.0)
             .expect("font size is valid")
             .with_variations([
                 FontVariation::new(wght, 400.0),
@@ -346,7 +502,7 @@ mod tests {
             ]
         );
         assert!(
-            ShapingStyle::new(16.0)
+            ShapingStyle::new(FontFamily::named("Test"), 16.0)
                 .expect("font size is valid")
                 .with_variations([FontVariation::new(wght, f32::NAN)])
                 .is_err()

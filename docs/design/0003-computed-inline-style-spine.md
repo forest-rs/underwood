@@ -146,7 +146,7 @@ styles.set_paint(emphasis, PaintSlot::new(1))?;
 ### After
 
 ```rust
-let body_shaping = ShapingStyle::new(16.0)?;
+let body_shaping = ShapingStyle::new(FontFamily::named("Roboto Flex"), 16.0)?;
 let body = ComputedInlineStyle::new(
     body_shaping.clone(),
     InlineFlowStyle::default(),

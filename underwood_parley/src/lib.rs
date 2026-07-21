@@ -12,17 +12,23 @@ use core::cell::Cell;
 use core::fmt;
 use core::ops::Range;
 
-use fontique::{Blob, CharmapIndex, FontInfo, SourceId, SourceInfo, SourceKind, Synthesis};
+use fontique::{
+    Attributes, Blob, Collection, CollectionOptions, FallbackKey, FontInfo, QueryFamily,
+    QueryStatus, SourceCache, SourceId, SourceInfo, SourceKind, Synthesis,
+};
 use parley_core::{
     Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, ShapeOptions, Shaper,
     shape::{CharCluster, Status},
 };
 use underwood::adapter::{
-    GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
+    FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
     ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
     PreparedParagraph, PreparedRun, ShapingRun,
 };
-use underwood::{FontData, ParagraphId, Rect, ShapingStyle, Vec2};
+use underwood::{
+    FontData, FontFamily, FontFamilyName, FontVariation, GenericFamily, Language, ParagraphId,
+    Rect, Script, ShapingStyle, Tag, Vec2,
+};
 
 /// Owned validated font bytes and a face within them.
 #[derive(Clone)]
@@ -32,7 +38,6 @@ pub struct Font {
     blob: Blob<u8>,
     index: u32,
     units_per_em: u16,
-    charmap: CharmapIndex,
 }
 
 impl fmt::Debug for Font {
@@ -55,7 +60,7 @@ impl Font {
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidFont))?;
         let blob = Blob::from(bytes.to_vec());
         let source = SourceInfo::new(SourceId::new(), SourceKind::Memory(blob.clone()));
-        let info = FontInfo::from_source(source, index)
+        FontInfo::from_source(source, index)
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidFont))?;
         Ok(Self {
             diagnostic_name: Arc::from(diagnostic_name),
@@ -63,69 +68,107 @@ impl Font {
             blob,
             index,
             units_per_em,
-            charmap: info.charmap_index(),
         })
-    }
-
-    fn instance(&self) -> FontInstance {
-        FontInstance {
-            blob: self.blob.clone(),
-            index: self.index,
-            synthesis: Synthesis::default(),
-        }
-    }
-
-    fn data(&self) -> FontData {
-        FontData::new(self.blob.clone(), self.index)
-    }
-
-    fn covers(&self, character: char) -> bool {
-        self.charmap
-            .charmap(self.blob.as_ref())
-            .and_then(|charmap| charmap.map(character))
-            .is_some()
     }
 }
 
-/// Immutable ordered fallback set for the headless adapter.
-#[derive(Clone, Debug)]
+/// Deterministic caller-supplied Fontique catalog for the headless adapter.
+#[derive(Clone)]
 pub struct FontSet {
-    fonts: Arc<[Font]>,
+    collection: Collection,
+    source_cache: SourceCache,
+    font_count: usize,
+}
+
+impl fmt::Debug for FontSet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FontSet")
+            .field("font_count", &self.font_count)
+            .finish_non_exhaustive()
+    }
 }
 
 impl FontSet {
-    /// Collects a non-empty ordered font set.
+    /// Registers a non-empty set of memory fonts with system discovery disabled.
     pub fn try_from_fonts(fonts: impl IntoIterator<Item = Font>) -> Result<Self, AdapterError> {
         let fonts: Vec<_> = fonts.into_iter().collect();
         if fonts.is_empty() {
             return Err(AdapterError::new(AdapterErrorKind::EmptyFontSet));
         }
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        let mut font_count = 0_usize;
+        for font in fonts {
+            let blob = font.blob;
+            let registered = collection.register_fonts(blob.clone(), None);
+            if registered.is_empty()
+                || registered.iter().any(|(_, fonts)| {
+                    fonts
+                        .iter()
+                        .any(|font| units_per_em(blob.as_ref(), font.index()).is_none())
+                })
+            {
+                return Err(AdapterError::new(AdapterErrorKind::InvalidFont));
+            }
+            font_count = font_count.saturating_add(
+                registered
+                    .iter()
+                    .map(|(_, fonts)| fonts.len())
+                    .sum::<usize>(),
+            );
+        }
         Ok(Self {
-            fonts: fonts.into(),
+            collection,
+            source_cache: SourceCache::default(),
+            font_count,
         })
     }
 
-    fn select<'a>(
-        &'a self,
-        cluster: &mut CharCluster,
-        data: &AnalysisDataSources,
-    ) -> Option<&'a Font> {
-        let mut best = None;
-        for font in self.fonts.iter() {
-            match cluster.map(|character| font.covers(character), data) {
-                Status::Complete => return Some(font),
-                Status::Keep => best = Some(font),
-                Status::Discard => {}
-            }
-        }
-        best
+    /// Returns a copy whose generic family resolves to the supplied named families.
+    pub fn with_generic_families(
+        mut self,
+        generic: GenericFamily,
+        family_names: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, AdapterError> {
+        let families = resolve_family_ids(&mut self.collection, family_names)?;
+        self.collection
+            .set_generic_families(generic, families.into_iter());
+        Ok(self)
     }
 
-    fn by_instance(&self, instance: &FontInstance) -> Option<&Font> {
-        self.fonts
-            .iter()
-            .find(|font| font.blob.id() == instance.blob.id() && font.index == instance.index)
+    /// Returns a copy with named fallback families for one script and optional language.
+    pub fn with_fallbacks(
+        mut self,
+        script: Script,
+        language: Option<Language>,
+        family_names: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, AdapterError> {
+        let families = resolve_family_ids(&mut self.collection, family_names)?;
+        if !self.collection.set_fallbacks(
+            FallbackKey::new(script, language.as_ref()),
+            families.into_iter(),
+        ) {
+            return Err(AdapterError::new(AdapterErrorKind::UnsupportedFallback));
+        }
+        Ok(self)
     }
+}
+
+fn resolve_family_ids(
+    collection: &mut Collection,
+    family_names: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<Vec<fontique::FamilyId>, AdapterError> {
+    family_names
+        .into_iter()
+        .map(|name| {
+            collection
+                .family_id(name.as_ref())
+                .ok_or_else(|| AdapterError::new(AdapterErrorKind::UnknownFamily))
+        })
+        .collect()
 }
 
 /// Immutable Unicode-data configuration for the compiled minimal path.
@@ -194,6 +237,7 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 shaping_styles: Vec::new(),
                 shaping_runs: Vec::new(),
                 runs: Vec::new(),
+                selected_clusters: 0,
             });
             (self.cache.len() - 1, true)
         };
@@ -201,10 +245,10 @@ impl ParagraphPreparation for ParleyParagraphEngine {
         let shaped = self.cache[cache_index].shaping_styles != input.shaping_styles()
             || self.cache[cache_index].shaping_runs != input.shaping_runs();
         if shaped {
-            let runs = shape_paragraph(
+            let (runs, selected_clusters) = shape_paragraph(
                 &mut self.shaper,
                 &self.cache[cache_index].analysis,
-                &self.fonts,
+                &mut self.fonts,
                 input.text(),
                 input.shaping_styles(),
                 input.shaping_runs(),
@@ -212,6 +256,7 @@ impl ParagraphPreparation for ParleyParagraphEngine {
             self.cache[cache_index].shaping_styles = input.shaping_styles().to_vec();
             self.cache[cache_index].shaping_runs = input.shaping_runs().to_vec();
             self.cache[cache_index].runs = runs;
+            self.cache[cache_index].selected_clusters = selected_clusters;
         }
 
         let physics = &self.cache[cache_index];
@@ -243,6 +288,7 @@ impl ParagraphPreparation for ParleyParagraphEngine {
                 run.script,
                 run.font.clone(),
                 run.font_size,
+                portable_synthesis(run.synthesis)?,
                 run.normalized_coords.iter().copied(),
                 prepared_glyphs,
             )?);
@@ -252,11 +298,12 @@ impl ParagraphPreparation for ParleyParagraphEngine {
         let paragraph =
             PreparedParagraph::try_from_runs(input.paragraph(), text_len, prepared_runs)?;
         let work = if !analyzed && !shaped {
-            PreparationWork::new(false, false, 0, 0)
+            PreparationWork::new(false, false, 0, 0, 0)
         } else {
             PreparationWork::new(
                 analyzed,
                 shaped,
+                if shaped { physics.selected_clusters } else { 0 },
                 if shaped {
                     u32::try_from(physics.runs.len()).unwrap_or(u32::MAX)
                 } else {
@@ -277,6 +324,7 @@ struct PhysicsCache {
     shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
     runs: Vec<PhysicsRun>,
+    selected_clusters: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -286,6 +334,7 @@ struct PhysicsRun {
     script: [u8; 4],
     font: FontData,
     font_size: f32,
+    synthesis: Synthesis,
     normalized_coords: Vec<i16>,
     glyphs: Vec<PhysicsGlyph>,
 }
@@ -314,11 +363,11 @@ fn analyze_text(analyzer: &mut Analyzer, text: &str) -> Analysis {
 fn shape_paragraph(
     shaper: &mut Shaper,
     analysis: &Analysis,
-    fonts: &FontSet,
+    fonts: &mut FontSet,
     text: &str,
     shaping_styles: &[ShapingStyle],
     shaping_runs: &[ShapingRun],
-) -> Result<Vec<PhysicsRun>, PreparationError> {
+) -> Result<(Vec<PhysicsRun>, u32), PreparationError> {
     let analysis_data = AnalysisDataSources::new();
     let char_offsets = char_byte_offsets(text);
     let mut style_indices = Vec::with_capacity(text.chars().count());
@@ -332,6 +381,7 @@ fn shape_paragraph(
         style_indices.extend(core::iter::repeat_n(index, run_text.chars().count()));
     }
     let mut runs = Vec::new();
+    let selected_clusters = Cell::new(0_u32);
 
     let split_after = |range: parley_core::itemize::TextRange| {
         style_indices[range.char_range.start] != style_indices[range.char_range.end]
@@ -340,6 +390,15 @@ fn shape_paragraph(
         let style = &shaping_styles[usize::from(style_indices[item.range.char_range.start])];
         let script = item.script.to_bytes();
         let missing_font = Cell::new(false);
+        let mut query = fonts.collection.query(&mut fonts.source_cache);
+        query.set_families(query_families(style.font_family()));
+        query.set_attributes(Attributes::new(
+            style.font_width(),
+            style.font_style(),
+            style.font_weight(),
+        ));
+        let language = style.language();
+        query.set_fallbacks(FallbackKey::new(item.script, language.as_ref()));
         shaper.shape_item(
             text,
             analysis,
@@ -351,8 +410,15 @@ fn shape_paragraph(
                 variations: style.variations(),
                 char_style_indices: &style_indices,
             },
-            |cluster| match fonts.select(cluster, &analysis_data) {
-                Some(font) => Some(font.instance()),
+            |cluster| match select_font(&mut query, cluster, &analysis_data) {
+                Some(font) => {
+                    selected_clusters.set(selected_clusters.get().saturating_add(1));
+                    Some(FontInstance {
+                        blob: font.blob,
+                        index: font.index,
+                        synthesis: font.synthesis,
+                    })
+                }
                 None => {
                     missing_font.set(true);
                     None
@@ -360,14 +426,10 @@ fn shape_paragraph(
             },
             &analysis_data,
             |shaped| {
-                let font = fonts
-                    .by_instance(&shaped.font)
-                    .expect("Parley must return the selected immutable font instance");
                 runs.push(copy_run(
                     shaped,
                     item.bidi_level,
                     script,
-                    font,
                     style.font_size(),
                     &char_offsets,
                 ));
@@ -380,14 +442,57 @@ fn shape_paragraph(
     if !text.is_empty() && runs.is_empty() {
         return Err(PreparationError::missing_font());
     }
-    Ok(runs)
+    Ok((runs, selected_clusters.get()))
+}
+
+fn query_families<'a>(font_family: &'a FontFamily<'static>) -> Vec<QueryFamily<'a>> {
+    let names: &[FontFamilyName<'_>] = match font_family {
+        FontFamily::Single(name) => core::slice::from_ref(name),
+        FontFamily::List(names) => names.as_ref(),
+        FontFamily::Source(_) => return Vec::new(),
+    };
+    names
+        .iter()
+        .map(|name| match name {
+            FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
+            FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
+        })
+        .collect()
+}
+
+fn select_font(
+    query: &mut fontique::Query<'_>,
+    cluster: &mut CharCluster,
+    data: &AnalysisDataSources,
+) -> Option<fontique::QueryFont> {
+    let mut selected = None;
+    query.matches_with(|font| {
+        let Some(charmap) = font.charmap() else {
+            return QueryStatus::Continue;
+        };
+        let status = cluster.map(
+            |character| charmap.map(character).is_some_and(|glyph| glyph != 0),
+            data,
+        );
+        match status {
+            Status::Complete => {
+                selected = Some(font.clone());
+                QueryStatus::Stop
+            }
+            Status::Keep => {
+                selected = Some(font.clone());
+                QueryStatus::Continue
+            }
+            Status::Discard => QueryStatus::Continue,
+        }
+    });
+    selected
 }
 
 fn copy_run(
     run: parley_core::ShapedRun<'_>,
     bidi_level: u8,
     script: [u8; 4],
-    font: &Font,
     font_size: f32,
     char_offsets: &[usize],
 ) -> PhysicsRun {
@@ -402,7 +507,9 @@ fn copy_run(
         .collect();
     cluster_starts.sort_unstable();
     cluster_starts.dedup();
-    let scale = font_size / f32::from(font.units_per_em);
+    let units_per_em = units_per_em(run.font.blob.as_ref(), run.font.index)
+        .expect("Fontique selected a previously validated font");
+    let scale = font_size / f32::from(units_per_em);
     let glyphs = infos
         .iter()
         .zip(positions)
@@ -434,11 +541,23 @@ fn copy_run(
             ..u32::try_from(run.range.byte_range.end).expect("text length was validated"),
         bidi_level,
         script,
-        font: font.data(),
+        font: FontData::new(run.font.blob.clone(), run.font.index),
         font_size,
+        synthesis: run.font.synthesis,
         normalized_coords: run.coords.iter().map(|coord| coord.to_bits()).collect(),
         glyphs,
     }
+}
+
+fn portable_synthesis(synthesis: Synthesis) -> Result<FontSynthesis, PreparationError> {
+    FontSynthesis::try_new(
+        synthesis
+            .variation_settings()
+            .iter()
+            .map(|(tag, value)| FontVariation::new(Tag::from_bytes(tag.to_be_bytes()), *value)),
+        synthesis.embolden(),
+        synthesis.skew(),
+    )
 }
 
 fn paint_coverage(
@@ -622,6 +741,10 @@ pub enum AdapterErrorKind {
     InvalidFont,
     /// A font set contains no fonts.
     EmptyFontSet,
+    /// A configured generic or fallback family is absent from the catalog.
+    UnknownFamily,
+    /// Fontique does not track the requested script and language fallback key.
+    UnsupportedFallback,
 }
 
 /// Concrete adapter construction error.
@@ -657,7 +780,12 @@ impl core::error::Error for AdapterError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{read_u16, read_u32};
+    use underwood::{GenericFamily, Language, Script};
+
+    use super::{AdapterErrorKind, Font, FontSet, read_u16, read_u32};
+
+    const LATIN_FONT: &[u8] =
+        include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
 
     #[test]
     fn big_endian_readers_reject_short_input() {
@@ -665,5 +793,33 @@ mod tests {
         assert_eq!(read_u16(&[0x12], 0), None);
         assert_eq!(read_u32(&[0x12, 0x34, 0x56, 0x78], 0), Some(0x1234_5678));
         assert_eq!(read_u32(&[0x12, 0x34], 0), None);
+    }
+
+    #[test]
+    fn catalog_configuration_rejects_unknown_and_untracked_families() {
+        let unknown = FontSet::try_from_fonts([
+            Font::from_bytes("latin", LATIN_FONT).expect("fixture font is valid")
+        ])
+        .expect("fixture catalog is valid")
+        .with_generic_families(GenericFamily::SansSerif, ["Absent Family"])
+        .expect_err("generic mappings must not silently omit absent families");
+        assert_eq!(
+            unknown.kind(),
+            AdapterErrorKind::UnknownFamily,
+            "unknown family configuration must retain a stable category"
+        );
+
+        let arabic = Language::parse("ar").expect("test language is valid");
+        let unsupported = FontSet::try_from_fonts([
+            Font::from_bytes("latin", LATIN_FONT).expect("fixture font is valid")
+        ])
+        .expect("fixture catalog is valid")
+        .with_fallbacks(Script::from_bytes(*b"Latn"), Some(arabic), ["Roboto Flex"])
+        .expect_err("untracked script-language pairs must not disappear");
+        assert_eq!(
+            unsupported.kind(),
+            AdapterErrorKind::UnsupportedFallback,
+            "unsupported fallback configuration must retain a stable category"
+        );
     }
 }

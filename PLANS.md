@@ -276,8 +276,8 @@ or claim renderer effects that the proof backend does not execute.
 
 - **Matcher duplication:** adapter code is limited to Fontique query setup and
   the cluster callback required by Parley Core.
-- **Unstable style identity:** family sources are parsed and canonicalized once;
-  every numeric request is validated before entering a cache key.
+- **Unstable style identity:** family sources are parsed into one structural
+  form once; every numeric request is validated before entering a cache key.
 - **Hidden selection cost:** selection receives its own deterministic work
   counter and cache-hit assertions.
 - **Synthesis theater:** final normalized coordinates and raw synthesis evidence

@@ -6,11 +6,12 @@
 //! Successful outputs own every retained font, coordinate, and glyph record.
 //! No backend-specific type crosses this boundary.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-use crate::{FontData, PaintSlot, ParagraphId, Rect, ShapingStyle, Vec2};
+use crate::{FontData, FontVariation, PaintSlot, ParagraphId, Rect, ShapingStyle, Vec2};
 
 /// Prepares analyzed, itemized, and shaped data for one paragraph.
 pub trait ParagraphPreparation {
@@ -181,6 +182,7 @@ impl ParagraphPreparationOutput {
 pub struct PreparationWork {
     analyzed: bool,
     itemized: bool,
+    selected_clusters: u32,
     shaped_runs: u32,
     shaped_glyphs: u32,
 }
@@ -188,10 +190,17 @@ pub struct PreparationWork {
 impl PreparationWork {
     /// Creates a work record from backend observations.
     #[must_use]
-    pub const fn new(analyzed: bool, itemized: bool, shaped_runs: u32, shaped_glyphs: u32) -> Self {
+    pub const fn new(
+        analyzed: bool,
+        itemized: bool,
+        selected_clusters: u32,
+        shaped_runs: u32,
+        shaped_glyphs: u32,
+    ) -> Self {
         Self {
             analyzed,
             itemized,
+            selected_clusters,
             shaped_runs,
             shaped_glyphs,
         }
@@ -209,6 +218,12 @@ impl PreparationWork {
         self.itemized
     }
 
+    /// Returns the number of clusters for which the adapter selected a font.
+    #[must_use]
+    pub const fn selected_clusters(self) -> u32 {
+        self.selected_clusters
+    }
+
     /// Returns the number of shaped runs.
     #[must_use]
     pub const fn shaped_runs(self) -> u32 {
@@ -219,6 +234,70 @@ impl PreparationWork {
     #[must_use]
     pub const fn shaped_glyphs(self) -> u32 {
         self.shaped_glyphs
+    }
+}
+
+/// Portable synthesis suggestions retained with an exact selected font.
+///
+/// Variation settings are shaping inputs. Embolden and skew are renderer-facing
+/// suggestions whose execution depends on renderer capabilities.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FontSynthesis {
+    variations: Arc<[FontVariation]>,
+    embolden: bool,
+    skew_degrees: Option<f32>,
+}
+
+impl FontSynthesis {
+    /// Validates and owns synthesis evidence from a preparation backend.
+    pub fn try_new(
+        variations: impl IntoIterator<Item = FontVariation>,
+        embolden: bool,
+        skew_degrees: Option<f32>,
+    ) -> Result<Self, PreparationError> {
+        let mut input: Vec<_> = variations.into_iter().collect();
+        if input.iter().any(|variation| !variation.value.is_finite())
+            || skew_degrees.is_some_and(|angle| !angle.is_finite())
+        {
+            return Err(PreparationError::invalid_output());
+        }
+        let mut variations = Vec::with_capacity(input.len());
+        while let Some(mut variation) = input.pop() {
+            if variation.value == 0.0 {
+                variation.value = 0.0;
+            }
+            if !variations
+                .iter()
+                .any(|candidate: &FontVariation| candidate.tag == variation.tag)
+            {
+                variations.push(variation);
+            }
+        }
+        variations.sort_by_key(|variation| variation.tag);
+        let skew_degrees = skew_degrees.filter(|angle| *angle != 0.0);
+        Ok(Self {
+            variations: variations.into(),
+            embolden,
+            skew_degrees,
+        })
+    }
+
+    /// Returns variation settings suggested by the font resolver.
+    #[must_use]
+    pub fn variations(&self) -> &[FontVariation] {
+        &self.variations
+    }
+
+    /// Returns whether the renderer should apply synthetic emboldening.
+    #[must_use]
+    pub const fn embolden(&self) -> bool {
+        self.embolden
+    }
+
+    /// Returns a synthetic skew angle in degrees, when requested.
+    #[must_use]
+    pub const fn skew_degrees(&self) -> Option<f32> {
+        self.skew_degrees
     }
 }
 
@@ -282,6 +361,7 @@ pub struct PreparedRun {
     script: [u8; 4],
     font: FontData,
     font_size: f32,
+    synthesis: FontSynthesis,
     normalized_coords: Vec<i16>,
     glyphs: Vec<PreparedGlyph>,
 }
@@ -294,6 +374,7 @@ impl PreparedRun {
         script: [u8; 4],
         font: FontData,
         font_size: f32,
+        synthesis: FontSynthesis,
         normalized_coords: impl IntoIterator<Item = i16>,
         glyphs: impl IntoIterator<Item = PreparedGlyph>,
     ) -> Result<Self, PreparationError> {
@@ -314,6 +395,7 @@ impl PreparedRun {
             script,
             font,
             font_size,
+            synthesis,
             normalized_coords: normalized_coords.into_iter().collect(),
             glyphs,
         })
@@ -347,6 +429,12 @@ impl PreparedRun {
     #[must_use]
     pub const fn font_size(&self) -> f32 {
         self.font_size
+    }
+
+    /// Returns synthesis suggestions selected for this font instance.
+    #[must_use]
+    pub const fn synthesis(&self) -> &FontSynthesis {
+        &self.synthesis
     }
 
     /// Returns normalized variation coordinates.
@@ -602,10 +690,44 @@ mod tests {
     use peniko::Blob;
 
     use super::{
-        GlyphPaintCoverage, GlyphPaintSegment, PreparationErrorKind, PreparedGlyph,
+        FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, PreparationErrorKind, PreparedGlyph,
         PreparedParagraph, PreparedRun,
     };
-    use crate::{DocumentId, FontData, PaintSlot, ParagraphId, Rect, Vec2};
+    use crate::{DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, Tag, Vec2};
+
+    #[test]
+    fn synthesis_evidence_is_validated_canonical_and_last_wins() {
+        let wght = Tag::new(b"wght");
+        let wdth = Tag::new(b"wdth");
+        let synthesis = FontSynthesis::try_new(
+            [
+                FontVariation::new(wght, 400.0),
+                FontVariation::new(wdth, 75.0),
+                FontVariation::new(wght, 700.0),
+            ],
+            true,
+            Some(0.0),
+        )
+        .expect("finite synthesis evidence is valid");
+        assert_eq!(
+            synthesis.variations(),
+            &[
+                FontVariation::new(wdth, 75.0),
+                FontVariation::new(wght, 700.0),
+            ],
+            "synthesis axes must be tag ordered with duplicate-last-wins semantics"
+        );
+        assert!(synthesis.embolden(), "embolden evidence must be retained");
+        assert_eq!(
+            synthesis.skew_degrees(),
+            None,
+            "zero skew must have the canonical absent representation"
+        );
+        assert!(
+            FontSynthesis::try_new([FontVariation::new(wght, f32::NAN)], false, None).is_err(),
+            "non-finite synthesis evidence must fail at the adapter boundary"
+        );
+    }
 
     #[test]
     fn prepared_paragraph_rejects_a_gap_between_runs() {
@@ -641,6 +763,7 @@ mod tests {
             *b"Latn",
             FontData::new(Blob::from(vec![0_u8]), 0),
             16.,
+            FontSynthesis::default(),
             [],
             [glyph],
         )

@@ -19,7 +19,10 @@ pub use document::{
 };
 pub use error::{EditError, EditErrorKind, SceneError, SceneErrorKind, StyleError, StyleErrorKind};
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
-pub use parlance::{FontFeature, FontVariation, Language, Tag};
+pub use parlance::{
+    FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight, FontWidth,
+    GenericFamily, Language, Script, Tag,
+};
 pub use peniko::{Brush, Color, FontData};
 pub use scene::{
     LayoutEngine, SceneCaret, SceneFragment, SceneFragmentId, SceneGlyph, SceneLine, SceneOutput,

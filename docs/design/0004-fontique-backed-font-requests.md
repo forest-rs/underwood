@@ -32,9 +32,11 @@ facade.
 2. Underwood reuses Parlance's `FontFamily`, `FontFamilyName`, `GenericFamily`,
    `FontWeight`, `FontWidth`, and `FontStyle` vocabulary. It does not implement
    a competing matcher or copy Fontique's database model.
-3. Every stored family request is owned and canonical: CSS source text is
-   parsed at construction, empty lists and duplicate family entries are
-   rejected, and equivalent requests have one cache identity.
+3. Every stored family request is owned and structurally canonical: CSS source
+   text is parsed at construction, empty lists and exact duplicate family
+   entries are rejected, and source/single/list spellings converge. Underwood
+   does not claim to canonicalize every matcher-equivalent family spelling;
+   Fontique still owns family-name matching semantics.
 4. Fontique queries receive the complete request plus the itemized script and
    language. The adapter performs only the cluster-coverage loop required to
    feed Parley Core.
@@ -87,7 +89,7 @@ pub use parlance::{
 
 let body = ShapingStyle::new(FontFamily::named("Roboto Flex"), 16.0)?
     .with_font_weight(FontWeight::new(450.0))?
-    .with_font_width(FontWidth::new(0.9))?
+    .with_font_width(FontWidth::from_ratio(0.9))?
     .with_font_style(FontStyle::Normal)?;
 ```
 
@@ -135,7 +137,7 @@ computed ShapingStyle
 ```
 
 Font selection is observable work. `PreparationWork` reports selected clusters,
-and `WorkReport` exposes a separate selection stage rather than hiding this new
+and `WorkReport::font_selection` exposes a separate stage rather than hiding this new
 cost in shaping. A cache hit reports no selection work.
 
 ## Executable proof

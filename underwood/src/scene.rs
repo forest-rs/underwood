@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::adapter::{
-    PaintRun, ParagraphInput, ParagraphPreparation, PreparationWork, PreparedGlyph,
+    FontSynthesis, PaintRun, ParagraphInput, ParagraphPreparation, PreparationWork, PreparedGlyph,
     PreparedParagraph, PreparedRun, ShapingRun, ShapingStyleId,
 };
 use crate::document::Paragraph;
@@ -487,6 +487,10 @@ fn record_preparation_work(report: &mut WorkReport, work: PreparationWork) {
     if work.itemized() {
         report.itemization.add_paragraph(1);
     }
+    if work.selected_clusters() > 0 {
+        report.font_selection.paragraphs += 1;
+        report.font_selection.records += work.selected_clusters() as usize;
+    }
     if work.shaped_runs() > 0 {
         report.shape.paragraphs += 1;
         report.shape.records += work.shaped_glyphs() as usize;
@@ -522,6 +526,7 @@ struct CachedFragment {
     clip: Rect,
     font: FontData,
     font_size: f32,
+    synthesis: FontSynthesis,
     normalized_coords: Arc<[i16]>,
     bidi_level: u8,
     script: [u8; 4],
@@ -729,6 +734,7 @@ fn flush_line(
                 clip,
                 font: run.font().clone(),
                 font_size: run.font_size(),
+                synthesis: run.synthesis().clone(),
                 normalized_coords: Arc::clone(&normalized_coords),
                 bidi_level: run.bidi_level(),
                 script: run.script(),
@@ -831,6 +837,7 @@ fn materialize_geometry(
             clip: fragment.clip + translate,
             font: fragment.font.clone(),
             font_size: fragment.font_size,
+            synthesis: fragment.synthesis.clone(),
             normalized_coords: Arc::clone(&fragment.normalized_coords),
             bidi_level: fragment.bidi_level,
             script: fragment.script,
@@ -910,6 +917,7 @@ impl StageWork {
 pub struct WorkReport {
     analysis: StageWork,
     itemization: StageWork,
+    font_selection: StageWork,
     shape: StageWork,
     flow: StageWork,
     geometry: StageWork,
@@ -928,6 +936,12 @@ impl WorkReport {
     #[must_use]
     pub const fn itemization(&self) -> StageWork {
         self.itemization
+    }
+
+    /// Returns font-selection work.
+    #[must_use]
+    pub const fn font_selection(&self) -> StageWork {
+        self.font_selection
     }
 
     /// Returns shaping work.
@@ -1061,6 +1075,7 @@ pub struct SceneFragment {
     clip: Rect,
     font: FontData,
     font_size: f32,
+    synthesis: FontSynthesis,
     normalized_coords: Arc<[i16]>,
     bidi_level: u8,
     script: [u8; 4],
@@ -1107,6 +1122,12 @@ impl SceneFragment {
     #[must_use]
     pub const fn font_size(&self) -> f32 {
         self.font_size
+    }
+
+    /// Returns synthesis suggestions selected for this font instance.
+    #[must_use]
+    pub const fn synthesis(&self) -> &FontSynthesis {
+        &self.synthesis
     }
 
     /// Returns normalized variation coordinates for the exact font instance.
@@ -1290,12 +1311,12 @@ mod tests {
 
     use super::{LayoutEngine, append_inline_flow_run, append_shaping_run};
     use crate::adapter::{
-        GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
+        FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, ParagraphInput, ParagraphPreparation,
         ParagraphPreparationOutput, PreparationError, PreparationWork, PreparedGlyph,
         PreparedParagraph, PreparedRun,
     };
     use crate::{
-        Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontData,
+        Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontData, FontFamily,
         InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, Rect, SceneErrorKind,
         SceneRequest, ShapingStyle, StyleMap, Vec2,
     };
@@ -1316,7 +1337,7 @@ mod tests {
                 let paragraph = PreparedParagraph::try_from_runs(input.paragraph(), text_len, [])?;
                 return Ok(ParagraphPreparationOutput::new(
                     paragraph,
-                    PreparationWork::new(true, true, 0, 0),
+                    PreparationWork::new(true, true, 0, 0, 0),
                 ));
             }
             let glyph_source = if self.split_utf8 {
@@ -1338,13 +1359,14 @@ mod tests {
                 *b"Latn",
                 FontData::new(Blob::from(vec![0_u8]), 0),
                 input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size(),
+                FontSynthesis::default(),
                 [],
                 [glyph],
             )?;
             let paragraph = PreparedParagraph::try_from_runs(input.paragraph(), text_len, [run])?;
             Ok(ParagraphPreparationOutput::new(
                 paragraph,
-                PreparationWork::new(true, true, 1, 1),
+                PreparationWork::new(true, true, 1, 1, 1),
             ))
         }
     }
@@ -1402,8 +1424,9 @@ mod tests {
     fn paragraph_projection_interns_repeated_style_partitions() {
         let (document, _, _) = one_leaf_document(*b"scene-test-doc04", "abc");
         let paragraph = document.snapshot().paragraphs()[0].id;
-        let first = ShapingStyle::new(16.).expect("test style is valid");
-        let second = ShapingStyle::new(24.).expect("test style is valid");
+        let first = ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style is valid");
+        let second =
+            ShapingStyle::new(FontFamily::named("Test"), 24.).expect("test style is valid");
         let mut shaping_styles = Vec::new();
         let mut shaping_runs = Vec::new();
         append_shaping_run(
@@ -1469,7 +1492,8 @@ mod tests {
             .expect("second paragraph text must append");
         edit.commit().expect("test document must commit");
 
-        let shaping = ShapingStyle::new(10.).expect("test style is valid");
+        let shaping =
+            ShapingStyle::new(FontFamily::named("Test"), 10.).expect("test style is valid");
         let compact = ComputedInlineStyle::new(
             shaping.clone(),
             InlineFlowStyle::new(
@@ -1516,7 +1540,7 @@ mod tests {
             .expect("test text must append");
         edit.commit().expect("test document must commit");
         let styles = StyleMap::new(ComputedInlineStyle::new(
-            ShapingStyle::new(16.).expect("test style must be valid"),
+            ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style must be valid"),
             InlineFlowStyle::default(),
             PaintSlot::new(0),
         ));

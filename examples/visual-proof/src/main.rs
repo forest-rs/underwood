@@ -14,9 +14,10 @@ use imaging::peniko::{Color, Fill, Style};
 use imaging::{PaintSink, Painter, RgbaImage, record};
 use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{
-    Brush, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature, FontVariation,
-    InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable,
-    ParagraphRole, SceneRequest, ShapingStyle, StyleMap, Tag, TextId, TextScene,
+    Brush, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature, FontStyle,
+    FontVariation, FontWeight, FontWidth, InlineFlowStyle, InlineRole, Language, LayoutEngine,
+    LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap,
+    Tag, TextId, TextScene,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
 
@@ -103,10 +104,15 @@ impl<'a> TextSceneAdapter<'a> {
                 y: imaging_coord(glyph.position().y),
             });
             let transform = self.placement * fragment.transform();
+            let glyph_transform = fragment
+                .synthesis()
+                .skew_degrees()
+                .map(|angle| Affine::skew(f64::from(angle.to_radians().tan()), 0.0));
             painter.with_fill_clip_transformed(fragment.clip(), self.placement, |painter| {
                 painter
                     .glyphs(fragment.font(), brush)
                     .transform(transform)
+                    .glyph_transform(glyph_transform)
                     .font_size(fragment.font_size())
                     .normalized_coords(fragment.normalized_coords())
                     .draw(&fill, glyphs);
@@ -386,10 +392,17 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
 }
 
 fn layout_engine() -> Result<LayoutEngine, AnyError> {
+    let arabic = Language::parse("ar")?;
     let fonts = FontSet::try_from_fonts([
         Font::from_bytes("latin", LATIN_FONT_BYTES)?,
         Font::from_bytes("arabic", ARABIC_FONT_BYTES)?,
-    ])?;
+    ])?
+    .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?
+    .with_fallbacks(
+        Script::from_bytes(*b"Arab"),
+        Some(arabic),
+        ["Noto Kufi Arabic"],
+    )?;
     let paragraphs = ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)?;
     Ok(LayoutEngine::new(paragraphs))
 }
@@ -404,7 +417,11 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     edit.append_text(second, InlineRole::TEXT, "unchanged sibling")?;
     let published = edit.commit()?;
 
-    let base = ComputedInlineStyle::new(ShapingStyle::new(40.0)?, InlineFlowStyle::default(), INK);
+    let base = ComputedInlineStyle::new(
+        ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 40.0)?,
+        InlineFlowStyle::default(),
+        INK,
+    );
     let mut styles = StyleMap::new(base.clone());
     styles.set(prefix, base.clone().with_paint(CORAL));
     styles.set(suffix, base.with_paint(CYAN));
@@ -462,15 +479,15 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
     let heading_text = edit.append_text(
         heading,
         InlineRole::TEXT,
-        "ONE DOCUMENT  /  wght + opsz  /  COMPUTED SHAPING + FLOW + PAINT",
+        "FONTIQUE REQUESTS  /  FAMILY + WEIGHT + WIDTH + STYLE  /  REAL INSTANCES",
     )?;
 
     let axis_row = edit.append_paragraph(ParagraphRole::BODY)?;
-    edit.append_text(axis_row, InlineRole::TEXT, "100 / 8   ")?;
+    edit.append_text(axis_row, InlineRole::TEXT, "100 / 75%   ")?;
     let light_text = edit.append_text(axis_row, InlineRole::EMPHASIS, "Variable")?;
-    edit.append_text(axis_row, InlineRole::TEXT, "          900 / 8   ")?;
+    edit.append_text(axis_row, InlineRole::TEXT, "      500 / 100%   ")?;
     let regular_text = edit.append_text(axis_row, InlineRole::EMPHASIS, "Variable")?;
-    edit.append_text(axis_row, InlineRole::TEXT, "          900 / 144   ")?;
+    edit.append_text(axis_row, InlineRole::TEXT, "      900 / 125%   ")?;
     let black_text = edit.append_text(axis_row, InlineRole::EMPHASIS, "Variable")?;
 
     let feature_row = edit.append_paragraph(ParagraphRole::BODY)?;
@@ -482,27 +499,35 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         "        liga 0  /  6 glyphs   ",
     )?;
     let ligatures_off = edit.append_text(feature_row, InlineRole::EMPHASIS, "office")?;
+    edit.append_text(
+        feature_row,
+        InlineRole::TEXT,
+        "        Arab + ar fallback / 14° oblique   ",
+    )?;
+    let arabic_text = edit.append_text(feature_row, InlineRole::EMPHASIS, "مرحبا")?;
     let published = edit.commit()?;
 
     let english = Language::parse("en")?;
     let wght = Tag::new(b"wght");
     let opsz = Tag::new(b"opsz");
     let liga = Tag::new(b"liga");
-    let label_shaping = ShapingStyle::new(14.0)?.with_language(Some(english));
+    let label_shaping = ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 14.0)?
+        .with_language(Some(english));
     let label_style = ComputedInlineStyle::new(
         label_shaping.clone(),
         InlineFlowStyle::new(LineHeight::from_multiplier(1.1)?),
         MUTED,
     );
     let heading_style = ComputedInlineStyle::new(
-        ShapingStyle::new(17.0)?.with_language(Some(english)),
+        ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 17.0)?
+            .with_language(Some(english)),
         InlineFlowStyle::new(LineHeight::from_multiplier(1.2)?),
         MUTED,
     );
-    let light_style = variable_style(36.0, 100.0, 8.0, CORAL, english, wght, opsz)?;
-    let regular_style = variable_style(46.0, 900.0, 8.0, CYAN, english, wght, opsz)?;
-    let black_style = variable_style(58.0, 900.0, 144.0, GOLD, english, wght, opsz)?;
-    let feature_shaping = ShapingStyle::new(32.0)?
+    let light_style = variable_style(36.0, 100.0, 0.75, 8.0, CORAL, english, opsz)?;
+    let regular_style = variable_style(46.0, 500.0, 1.0, 36.0, CYAN, english, opsz)?;
+    let black_style = variable_style(58.0, 900.0, 1.25, 144.0, GOLD, english, opsz)?;
+    let feature_shaping = ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 32.0)?
         .with_language(Some(english))
         .with_variations([
             FontVariation::new(wght, 650.0),
@@ -521,6 +546,13 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         feature_flow,
         CORAL,
     );
+    let arabic_style = ComputedInlineStyle::new(
+        ShapingStyle::new(underwood::FontFamily::named("Absent Primary Family"), 32.0)?
+            .with_language(Some(Language::parse("ar")?))
+            .with_font_style(FontStyle::Oblique(Some(14.0)))?,
+        feature_flow,
+        GOLD,
+    );
 
     let mut styles = StyleMap::new(label_style);
     styles.set(heading_text, heading_style);
@@ -529,6 +561,7 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
     styles.set(black_text, black_style);
     styles.set(ligatures_on, ligatures_on_style);
     styles.set(ligatures_off, ligatures_off_style);
+    styles.set(arabic_text, arabic_style);
 
     let paints = poster_paints();
     let request = SceneRequest::new(FiniteWidth::new(1_350.0)?, &styles, &paints);
@@ -549,6 +582,25 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         glyph_count(scene, ligatures_off),
         6,
         "explicit liga-off office must preserve six glyphs"
+    );
+    let arabic_fragment = scene
+        .fragments()
+        .iter()
+        .find(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == arabic_text)
+        })
+        .expect("Fontique fallback specimen must produce a fragment");
+    assert_eq!(
+        arabic_fragment.font().data.as_ref(),
+        ARABIC_FONT_BYTES,
+        "the specimen must retain the exact configured Arabic fallback"
+    );
+    assert_eq!(
+        arabic_fragment.synthesis().skew_degrees(),
+        Some(14.0),
+        "the specimen must retain Fontique's synthetic oblique evidence"
     );
     let light_coords = coordinates(scene, light_text);
     let regular_coords = coordinates(scene, regular_text);
@@ -585,19 +637,18 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
 fn variable_style(
     font_size: f32,
     weight: f32,
+    width: f32,
     optical_size: f32,
     paint: PaintSlot,
     language: Language,
-    weight_tag: Tag,
     optical_size_tag: Tag,
 ) -> Result<ComputedInlineStyle, AnyError> {
     Ok(ComputedInlineStyle::new(
-        ShapingStyle::new(font_size)?
+        ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), font_size)?
             .with_language(Some(language))
-            .with_variations([
-                FontVariation::new(weight_tag, weight),
-                FontVariation::new(optical_size_tag, optical_size),
-            ])?,
+            .with_font_weight(FontWeight::new(weight))?
+            .with_font_width(FontWidth::from_ratio(width))?
+            .with_variations([FontVariation::new(optical_size_tag, optical_size)])?,
         InlineFlowStyle::new(LineHeight::from_multiplier(1.05)?),
         paint,
     ))
@@ -663,7 +714,7 @@ fn layout_scene(
     let published = edit.commit()?;
 
     let base = ComputedInlineStyle::new(
-        ShapingStyle::new(font_size)?,
+        ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), font_size)?,
         InlineFlowStyle::default(),
         INK,
     );
