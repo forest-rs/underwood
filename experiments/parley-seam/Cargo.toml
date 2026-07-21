@@ -11,16 +11,16 @@ license.workspace = true
 publish = false
 
 [dependencies]
-fontique = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+fontique = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
   "std",
 ] }
-parlance = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+parlance = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
   "std",
 ] }
-parley_core = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+parley_core = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
   "std",
 ] }
-parley_dev = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97" }
+parley_dev = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7" }
 
 [lints]
 workspace = true

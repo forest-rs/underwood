@@ -24,14 +24,14 @@ license = "Apache-2.0 OR MIT"
 repository = "https://github.com/forest-rs/underwood"
 
 [workspace.dependencies]
-fontique = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+fontique = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
   "libm",
 ] }
 imaging = "0.0.1"
 imaging_vello_cpu = "0.0.2"
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
-parlance = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false }
-parley_core = { git = "https://github.com/linebender/parley.git", rev = "45da4a90248b1600277a4294b70d8bfde5ca8e97", default-features = false, features = [
+parlance = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false }
+parley_core = { git = "https://github.com/linebender/parley.git", rev = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7", default-features = false, features = [
   "libm",
 ] }
 peniko = { version = "0.6.1", default-features = false, features = ["libm"] }

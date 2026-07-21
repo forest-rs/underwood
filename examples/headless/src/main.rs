@@ -178,6 +178,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(14.0),
         "the static fallback must retain Fontique's synthetic oblique evidence"
     );
+    let arabic_visual_sources: Vec<_> = first_scene
+        .scene()
+        .fragments()
+        .iter()
+        .filter_map(|fragment| {
+            fragment
+                .source()
+                .filter(|source| source.text() == first_arabic)
+                .map(|source| source.bytes())
+        })
+        .collect();
+    assert!(
+        arabic_visual_sources.len() > 1
+            && arabic_visual_sources
+                .first()
+                .expect("length was checked")
+                .start
+                > arabic_visual_sources
+                    .last()
+                    .expect("length was checked")
+                    .start
+            && arabic_visual_sources
+                .windows(2)
+                .all(|pair| pair[0].start >= pair[1].start),
+        "RTL clusters must lower in visual order while retaining logical source ranges: {arabic_visual_sources:?}"
+    );
     let direct_arabic_fragment = first_scene
         .scene()
         .fragments()
@@ -224,6 +250,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         glyph_count(first_scene.scene(), ligatures_off),
         6,
         "explicit liga-off office must preserve six glyphs"
+    );
+    assert!(
+        first_scene.scene().fragments().iter().any(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == ligatures_on && source.bytes() == (1..4))
+        }),
+        "the retained ffi glyph must own the full three-character source range"
     );
     let light_coords = coordinates(first_scene.scene(), variable_light);
     let black_coords = coordinates(first_scene.scene(), variable_black);
@@ -451,7 +485,10 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
     let base = ComputedInlineStyle::new(light, InlineFlowStyle::default(), PaintSlot::new(0));
     let mut styles = StyleMap::new(base.clone());
     styles.set(changed_text, base);
-    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let paint = PaintTable::from_brushes([
+        Brush::Solid(Color::BLACK),
+        Brush::Solid(Color::from_rgb8(0x20, 0x50, 0xa0)),
+    ]);
     let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(
         TextData::compiled_minimal(),
         font_catalog()?,
@@ -465,7 +502,7 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         InlineFlowStyle::default(),
         PaintSlot::new(0),
     );
-    styles.set(changed_text, black);
+    styles.set(changed_text, black.clone());
     let request = SceneRequest::new(FiniteWidth::new(400.0)?, &styles, &paint);
     let changed = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
@@ -512,6 +549,14 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         error.preparation(),
         Some(PreparationErrorKind::MissingFont),
         "missing family failure must retain the stable MissingFont diagnostic"
+    );
+    styles.set(changed_text, black.with_paint(PaintSlot::new(1)));
+    let request = SceneRequest::new(FiniteWidth::new(400.0)?, &styles, &paint);
+    let recovered = layout.prepare(published.snapshot(), &request)?;
+    assert_eq!(
+        recovered.work().shape().paragraphs(),
+        1,
+        "a paint-driven retry after failed shaping must rebuild invalidated retained text"
     );
 
     missing_coverage_proof()?;

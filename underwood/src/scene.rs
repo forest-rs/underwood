@@ -472,10 +472,20 @@ fn validate_prepared(
 ) -> Result<(), SceneError> {
     for run in prepared.runs() {
         let source = run.source();
-        if projection
+        let Some(source_text) = projection
             .text
             .get(source.start as usize..source.end as usize)
-            .is_none()
+        else {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                prepared.paragraph(),
+                source,
+            ));
+        };
+        if run.glyphs().is_empty()
+            && !source_text
+                .chars()
+                .all(|character| matches!(character, '\n' | '\r' | '\u{2028}' | '\u{2029}'))
         {
             return Err(SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
@@ -1354,6 +1364,7 @@ mod tests {
     #[derive(Debug)]
     struct EchoAdapter {
         split_utf8: bool,
+        glyphless: bool,
     }
 
     impl ParagraphPreparation for EchoAdapter {
@@ -1375,14 +1386,23 @@ mod tests {
             } else {
                 0..text_len
             };
-            let segment = GlyphPaintSegment::new(
-                glyph_source.clone(),
-                input.paint_runs()[0].slot(),
-                Rect::new(0., -16., 10., 4.),
-            )?;
-            let coverage = GlyphPaintCoverage::try_from_segments([segment])?;
-            let glyph =
-                PreparedGlyph::try_new(7, glyph_source, Vec2::new(10., 0.), Vec2::ZERO, coverage)?;
+            let glyphs = if self.glyphless {
+                Vec::new()
+            } else {
+                let segment = GlyphPaintSegment::new(
+                    glyph_source.clone(),
+                    input.paint_runs()[0].slot(),
+                    Rect::new(0., -16., 10., 4.),
+                )?;
+                let coverage = GlyphPaintCoverage::try_from_segments([segment])?;
+                vec![PreparedGlyph::try_new(
+                    7,
+                    glyph_source,
+                    Vec2::new(10., 0.),
+                    Vec2::ZERO,
+                    coverage,
+                )?]
+            };
             let run = PreparedRun::try_new(
                 0..text_len,
                 0,
@@ -1391,7 +1411,7 @@ mod tests {
                 input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size(),
                 FontSynthesis::default(),
                 [],
-                [glyph],
+                glyphs,
             )?;
             let paragraph = PreparedParagraph::try_from_runs(input.paragraph(), text_len, [run])?;
             Ok(ParagraphPreparationOutput::new(
@@ -1404,7 +1424,10 @@ mod tests {
     #[test]
     fn layout_rejects_adapter_ranges_inside_a_utf8_scalar() {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc01", "é");
-        let mut layout = LayoutEngine::new(EchoAdapter { split_utf8: true });
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: true,
+            glyphless: false,
+        });
         let request = SceneRequest::new(
             FiniteWidth::new(100.).expect("test width is valid"),
             &styles,
@@ -1430,10 +1453,32 @@ mod tests {
     }
 
     #[test]
+    fn layout_rejects_glyphless_non_control_source() {
+        let (document, styles, paint) = one_leaf_document(*b"scene-test-doc06", "a");
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            glyphless: true,
+        });
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let error = layout
+            .prepare(&document.snapshot(), &request)
+            .expect_err("glyphless non-control source must be rejected");
+        assert_eq!(error.kind(), SceneErrorKind::SourceCoverage);
+        assert_eq!(error.source(), Some(0..1));
+    }
+
+    #[test]
     fn fragment_identity_is_distinct_across_documents() {
         let (first, first_styles, first_paint) = one_leaf_document(*b"scene-test-doc02", "a");
         let (second, second_styles, second_paint) = one_leaf_document(*b"scene-test-doc03", "b");
-        let mut layout = LayoutEngine::new(EchoAdapter { split_utf8: false });
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            glyphless: false,
+        });
         let width = FiniteWidth::new(100.).expect("test width is valid");
         let first_request = SceneRequest::new(width, &first_styles, &first_paint);
         let first_scene = layout
@@ -1544,7 +1589,10 @@ mod tests {
         spacious_styles.set(text, compact);
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let width = FiniteWidth::new(100.).expect("test width is valid");
-        let mut layout = LayoutEngine::new(EchoAdapter { split_utf8: false });
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            glyphless: false,
+        });
 
         let compact_request = SceneRequest::new(width, &compact_styles, &paint);
         let compact_scene = layout

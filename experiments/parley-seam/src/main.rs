@@ -12,10 +12,10 @@ use fontique::{Blob, Synthesis};
 use parlance::{FontFeature, FontVariation};
 use parley_core::{
     Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, Boundary, FontInstance, ShapeOptions,
-    Shaper,
+    ShapedText, Shaper, shape::ClusterData,
 };
 
-const PARLEY_REVISION: &str = "45da4a90248b1600277a4294b70d8bfde5ca8e97";
+const PARLEY_REVISION: &str = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7";
 const CORPUS: &str = "office affinity — مرحبا بالعالم";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,10 +53,9 @@ struct GlyphRecord {
     cluster: usize,
     source_bytes: Range<usize>,
     source_chars: Range<usize>,
-    x_advance: i32,
-    y_advance: i32,
-    x_offset: i32,
-    y_offset: i32,
+    advance_bits: u32,
+    x_offset_bits: u32,
+    y_offset_bits: u32,
     paint_slots: Vec<u16>,
 }
 
@@ -91,7 +90,6 @@ struct ShapeConfig<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CurrentGap {
-    RetainedShapedText,
     BoundedBreakReshaping,
     VerticalShaping,
     CoreInlineObjects,
@@ -100,7 +98,6 @@ enum CurrentGap {
 
 fn current_gaps() -> &'static [CurrentGap] {
     &[
-        CurrentGap::RetainedShapedText,
         CurrentGap::BoundedBreakReshaping,
         CurrentGap::VerticalShaping,
         CurrentGap::CoreInlineObjects,
@@ -136,8 +133,7 @@ fn load_font(
         source_name,
         source_digest,
         instance: FontInstance {
-            blob: Blob::from(bytes),
-            index: 0,
+            font: parley_core::FontData::new(Blob::from(bytes), 0),
             synthesis: Synthesis::default(),
         },
     })
@@ -181,8 +177,8 @@ fn prepare(
     );
     let analysis_digest = digest_analysis(&analysis);
     let analysis_data_sources = AnalysisDataSources::new();
-    let byte_offsets = char_byte_offsets(text);
     let mut shaper = Shaper::default();
+    let mut shaped_text = ShapedText::new();
     let mut items = Vec::new();
     let mut runs = Vec::new();
 
@@ -201,7 +197,7 @@ fn prepare(
             font: font.choice,
         });
 
-        shaper.shape_item(
+        let appended = shaper.shape_item(
             text,
             &analysis,
             &item,
@@ -214,16 +210,10 @@ fn prepare(
             },
             |_| Some(font.instance.clone()),
             &analysis_data_sources,
-            |run| {
-                runs.push(copy_run(
-                    run,
-                    item.bidi_level,
-                    script,
-                    font,
-                    paint_slots,
-                    &byte_offsets,
-                ));
-            },
+            &mut shaped_text,
+        );
+        runs.extend(
+            appended.map(|run_index| copy_run(&shaped_text, run_index, script, font, paint_slots)),
         );
     }
 
@@ -241,71 +231,124 @@ fn prepare(
 }
 
 fn copy_run(
-    run: parley_core::ShapedRun<'_>,
-    bidi_level: u8,
+    shaped_text: &ShapedText,
+    run_index: usize,
     script: [u8; 4],
     font: &FontAsset,
     paint_slots: &[u16],
-    byte_offsets: &[usize],
 ) -> RunRecord {
-    let infos = run.glyph_buffer.glyph_infos();
-    let positions = run.glyph_buffer.glyph_positions();
-    let mut cluster_starts: Vec<usize> = infos
-        .iter()
-        .map(|info| {
-            run.range.char_range.start
-                + usize::try_from(info.cluster).expect("glyph cluster must fit usize")
-        })
-        .collect();
-    cluster_starts.sort_unstable();
-    cluster_starts.dedup();
-
-    let glyphs = infos
-        .iter()
-        .zip(positions)
-        .map(|(info, position)| {
-            let cluster = run.range.char_range.start
-                + usize::try_from(info.cluster).expect("glyph cluster must fit usize");
-            let next = cluster_starts
-                .iter()
-                .copied()
-                .find(|candidate| *candidate > cluster)
-                .unwrap_or(run.range.char_range.end);
-            let source_chars = cluster..next;
-            let mut slots: Vec<u16> = paint_slots[source_chars.clone()].to_vec();
-            slots.sort_unstable();
-            slots.dedup();
-            GlyphRecord {
-                id: info.glyph_id,
-                cluster,
-                source_bytes: byte_offsets[source_chars.start]..byte_offsets[source_chars.end],
+    let run = &shaped_text.runs()[run_index];
+    assert_eq!(
+        shaped_text.fonts()[run.font_index],
+        font.instance,
+        "retained run must name the exact selected font instance"
+    );
+    let clusters = &shaped_text.clusters()[run.clusters_range.clone()];
+    let mut glyphs = Vec::with_capacity(run.glyphs_range.len());
+    let mut retain_cluster = |index: usize| {
+        let cluster = &clusters[index];
+        if cluster.is_ligature_component() {
+            return;
+        }
+        let (source_bytes, source_chars) = cluster_source(run, clusters, index);
+        let mut slots: Vec<u16> = paint_slots[source_chars.clone()].to_vec();
+        slots.sort_unstable();
+        slots.dedup();
+        if cluster.glyph_len == u8::MAX {
+            glyphs.push(GlyphRecord {
+                id: cluster.glyph_offset,
+                cluster: source_chars.start,
+                source_bytes,
                 source_chars,
-                x_advance: position.x_advance,
-                y_advance: position.y_advance,
-                x_offset: position.x_offset,
-                y_offset: position.y_offset,
+                advance_bits: cluster.advance.to_bits(),
+                x_offset_bits: 0.0_f32.to_bits(),
+                y_offset_bits: 0.0_f32.to_bits(),
                 paint_slots: slots,
-            }
-        })
-        .collect();
+            });
+            return;
+        }
+        let glyph_start = run.glyphs_range.start + cluster.glyph_offset as usize;
+        for glyph in
+            &shaped_text.glyphs()[glyph_start..glyph_start + usize::from(cluster.glyph_len)]
+        {
+            glyphs.push(GlyphRecord {
+                id: glyph.id,
+                cluster: source_chars.start,
+                source_bytes: source_bytes.clone(),
+                source_chars: source_chars.clone(),
+                advance_bits: glyph.advance.to_bits(),
+                x_offset_bits: glyph.x.to_bits(),
+                y_offset_bits: glyph.y.to_bits(),
+                paint_slots: slots.clone(),
+            });
+        }
+    };
+    if run.bidi_level & 1 == 1 {
+        for index in (0..clusters.len()).rev() {
+            retain_cluster(index);
+        }
+    } else {
+        for index in 0..clusters.len() {
+            retain_cluster(index);
+        }
+    }
 
     RunRecord {
-        byte_range: run.range.byte_range,
-        char_range: run.range.char_range,
-        bidi_level,
+        byte_range: run.range.byte_range.clone(),
+        char_range: run.range.char_range.clone(),
+        bidi_level: run.bidi_level,
         script,
         font: font.choice,
         font_digest: font.source_digest,
-        normalized_coords: run.coords.iter().map(|coord| coord.to_bits()).collect(),
+        normalized_coords: shaped_text.normalized_coords()[run.normalized_coords_range.clone()]
+            .iter()
+            .map(|coord| coord.to_bits())
+            .collect(),
         glyphs,
     }
 }
 
-fn char_byte_offsets(text: &str) -> Vec<usize> {
-    text.char_indices()
-        .map(|(offset, _)| offset)
-        .chain(std::iter::once(text.len()))
-        .collect()
+fn cluster_source(
+    run: &parley_core::ShapedRun,
+    clusters: &[ClusterData],
+    index: usize,
+) -> (Range<usize>, Range<usize>) {
+    let cluster = &clusters[index];
+    let mut byte_start = run.range.byte_range.start + usize::from(cluster.text_offset);
+    let mut byte_end = byte_start + usize::from(cluster.text_len);
+    let mut char_start = run.range.char_range.start + index;
+    let mut char_end = char_start + 1;
+    if cluster.is_ligature_start() {
+        if run.bidi_level & 1 == 1 {
+            for (component_index, component) in clusters[..index].iter().enumerate().rev() {
+                if !component.is_ligature_component() {
+                    break;
+                }
+                let start = run.range.byte_range.start + usize::from(component.text_offset);
+                assert_eq!(
+                    start + usize::from(component.text_len),
+                    byte_start,
+                    "RTL ligature components must be source adjacent"
+                );
+                byte_start = start;
+                char_start = run.range.char_range.start + component_index;
+            }
+        } else {
+            for (component_index, component) in clusters.iter().enumerate().skip(index + 1) {
+                if !component.is_ligature_component() {
+                    break;
+                }
+                let start = run.range.byte_range.start + usize::from(component.text_offset);
+                assert_eq!(
+                    start, byte_end,
+                    "LTR ligature components must be source adjacent"
+                );
+                byte_end += usize::from(component.text_len);
+                char_end = run.range.char_range.start + component_index + 1;
+            }
+        }
+    }
+    (byte_start..byte_end, char_start..char_end)
 }
 
 fn digest_analysis(analysis: &Analysis) -> u64 {
@@ -358,10 +401,9 @@ fn digest_physics(runs: &[RunRecord]) -> u64 {
             digest.usize(glyph.cluster);
             digest.range(&glyph.source_bytes);
             digest.range(&glyph.source_chars);
-            digest.bytes(&glyph.x_advance.to_le_bytes());
-            digest.bytes(&glyph.y_advance.to_le_bytes());
-            digest.bytes(&glyph.x_offset.to_le_bytes());
-            digest.bytes(&glyph.y_offset.to_le_bytes());
+            digest.u32(glyph.advance_bits);
+            digest.u32(glyph.x_offset_bits);
+            digest.u32(glyph.y_offset_bits);
         }
     }
     digest.finish()
@@ -512,7 +554,7 @@ mod tests {
     const FEATURE_CORPUS: &str = "AV";
 
     #[test]
-    fn current_callback_seam_copies_owned_deterministic_observations() {
+    fn retained_shaped_text_produces_deterministic_observations() {
         let fonts = load_fonts().expect("pinned Parley fonts must load");
         let slots = default_slots(CORPUS);
         let first = prepare(CORPUS, &fonts, &slots, config(&[], &[]));
@@ -522,7 +564,7 @@ mod tests {
         assert!(!first.runs.is_empty(), "shaping must emit owned runs");
         assert!(
             first.runs.iter().all(|run| !run.glyphs.is_empty()),
-            "every retained run must own copied glyph observations"
+            "every retained text run must expose glyph observations"
         );
     }
 
@@ -683,7 +725,6 @@ mod tests {
         assert_eq!(
             current_gaps(),
             &[
-                CurrentGap::RetainedShapedText,
                 CurrentGap::BoundedBreakReshaping,
                 CurrentGap::VerticalShaping,
                 CurrentGap::CoreInlineObjects,
