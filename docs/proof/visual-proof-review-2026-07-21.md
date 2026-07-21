@@ -6,10 +6,10 @@
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
   `8f09637ec658c345dbe4a511082b4c947057d7f4eb4443ec4bf63a70304bdc6a`
 - **Unsafe watch:** no `unsafe` in Underwood-owned Rust
-- **Remote gate:** pending the current pull request's Linux, macOS, and Windows
-  snapshot matrix
-- **Local result:** exact snapshot reproduction and the complete semantic
-  evidence suite pass
+- **Remote gate:** GitHub Actions run `29849889488`; all eight jobs passed,
+  including exact snapshot reproduction on Linux, macOS, and Windows
+- **Result:** exact snapshot reproduction, the complete semantic evidence
+  suite, MSRV, `no_std`, rustdoc, and repository-policy gates pass
 
 ## Lynx review
 

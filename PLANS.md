@@ -64,7 +64,7 @@ All five records are Accepted. Their private proof obligations continue as
 
 ## First semantic-to-scene campaign
 
-**Status:** Active
+**Status:** Complete — executable proof landed through PR #6
 
 **Beads:** `und-oh0.10.1`, `und-oh0.10.1.1`, `und-oh0.10.1.2`,
 `und-oh0.10.1.3`, `und-oh0.10.1.4`, `und-oh0.10.1.5`
