@@ -131,27 +131,12 @@ impl<A: HostApplication> NativeHost<A> {
             return;
         }
 
-        let Some(surface) = self.surface.as_mut() else {
-            return;
+        let presentation = match self.surface.as_mut() {
+            Some(surface) => present_frame(surface, width, height, &frame.rgba),
+            None => return,
         };
-        if let Err(error) = surface.resize(width, height) {
-            self.fail(event_loop, HostError::softbuffer(error));
-            return;
-        }
-        let mut buffer = match surface.buffer_mut() {
-            Ok(buffer) => buffer,
-            Err(error) => {
-                self.fail(event_loop, HostError::softbuffer(error));
-                return;
-            }
-        };
-        if let Err(error) = copy_rgba_to_softbuffer(&mut buffer, &frame.rgba) {
-            drop(buffer);
+        if let Err(error) = presentation {
             self.fail(event_loop, error);
-            return;
-        }
-        if let Err(error) = buffer.present() {
-            self.fail(event_loop, HostError::softbuffer(error));
             return;
         }
         window.set_title(&frame.window_title);
@@ -281,6 +266,20 @@ fn copy_rgba_to_softbuffer(target: &mut [u32], rgba: &[u8]) -> Result<(), HostEr
             u32::from(channels[2]) | (u32::from(channels[1]) << 8) | (u32::from(channels[0]) << 16);
     }
     Ok(())
+}
+
+fn present_frame(
+    surface: &mut Surface<Arc<Window>, Arc<Window>>,
+    width: NonZeroU32,
+    height: NonZeroU32,
+    rgba: &[u8],
+) -> Result<(), HostError> {
+    surface
+        .resize(width, height)
+        .map_err(HostError::softbuffer)?;
+    let mut buffer = surface.buffer_mut().map_err(HostError::softbuffer)?;
+    copy_rgba_to_softbuffer(&mut buffer, rgba)?;
+    buffer.present().map_err(HostError::softbuffer)
 }
 
 /// Fatal native-host error.
