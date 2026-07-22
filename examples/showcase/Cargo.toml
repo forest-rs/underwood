@@ -1,0 +1,22 @@
+[package]
+name = "underwood_showcase"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Live, resizable document showcase for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+imaging.workspace = true
+imaging_vello_cpu.workspace = true
+softbuffer.workspace = true
+underwood.workspace = true
+underwood_parley.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true

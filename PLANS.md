@@ -522,3 +522,67 @@ present, the proportional approximation is deleted, supported ligature/bidi/
 mark/overhang cases have public conformance evidence, unsupported coverage
 fails explicitly, the visual proof is regenerated and inspected, and all local
 plus remote gates pass.
+
+## Live document showcase
+
+**Status:** Complete — live review and remote proof green in PR #11
+
+### Goal
+
+Open one genuine semantic document in a resizable native window and make the
+retained Underwood pipeline visible in real time. Resizing must reflow mixed
+LTR/RTL paragraphs; a local edit, paint-only change, and animated variable-font
+axis must report the work they actually cause.
+
+### Fence
+
+The external showcase crate owns native events, presentation, demo composition,
+and narration. It explicitly does not own document semantics, font selection,
+shaping, line formation, renderer-neutral scene geometry, or rasterization.
+`winit` and `softbuffer` are example-only host dependencies; production crates
+remain toolkit- and renderer-independent.
+
+### Integration
+
+```text
+winit resize / keys / timer
+             |
+             v
+Underwood document -> retained TextScene -> imaging -> imaging_vello_cpu
+                                                          |
+                                                          v
+                                               RGBA -> softbuffer
+```
+
+### Steps
+
+1. Add the isolated native showcase crate and additive semantic heading roles.
+2. Compose one heading/deck/body document with variable Latin type, mixed
+   English/Arabic text, real fallback, and multiple paragraphs.
+3. Re-prepare on resize and present CPU-rendered pixels without moving host or
+   rendering dependencies into production crates.
+4. Add local-edit, paint-only, reset, and optional variable-axis animation
+   controls with visible `WorkReport` evidence.
+5. Run the app, inspect the live output at narrow and wide sizes, then run the
+   workspace Definition of Done and preserve a reliable static fallback.
+
+### Risks and controls
+
+- **Static poster in a window:** width changes must alter real line formation.
+- **Fake document:** the content is one snapshot with semantic heading and body
+  blocks, not separately positioned labels masquerading as document flow.
+- **Animation theater:** axis animation changes an executed shaping value and
+  reports shaping work; it is optional and off by default.
+- **Toolkit invasion:** all native and presentation dependencies stay in the
+  unpublished external example.
+- **Meeting fragility:** retain the landed deterministic poster and keep the
+  showcase event-driven when animation is disabled.
+
+### Completion
+
+The slice is complete: the native app visibly and smoothly reflows the real
+document, its controls exercise honest invalidation paths, the core dependency
+fence remains unchanged, and the full local and remote workspace gates pass.
+The live meeting demonstration succeeded, and GitHub Actions run `29911682384`
+proved the eight-job matrix across Linux, macOS, Windows, MSRV, rustdoc,
+repository policy, formatting, bare metal, and WebAssembly.

@@ -57,6 +57,12 @@ pub struct ParagraphRole(u8);
 impl ParagraphRole {
     /// Ordinary body paragraph.
     pub const BODY: Self = Self(0);
+
+    /// Top-level document heading.
+    pub const HEADING_1: Self = Self(1);
+
+    /// Second-level section heading.
+    pub const HEADING_2: Self = Self(2);
 }
 
 /// Semantic role of an inline text leaf.
@@ -382,5 +388,33 @@ mod tests {
         edit.commit().expect("replacement must commit");
         assert_eq!(old.text(leaf), Some("old"));
         assert_eq!(document.snapshot().text(leaf), Some("new"));
+    }
+
+    #[test]
+    fn paragraph_heading_roles_survive_snapshot_publication() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"document-test-02"));
+        let mut edit = document.edit();
+        edit.append_paragraph(ParagraphRole::HEADING_1)
+            .expect("level-one heading must append");
+        edit.append_paragraph(ParagraphRole::HEADING_2)
+            .expect("level-two heading must append");
+        edit.append_paragraph(ParagraphRole::BODY)
+            .expect("body paragraph must append");
+        let published = edit.commit().expect("document must publish");
+
+        let roles: alloc::vec::Vec<_> = published
+            .snapshot()
+            .paragraphs()
+            .iter()
+            .map(|paragraph| paragraph.role)
+            .collect();
+        assert_eq!(
+            roles,
+            [
+                ParagraphRole::HEADING_1,
+                ParagraphRole::HEADING_2,
+                ParagraphRole::BODY
+            ]
+        );
     }
 }

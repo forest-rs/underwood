@@ -2,6 +2,7 @@
 members = [
   "benches/semantic-scene",
   "examples/headless",
+  "examples/showcase",
   "examples/visual-proof",
   "experiments/flow",
   "experiments/parley-seam",
@@ -37,8 +38,20 @@ parley_core = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12
 ] }
 peniko = { version = "0.6.1", default-features = false, features = ["libm"] }
 png = "0.18.1"
+softbuffer = { version = "0.4.8", default-features = false, features = [
+  "wayland",
+  "wayland-dlopen",
+  "x11",
+  "x11-dlopen",
+] }
 underwood = { path = "underwood" }
 underwood_parley = { path = "underwood_parley" }
+winit = { version = "0.30.12", default-features = false, features = [
+  "rwh_06",
+  "wayland",
+  "wayland-dlopen",
+  "x11",
+] }
 
 [workspace.lints]
 # LINEBENDER LINT SET - Cargo.toml - v8
