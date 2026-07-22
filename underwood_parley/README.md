@@ -33,6 +33,15 @@ continuation clusters. Parley's `contributes_to_shaping` analysis identifies
 controls and format characters which intentionally produce no glyphs; their
 source remains explicit while shaping-only sentinel glyphs are discarded.
 
+Formed lines also retain a separate visual cluster stream. Every Parley cluster
+keeps its own source slice and advance, including ligature components,
+whitespace, combining source, and controls, while its left and right sides map
+to explicit paragraph-local boundaries and upstream/downstream affinities.
+Underwood can therefore project exact semantic hits and caret stops without
+reconstructing bidi direction from glyphs or using ink clips as interaction
+geometry. Soft wraps retain both affinities for their shared logical boundary,
+and mandatory breaks keep the visible caret before the control.
+
 Paint clips come from the selected font instance's real glyph outline bounds,
 queried through Parley Core with the run's exact normalized coordinates and
 scaled into layout space. Zero-advance marks therefore retain visible coverage,

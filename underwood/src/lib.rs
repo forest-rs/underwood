@@ -8,6 +8,8 @@ extern crate alloc;
 
 pub mod adapter;
 
+pub use adapter::TextAffinity;
+
 mod document;
 mod error;
 mod scene;
@@ -26,7 +28,8 @@ pub use parlance::{
 pub use peniko::{Brush, Color, FontData};
 pub use scene::{
     LayoutEngine, SceneCaret, SceneFragment, SceneFragmentId, SceneGlyph, SceneLine, SceneOutput,
-    SemanticFragment, SnapshotTextRange, StageWork, TextHit, TextScene, WorkReport,
+    SemanticFragment, SnapshotTextPosition, SnapshotTextRange, StageWork, TextHit, TextScene,
+    WorkReport,
 };
 pub use style::{
     ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, PaintSlot, PaintTable,

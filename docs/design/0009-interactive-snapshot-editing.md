@@ -231,10 +231,11 @@ explicit migration record.
 
 - `TextHit` changes from a whole-fragment source observation to an exact
   cluster hit with a collapsed revision-bound position.
-- `TextScene::caret` becomes fallible when a hit or position does not belong to
-  the scene's revision/source map.
-- Callers that used `hit.point().x` as the caret x-coordinate migrate to the
-  returned `SceneCaret` geometry.
+- `TextScene::caret(&hit)` becomes
+  `TextScene::caret(hit.position()) -> Option<SceneCaret>`; callers handle
+  `None` when a position does not belong to the scene's revision/source map.
+- `TextHit::point` is removed. Callers that used its x-coordinate as the caret
+  location migrate to the exact returned `SceneCaret` geometry.
 - Whole-leaf replacement remains source-compatible; interactive callers move
   to validated snapshot-range replacement.
 - No snapshot-local interaction type may be documented or serialized as a
