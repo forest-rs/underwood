@@ -9,6 +9,10 @@
 - **Unsafe watch:** no `unsafe` added
 - **Dependency watch:** native and rendering dependencies are example-only;
   production dependency edges are unchanged
+- **Human gate:** the release-mode live demonstration succeeded on 2026-07-22
+- **Remote gate:** GitHub Actions run
+  [`29911682384`](https://github.com/forest-rs/underwood/actions/runs/29911682384);
+  all eight required jobs passed
 
 ## Result
 
@@ -88,6 +92,8 @@ keyboard mapping, channel conversion, and vertical clipping. Repository-wide
 formatting, TOML formatting, all-target/all-feature clippy with warnings denied,
 workspace tests, denied-warning rustdoc, repository/text/Beads policy, Rust
 1.92, and bare-metal plus WebAssembly portability all pass locally.
+GitHub Actions repeated the complete matrix successfully on Linux, macOS, and
+Windows in run `29911682384`.
 
 At the default window size on the development Mac, release-mode smoke frames
 observed roughly `0.1–0.4 ms` for preparation and `3.9–6.9 ms` for imaging

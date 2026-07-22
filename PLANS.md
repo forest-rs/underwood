@@ -525,7 +525,7 @@ plus remote gates pass.
 
 ## Live document showcase
 
-**Status:** Complete locally — review and remote CI pending
+**Status:** Complete — live review and remote proof green in PR #11
 
 ### Goal
 
@@ -580,6 +580,9 @@ Underwood document -> retained TextScene -> imaging -> imaging_vello_cpu
 
 ### Completion
 
-The slice is complete when the native app visibly and smoothly reflows the real
+The slice is complete: the native app visibly and smoothly reflows the real
 document, its controls exercise honest invalidation paths, the core dependency
-fence remains unchanged, and local workspace gates pass.
+fence remains unchanged, and the full local and remote workspace gates pass.
+The live meeting demonstration succeeded, and GitHub Actions run `29911682384`
+proved the eight-job matrix across Linux, macOS, Windows, MSRV, rustdoc,
+repository policy, formatting, bare metal, and WebAssembly.
