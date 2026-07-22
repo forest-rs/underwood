@@ -9,11 +9,13 @@
 
 Turn the live retained-document proof into a genuinely interactive semantic
 document. A pointer must resolve to a real shaped cluster and caret affinity;
-dragging must produce bidi-correct selection geometry; keyboard input must
-publish one validated document transaction; and IME preedit must use a
-separate projection epoch without mutating committed text. That composition
-model must support both a simple one-way event feed and richer native text
-protocols that synchronously query and mutate host editor state.
+dragging must produce bidi-correct visual selections whose source can be more
+than one logical range; multiple selections must remain independent insertion
+points; keyboard input must publish one validated document transaction; and
+IME preedit must use a separate projection epoch without mutating committed
+text. That composition model must support both a simple one-way event feed and
+richer native text protocols that synchronously query and mutate host editor
+state.
 
 The product proof is deliberately demanding: mixed English and Arabic,
 combining marks, an OpenType ligature, soft and explicit line breaks, empty
@@ -46,6 +48,14 @@ derived positions. This campaign uses the latter.
 - A transaction consumes current snapshot positions and publishes replacement
   positions for its new revision. It does not claim that the old positions
   survived an unrelated edit.
+- One snapshot selection represents one insertion point. It retains an anchor,
+  an extent, logical-versus-visual interpretation, affinity, and one or more
+  logically ordered source ranges. A visual selection can require disjoint
+  logical ranges when it crosses bidi boundaries.
+- A snapshot selection set contains zero or more independent selections. Its
+  first member is the primary selection when the set is nonempty. Multiple
+  carets are not flattened into one multi-range selection because each must
+  remain an independent insertion point during editing.
 - Persistent selections, collaboration presence, comments, and bookmarks still
   require the durable-anchor representation gated by `und-oh0.10.1.1`.
 
@@ -92,37 +102,58 @@ The replacement contract has these invariants:
 2. A hit returns a collapsed snapshot position and the source cluster it hit.
 3. Caret lookup resolves the position and affinity against the current scene;
    it never uses the original pointer x-coordinate as caret geometry.
-4. Visual left/right movement walks adapter-produced caret stops. Logical
-   movement and deletion walk valid cluster boundaries, not UTF-8 bytes.
-5. Selection geometry includes every visual cluster whose logical source lies
-   between the endpoints, splits at bidi discontinuities and line boundaries,
-   and merges only adjacent rectangles on the same line.
-6. Every returned source position is a UTF-8 boundary in exactly one semantic
+4. Visual left/right movement walks adapter-produced cursor transitions.
+   Logical movement and deletion walk adapter-produced source-cluster
+   transitions, not UTF-8 bytes.
+5. The scene creates and moves whole selection sets. Moving without extension
+   collapses each nonempty selection toward the requested direction; extending
+   preserves each selection's anchor and recomputes its logical ranges from the
+   moved extent.
+6. Logical selection records one contiguous document interval, projected into
+   its leaf-local ranges. Visual selection follows the visual caret path and
+   records the logically ordered, nonoverlapping ranges covered by that path.
+   It never replaces those ranges with their logical union.
+7. Selection geometry accepts a whole selection set. It includes every visual
+   cluster covered by every member range, splits at selection, range, bidi, and
+   line boundaries, and tags every rectangle with its selection and range
+   indices. It merges only adjacent rectangles with the same ownership on the
+   same line.
+8. Every returned source position is a UTF-8 boundary in exactly one semantic
    text leaf. Leaf-boundary ownership follows affinity explicitly.
-7. Empty editable text has a valid caret when its paragraph contains an empty
+9. Empty editable text has a valid caret when its paragraph contains an empty
    text leaf; a structurally leafless paragraph remains non-editable.
+10. A selection set is revision-consistent. Stale or foreign members fail as a
+    unit; the scene never renders or moves the valid subset.
 
 ## Transaction contract
 
 The existing whole-leaf `replace_text` operation remains available. A new
-validated range replacement consumes two current snapshot positions in one
-text leaf and a replacement string.
+validated selection-set replacement consumes current snapshot selections and
+a replacement string.
 
-- Wrong-document, wrong-revision, reversed, cross-leaf, and non-UTF-8 ranges
-  fail before publication.
+- Every selection is one insertion point even when visual bidi selection gives
+  it several logical ranges. Replacement removes all of those ranges and
+  inserts the replacement once at the selection's first logical boundary.
+- Independent selections each receive the replacement once. The complete set
+  is validated before staging; duplicate insertion points and overlapping
+  source ranges are rejected rather than applied in an order-dependent way.
+- The first slice permits several selections and several affected paragraphs,
+  while every individual selection's ranges must stay inside one semantic text
+  leaf. Cross-leaf selection replacement remains a later structural operation.
+- Wrong-document, wrong-revision, unordered ranges, cross-leaf ranges,
+  overlapping selections, and non-UTF-8 ranges fail before publication.
 - Dropping the edit publishes nothing.
-- Commit publishes one new immutable snapshot and reports the affected
+- Commit publishes one new immutable snapshot and reports each affected
   paragraph once.
-- The edit result exposes the collapsed position immediately after inserted
-  text in the new revision so a single-writer caller does not manufacture a
-  position from a raw offset.
+- The edit result exposes a collapsed post-edit selection for every input
+  selection, in input order, so a single-writer caller does not manufacture
+  positions from raw offsets.
 - Backspace, delete, and selection replacement obtain their range from the
   scene interaction map. The document layer never guesses grapheme or visual
   boundaries.
 
 Cross-leaf and structural replacement remain later transaction operations.
-The first live editor keeps its editable multilingual specimen in one semantic
-leaf while hit testing and selection geometry remain document-wide.
+Hit testing and selection geometry remain document-wide.
 
 ## Composition contract
 
@@ -161,17 +192,20 @@ both through one revisioned *editable surface*:
 - The focus owner explicitly chooses which semantic text is exposed and how
   any leaves or paragraph separators are flattened. Platform offsets never
   silently mean global document offsets.
-- The surface snapshot binds document text, selection, composition, source
+- The surface snapshot binds document text, the complete selection set,
+  composition, source
   projection, and geometry to one document revision and one composition
   epoch. A synchronous callback cannot combine text from one snapshot with
   geometry from another.
 - Underwood positions stay UTF-8 and semantic. The platform adapter converts
   UTF-16, code-point, or protocol-specific ranges at the boundary and rejects
   offsets that do not map to a valid surface boundary.
-- A simple feed anchors its replacement range to the selection when a
+- A simple feed anchors its replacement range to the primary selection when a
   composition begins and retains that range across subsequent preedit
-  snapshots. A host-driven callback may provide an explicit replacement range,
-  but it is validated through the same surface mapping.
+  snapshots. Starting composition with several selections first collapses the
+  editable surface to that primary insertion point and reports the selection
+  change explicitly. A host-driven callback may provide an explicit
+  replacement range, but it is validated through the same surface mapping.
 - Text queries, first-rectangle queries, caret rectangles, and point hits are
   read-only views of the same exact scene interaction map used by selection.
 - Selection/text/layout changes produce explicit host-visible invalidation
@@ -199,10 +233,11 @@ This is the first independently landable PR.
 
 ### B. Snapshot transaction and selection
 
-Add validated snapshot positions, range replacement with returned post-edit
-position, visual/logical movement, and selection rectangles. The live proof
-must click, drag, insert, replace, backspace, and delete while reporting one
-affected paragraph and unchanged siblings.
+Add validated snapshot positions, multi-selection replacement with returned
+post-edit selections, visual/logical movement, and owned selection rectangles.
+The live proof must create multiple carets, drag a mixed-bidi visual selection
+that projects to multiple logical ranges, insert, replace, backspace, and
+delete while reporting exactly the affected paragraphs and unchanged siblings.
 
 ### C. Composition epoch
 
@@ -237,9 +272,26 @@ explicit migration record.
 - `TextHit::point` is removed. Callers that used its x-coordinate as the caret
   location migrate to the exact returned `SceneCaret` geometry.
 - Whole-leaf replacement remains source-compatible; interactive callers move
-  to validated snapshot-range replacement.
+  to `TextScene`-created `SnapshotTextSelectionSet` values and
+  `Document::replace_selections`.
+- Paragraph adapters migrate `PreparedParagraph::try_from_lines` calls to
+  `PreparedParagraph::try_new` and supply complete cursor movements, including
+  exact caret placement and optional crossed-source ranges.
 - No snapshot-local interaction type may be documented or serialized as a
   durable anchor.
+
+## Selection-model precedent
+
+The two-level shape deliberately follows TextKit 2's distinction rather than
+copying a single-range editor model. Apple's `NSTextLayoutManager` stores an
+array of selections; each `NSTextSelection` can itself contain logically
+ordered noncontiguous ranges, and those ranges constitute one insertion point.
+Underwood keeps its own renderer-neutral value types and revision laws, but
+preserves that separation because it is required for visual bidi selection and
+multi-caret editing.
+
+- <https://developer.apple.com/documentation/appkit/nstextlayoutmanager/textselections>
+- <https://developer.apple.com/documentation/uikit/nstextselection/textranges>
 
 ## Proof gates
 
@@ -252,7 +304,10 @@ The campaign is complete only when:
   stop and both bidi affinities;
 - selection-only changes perform zero document publication, analysis,
   shaping, line formation, and text geometry work;
-- one committed edit and one IME commit reshape only the affected paragraph;
+- visual mixed-bidi selection produces the expected disjoint logical ranges;
+  multiple selections keep distinct insertion points and geometry ownership;
+- one committed multi-selection edit reshapes only its affected paragraphs,
+  and one IME commit reshapes only its affected paragraph;
 - IME preedit never mutates the committed snapshot, and cancel reuses the
   committed cached formation;
 - one event-feed trace and one synchronous host-query trace drive the same

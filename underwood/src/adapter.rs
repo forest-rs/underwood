@@ -503,6 +503,136 @@ impl PreparedClusterSide {
     }
 }
 
+/// One paragraph-local cursor step supplied by a formation backend.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedCursorStep {
+    target: PreparedClusterSide,
+    source: Option<Range<u32>>,
+}
+
+impl PreparedCursorStep {
+    /// Creates a step and the source cluster crossed by it, when any.
+    #[must_use]
+    pub const fn new(target: PreparedClusterSide, source: Option<Range<u32>>) -> Self {
+        Self { target, source }
+    }
+
+    /// Returns the destination position.
+    #[must_use]
+    pub const fn target(&self) -> PreparedClusterSide {
+        self.target
+    }
+
+    /// Returns the source cluster crossed by this step.
+    ///
+    /// A transition across a soft wrap carries no source cluster.
+    #[must_use]
+    pub fn source(&self) -> Option<Range<u32>> {
+        self.source.clone()
+    }
+}
+
+/// Paragraph-local caret placement for one cursor position.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PreparedCaret {
+    line: u32,
+    inline: f64,
+}
+
+impl PreparedCaret {
+    /// Creates a caret placement in one prepared line.
+    pub fn try_new(line: u32, inline: f64) -> Result<Self, PreparationError> {
+        if !inline.is_finite() || inline < 0.0 {
+            return Err(PreparationError::invalid_output());
+        }
+        Ok(Self { line, inline })
+    }
+
+    /// Returns the prepared line index.
+    #[must_use]
+    pub const fn line(self) -> u32 {
+        self.line
+    }
+
+    /// Returns the inline-axis caret coordinate within the line.
+    #[must_use]
+    pub const fn inline(self) -> f64 {
+        self.inline
+    }
+}
+
+/// Paragraph-local cursor transitions supplied by a formation backend.
+///
+/// Underwood maps these positions into semantic snapshot positions without
+/// reconstructing bidi or soft-wrap cursor rules.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreparedCursorMovement {
+    position: PreparedClusterSide,
+    caret: PreparedCaret,
+    previous_visual: Option<PreparedCursorStep>,
+    next_visual: Option<PreparedCursorStep>,
+    previous_logical: Option<PreparedCursorStep>,
+    next_logical: Option<PreparedCursorStep>,
+}
+
+impl PreparedCursorMovement {
+    /// Creates the movement facts for one paragraph-local position.
+    #[must_use]
+    pub const fn new(
+        position: PreparedClusterSide,
+        caret: PreparedCaret,
+        previous_visual: Option<PreparedCursorStep>,
+        next_visual: Option<PreparedCursorStep>,
+        previous_logical: Option<PreparedCursorStep>,
+        next_logical: Option<PreparedCursorStep>,
+    ) -> Self {
+        Self {
+            position,
+            caret,
+            previous_visual,
+            next_visual,
+            previous_logical,
+            next_logical,
+        }
+    }
+
+    /// Returns the source position for these transitions.
+    #[must_use]
+    pub const fn position(&self) -> PreparedClusterSide {
+        self.position
+    }
+
+    /// Returns the exact paragraph-local caret placement.
+    #[must_use]
+    pub const fn caret(&self) -> PreparedCaret {
+        self.caret
+    }
+
+    /// Returns the preceding position in visual order.
+    #[must_use]
+    pub const fn previous_visual(&self) -> Option<&PreparedCursorStep> {
+        self.previous_visual.as_ref()
+    }
+
+    /// Returns the following position in visual order.
+    #[must_use]
+    pub const fn next_visual(&self) -> Option<&PreparedCursorStep> {
+        self.next_visual.as_ref()
+    }
+
+    /// Returns the preceding source-cluster boundary in logical order.
+    #[must_use]
+    pub const fn previous_logical(&self) -> Option<&PreparedCursorStep> {
+        self.previous_logical.as_ref()
+    }
+
+    /// Returns the following source-cluster boundary in logical order.
+    #[must_use]
+    pub const fn next_logical(&self) -> Option<&PreparedCursorStep> {
+        self.next_logical.as_ref()
+    }
+}
+
 /// One source cluster in line-local visual order.
 ///
 /// The paragraph adapter supplies both visual sides so the scene layer never
@@ -749,14 +879,16 @@ pub struct PreparedParagraph {
     paragraph: ParagraphId,
     text_len: u32,
     lines: Vec<PreparedLine>,
+    movements: Vec<PreparedCursorMovement>,
 }
 
 impl PreparedParagraph {
-    /// Validates and collects source-ordered formed lines.
-    pub fn try_from_lines(
+    /// Validates and collects formed lines plus complete cursor transitions.
+    pub fn try_new(
         paragraph: ParagraphId,
         text_len: u32,
         lines: impl IntoIterator<Item = PreparedLine>,
+        movements: impl IntoIterator<Item = PreparedCursorMovement>,
     ) -> Result<Self, PreparationError> {
         let lines: Vec<_> = lines.into_iter().collect();
         let mut previous_end = 0;
@@ -769,10 +901,79 @@ impl PreparedParagraph {
         if previous_end != text_len {
             return Err(PreparationError::invalid_output());
         }
+        let mut positions = Vec::new();
+        for line in &lines {
+            if line.clusters.is_empty() {
+                let affinity = if line.source.start == 0 {
+                    TextAffinity::Downstream
+                } else {
+                    TextAffinity::Upstream
+                };
+                push_unique_position(
+                    &mut positions,
+                    PreparedClusterSide::new(line.source.start, affinity),
+                );
+            } else {
+                for cluster in &line.clusters {
+                    push_unique_position(&mut positions, cluster.left);
+                    push_unique_position(&mut positions, cluster.right);
+                }
+            }
+        }
+        if positions.is_empty() && text_len == 0 {
+            positions.push(PreparedClusterSide::new(0, TextAffinity::Downstream));
+        }
+        let movements: Vec<_> = movements.into_iter().collect();
+        let movement_positions: Vec<_> = movements
+            .iter()
+            .map(PreparedCursorMovement::position)
+            .collect();
+        let cluster_sources: Vec<_> = lines
+            .iter()
+            .flat_map(|line| line.clusters.iter().map(|cluster| cluster.source.clone()))
+            .collect();
+        if positions
+            .iter()
+            .any(|position| !movement_positions.contains(position))
+            || movements.iter().enumerate().any(|(index, movement)| {
+                movements[..index]
+                    .iter()
+                    .any(|previous| previous.position == movement.position)
+                    || movement.position.offset > text_len
+                    || usize::try_from(movement.caret.line).map_or(true, |line| {
+                        if lines.is_empty() {
+                            line != 0 || movement.caret.inline != 0.0
+                        } else {
+                            lines
+                                .get(line)
+                                .is_none_or(|line| movement.caret.inline > line.advance)
+                        }
+                    })
+                    || movement.previous_visual.as_ref().is_some_and(|step| {
+                        !movement_positions.contains(&step.target)
+                            || !valid_step_source(step, &cluster_sources)
+                    })
+                    || movement.next_visual.as_ref().is_some_and(|step| {
+                        !movement_positions.contains(&step.target)
+                            || !valid_step_source(step, &cluster_sources)
+                    })
+                    || movement.previous_logical.as_ref().is_some_and(|step| {
+                        !movement_positions.contains(&step.target)
+                            || !valid_step_source(step, &cluster_sources)
+                    })
+                    || movement.next_logical.as_ref().is_some_and(|step| {
+                        !movement_positions.contains(&step.target)
+                            || !valid_step_source(step, &cluster_sources)
+                    })
+            })
+        {
+            return Err(PreparationError::invalid_output());
+        }
         Ok(Self {
             paragraph,
             text_len,
             lines,
+            movements,
         })
     }
 
@@ -792,6 +993,24 @@ impl PreparedParagraph {
     #[must_use]
     pub fn lines(&self) -> &[PreparedLine] {
         &self.lines
+    }
+
+    /// Returns complete paragraph-local cursor transitions.
+    #[must_use]
+    pub fn movements(&self) -> &[PreparedCursorMovement] {
+        &self.movements
+    }
+}
+
+fn valid_step_source(step: &PreparedCursorStep, cluster_sources: &[Range<u32>]) -> bool {
+    step.source
+        .as_ref()
+        .is_none_or(|source| cluster_sources.contains(source))
+}
+
+fn push_unique_position(positions: &mut Vec<PreparedClusterSide>, position: PreparedClusterSide) {
+    if !positions.contains(&position) {
+        positions.push(position);
     }
 }
 
@@ -1161,8 +1380,9 @@ mod tests {
 
     use super::{
         ClusterBoundary, ClusterWhitespace, FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment,
-        LineBreakReason, PreparationErrorKind, PreparedCluster, PreparedClusterSide, PreparedGlyph,
-        PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
+        LineBreakReason, PreparationErrorKind, PreparedCaret, PreparedCluster, PreparedClusterSide,
+        PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedLine, PreparedParagraph,
+        PreparedRun, TextAffinity,
     };
     use crate::{DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, Tag, Vec2};
 
@@ -1217,13 +1437,106 @@ mod tests {
         };
         let first = line(0..1);
         let second = line(2..3);
-        let error = PreparedParagraph::try_from_lines(paragraph, 3, [first, second])
+        let error = PreparedParagraph::try_new(paragraph, 3, [first, second], [])
             .expect_err("source gaps must be rejected at the adapter boundary");
         assert_eq!(
             error.kind(),
             PreparationErrorKind::InvalidOutput,
             "a source gap is invalid adapter output"
         );
+    }
+
+    #[test]
+    fn prepared_paragraph_rejects_incomplete_cursor_facts() {
+        let paragraph = ParagraphId {
+            document: DocumentId::from_bytes(*b"adapter-test-002"),
+            index: 0,
+        };
+        let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
+        let end = PreparedClusterSide::new(1, TextAffinity::Upstream);
+        let unknown = PreparedClusterSide::new(0, TextAffinity::Upstream);
+        let caret = PreparedCaret::try_new(0, 0.0).expect("test caret is valid");
+        let start_movement = PreparedCursorMovement::new(
+            start,
+            caret,
+            None,
+            Some(PreparedCursorStep::new(unknown, Some(0..1))),
+            None,
+            Some(PreparedCursorStep::new(end, Some(0..1))),
+        );
+        let end_movement = PreparedCursorMovement::new(
+            end,
+            caret,
+            Some(PreparedCursorStep::new(start, Some(0..1))),
+            None,
+            Some(PreparedCursorStep::new(start, Some(0..1))),
+            None,
+        );
+        let error =
+            PreparedParagraph::try_new(paragraph, 1, [line(0..1)], [start_movement, end_movement])
+                .expect_err("every cursor target must have its own movement record");
+        assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
+    }
+
+    #[test]
+    fn prepared_paragraph_rejects_a_caret_on_an_unknown_line() {
+        let paragraph = ParagraphId {
+            document: DocumentId::from_bytes(*b"adapter-test-003"),
+            index: 0,
+        };
+        let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
+        let end = PreparedClusterSide::new(1, TextAffinity::Upstream);
+        let invalid_caret = PreparedCaret::try_new(1, 0.0).expect("coordinates are finite");
+        let start_movement = PreparedCursorMovement::new(
+            start,
+            invalid_caret,
+            None,
+            Some(PreparedCursorStep::new(end, Some(0..1))),
+            None,
+            Some(PreparedCursorStep::new(end, Some(0..1))),
+        );
+        let end_movement = PreparedCursorMovement::new(
+            end,
+            invalid_caret,
+            Some(PreparedCursorStep::new(start, Some(0..1))),
+            None,
+            Some(PreparedCursorStep::new(start, Some(0..1))),
+            None,
+        );
+        let error =
+            PreparedParagraph::try_new(paragraph, 1, [line(0..1)], [start_movement, end_movement])
+                .expect_err("caret line identities must resolve inside the paragraph");
+        assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
+    }
+
+    #[test]
+    fn prepared_paragraph_rejects_a_step_source_that_is_not_a_cluster() {
+        let paragraph = ParagraphId {
+            document: DocumentId::from_bytes(*b"adapter-test-004"),
+            index: 0,
+        };
+        let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
+        let end = PreparedClusterSide::new(2, TextAffinity::Upstream);
+        let start_movement = PreparedCursorMovement::new(
+            start,
+            PreparedCaret::try_new(0, 0.0).expect("test caret is valid"),
+            None,
+            Some(PreparedCursorStep::new(end, Some(0..1))),
+            None,
+            Some(PreparedCursorStep::new(end, Some(0..1))),
+        );
+        let end_movement = PreparedCursorMovement::new(
+            end,
+            PreparedCaret::try_new(0, 1.0).expect("test caret is valid"),
+            Some(PreparedCursorStep::new(start, Some(0..1))),
+            None,
+            Some(PreparedCursorStep::new(start, Some(0..1))),
+            None,
+        );
+        let error =
+            PreparedParagraph::try_new(paragraph, 2, [line(0..2)], [start_movement, end_movement])
+                .expect_err("a cursor step must cross one actual prepared cluster");
+        assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
     }
 
     #[test]

@@ -50,6 +50,24 @@ Underwood does not yet make compatibility promises.
   pointer selection that clamps through whitespace or empty editable text;
   `TextScene::hit_test` remains exact and returns `None` outside cluster
   geometry.
+- Added revision-bound `SnapshotTextSelectionSet` support. Each
+  `SnapshotTextSelection` is one insertion point and can expose several
+  logically ordered ranges for visual bidi selection; independent carets are
+  separate members of the set. `TextScene::selection`, `selection_set`,
+  `move_selections`, and `selection_geometry` preserve this distinction.
+  `Document::replace_selections` validates and publishes the complete set,
+  inserts once per selection rather than once per range, and returns collapsed
+  post-edit selections in input order.
+- Replaced `PreparedParagraph::try_from_lines` with
+  `PreparedParagraph::try_new`, which also receives complete
+  `PreparedCursorMovement` records. Adapter implementations now provide exact
+  caret placement plus visual/logical cursor steps and the source cluster
+  crossed by each step. This keeps bidi, affinity, soft-wrap, and deletion
+  mechanics behind the paragraph seam instead of reconstructing them in
+  `TextScene`.
+- `ChangeSet::paragraphs` is now always in document order. Transactions that
+  apply source operations in reverse order no longer leak staging order into
+  their public change summary.
 
 ### Added
 

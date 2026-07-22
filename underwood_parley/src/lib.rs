@@ -24,9 +24,9 @@ use parley_core::{
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     GlyphPaintSegment, InlineFlowRun, LineBreakReason, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCluster,
-    PreparedClusterSide, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun, ShapingRun,
-    TextAffinity,
+    ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCaret, PreparedCluster,
+    PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedLine,
+    PreparedParagraph, PreparedRun, ShapingRun, TextAffinity,
 };
 use underwood::{
     FontData, FontFamilyName, FontVariation, GenericFamily, InlineFlowStyle, Language, ParagraphId,
@@ -410,8 +410,9 @@ impl ParagraphFormation for ParleyParagraphEngine {
         }
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
+        let movements = prepared_cursor_movements(&prepared_lines, text_len)?;
         let paragraph =
-            PreparedParagraph::try_from_lines(input.paragraph(), text_len, prepared_lines)?;
+            PreparedParagraph::try_new(input.paragraph(), text_len, prepared_lines, movements)?;
         let work = FormationWork::new(
             analyzed,
             shaped,
@@ -933,6 +934,374 @@ fn lower_prepared_cluster(
         left,
         right,
     )
+}
+
+#[derive(Clone, Debug)]
+struct CursorCluster {
+    source: Range<u32>,
+    rtl: bool,
+    line: usize,
+    visual_offset: f64,
+    advance: f64,
+    end_of_line: bool,
+    hard_line_end: bool,
+    soft_line_end: bool,
+}
+
+fn prepared_cursor_movements(
+    lines: &[PreparedLine],
+    text_len: u32,
+) -> Result<Vec<PreparedCursorMovement>, PreparationError> {
+    let mut clusters = Vec::new();
+    let mut positions = Vec::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        let first = clusters.len();
+        let mut visual_offset = 0.0;
+        for (cluster_index, cluster) in line.clusters().iter().enumerate() {
+            push_cursor_position(&mut positions, cluster.left());
+            push_cursor_position(&mut positions, cluster.right());
+            clusters.push(CursorCluster {
+                source: cluster.source(),
+                rtl: cluster.bidi_level() & 1 == 1,
+                line: line_index,
+                visual_offset,
+                advance: cluster.advance(),
+                end_of_line: cluster_index + 1 == line.clusters().len(),
+                hard_line_end: cluster_index + 1 == line.clusters().len()
+                    && line.break_reason() == LineBreakReason::Mandatory,
+                soft_line_end: false,
+            });
+            visual_offset += cluster.advance();
+        }
+        if clusters.len() > first
+            && line.break_reason() == LineBreakReason::Regular
+            && let Some(last) = clusters.last_mut()
+        {
+            last.soft_line_end = true;
+        }
+        if line.clusters().is_empty() {
+            let source = line.source();
+            push_cursor_position(
+                &mut positions,
+                PreparedClusterSide::new(
+                    source.start,
+                    if source.start == 0 {
+                        TextAffinity::Downstream
+                    } else {
+                        TextAffinity::Upstream
+                    },
+                ),
+            );
+        }
+    }
+    if positions.is_empty() && text_len == 0 {
+        positions.push(PreparedClusterSide::new(0, TextAffinity::Downstream));
+    }
+    let mut movements = Vec::new();
+    let mut index = 0;
+    while index < positions.len() {
+        let position = positions[index];
+        let movement = PreparedCursorMovement::new(
+            position,
+            prepared_cursor_caret(lines, &clusters, position)?,
+            previous_visual_cursor(&clusters, text_len, position)?,
+            next_visual_cursor(&clusters, text_len, position)?,
+            previous_logical_cursor(&clusters, text_len, position)?,
+            next_logical_cursor(&clusters, text_len, position)?,
+        );
+        for step in [
+            movement.previous_visual(),
+            movement.next_visual(),
+            movement.previous_logical(),
+            movement.next_logical(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            push_cursor_position(&mut positions, step.target());
+        }
+        movements.push(movement);
+        index += 1;
+    }
+    Ok(movements)
+}
+
+fn prepared_cursor_caret(
+    lines: &[PreparedLine],
+    clusters: &[CursorCluster],
+    position: PreparedClusterSide,
+) -> Result<PreparedCaret, PreparationError> {
+    let [left, right] = visual_cursor_clusters(clusters, position);
+    let placement = match (left, right) {
+        (Some(left), Some(right)) => {
+            let left_cluster = &clusters[left];
+            if left_cluster.end_of_line {
+                if left_cluster.soft_line_end {
+                    if left_cluster.rtl && position.affinity() == TextAffinity::Downstream
+                        || !left_cluster.rtl && position.affinity() == TextAffinity::Upstream
+                    {
+                        cursor_cluster_placement(left_cluster, true)
+                    } else {
+                        cursor_cluster_placement(&clusters[right], false)
+                    }
+                } else if left_cluster.hard_line_end {
+                    cursor_cluster_placement(&clusters[right], false)
+                } else {
+                    cursor_cluster_placement(left_cluster, true)
+                }
+            } else {
+                cursor_cluster_placement(left_cluster, true)
+            }
+        }
+        (Some(left), None) if clusters[left].hard_line_end => last_line_placement(lines),
+        (Some(left), _) => cursor_cluster_placement(&clusters[left], true),
+        (_, Some(right)) => cursor_cluster_placement(&clusters[right], false),
+        _ => last_line_placement(lines),
+    };
+    PreparedCaret::try_new(
+        u32::try_from(placement.0).map_err(|_| PreparationError::invalid_output())?,
+        placement.1,
+    )
+}
+
+fn cursor_cluster_placement(cluster: &CursorCluster, at_end: bool) -> (usize, f64) {
+    (
+        cluster.line,
+        cluster.visual_offset + if at_end { cluster.advance } else { 0.0 },
+    )
+}
+
+fn last_line_placement(lines: &[PreparedLine]) -> (usize, f64) {
+    (lines.len().saturating_sub(1), 0.0)
+}
+
+fn push_cursor_position(positions: &mut Vec<PreparedClusterSide>, position: PreparedClusterSide) {
+    if !positions.contains(&position) {
+        positions.push(position);
+    }
+}
+
+fn previous_visual_cursor(
+    clusters: &[CursorCluster],
+    text_len: u32,
+    position: PreparedClusterSide,
+) -> Result<Option<PreparedCursorStep>, PreparationError> {
+    let [left, right] = visual_cursor_clusters(clusters, position);
+    if let (Some(left), Some(right)) = (left, right)
+        && clusters[left].soft_line_end
+    {
+        if clusters[left].rtl && position.affinity() == TextAffinity::Upstream {
+            let index = if clusters[right].rtl {
+                clusters[left].source.start
+            } else {
+                clusters[left].source.end
+            };
+            return normalize_cursor(clusters, text_len, index, TextAffinity::Downstream)
+                .map(|target| Some(PreparedCursorStep::new(target, None)));
+        } else if !clusters[left].rtl && position.affinity() == TextAffinity::Downstream {
+            let index = if clusters[right].rtl {
+                clusters[right].source.end
+            } else {
+                clusters[right].source.start
+            };
+            return normalize_cursor(clusters, text_len, index, TextAffinity::Upstream)
+                .map(|target| Some(PreparedCursorStep::new(target, None)));
+        }
+    }
+    let Some(left) = left else {
+        return Ok(None);
+    };
+    let cluster = &clusters[left];
+    let index = if cluster.rtl {
+        cluster.source.end
+    } else {
+        cluster.source.start
+    };
+    let source = cluster.source.clone();
+    normalize_cursor(
+        clusters,
+        text_len,
+        index,
+        affinity_for_visual_direction(cluster.rtl, false),
+    )
+    .map(|target| Some(PreparedCursorStep::new(target, Some(source))))
+}
+
+fn next_visual_cursor(
+    clusters: &[CursorCluster],
+    text_len: u32,
+    position: PreparedClusterSide,
+) -> Result<Option<PreparedCursorStep>, PreparationError> {
+    let [left, right] = visual_cursor_clusters(clusters, position);
+    if let (Some(left), Some(right)) = (left, right) {
+        if clusters[left].soft_line_end {
+            if clusters[left].rtl && position.affinity() == TextAffinity::Downstream {
+                let index = if clusters[right].rtl {
+                    clusters[right].source.end
+                } else {
+                    clusters[right].source.start
+                };
+                return normalize_cursor(clusters, text_len, index, TextAffinity::Upstream)
+                    .map(|target| Some(PreparedCursorStep::new(target, None)));
+            } else if !clusters[left].rtl && position.affinity() == TextAffinity::Upstream {
+                let index = if clusters[right].rtl {
+                    clusters[right].source.end
+                } else {
+                    clusters[right].source.start
+                };
+                return normalize_cursor(clusters, text_len, index, TextAffinity::Downstream)
+                    .map(|target| Some(PreparedCursorStep::new(target, None)));
+            }
+        }
+        let source = clusters[right].source.clone();
+        return cursor_after_visual_cluster(clusters, text_len, right)
+            .map(|target| Some(PreparedCursorStep::new(target, Some(source))));
+    }
+    right.map_or(Ok(None), |right| {
+        let source = clusters[right].source.clone();
+        cursor_after_visual_cluster(clusters, text_len, right)
+            .map(Some)
+            .map(|target| target.map(|target| PreparedCursorStep::new(target, Some(source))))
+    })
+}
+
+fn cursor_after_visual_cluster(
+    clusters: &[CursorCluster],
+    text_len: u32,
+    index: usize,
+) -> Result<PreparedClusterSide, PreparationError> {
+    let cluster = &clusters[index];
+    let offset = if cluster.rtl {
+        cluster.source.start
+    } else {
+        cluster.source.end
+    };
+    normalize_cursor(
+        clusters,
+        text_len,
+        offset,
+        affinity_for_visual_direction(cluster.rtl, true),
+    )
+}
+
+fn previous_logical_cursor(
+    clusters: &[CursorCluster],
+    text_len: u32,
+    position: PreparedClusterSide,
+) -> Result<Option<PreparedCursorStep>, PreparationError> {
+    upstream_cursor_cluster(clusters, position.offset()).map_or(Ok(None), |index| {
+        let source = clusters[index].source.clone();
+        normalize_cursor(
+            clusters,
+            text_len,
+            clusters[index].source.start,
+            TextAffinity::Downstream,
+        )
+        .map(|target| Some(PreparedCursorStep::new(target, Some(source))))
+    })
+}
+
+fn next_logical_cursor(
+    clusters: &[CursorCluster],
+    text_len: u32,
+    position: PreparedClusterSide,
+) -> Result<Option<PreparedCursorStep>, PreparationError> {
+    downstream_cursor_cluster(clusters, position.offset()).map_or(Ok(None), |index| {
+        let source = clusters[index].source.clone();
+        normalize_cursor(
+            clusters,
+            text_len,
+            clusters[index].source.end,
+            TextAffinity::Upstream,
+        )
+        .map(|target| Some(PreparedCursorStep::new(target, Some(source))))
+    })
+}
+
+fn normalize_cursor(
+    clusters: &[CursorCluster],
+    text_len: u32,
+    index: u32,
+    affinity: TextAffinity,
+) -> Result<PreparedClusterSide, PreparationError> {
+    if index > text_len {
+        return Err(PreparationError::invalid_output());
+    }
+    if let Some(cluster) = downstream_cursor_cluster(clusters, index) {
+        let index = clusters[cluster].source.start;
+        Ok(PreparedClusterSide::new(
+            index,
+            if index == 0 {
+                TextAffinity::Downstream
+            } else {
+                affinity
+            },
+        ))
+    } else {
+        Ok(PreparedClusterSide::new(text_len, TextAffinity::Upstream))
+    }
+}
+
+fn visual_cursor_clusters(
+    clusters: &[CursorCluster],
+    position: PreparedClusterSide,
+) -> [Option<usize>; 2] {
+    let upstream = upstream_cursor_cluster(clusters, position.offset());
+    let downstream = downstream_cursor_cluster(clusters, position.offset());
+    if position.affinity() == TextAffinity::Upstream {
+        if let Some(cluster) = upstream {
+            if clusters[cluster].rtl {
+                [cluster.checked_sub(1), Some(cluster)]
+            } else {
+                [Some(cluster), next_visual_cluster(clusters, cluster)]
+            }
+        } else if let Some(cluster) = downstream {
+            if clusters[cluster].rtl {
+                [None, Some(cluster)]
+            } else {
+                [Some(cluster), None]
+            }
+        } else {
+            [None, None]
+        }
+    } else if let Some(cluster) = downstream {
+        if clusters[cluster].rtl {
+            [Some(cluster), next_visual_cluster(clusters, cluster)]
+        } else {
+            [cluster.checked_sub(1), Some(cluster)]
+        }
+    } else if let Some(cluster) = upstream {
+        if clusters[cluster].rtl {
+            [None, Some(cluster)]
+        } else {
+            [Some(cluster), None]
+        }
+    } else {
+        [None, None]
+    }
+}
+
+fn next_visual_cluster(clusters: &[CursorCluster], index: usize) -> Option<usize> {
+    index.checked_add(1).filter(|next| *next < clusters.len())
+}
+
+fn upstream_cursor_cluster(clusters: &[CursorCluster], offset: u32) -> Option<usize> {
+    clusters
+        .iter()
+        .position(|cluster| cluster.source.start < offset && offset <= cluster.source.end)
+}
+
+fn downstream_cursor_cluster(clusters: &[CursorCluster], offset: u32) -> Option<usize> {
+    clusters
+        .iter()
+        .position(|cluster| cluster.source.start <= offset && offset < cluster.source.end)
+}
+
+const fn affinity_for_visual_direction(rtl: bool, moving_right: bool) -> TextAffinity {
+    match (rtl, moving_right) {
+        (true, true) | (false, false) => TextAffinity::Downstream,
+        _ => TextAffinity::Upstream,
+    }
 }
 
 fn analyze_text(analyzer: &mut Analyzer, text: &str) -> Analysis {
@@ -1509,10 +1878,10 @@ mod tests {
 
     use underwood::adapter::{LineBreakReason as TestLineBreakReason, PreparationErrorKind};
     use underwood::{
-        Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFamily,
-        GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot,
-        PaintTable, ParagraphRole, Point, SceneRequest, ShapingStyle, StyleMap, TextAffinity,
-        TextScene,
+        Brush, Color, ComputedInlineStyle, Document, DocumentId, EditErrorKind, FiniteWidth,
+        FontFamily, GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight,
+        PaintSlot, PaintTable, ParagraphRole, Point, SceneRequest, SelectionErrorKind,
+        ShapingStyle, StyleMap, TextAffinity, TextMovement, TextScene, TextSelectionMode,
     };
     use underwood::{Language, Script};
 
@@ -2052,6 +2421,362 @@ mod tests {
                 && arabic.windows(2).any(|pair| pair[0].1 > pair[1].1),
             "RTL glyph records run in visual order opposite logical source: {arabic:?}"
         );
+    }
+
+    #[test]
+    fn visual_bidi_selection_retains_disjoint_ranges_and_set_ownership() {
+        let text = "abc مرحبا XYZ";
+        let arabic_start =
+            u32::try_from(text.find('م').expect("Arabic run exists")).expect("fixture offset fits");
+        let arabic_end = u32::try_from(text.find(" X").expect("trailing run exists"))
+            .expect("fixture offset fits");
+        let trailing_start = arabic_end + 1;
+        let (mut document, styles, paint) = fixture_document(text, 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("mixed-bidi interaction must prepare");
+        let scene = output.scene();
+        let hits = scan_line_hits(scene, 0);
+        let arabic: Vec<_> = hits
+            .iter()
+            .filter(|hit| hit.source.start >= arabic_start && hit.source.end <= arabic_end)
+            .collect();
+        assert!(arabic.len() >= 4, "fixture needs several Arabic clusters");
+        let anchor_hit = arabic[arabic.len() / 2];
+        let extent_hit = hits
+            .iter()
+            .find(|hit| hit.source.start == trailing_start)
+            .expect("trailing Latin cluster is visible");
+        let prefix_hit = hits.first().expect("prefix cluster is visible");
+        let y = scene.lines()[0].bounds().center().y;
+        let anchor = *scene
+            .hit_test(Point::new(anchor_hit.min_x + 0.01, y))
+            .expect("Arabic anchor must hit")
+            .position();
+        let extent = *scene
+            .hit_test(Point::new(extent_hit.max_x - 0.01, y))
+            .expect("Latin extent must hit")
+            .position();
+        let visual = scene
+            .selection(&anchor, &extent, TextSelectionMode::Visual)
+            .expect("visual caret path must select");
+        let reverse = scene
+            .selection(&extent, &anchor, TextSelectionMode::Visual)
+            .expect("the reverse visual caret path must select");
+        assert_eq!(
+            visual.ranges(),
+            reverse.ranges(),
+            "visual selection source is independent of drag direction"
+        );
+        assert_eq!(
+            visual
+                .ranges()
+                .iter()
+                .map(|range| range.bytes())
+                .collect::<Vec<_>>(),
+            [4..10, 14..16],
+            "the pinned mixed-bidi fixture must preserve its exact logical gap"
+        );
+        assert!(
+            visual.ranges().windows(2).any(|ranges| {
+                ranges[0].text() == ranges[1].text()
+                    && ranges[0].bytes().end < ranges[1].bytes().start
+            }),
+            "a visually contiguous bidi gesture must retain its logical gap: {:?}",
+            visual.ranges()
+        );
+
+        let prefix_start = *scene
+            .hit_test(Point::new(prefix_hit.min_x + 0.01, y))
+            .expect("prefix start must hit")
+            .position();
+        let prefix_end = *scene
+            .hit_test(Point::new(prefix_hit.max_x - 0.01, y))
+            .expect("prefix end must hit")
+            .position();
+        let prefix = scene
+            .selection(&prefix_start, &prefix_end, TextSelectionMode::Logical)
+            .expect("prefix selection must form");
+        let selections = scene
+            .selection_set([visual, prefix])
+            .expect("nonoverlapping insertion points form one set");
+        assert_eq!(selections.selections().len(), 2);
+        let geometry = scene
+            .selection_geometry(&selections)
+            .expect("the complete selection set has geometry");
+        assert!(
+            geometry.iter().any(|rect| rect.selection() == 0)
+                && geometry.iter().any(|rect| rect.selection() == 1),
+            "geometry must preserve independent selection ownership: {geometry:?}"
+        );
+        assert!(
+            geometry.iter().any(|rect| rect.range() > 0),
+            "visual selection geometry must preserve disjoint-range ownership"
+        );
+
+        let carets = scene
+            .selection_set([
+                scene
+                    .collapsed_selection(&prefix_start)
+                    .expect("prefix caret is valid"),
+                scene
+                    .collapsed_selection(&anchor)
+                    .expect("Arabic caret is valid"),
+            ])
+            .expect("two independent carets form one set");
+        let duplicate = scene
+            .collapsed_selection(&prefix_start)
+            .expect("prefix caret is valid");
+        assert_eq!(
+            scene
+                .selection_set([duplicate.clone(), duplicate])
+                .expect_err("duplicate insertion points must fail as one set")
+                .kind(),
+            SelectionErrorKind::OverlappingSelections
+        );
+        let moved = scene
+            .move_selections(&carets, TextMovement::NextVisual, false)
+            .expect("the whole set moves through adapter transitions");
+        assert_eq!(
+            document.snapshot().revision(),
+            selections.revision(),
+            "selection and movement must not publish document work"
+        );
+        assert_eq!(moved.selections().len(), 2);
+        assert!(
+            moved
+                .selections()
+                .iter()
+                .all(|selection| selection.is_collapsed())
+        );
+        assert_ne!(
+            moved.selections()[0].extent(),
+            moved.selections()[1].extent(),
+            "independent carets must remain independent after movement"
+        );
+
+        let text_id = selections.selections()[0].ranges()[0].text();
+        let replacement = document
+            .replace_selections(&selections, "§")
+            .expect("the complete set must publish atomically");
+        assert_eq!(replacement.publication().changes().paragraphs().len(), 1);
+        assert_eq!(replacement.selections().selections().len(), 2);
+        assert!(
+            replacement
+                .selections()
+                .selections()
+                .iter()
+                .all(|selection| selection.is_collapsed()),
+            "every input insertion point must receive one post-edit caret"
+        );
+        assert_eq!(
+            replacement
+                .publication()
+                .snapshot()
+                .text(text_id)
+                .expect("edited leaf survives")
+                .matches('§')
+                .count(),
+            2,
+            "one multi-range visual selection plus one prefix selection inserts twice, not once per range"
+        );
+        let error = document
+            .replace_selections(&selections, "stale")
+            .expect_err("old scene selections must not migrate across publication");
+        assert_eq!(error.kind(), EditErrorKind::RevisionConflict);
+    }
+
+    #[test]
+    fn logical_delete_and_backspace_remove_one_adapter_cluster() {
+        for (source, movement, at_end, expected_range, expected_text) in [
+            ("aé", TextMovement::PreviousLogical, true, 1..3, "a"),
+            ("ae\u{301}", TextMovement::PreviousLogical, true, 2..4, "ae"),
+            ("éa", TextMovement::NextLogical, false, 0..2, "a"),
+        ] {
+            let (mut document, styles, paint) = fixture_document(source, 1.2);
+            let mut engine = fixture_engine();
+            let request = SceneRequest::new(
+                FiniteWidth::new(1_000.0).expect("test width is valid"),
+                &styles,
+                &paint,
+            );
+            let output = engine
+                .prepare(&document.snapshot(), &request)
+                .expect("cluster interaction must prepare");
+            let scene = output.scene();
+            let position = *scene
+                .hit_test_closest(Point::new(
+                    if at_end { 10_000.0 } else { -10_000.0 },
+                    scene.lines()[0].bounds().center().y,
+                ))
+                .expect("line edge must resolve")
+                .position();
+            let carets = scene
+                .selection_set([scene
+                    .collapsed_selection(&position)
+                    .expect("line-edge caret is valid")])
+                .expect("one caret forms a set");
+            let deletion = scene
+                .move_selections(&carets, movement, true)
+                .expect("deletion range follows the adapter cluster transition");
+            assert_eq!(
+                deletion.primary().expect("primary survives").ranges()[0].bytes(),
+                expected_range,
+                "deletion must select the complete adapter cluster for {source:?}"
+            );
+            let text = position.text();
+            let replacement = document
+                .replace_selections(&deletion, "")
+                .expect("cluster deletion must publish once");
+            assert_eq!(
+                replacement.publication().snapshot().text(text),
+                Some(expected_text)
+            );
+        }
+    }
+
+    #[test]
+    fn multi_paragraph_selection_edit_reshapes_only_affected_paragraphs() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"selection-cache1"));
+        let mut edit = document.edit();
+        let first_paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("first paragraph is valid");
+        edit.append_text(first_paragraph, InlineRole::TEXT, "alpha")
+            .expect("first text is valid");
+        let middle_paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("middle paragraph is valid");
+        edit.append_text(middle_paragraph, InlineRole::TEXT, "bravo")
+            .expect("middle text is valid");
+        let last_paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("last paragraph is valid");
+        edit.append_text(last_paragraph, InlineRole::TEXT, "charlie")
+            .expect("last text is valid");
+        edit.commit().expect("fixture edit is valid");
+
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+                .expect("fixture shaping style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let mut engine = fixture_engine();
+        let initial = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("initial document must prepare");
+        assert_eq!(initial.work().shape().paragraphs(), 3);
+        let scene = initial.scene();
+        let first = *scene
+            .hit_test_closest(Point::new(10_000.0, scene.lines()[0].bounds().center().y))
+            .expect("first paragraph end resolves")
+            .position();
+        let last = *scene
+            .hit_test_closest(Point::new(10_000.0, scene.lines()[2].bounds().center().y))
+            .expect("last paragraph end resolves")
+            .position();
+        let selections = scene
+            .selection_set([
+                scene
+                    .collapsed_selection(&first)
+                    .expect("first caret is valid"),
+                scene
+                    .collapsed_selection(&last)
+                    .expect("last caret is valid"),
+            ])
+            .expect("two paragraph-local carets form one set");
+        let replacement = document
+            .replace_selections(&selections, "!")
+            .expect("both insertions publish atomically");
+        assert_eq!(
+            replacement.publication().changes().paragraphs(),
+            [first_paragraph, last_paragraph]
+        );
+
+        let updated = engine
+            .prepare(replacement.publication().snapshot(), &request)
+            .expect("updated document must prepare");
+        assert_eq!(updated.work().shape().paragraphs(), 2);
+        assert_eq!(updated.work().reused_paragraphs(), 1);
+        assert_eq!(
+            updated.work().analysis().paragraphs(),
+            2,
+            "only changed paragraphs return to Unicode analysis"
+        );
+        assert_eq!(
+            updated.work().geometry().paragraphs(),
+            2,
+            "the unchanged middle paragraph must retain its geometry"
+        );
+    }
+
+    #[test]
+    fn scene_movement_crosses_semantic_paragraph_boundaries() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"paragraph-move01"));
+        let mut edit = document.edit();
+        let first_paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("first paragraph is valid");
+        let first = edit
+            .append_text(first_paragraph, InlineRole::TEXT, "one")
+            .expect("first text is valid");
+        let second_paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("second paragraph is valid");
+        let second = edit
+            .append_text(second_paragraph, InlineRole::TEXT, "two")
+            .expect("second text is valid");
+        edit.commit().expect("fixture edit is valid");
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+                .expect("fixture shaping style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = fixture_engine()
+            .prepare(&document.snapshot(), &request)
+            .expect("multi-paragraph interaction must prepare");
+        let scene = output.scene();
+        let end = *scene
+            .hit_test_closest(Point::new(10_000.0, scene.lines()[0].bounds().center().y))
+            .expect("first paragraph end must resolve")
+            .position();
+        assert_eq!(end.text(), first);
+        let carets = scene
+            .selection_set([scene
+                .collapsed_selection(&end)
+                .expect("first paragraph caret is valid")])
+            .expect("one caret forms a set");
+        for movement in [TextMovement::NextVisual, TextMovement::NextLogical] {
+            let moved = scene
+                .move_selections(&carets, movement, false)
+                .expect("movement must compose across paragraph boundaries");
+            assert_eq!(
+                moved.primary().expect("primary survives").extent().text(),
+                second
+            );
+        }
     }
 
     #[test]
