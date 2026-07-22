@@ -24,14 +24,15 @@ license = "Apache-2.0 OR MIT"
 repository = "https://github.com/forest-rs/underwood"
 
 [workspace.dependencies]
-fontique = { git = "https://github.com/waywardmonkeys/parley.git", rev = "181664b28144cb59671a7f1b736757c6ebe270f2", default-features = false, features = [
+fontique = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2", default-features = false, features = [
   "libm",
 ] }
 imaging = "0.0.1"
 imaging_vello_cpu = "0.0.2"
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
-parlance = { git = "https://github.com/waywardmonkeys/parley.git", rev = "181664b28144cb59671a7f1b736757c6ebe270f2", default-features = false }
-parley_core = { git = "https://github.com/waywardmonkeys/parley.git", rev = "181664b28144cb59671a7f1b736757c6ebe270f2", default-features = false, features = [
+libm = "0.2.16"
+parlance = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2", default-features = false }
+parley_core = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2", default-features = false, features = [
   "libm",
 ] }
 peniko = { version = "0.6.1", default-features = false, features = ["libm"] }

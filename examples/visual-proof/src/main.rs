@@ -9,7 +9,7 @@ use std::io::BufReader;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
-use imaging::kurbo::{Affine, Circle, Point, Rect, RoundedRect, Stroke};
+use imaging::kurbo::{Affine, Rect, RoundedRect, Stroke};
 use imaging::peniko::{Color, Fill, Style};
 use imaging::{PaintSink, Painter, RgbaImage, record};
 use imaging_vello_cpu::VelloCpuRenderer;
@@ -114,10 +114,7 @@ impl<'a> TextSceneAdapter<'a> {
                 y: imaging_coord(glyph.position().y),
             });
             let transform = self.placement * fragment.transform();
-            let glyph_transform = fragment
-                .synthesis()
-                .skew_degrees()
-                .map(|angle| Affine::skew(f64::from(angle.to_radians().tan()), 0.0));
+            let glyph_transform = fragment.synthesis().skew_transform();
             painter.with_fill_clip_transformed(fragment.clip(), self.placement, |painter| {
                 painter
                     .glyphs(fragment.font(), brush)
@@ -179,16 +176,9 @@ impl<'a> TextSceneAdapter<'a> {
     }
 
     fn paint_diagnostics_behind<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        let (glyph_id, glyph_position, _) = split_ligature_evidence(self.scene)
-            .expect("diagnostic scene must contain a split ligature");
-        for fragment in self.scene.fragments() {
-            if !fragment
-                .glyphs()
-                .iter()
-                .any(|glyph| glyph.id() == glyph_id && glyph.position() == glyph_position)
-            {
-                continue;
-            }
+        for fragment in self.scene.fragments().iter().filter(|fragment| {
+            is_zero_advance_ink(fragment) || is_latin_horizontal_overhang(fragment)
+        }) {
             painter
                 .fill(fragment.clip(), DIAGNOSTIC_FILL)
                 .transform(self.placement)
@@ -197,17 +187,10 @@ impl<'a> TextSceneAdapter<'a> {
     }
 
     fn paint_diagnostics_above<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        let (glyph_id, glyph_position, _) = split_ligature_evidence(self.scene)
-            .expect("diagnostic scene must contain a split ligature");
         let clip_stroke = Stroke::new(1.5).with_dashes(0.0, [8.0, 5.0]);
-        for fragment in self.scene.fragments() {
-            if !fragment
-                .glyphs()
-                .iter()
-                .any(|glyph| glyph.id() == glyph_id && glyph.position() == glyph_position)
-            {
-                continue;
-            }
+        for fragment in self.scene.fragments().iter().filter(|fragment| {
+            is_zero_advance_ink(fragment) || is_latin_horizontal_overhang(fragment)
+        }) {
             painter
                 .stroke(fragment.clip(), &clip_stroke, DIAGNOSTIC_COLOR)
                 .transform(self.placement)
@@ -225,38 +208,30 @@ impl<'a> TextSceneAdapter<'a> {
                 )
                 .transform(self.placement)
                 .draw();
-        }
 
-        let fragment = self
-            .scene
-            .fragments()
-            .iter()
-            .find(|fragment| {
-                fragment
-                    .glyphs()
-                    .iter()
-                    .any(|glyph| glyph.id() == glyph_id && glyph.position() == glyph_position)
-            })
-            .expect("diagnostic scene must contain a split-ligature fragment");
-        let point = fragment.clip().center();
-        let hit = self
-            .scene
-            .hit_test(point)
-            .expect("visual proof fragment center must hit");
-        let caret = self.scene.caret(&hit);
-        let bounded_caret = caret.bounds().intersect(fragment.clip());
-        painter
-            .fill(bounded_caret, DIAGNOSTIC_COLOR)
-            .transform(self.placement)
-            .draw();
-        painter
-            .fill(Circle::new(hit.point(), 5.0), BACKGROUND)
-            .transform(self.placement)
-            .draw();
-        painter
-            .fill(Circle::new(hit.point(), 3.0), DIAGNOSTIC_COLOR)
-            .transform(self.placement)
-            .draw();
+            let glyph = &fragment.glyphs()[0];
+            let origin = glyph.position();
+            let advance_end = origin.x + glyph.advance().x;
+            let rail_x1 = if origin.x == advance_end {
+                origin.x + 2.0
+            } else {
+                advance_end
+            };
+            painter
+                .fill(
+                    Rect::new(origin.x, origin.y - 2.0, rail_x1, origin.y),
+                    DIAGNOSTIC_COLOR,
+                )
+                .transform(self.placement)
+                .draw();
+            painter
+                .fill(
+                    Rect::new(origin.x, origin.y - 9.0, origin.x + 2.0, origin.y + 7.0),
+                    DIAGNOSTIC_COLOR,
+                )
+                .transform(self.placement)
+                .draw();
+        }
     }
 }
 
@@ -275,11 +250,11 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     let hero = layout_scene(
         &mut layout,
         0x21,
-        230.0,
-        1_200.0,
+        150.0,
+        580.0,
         &[
-            Piece::new("of", InlineRole::TEXT, CORAL),
-            Piece::new("fice", InlineRole::EMPHASIS, CYAN),
+            Piece::new("مرحبا  ", InlineRole::EMPHASIS, GOLD),
+            Piece::new("j", InlineRole::TEXT, CORAL),
         ],
     )?;
     let mixed_direction = layout_scene(
@@ -294,12 +269,36 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         ],
     )?;
 
-    let (_, _, ligature_clips) = split_ligature_evidence(&hero)
-        .expect("poster must paint one real ligature through multiple source clips");
-    assert_eq!(
-        hero.fragments()[0].font().data.as_ref(),
-        LATIN_FONT_BYTES,
+    let zero_advance_ink = hero
+        .fragments()
+        .iter()
+        .filter(|fragment| is_zero_advance_ink(fragment))
+        .count();
+    let zero_advance_clip = hero
+        .fragments()
+        .iter()
+        .find(|fragment| is_zero_advance_ink(fragment))
+        .expect("the hero must contain a zero-advance Arabic glyph")
+        .clip();
+    assert!(
+        zero_advance_ink > 0,
+        "the hero must retain visible ink for a zero-advance Arabic glyph"
+    );
+    assert!(
+        hero.fragments().iter().any(is_latin_horizontal_overhang),
+        "the hero must retain Latin ink outside shaped advance"
+    );
+    assert!(
+        hero.fragments()
+            .iter()
+            .any(|fragment| fragment.font().data.as_ref() == LATIN_FONT_BYTES),
         "Latin poster text must retain the bundled Roboto Flex resource"
+    );
+    assert!(
+        hero.fragments()
+            .iter()
+            .any(|fragment| fragment.font().data.as_ref() == ARABIC_FONT_BYTES),
+        "Arabic poster text must retain the bundled Noto Kufi resource"
     );
     assert!(
         hero.semantics()
@@ -348,11 +347,11 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
 
     let title = layout_label(&mut layout, 0x23, 72.0, "UNDERWOOD", INK)?;
     let computed_styles = computed_style_specimen(&mut layout)?;
-    let ligature_evidence = layout_label(
+    let ink_evidence = layout_label(
         &mut layout,
         0x2d,
         18.0,
-        &format!("ONE SHAPED LIGATURE / {ligature_clips} SOURCE CLIPS"),
+        &format!("INK BOUNDS / {zero_advance_ink} ZERO-ADVANCE GLYPH / j OVERHANG"),
         CORAL,
     )?;
     let mixed_direction_evidence = layout_label(
@@ -412,8 +411,8 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         paint_backdrop(&mut painter);
 
         TextSceneAdapter::new(&title, 120.0, 52.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&ligature_evidence, 124.0, 184.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&hero, 116.0, 228.0)
+        TextSceneAdapter::new(&ink_evidence, 124.0, 184.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&hero, 116.0, 252.0)
             .with_diagnostics()
             .paint_into(&mut painter);
         TextSceneAdapter::new(&mixed_direction_evidence, 740.0, 184.0).paint_into(&mut painter);
@@ -455,7 +454,18 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     scene.validate()?;
 
     let mut renderer = VelloCpuRenderer::new(WIDTH, HEIGHT);
-    Ok(renderer.render_scene(&scene, WIDTH, HEIGHT)?)
+    let image = renderer.render_scene(&scene, WIDTH, HEIGHT)?;
+    let placed_mark_clip = Rect::new(
+        zero_advance_clip.x0 + 116.0,
+        zero_advance_clip.y0 + 252.0,
+        zero_advance_clip.x1 + 116.0,
+        zero_advance_clip.y1 + 252.0,
+    );
+    assert!(
+        rect_contains_rgba(&image, placed_mark_clip, [0xf5, 0xc4, 0x51, 0xff]),
+        "the CPU rendering must contain visible Arabic mark pixels inside its ink clip"
+    );
+    Ok(image)
 }
 
 fn layout_engine() -> Result<LayoutEngine, AnyError> {
@@ -478,8 +488,8 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     let mut document = Document::new(DocumentId::from_bytes([0x31; 16]));
     let mut edit = document.edit();
     let first = edit.append_paragraph(ParagraphRole::BODY)?;
-    let prefix = edit.append_text(first, InlineRole::TEXT, "of")?;
-    let suffix = edit.append_text(first, InlineRole::EMPHASIS, "fice")?;
+    let prefix = edit.append_text(first, InlineRole::TEXT, "j / ")?;
+    let suffix = edit.append_text(first, InlineRole::EMPHASIS, "office")?;
     let second = edit.append_paragraph(ParagraphRole::BODY)?;
     edit.append_text(second, InlineRole::TEXT, "unchanged sibling")?;
     let published = edit.commit()?;
@@ -495,7 +505,19 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     let paint = poster_paints();
     let request = SceneRequest::new(FiniteWidth::new(700.0)?, &styles, &paint);
     let initial = layout.prepare(published.snapshot(), &request)?;
-    assert_split_ligature(initial.scene());
+    assert_eq!(
+        glyph_count(initial.scene(), suffix),
+        4,
+        "retained proof must execute real ffi substitution without splitting its paint"
+    );
+    assert!(
+        initial.scene().fragments().iter().any(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == suffix && source.bytes() == (1..4))
+        }),
+        "the retained ffi glyph must own its complete source range"
+    );
 
     let mut edit = document.edit();
     edit.replace_text(suffix, "fices")?;
@@ -805,26 +827,39 @@ fn poster_paints() -> PaintTable {
     ])
 }
 
-fn assert_split_ligature(scene: &TextScene) {
-    assert!(
-        split_ligature_evidence(scene).is_some(),
-        "poster must paint one real ligature through multiple source clips"
-    );
+fn is_zero_advance_ink(fragment: &underwood::SceneFragment) -> bool {
+    fragment.glyphs().len() == 1
+        && fragment.glyphs()[0].advance().x == 0.0
+        && fragment.clip().width() > 0.0
+        && fragment.clip().height() > 0.0
 }
 
-fn split_ligature_evidence(scene: &TextScene) -> Option<(u32, Point, usize)> {
-    scene.fragments().iter().find_map(|left| {
-        let glyph = &left.glyphs()[0];
-        let matching = scene.fragments().iter().filter(|right| {
-            glyph.id() == right.glyphs()[0].id() && glyph.position() == right.glyphs()[0].position()
-        });
-        let clips = matching.clone().count();
-        let proves_source_partition = matching.into_iter().any(|right| {
-            left.paint() != right.paint()
-                && left.source() != right.source()
-                && left.clip() != right.clip()
-        });
-        proves_source_partition.then_some((glyph.id(), glyph.position(), clips))
+fn is_latin_horizontal_overhang(fragment: &underwood::SceneFragment) -> bool {
+    let Some(glyph) = fragment.glyphs().first() else {
+        return false;
+    };
+    fragment.script() == *b"Latn"
+        && (fragment.clip().x0 < glyph.position().x
+            || fragment.clip().x1 > glyph.position().x + glyph.advance().x)
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the rectangle is clamped to finite non-negative image dimensions before conversion"
+)]
+fn rect_contains_rgba(image: &RgbaImage, rect: Rect, rgba: [u8; 4]) -> bool {
+    let x0 = rect.x0.floor().clamp(0.0, f64::from(image.width)) as u32;
+    let y0 = rect.y0.floor().clamp(0.0, f64::from(image.height)) as u32;
+    let x1 = rect.x1.ceil().clamp(0.0, f64::from(image.width)) as u32;
+    let y1 = rect.y1.ceil().clamp(0.0, f64::from(image.height)) as u32;
+
+    (y0..y1).any(|y| {
+        (x0..x1).any(|x| {
+            let index = usize::try_from((y * image.width + x) * 4)
+                .expect("the allocated image index must fit usize");
+            image.data[index..index + 4] == rgba
+        })
     })
 }
 

@@ -145,9 +145,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut edit_iteration = 0_usize;
     let one_paragraph_edit = measure(MUTATION_ITERATIONS, || {
         let replacement = if edit_iteration & 1 == 0 {
-            "fices مرحبا بالعالم"
+            "offices مرحبا بالعالم"
         } else {
-            "fice مرحبا بالعالم"
+            "office مرحبا بالعالم"
         };
         edit_iteration += 1;
         let mut edit = fixture.document.edit();
@@ -187,8 +187,8 @@ fn document_fixture() -> Result<DocumentFixture, Box<dyn std::error::Error>> {
     let mut document = Document::new(DocumentId::from_bytes(*b"und-benchmark-01"));
     let mut edit = document.edit();
     let first = edit.append_paragraph(ParagraphRole::BODY)?;
-    let first_prefix = edit.append_text(first, InlineRole::TEXT, "of")?;
-    let edited_text = edit.append_text(first, InlineRole::EMPHASIS, "fice مرحبا بالعالم")?;
+    let first_prefix = edit.append_text(first, InlineRole::TEXT, "proof / ")?;
+    let edited_text = edit.append_text(first, InlineRole::EMPHASIS, "office مرحبا بالعالم")?;
     for index in 1..PARAGRAPHS {
         let paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
         let text = if index & 1 == 0 {

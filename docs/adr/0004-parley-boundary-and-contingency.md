@@ -104,6 +104,24 @@ portable lowering, and the exact committed-reshape count. `und-oh0.2.7` owns
 upstream review and replacing the fork URL with `linebender/parley` as soon as
 the capability lands there.
 
+### Implementation update — ink metrics candidate, 2026-07-22
+
+Underwood now pins
+[`waywardmonkeys/parley@d12c801`](https://github.com/waywardmonkeys/parley/commit/d12c801d8fd298ff095f1ec903b6adaa732fcef2),
+which layers run-scoped, variation-aware glyph ink metrics on the bounded
+reshape candidate. This deletes Underwood's advance-sized and
+character-proportional paint geometry. `underwood_parley` consumes the font
+truth but retains paint policy: one paint run must own a glyph's complete
+source, or preparation returns `UnsupportedPaintCoverage`. Design-0007 records
+the contract and `und-oh0.2.8` gates any future multi-paint ligature support.
+
+This candidate also establishes the preferred collaboration shape with Parley:
+make reusable text mechanisms available independently at the Core layer, while
+Underwood keeps document/region flow, retained invalidation, semantic mapping,
+work accounting, and portable scenes. Future sharing should extract similarly
+small line-formation mechanisms rather than couple Underwood to private
+high-level `LayoutData`.
+
 ## Seam matrix
 
 | Capability | Current upstream seam | Underwood position | Readiness |
@@ -112,14 +130,15 @@ the capability lands there.
 | Bidi resolution | Retained levels in `Analysis` | Consume as analysis identity | Usable |
 | Itemization | `Analysis::itemize` plus `split_after` predicate | Supply shaping-topology predicate; retain Underwood key | Usable |
 | Font selection | `Shaper::shape_item` callback over clusters | Bridge the Underwood font resolver | Usable |
-| Shaping | Callback-borrowed `ShapedRun` | Prototype against the seam; do not stabilize storage around it | Transitional |
-| Retained shaped text | PR #679 | Prefer upstream; require owned immutable output | Active upstream work |
+| Shaping | Owned `ShapedText` on current Parley `main` | Retain directly; do not maintain a second shaped-run model | Usable |
+| Retained shaped text | Landed PR #679 | Consume the owned immutable output | Usable |
 | Bounded break reshaping | Candidate `181664b` extracted onto current `ShapedText` | Consume exact pin; upstream and retire fork URL | Executable, upstream review pending |
+| Glyph ink metrics | Candidate `d12c801` exposes run-scoped, variation-aware bounds | Consume for portable paint clips; keep paint identity outside Parley | Executable, upstream review pending |
 | Greedy line breaking | High-level `BreakLines` and `BreakerState` | Evidence source and possible temporary adapter, not document flow | Usable but wrong ownership |
 | Arbitrary line intervals | Mutable line geometry and custom out-of-flow yield | Drive an Underwood breaker over core-shaped data | Partial |
 | Vertical shaping | Draft PR #634 only | Upstream first; no horizontal-only public Underwood contract | Gap |
 | Inline objects | High-level out-of-band `InlineBox` | Require core marker semantics plus high-level adapter equivalence | Partial |
-| Paint-only boundaries | Per-character `u16` user/style data reaches shaping output | Retain slots without changing font/shaping inputs | Needs proof |
+| Paint-only boundaries | Font ink is available; exact ligature-component paint ownership is not | Retain slots without changing shaping; reject a boundary inside one glyph | Single-owner executable; multi-paint gap |
 | Text-data injection | Compiled/baked constructors inside core | Coordinate with ADR-0003; upstream provider seam required | Gap |
 
 ## Required retained contracts
@@ -174,7 +193,7 @@ conformant merely because its own snapshots are stable.
 | Latin, Arabic, Devanagari, Thai, CJK, emoji, and mixed bidi | analysis, itemization, clusters, glyphs, and advances |
 | Font weight or fallback change | analysis identity unchanged; affected item/shape identity changed |
 | Paint value change | analysis, items, glyph ids, advances, and break opportunities unchanged |
-| Paint boundary inside `fi` and Arabic cursive text | declared slot coverage with no accidental reshaping |
+| Paint boundary inside `fi` and Arabic cursive text | exact declared coverage, or stable explicit unsupported result; no source-count approximation |
 | Explicit tracking and OpenType feature changes | only documented topology and shaped ranges change |
 | Hyphenation or discretionary break inside a ligature | bounded break reshape; concat restores the unbroken result |
 | Multiple disjoint intervals and custom out-of-flow object | no duplicated, skipped, or reordered source coverage |

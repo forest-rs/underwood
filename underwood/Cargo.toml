@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 kurbo.workspace = true
+libm.workspace = true
 parlance.workspace = true
 peniko.workspace = true
 

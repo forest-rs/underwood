@@ -1,5 +1,10 @@
 # Visual-proof Lynx and Rook review — 2026-07-21
 
+> **Superseded poster claim (2026-07-22):** Design-0007 replaces the
+> split-ligature diagnostic with real zero-advance Arabic ink and Latin
+> overhang bounds. `liga` on/off remains real; proportional paint partitioning
+> does not. This review remains historical evidence for its named snapshot.
+
 - **Scope:** computed inline styles, the Parley adapter, public examples, and
   the deterministic CPU poster
 - **Review modes:** Lynx adversarial correctness; Rook real-versus-mirage audit
