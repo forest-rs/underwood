@@ -445,7 +445,7 @@ the improvement; and local plus remote validation are green.
 
 ## Ink-accurate glyph paint coverage
 
-**Status:** In progress
+**Status:** Complete — local and remote proof green in PR #10
 
 **Bead:** `und-oh0.2.4`
 

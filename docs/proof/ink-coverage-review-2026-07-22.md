@@ -10,6 +10,9 @@
   [`waywardmonkeys/ink-coverage-primitives`](https://github.com/waywardmonkeys/parley/tree/ink-coverage-primitives)
 - **Snapshot:** 1600 × 1000 RGBA8, PNG SHA-256
   `be7eaf53d4cccd72ae253433ffe7ee82a74c431a70f74c8c13787110499c4a11`
+- **Remote gate:** GitHub Actions run
+  [`29900013909`](https://github.com/forest-rs/underwood/actions/runs/29900013909);
+  all eight jobs passed on PR #10
 - **Unsafe watch:** no `unsafe` added to Underwood or the Parley candidate
 - **Dependency watch:** existing transitive `libm` promoted to a direct
   Underwood edge; no package added to the dependency graph
@@ -129,8 +132,8 @@ workspace formatting, all-target/all-feature clippy with warnings denied, and
 the complete workspace test suite including the external headless example,
 product benchmark, and exact visual snapshot. Repository policy, rustdoc, Rust
 1.92 workspace checking, and `x86_64-unknown-none` plus
-`wasm32-unknown-unknown` portability checks also pass locally. Cross-platform
-results are recorded by the landing PR rather than inferred from this review.
+`wasm32-unknown-unknown` portability checks also pass locally. PR #10 repeats
+the complete suite successfully on Linux, macOS, and Windows.
 
 ## Migration
 
