@@ -33,7 +33,19 @@ continuation clusters. Parley's `contributes_to_shaping` analysis identifies
 controls and format characters which intentionally produce no glyphs; their
 source remains explicit while shaping-only sentinel glyphs are discarded.
 
+Paint clips come from the selected font instance's real glyph outline bounds,
+queried through Parley Core with the run's exact normalized coordinates and
+scaled into layout space. Zero-advance marks therefore retain visible coverage,
+and overhangs are not clamped to advances. Synthetic skew is applied to the
+same bounds that the example renderer uses. A glyph wholly owned by one paint
+run is supported; a glyph crossing paint runs returns
+`UnsupportedPaintCoverage` until a conformance-backed component rule exists.
+Synthetic emboldening returns the same error because Fontique currently does
+not expose the expansion required to bound its ink exactly.
+
 Fontique synthesis variations precede explicit `ShapingStyle` variations at
 the Parley Core seam. An explicit coordinate therefore wins for the same axis.
-Synthetic embolden and skew are retained for capable renderers but do not alter
-Underwood's layout advances.
+Synthetic skew is retained for capable renderers and does not alter
+Underwood's layout advances. A selected synthetic embolden currently stops with
+the explicit coverage error; it becomes renderable only when the adapter can
+also produce trustworthy expanded paint bounds.

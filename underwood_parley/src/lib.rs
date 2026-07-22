@@ -354,14 +354,22 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     ..run.range.byte_range.start
                         + usize::from(last.text_offset)
                         + usize::from(last.text_len);
-                let prepared_glyphs = lower_glyphs(
-                    input.text(),
-                    &physics.analysis,
-                    &physics.formed_text,
-                    run,
-                    piece.clusters.clone(),
-                    input.paint_runs(),
-                )?;
+                let synthesis = portable_synthesis(font.synthesis)?;
+                let prepared_glyphs = physics
+                    .formed_text
+                    .with_glyph_metrics(piece.run, |metrics| {
+                        lower_glyphs(
+                            input.text(),
+                            &physics.analysis,
+                            &physics.formed_text,
+                            run,
+                            metrics,
+                            piece.clusters.clone(),
+                            input.paint_runs(),
+                            &synthesis,
+                        )
+                    })
+                    .ok_or_else(PreparationError::unsupported_paint_coverage)??;
                 glyph_count = glyph_count
                     .saturating_add(u32::try_from(prepared_glyphs.len()).unwrap_or(u32::MAX));
                 let unrendered_source = unrendered_source(
@@ -376,7 +384,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     *script,
                     font.font.clone(),
                     run.font_size,
-                    portable_synthesis(font.synthesis)?,
+                    synthesis,
                     normalized_coords.iter().map(|coord| coord.to_bits()),
                     unrendered_source,
                     prepared_glyphs,
@@ -976,8 +984,10 @@ fn lower_glyphs(
     analysis: &Analysis,
     shaped_text: &ShapedText,
     run: &parley_core::ShapedRun,
+    glyph_metrics: &parley_core::RunGlyphMetrics<'_>,
     cluster_range: Range<usize>,
     paint_runs: &[underwood::adapter::PaintRun],
+    synthesis: &FontSynthesis,
 ) -> Result<Vec<PreparedGlyph>, PreparationError> {
     let clusters = shaped_text
         .clusters()
@@ -1014,14 +1024,22 @@ fn lower_glyphs(
         }
         lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
             let advance = Vec2::new(f64::from(glyph.advance), 0.0);
-            let paint = paint_coverage(
-                text,
-                source.clone(),
-                advance,
-                run.font_size,
-                paint_runs,
-                run.bidi_level & 1 == 1,
-            )?;
+            let bounds = glyph_metrics
+                .ink_bounds(glyph.id)
+                .ok_or_else(PreparationError::unsupported_paint_coverage)?;
+            let mut ink = Rect::new(
+                f64::from(bounds.left),
+                f64::from(bounds.top),
+                f64::from(bounds.right),
+                f64::from(bounds.bottom),
+            );
+            if synthesis.embolden() {
+                return Err(PreparationError::unsupported_paint_coverage());
+            }
+            if let Some(transform) = synthesis.skew_transform() {
+                ink = transform.transform_rect_bbox(ink);
+            }
+            let paint = paint_coverage(source.clone(), ink, paint_runs)?;
             prepared.push(PreparedGlyph::try_new(
                 glyph.id,
                 source.clone(),
@@ -1218,78 +1236,24 @@ fn portable_synthesis(synthesis: Synthesis) -> Result<FontSynthesis, Preparation
 }
 
 fn paint_coverage(
-    text: &str,
     source: Range<u32>,
-    advance: Vec2,
-    font_size: f32,
+    ink: Rect,
     paint_runs: &[underwood::adapter::PaintRun],
-    rtl: bool,
 ) -> Result<GlyphPaintCoverage, PreparationError> {
-    let source_start = source.start as usize;
-    let source_end = source.end as usize;
-    let source_text = text
-        .get(source_start..source_end)
+    let mut matching = paint_runs.iter().filter(|paint| {
+        let bytes = paint.bytes();
+        bytes.start < source.end && bytes.end > source.start
+    });
+    let paint = matching
+        .next()
         .ok_or_else(PreparationError::unsupported_paint_coverage)?;
-    let total_chars = source_text.chars().count();
-    if total_chars == 0 {
-        return Err(PreparationError::unsupported_paint_coverage());
-    }
-    let intersecting_runs = paint_runs
-        .iter()
-        .filter(|paint| {
-            let bytes = paint.bytes();
-            bytes.start < source.end && bytes.end > source.start
-        })
-        .count();
-    if intersecting_runs > 1
-        && (advance.x == 0.0
-            || !source_text
-                .chars()
-                .all(|character| character.is_ascii_alphabetic()))
+    if matching.next().is_some()
+        || paint.bytes().start > source.start
+        || paint.bytes().end < source.end
     {
         return Err(PreparationError::unsupported_paint_coverage());
     }
-    let mut segments = Vec::new();
-    let mut covered = source.start;
-    let total_width = advance.x.abs();
-    let mut prior_chars = 0_usize;
-    for paint in paint_runs {
-        let bytes = paint.bytes();
-        let start = bytes.start.max(source.start);
-        let end = bytes.end.min(source.end);
-        if start >= end {
-            continue;
-        }
-        if start != covered {
-            return Err(PreparationError::unsupported_paint_coverage());
-        }
-        let segment_text = text
-            .get(start as usize..end as usize)
-            .ok_or_else(PreparationError::unsupported_paint_coverage)?;
-        let segment_chars = segment_text.chars().count();
-        let next_chars = prior_chars + segment_chars;
-        let first_fraction = prior_chars as f64 / total_chars as f64;
-        let next_fraction = next_chars as f64 / total_chars as f64;
-        let (x0, x1) = if rtl {
-            (
-                total_width * (1.0 - next_fraction),
-                total_width * (1.0 - first_fraction),
-            )
-        } else {
-            (total_width * first_fraction, total_width * next_fraction)
-        };
-        segments.push(GlyphPaintSegment::new(
-            start..end,
-            paint.slot(),
-            Rect::new(x0, -f64::from(font_size), x1, f64::from(font_size) * 0.25),
-        )?);
-        covered = end;
-        prior_chars = next_chars;
-    }
-    if covered != source.end || prior_chars != total_chars {
-        return Err(PreparationError::unsupported_paint_coverage());
-    }
-    GlyphPaintCoverage::try_from_segments(segments)
+    GlyphPaintCoverage::try_from_segments([GlyphPaintSegment::new(source, paint.slot(), ink)?])
 }
 
 fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationError> {
@@ -1449,7 +1413,7 @@ mod tests {
     use fontique::{Blob, Synthesis};
     use parley_core::{AnalysisDataSources, FontInstance, ShapeOptions, ShapedText, Shaper};
 
-    use underwood::adapter::LineBreakReason as TestLineBreakReason;
+    use underwood::adapter::{LineBreakReason as TestLineBreakReason, PreparationErrorKind};
     use underwood::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFamily,
         GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot,
@@ -1992,6 +1956,96 @@ mod tests {
             arabic.windows(2).all(|pair| pair[0].1 >= pair[1].1)
                 && arabic.windows(2).any(|pair| pair[0].1 > pair[1].1),
             "RTL glyph records run in visual order opposite logical source: {arabic:?}"
+        );
+    }
+
+    #[test]
+    fn zero_advance_arabic_mark_retains_visible_paint_coverage() {
+        let (document, styles, paint) = fixture_document("ب", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("Arabic mark shaping must form a scene");
+        let mark = output
+            .scene()
+            .fragments()
+            .iter()
+            .find(|fragment| fragment.glyphs()[0].advance().x == 0.0)
+            .expect("Noto Kufi beh must expose its zero-advance dot glyph");
+        assert!(
+            mark.clip().width() > 0.0 && mark.clip().height() > 0.0,
+            "a zero-advance glyph still has visible ink and cannot have an empty clip: {:?}",
+            mark.clip()
+        );
+    }
+
+    #[test]
+    fn glyph_overhang_is_not_clamped_to_advance() {
+        let (document, styles, paint) = fixture_document("j", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("overhanging glyph shaping must form a scene");
+        let fragment = &output.scene().fragments()[0];
+        let glyph = &fragment.glyphs()[0];
+        assert!(
+            fragment.clip().x0 < glyph.position().x
+                || fragment.clip().x1 > glyph.position().x + glyph.advance().x,
+            "the fixture must retain ink outside its advance: clip={:?}, position={:?}, advance={:?}",
+            fragment.clip(),
+            glyph.position(),
+            glyph.advance()
+        );
+    }
+
+    #[test]
+    fn split_paint_ligature_without_component_geometry_fails_explicitly() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"paint-ligature01"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph is valid");
+        let prefix = edit
+            .append_text(paragraph, InlineRole::TEXT, "of")
+            .expect("prefix is valid");
+        let suffix = edit
+            .append_text(paragraph, InlineRole::EMPHASIS, "fice")
+            .expect("suffix is valid");
+        edit.commit().expect("test edit is valid");
+
+        let base = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 40.0).expect("test style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let mut styles = StyleMap::new(base.clone());
+        styles.set(prefix, base.clone());
+        styles.set(suffix, base.with_paint(PaintSlot::new(1)));
+        let paint = PaintTable::from_brushes([
+            Brush::Solid(Color::BLACK),
+            Brush::Solid(Color::from_rgba8(0xff, 0x00, 0x00, 0xff)),
+        ]);
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let error = fixture_engine()
+            .prepare(&document.snapshot(), &request)
+            .expect_err("Roboto Flex has no GDEF ligature carets for an exact paint split");
+        assert_eq!(
+            error.preparation(),
+            Some(PreparationErrorKind::UnsupportedPaintCoverage)
         );
     }
 

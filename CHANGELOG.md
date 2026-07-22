@@ -24,6 +24,16 @@ Underwood does not yet make compatibility promises.
   instead of exposing only their first slice. `PreparedRun::try_new` now also
   receives explicit unrendered source ranges for controls and format characters;
   adapters must account for every scalar without manufacturing phantom glyphs.
+- Replaced advance-sized and character-proportional glyph paint clips with
+  variation-aware font outline bounds from Parley Core. Zero-advance marks and
+  glyph overhangs now retain their real ink coverage. Adapter callers that put
+  a paint boundary inside one shaped glyph, or request synthetic emboldening
+  without exact expanded bounds, must handle
+  `PreparationErrorKind::UnsupportedPaintCoverage`; Underwood no longer emits
+  approximate component clips for those cases.
+- Added `FontSynthesis::skew_transform` as the canonical `no_std` affine used
+  by coverage adapters and renderers. Existing callers may replace local
+  degree-to-shear math with this method; `skew_degrees` remains available.
 
 ### Added
 

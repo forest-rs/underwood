@@ -17,8 +17,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut edit = document.edit();
     let first = edit.append_paragraph(ParagraphRole::BODY)?;
-    let first_prefix = edit.append_text(first, InlineRole::TEXT, "of")?;
-    let first_suffix = edit.append_text(first, InlineRole::EMPHASIS, "fice ")?;
+    let first_prefix = edit.append_text(first, InlineRole::TEXT, "j / ")?;
+    let first_suffix = edit.append_text(first, InlineRole::EMPHASIS, "office ")?;
     let first_arabic = edit.append_text(first, InlineRole::EMPHASIS, "مرحبا")?;
     let direct_arabic = edit.append_text(first, InlineRole::TEXT, " خط")?;
     let second = edit.append_paragraph(ParagraphRole::BODY)?;
@@ -140,15 +140,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         16.0,
         "scene fragments must retain the font scale required for rendering"
     );
+    let overhang = first_scene
+        .scene()
+        .fragments()
+        .iter()
+        .find(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == first_prefix && source.bytes() == (0..1))
+        })
+        .expect("the Latin j overhang probe must produce a scene fragment");
+    let overhang_glyph = &overhang.glyphs()[0];
     assert!(
-        first_scene.scene().fragments().iter().any(|left| {
-            first_scene.scene().fragments().iter().any(|right| {
-                left.paint() != right.paint()
-                    && left.glyphs()[0].id() == right.glyphs()[0].id()
-                    && left.glyphs()[0].position() == right.glyphs()[0].position()
-            })
-        }),
-        "one shaped ligature must lower into multiple paint clips without reshaping"
+        overhang.clip().x0 < overhang_glyph.position().x
+            || overhang.clip().x1 > overhang_glyph.position().x + overhang_glyph.advance().x,
+        "real glyph ink must not be clamped to shaped advance"
     );
     assert!(
         first_scene
@@ -177,6 +183,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         arabic_fragment.synthesis().skew_degrees(),
         Some(14.0),
         "the static fallback must retain Fontique's synthetic oblique evidence"
+    );
+    let zero_advance_mark = first_scene
+        .scene()
+        .fragments()
+        .iter()
+        .find(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == first_arabic)
+                && fragment.glyphs()[0].advance().x == 0.0
+        })
+        .expect("Noto Kufi must expose a zero-advance Arabic mark");
+    assert!(
+        zero_advance_mark.clip().width() > 0.0 && zero_advance_mark.clip().height() > 0.0,
+        "zero-advance Arabic ink must retain visible paint coverage"
     );
     let arabic_visual_sources: Vec<_> = first_scene
         .scene()
@@ -289,7 +310,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let mut edit = document.edit();
-    edit.replace_text(first_suffix, "fices ")?;
+    edit.replace_text(first_suffix, "offices ")?;
     let changed = edit.commit()?;
     assert_eq!(
         old_snapshot.text(second_text),

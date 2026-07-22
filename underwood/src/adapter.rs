@@ -12,7 +12,8 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::{
-    FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId, Rect, ShapingStyle, Vec2,
+    Affine, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId, Rect, ShapingStyle,
+    Vec2,
 };
 
 /// Forms portable lines for one paragraph through a retained text backend.
@@ -411,6 +412,16 @@ impl FontSynthesis {
             Some(evidence) if evidence.skew_degrees != 0.0 => Some(evidence.skew_degrees),
             Some(_) | None => None,
         }
+    }
+
+    /// Returns the renderer-facing affine transform for synthetic skew.
+    ///
+    /// Coverage adapters and renderers should use this shared transform so
+    /// their `no_std` math and glyph geometry remain identical.
+    #[must_use]
+    pub fn skew_transform(&self) -> Option<Affine> {
+        self.skew_degrees()
+            .map(|degrees| Affine::skew(f64::from(libm::tanf(degrees.to_radians())), 0.0))
     }
 }
 
@@ -993,6 +1004,15 @@ mod tests {
             synthesis.skew_degrees(),
             None,
             "zero skew must have the canonical absent representation"
+        );
+        let oblique =
+            FontSynthesis::try_new([], false, Some(14.0)).expect("a finite non-zero skew is valid");
+        let transform = oblique
+            .skew_transform()
+            .expect("a non-zero skew must produce a transform");
+        assert!(
+            transform.as_coeffs()[2].is_finite() && transform.as_coeffs()[2] > 0.0,
+            "the shared skew transform must contain a finite horizontal shear"
         );
         assert!(
             FontSynthesis::try_new([FontVariation::new(wght, f32::NAN)], false, None).is_err(),
