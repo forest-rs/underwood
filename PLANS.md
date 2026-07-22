@@ -589,7 +589,8 @@ repository policy, formatting, bare metal, and WebAssembly.
 
 ## Interactive semantic document campaign
 
-**Status:** Active — exact hit/caret slice started 2026-07-22
+**Status:** Active — exact interaction and selection landed; composition epoch
+executable with local gates green and remote proof pending
 
 **Design:** Design-0009
 

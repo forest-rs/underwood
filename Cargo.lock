@@ -1907,6 +1907,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "underwood_ime_compat_experiment"
+version = "0.0.1"
+dependencies = [
+ "underwood",
+ "underwood_parley",
+]
+
+[[package]]
 name = "underwood_parley"
 version = "0.0.1"
 dependencies = [

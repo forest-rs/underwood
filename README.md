@@ -16,7 +16,11 @@ physics. Overstory is the flagship experience layer.
 Underwood has completed its executable constitution, first semantic-to-scene
 slice, computed inline-style spine, Fontique-backed font requests, retained
 Parley Core `ShapedText`, Parley-backed paragraph formation, ink-accurate glyph
-coverage, and CPU visual proof. The complete architecture is
+coverage, CPU visual proof, exact cluster interaction, and revision-bound
+multi-selection transactions. A generated-source IME composition epoch and
+revisioned editable-surface query layer now execute against the same retained
+Parley geometry for both event-feed and host-driven protocol shapes. The
+complete architecture is
 [specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
 first pre-stable public slice and its exact dependency fence: `underwood` owns
 the `no_std + alloc` document, flow, and scene path, while `underwood_parley`
@@ -53,6 +57,16 @@ line and baseline evidence. Run the optimized meeting demo with:
 
 ```sh
 cargo run --release -p underwood_showcase
+```
+
+The deterministic IME compatibility proof starts with two independent scene
+selections, reports their explicit normalization to one native marked region,
+shapes Arabic preedit without publishing the document, answers synchronous
+UTF-16/text/geometry/hit queries from the exact same epoch, then demonstrates
+zero-work cancel and single-publication commit:
+
+```sh
+cargo run -p underwood_ime_compat_experiment
 ```
 
 Product performance lives in `benches/semantic-scene` and measures those same

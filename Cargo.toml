@@ -5,6 +5,7 @@ members = [
   "examples/showcase",
   "examples/visual-proof",
   "experiments/flow",
+  "experiments/ime-compat",
   "experiments/parley-seam",
   "experiments/position",
   "experiments/text-data",

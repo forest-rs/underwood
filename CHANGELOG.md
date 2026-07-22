@@ -68,6 +68,27 @@ Underwood does not yet make compatibility promises.
 - `ChangeSet::paragraphs` is now always in document order. Transactions that
   apply source operations in reverse order no longer leak staging order into
   their public change summary.
+- Added `CompositionSession`, checked `CompositionEpoch` updates, explicit
+  generated-text provenance, and `LayoutEngine::prepare_composition`. Preedit
+  no longer masquerades as committed document edits; cancel retains committed
+  paragraph formation and commit publishes one selection replacement.
+- Added `EditableSurface` and `EditableSurfaceSnapshot` for a caller-chosen
+  semantic focus scope. Native adapters can bind text, the complete
+  multi-selection set, marked range, source map, exact scene geometry, and one
+  document/composition revision, then perform UTF-8, UTF-16, or Unicode-scalar
+  range conversion and synchronous text/geometry/hit queries.
+  `EditableSurfaceSnapshot::replacement_selection` maps a host-authored range
+  back to a validated logical scene selection without exposing raw snapshot
+  position construction.
+- Generalized `SceneLine`, `SceneFragment`, `SceneGlyph`, `TextHit`, and
+  `SceneCaret` over their source or position type so composition scenes can
+  preserve authored and generated provenance. Existing committed-scene type
+  annotations can keep using their default snapshot-source parameters.
+- Starting composition with several independent selections or one multi-range
+  visual bidi selection now performs an explicit, reported collapse to the
+  primary extent. Committed scenes and surfaces retain the complete two-level
+  selection model; callers must not treat this native marked-region policy as
+  a general scene limitation.
 
 ### Added
 
@@ -84,3 +105,5 @@ Underwood does not yet make compatibility promises.
 - Initial CI and review scaffolding.
 - Dependency-free `no_std` `underwood` production crate boundary.
 - Bare-metal and WebAssembly portability checks for foundational crates.
+- Deterministic event-feed and host-driven IME compatibility trace in the
+  separate `experiments/ime-compat` workspace crate.
