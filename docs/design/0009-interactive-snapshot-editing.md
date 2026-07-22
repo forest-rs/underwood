@@ -259,6 +259,20 @@ schema or open URLs from core. Run correctness and real-versus-mirage review,
 and land each coherent slice only after local and remote Definition of Done
 gates pass.
 
+## Execution status — 2026-07-22
+
+| Slice | State | Executable evidence |
+| --- | --- | --- |
+| A. Exact interaction map | Landed | `underwood_parley` cluster/caret corpus and `docs/proof/exact-interaction-review-2026-07-22.md` |
+| B. Snapshot transaction and selection | Landed | multi-range visual bidi and independent multi-selection transaction corpus; `docs/proof/selection-transaction-review-2026-07-22.md` |
+| C. Composition epoch | Executable; local gates green, remote proof pending | `CompositionSession`, `CompositionScene`, `EditableSurface`, real-Parley feed/host tests, and `underwood_ime_compat_experiment` |
+| D. Product proof and review | Pending | editable native showcase and semantic activation |
+
+Slice C preserves the general scene model from Slice B. Committed scenes and
+editable surfaces expose every independent selection and every logical range.
+Only entry into a singular native marked-text session normalizes that state,
+and `CompositionStart` makes the change observable before any preedit update.
+
 ## Migration
 
 This repository is pre-stable, but public interaction changes still receive an
@@ -274,6 +288,13 @@ explicit migration record.
 - Whole-leaf replacement remains source-compatible; interactive callers move
   to `TextScene`-created `SnapshotTextSelectionSet` values and
   `Document::replace_selections`.
+- Scene observation primitives are generic over source/position and retain
+  committed snapshot types as defaults. Callers with explicit type annotations
+  may either keep the defaults or name `ProjectedTextRange` and
+  `ProjectedTextPosition` when consuming `CompositionScene`.
+- Host-driven adapters map explicit authored ranges through
+  `EditableSurfaceSnapshot::replacement_selection`; they do not construct a
+  `SnapshotTextPosition` from a platform byte offset.
 - Paragraph adapters migrate `PreparedParagraph::try_from_lines` calls to
   `PreparedParagraph::try_new` and supply complete cursor movements, including
   exact caret placement and optional crossed-source ranges.

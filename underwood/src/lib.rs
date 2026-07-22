@@ -10,19 +10,29 @@ pub mod adapter;
 
 pub use adapter::TextAffinity;
 
+mod composition;
 mod document;
+mod editable;
 mod error;
 mod scene;
 mod selection;
 mod style;
 
+pub use composition::{
+    CompositionClause, CompositionClauseKind, CompositionEpoch, CompositionId, CompositionSession,
+    CompositionStart, CompositionTextPosition, CompositionTextRange, CompositionUpdate,
+};
 pub use document::{
     ChangeSet, Document, DocumentId, DocumentRevision, DocumentSnapshot, Edit, InlineRole,
     ParagraphId, ParagraphRole, Publication, SelectionReplacement, SemanticId, TextId,
 };
+pub use editable::{
+    EditableSurface, EditableSurfaceElement, EditableSurfaceSelection, EditableSurfaceSnapshot,
+    SurfaceTextEncoding,
+};
 pub use error::{
-    EditError, EditErrorKind, SceneError, SceneErrorKind, SelectionError, SelectionErrorKind,
-    StyleError, StyleErrorKind,
+    CompositionError, CompositionErrorKind, EditError, EditErrorKind, SceneError, SceneErrorKind,
+    SelectionError, SelectionErrorKind, StyleError, StyleErrorKind, SurfaceError, SurfaceErrorKind,
 };
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
 pub use parlance::{
@@ -31,8 +41,10 @@ pub use parlance::{
 };
 pub use peniko::{Brush, Color, FontData};
 pub use scene::{
-    LayoutEngine, SceneCaret, SceneFragment, SceneFragmentId, SceneGlyph, SceneLine, SceneOutput,
-    SceneSelectionRect, SemanticFragment, StageWork, TextHit, TextScene, WorkReport,
+    CompositionScene, CompositionSceneOutput, LayoutEngine, ProjectedTextPosition,
+    ProjectedTextRange, ProjectedTextSource, SceneCaret, SceneCompositionRect, SceneFragment,
+    SceneFragmentId, SceneGlyph, SceneLine, SceneOutput, SceneSelectionRect, SemanticFragment,
+    StageWork, TextHit, TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

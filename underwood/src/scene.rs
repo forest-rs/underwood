@@ -13,17 +13,19 @@ use crate::adapter::{
 };
 use crate::document::Paragraph;
 use crate::{
-    Affine, DocumentRevision, DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, PaintSlot,
-    PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError, SceneErrorKind, SceneRequest,
-    SelectionError, SelectionErrorKind, SemanticId, ShapingStyle, SnapshotTextPosition,
-    SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet, TextId, TextMovement,
-    TextSelectionMode, Vec2,
+    Affine, CompositionError, CompositionErrorKind, CompositionId, CompositionSession,
+    CompositionStart, DocumentRevision, DocumentSnapshot, FontData, InlineFlowStyle, InlineRole,
+    PaintSlot, PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError, SceneErrorKind,
+    SceneRequest, SelectionError, SelectionErrorKind, SemanticId, ShapingStyle,
+    SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
+    TextId, TextMovement, TextSelectionMode, Vec2,
 };
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
 pub struct LayoutEngine {
     paragraphs: Box<dyn ParagraphFormation>,
     cache: Vec<ParagraphCache>,
+    composition_cache: Vec<ParagraphCache>,
 }
 
 impl core::fmt::Debug for LayoutEngine {
@@ -31,6 +33,10 @@ impl core::fmt::Debug for LayoutEngine {
         formatter
             .debug_struct("LayoutEngine")
             .field("cached_paragraphs", &self.cache.len())
+            .field(
+                "cached_composition_paragraphs",
+                &self.composition_cache.len(),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -42,6 +48,7 @@ impl LayoutEngine {
         Self {
             paragraphs: Box::new(paragraphs),
             cache: Vec::new(),
+            composition_cache: Vec::new(),
         }
     }
 
@@ -65,89 +72,14 @@ impl LayoutEngine {
 
         for paragraph in snapshot.paragraphs() {
             let projection = Projection::new(paragraph, request)?;
-            let cache_index = self
-                .cache
-                .iter()
-                .position(|entry| entry.paragraph == paragraph.id);
-            let formation_matches = cache_index.is_some_and(|index| {
-                self.cache[index].formation_key.matches(
-                    paragraph.version,
-                    &projection,
-                    request.width.0,
-                )
-            });
-            let paint_matches = cache_index
-                .is_some_and(|index| self.cache[index].paint_runs == projection.paint_runs);
-            let needs_formation = !formation_matches || !paint_matches;
-            let cache_index = if needs_formation {
-                let shaping_styles: Vec<_> = projection
-                    .shaping_styles
-                    .iter()
-                    .map(|style| (*style).clone())
-                    .collect();
-                let text_len = u32::try_from(projection.text.len()).map_err(|_| {
-                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
-                })?;
-                let constraints = ParagraphConstraints::try_new(request.width.0)
-                    .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
-                let output = self
-                    .paragraphs
-                    .form(
-                        ParagraphInput::new(
-                            paragraph.id,
-                            &projection.text,
-                            &shaping_styles,
-                            &projection.shaping_runs,
-                            &projection.inline_flow_styles,
-                            &projection.inline_flow_runs,
-                            &projection.paint_runs,
-                        ),
-                        constraints,
-                    )
-                    .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
-                if output.paragraph().paragraph() != paragraph.id
-                    || output.paragraph().text_len() != text_len
-                {
-                    return Err(SceneError::for_paragraph(
-                        SceneErrorKind::SourceCoverage,
-                        paragraph.id,
-                    ));
-                }
-                validate_prepared(output.paragraph(), &projection)?;
-                record_formation_work(&mut work, output.work());
-                if projection.text.is_empty() && !formation_matches {
-                    work.flow.add_paragraph(1);
-                }
-                let geometry = build_geometry(output.paragraph(), &projection)?;
-                work.geometry.add_paragraph(geometry.fragments.len());
-                let formation_key = FormationKey::new(
-                    paragraph.version,
-                    shaping_styles,
-                    projection.shaping_runs.clone(),
-                    projection.inline_flow_styles.clone(),
-                    projection.inline_flow_runs.clone(),
-                    request.width.0,
-                    projection.empty_line_height_key(),
-                );
-                if let Some(index) = cache_index {
-                    let entry = &mut self.cache[index];
-                    entry.formation_key = formation_key;
-                    entry.paint_runs = projection.paint_runs.clone();
-                    entry.geometry = geometry;
-                    index
-                } else {
-                    self.cache.push(ParagraphCache {
-                        paragraph: paragraph.id,
-                        formation_key,
-                        paint_runs: projection.paint_runs.clone(),
-                        geometry,
-                    });
-                    self.cache.len() - 1
-                }
-            } else {
-                work.reused_paragraphs += 1;
-                cache_index.expect("a reusable cache index must exist")
-            };
+            let cache_index = prepare_paragraph_geometry(
+                self.paragraphs.as_mut(),
+                &mut self.cache,
+                paragraph,
+                &projection,
+                request.width.0,
+                &mut work,
+            )?;
 
             let geometry = &self.cache[cache_index].geometry;
             materialize_geometry(
@@ -185,11 +117,190 @@ impl LayoutEngine {
             work,
         })
     }
+
+    /// Prepares a transient generated-text scene without evicting committed work.
+    pub fn prepare_composition(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+        composition: &CompositionSession,
+    ) -> Result<CompositionSceneOutput, SceneError> {
+        validate_styles(snapshot, request)?;
+        if composition.document() != snapshot.id()
+            || composition.base_revision() != snapshot.revision()
+        {
+            return Err(SceneError::for_document(
+                SceneErrorKind::InvalidComposition,
+                snapshot.id(),
+            ));
+        }
+        let target = composition.target_text().ok_or_else(|| {
+            SceneError::for_document(SceneErrorKind::InvalidComposition, snapshot.id())
+        })?;
+
+        let mut work = WorkReport::default();
+        let mut lines = Vec::new();
+        let mut fragments = Vec::new();
+        let mut clusters = Vec::new();
+        let mut carets = Vec::new();
+        let mut movements = Vec::new();
+        let mut semantics = Vec::new();
+        let mut y_offset = 0.0;
+
+        for paragraph in snapshot.paragraphs() {
+            let transient = paragraph.id.index == target.paragraph;
+            let projection = if transient {
+                Projection::with_composition(paragraph, request, composition)?
+            } else {
+                Projection::new(paragraph, request)?
+            };
+            let cache = if transient {
+                &mut self.composition_cache
+            } else {
+                &mut self.cache
+            };
+            let cache_index = prepare_paragraph_geometry(
+                self.paragraphs.as_mut(),
+                cache,
+                paragraph,
+                &projection,
+                request.width.0,
+                &mut work,
+            )?;
+            let geometry = &cache[cache_index].geometry;
+            materialize_projected_geometry(
+                geometry,
+                snapshot.revision(),
+                y_offset,
+                &mut lines,
+                &mut fragments,
+                &mut clusters,
+                &mut carets,
+                &mut movements,
+                &mut semantics,
+            );
+            y_offset += geometry.height;
+        }
+
+        work.paint = StageWork {
+            paragraphs: snapshot.paragraphs().len(),
+            records: fragments.len(),
+        };
+        Ok(CompositionSceneOutput {
+            scene: CompositionScene {
+                document: snapshot.id(),
+                revision: snapshot.revision(),
+                composition: composition.id(),
+                epoch: composition.epoch(),
+                lines,
+                fragments,
+                clusters,
+                carets,
+                movements,
+                paint: request.paint.clone(),
+                semantics,
+            },
+            work,
+        })
+    }
+}
+
+fn prepare_paragraph_geometry(
+    paragraphs: &mut dyn ParagraphFormation,
+    cache: &mut Vec<ParagraphCache>,
+    paragraph: &Paragraph,
+    projection: &Projection<'_>,
+    width: f64,
+    work: &mut WorkReport,
+) -> Result<usize, SceneError> {
+    let cache_index = cache
+        .iter()
+        .position(|entry| entry.paragraph == paragraph.id);
+    let formation_matches = cache_index.is_some_and(|index| {
+        cache[index]
+            .formation_key
+            .matches(paragraph.version, projection, width)
+    });
+    let paint_matches =
+        cache_index.is_some_and(|index| cache[index].paint_runs == projection.paint_runs);
+    if formation_matches && paint_matches {
+        let cache_index = cache_index.expect("a reusable cache index must exist");
+        if let Some((id, epoch)) = projection.composition_identity() {
+            rebind_composition_geometry(&mut cache[cache_index].geometry, id, epoch);
+        }
+        work.reused_paragraphs += 1;
+        return Ok(cache_index);
+    }
+
+    let shaping_styles: Vec<_> = projection
+        .shaping_styles
+        .iter()
+        .map(|style| (*style).clone())
+        .collect();
+    let text_len = u32::try_from(projection.text.len())
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+    let constraints = ParagraphConstraints::try_new(width)
+        .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
+    let output = paragraphs
+        .form(
+            ParagraphInput::new(
+                paragraph.id,
+                &projection.text,
+                &shaping_styles,
+                &projection.shaping_runs,
+                &projection.inline_flow_styles,
+                &projection.inline_flow_runs,
+                &projection.paint_runs,
+            ),
+            constraints,
+        )
+        .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
+    if output.paragraph().paragraph() != paragraph.id || output.paragraph().text_len() != text_len {
+        return Err(SceneError::for_paragraph(
+            SceneErrorKind::SourceCoverage,
+            paragraph.id,
+        ));
+    }
+    validate_prepared(output.paragraph(), projection)?;
+    record_formation_work(work, output.work());
+    if projection.text.is_empty() && !formation_matches {
+        work.flow.add_paragraph(1);
+    }
+    let geometry = build_geometry(output.paragraph(), projection)?;
+    work.geometry.add_paragraph(geometry.fragments.len());
+    let formation_key = FormationKey::new(
+        paragraph.version,
+        projection.text.clone(),
+        shaping_styles,
+        projection.shaping_runs.clone(),
+        projection.inline_flow_styles.clone(),
+        projection.inline_flow_runs.clone(),
+        width,
+        projection.empty_line_height_key(),
+        projection,
+    );
+    if let Some(index) = cache_index {
+        let entry = &mut cache[index];
+        entry.formation_key = formation_key;
+        entry.paint_runs = projection.paint_runs.clone();
+        entry.geometry = geometry;
+        Ok(index)
+    } else {
+        cache.push(ParagraphCache {
+            paragraph: paragraph.id,
+            formation_key,
+            paint_runs: projection.paint_runs.clone(),
+            geometry,
+        });
+        Ok(cache.len() - 1)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 struct FormationKey {
     version: u64,
+    text: alloc::string::String,
+    source_map: Vec<ProjectionSourceKey>,
     shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
     inline_flow_styles: Vec<InlineFlowStyle>,
@@ -201,15 +312,19 @@ struct FormationKey {
 impl FormationKey {
     fn new(
         version: u64,
+        text: alloc::string::String,
         shaping_styles: Vec<ShapingStyle>,
         shaping_runs: Vec<ShapingRun>,
         inline_flow_styles: Vec<InlineFlowStyle>,
         inline_flow_runs: Vec<InlineFlowRun>,
         width: f64,
         empty_line_height: u64,
+        projection: &Projection<'_>,
     ) -> Self {
         Self {
             version,
+            text,
+            source_map: ProjectionSourceKey::from_projection(projection),
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
@@ -221,6 +336,8 @@ impl FormationKey {
 
     fn matches(&self, version: u64, projection: &Projection<'_>, width: f64) -> bool {
         self.version == version
+            && self.text == projection.text
+            && self.source_map == ProjectionSourceKey::from_projection(projection)
             && self.shaping_styles.len() == projection.shaping_styles.len()
             && self
                 .shaping_styles
@@ -280,6 +397,8 @@ impl<'a> Projection<'a> {
             spans.push(LeafSpan {
                 paragraph: start..end,
                 text: leaf.id,
+                source: LeafSpanSource::Snapshot { start: 0 },
+                leaf_len: len,
                 role: leaf.role,
                 semantic: leaf.semantic_id(),
             });
@@ -318,7 +437,176 @@ impl<'a> Projection<'a> {
         })
     }
 
-    fn local_range(&self, paragraph: Range<u32>) -> Result<LocalRange, SceneError> {
+    fn with_composition(
+        paragraph: &Paragraph,
+        request: &'a SceneRequest<'_>,
+        composition: &CompositionSession,
+    ) -> Result<Self, SceneError> {
+        let target = composition.target_text().ok_or_else(|| {
+            SceneError::for_paragraph(SceneErrorKind::InvalidComposition, paragraph.id)
+        })?;
+        if target.paragraph != paragraph.id.index {
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::InvalidComposition,
+                paragraph.id,
+            ));
+        }
+        let ranges = composition.replacement_ranges();
+        if ranges.is_empty()
+            || ranges.iter().any(|range| {
+                range.revision() != composition.base_revision() || range.text() != target
+            })
+        {
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::InvalidComposition,
+                paragraph.id,
+            ));
+        }
+
+        let mut text = alloc::string::String::new();
+        let mut spans = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
+        let mut shaping_styles = Vec::new();
+        let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
+        let mut inline_flow_styles = Vec::new();
+        let mut inline_flow_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
+        let mut paint_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
+        let mut target_found = false;
+
+        for leaf in &paragraph.leaves {
+            let style = request.styles.style_for(leaf.id);
+            if leaf.id != target {
+                append_projection_span(
+                    paragraph.id,
+                    &mut text,
+                    &mut spans,
+                    &mut shaping_styles,
+                    &mut shaping_runs,
+                    &mut inline_flow_styles,
+                    &mut inline_flow_runs,
+                    &mut paint_runs,
+                    leaf,
+                    leaf.text.as_ref(),
+                    LeafSpanSource::Snapshot { start: 0 },
+                    style,
+                )?;
+                continue;
+            }
+            target_found = true;
+
+            let mut source = 0_u32;
+            for (index, range) in ranges.iter().enumerate() {
+                let bytes = range.bytes();
+                if bytes.start < source
+                    || leaf
+                        .text
+                        .get(bytes.start as usize..bytes.end as usize)
+                        .is_none()
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::InvalidComposition,
+                        paragraph.id,
+                        bytes,
+                    ));
+                }
+                if source < bytes.start {
+                    let retained = leaf
+                        .text
+                        .get(source as usize..bytes.start as usize)
+                        .ok_or_else(|| {
+                            SceneError::for_source(
+                                SceneErrorKind::InvalidComposition,
+                                paragraph.id,
+                                source..bytes.start,
+                            )
+                        })?;
+                    append_projection_span(
+                        paragraph.id,
+                        &mut text,
+                        &mut spans,
+                        &mut shaping_styles,
+                        &mut shaping_runs,
+                        &mut inline_flow_styles,
+                        &mut inline_flow_runs,
+                        &mut paint_runs,
+                        leaf,
+                        retained,
+                        LeafSpanSource::Snapshot { start: source },
+                        style,
+                    )?;
+                }
+                if index == 0 {
+                    append_projection_span(
+                        paragraph.id,
+                        &mut text,
+                        &mut spans,
+                        &mut shaping_styles,
+                        &mut shaping_runs,
+                        &mut inline_flow_styles,
+                        &mut inline_flow_runs,
+                        &mut paint_runs,
+                        leaf,
+                        composition.text(),
+                        LeafSpanSource::Composition {
+                            id: composition.id(),
+                            epoch: composition.epoch(),
+                            start: 0,
+                        },
+                        style,
+                    )?;
+                }
+                source = bytes.end;
+            }
+            let end = u32::try_from(leaf.text.len()).map_err(|_| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
+            })?;
+            if source < end {
+                let retained = leaf.text.get(source as usize..).ok_or_else(|| {
+                    SceneError::for_source(
+                        SceneErrorKind::InvalidComposition,
+                        paragraph.id,
+                        source..end,
+                    )
+                })?;
+                append_projection_span(
+                    paragraph.id,
+                    &mut text,
+                    &mut spans,
+                    &mut shaping_styles,
+                    &mut shaping_runs,
+                    &mut inline_flow_styles,
+                    &mut inline_flow_runs,
+                    &mut paint_runs,
+                    leaf,
+                    retained,
+                    LeafSpanSource::Snapshot { start: source },
+                    style,
+                )?;
+            }
+        }
+        if !target_found {
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::InvalidComposition,
+                paragraph.id,
+            ));
+        }
+
+        Ok(Self {
+            paragraph: paragraph.id,
+            text,
+            spans,
+            shaping_styles,
+            shaping_runs,
+            inline_flow_styles,
+            inline_flow_runs,
+            paint_runs,
+            default_font_size: request.styles.default_style().shaping().font_size(),
+            default_inline_flow: request.styles.default_style().inline_flow(),
+            paragraph_semantic: paragraph.semantic_id(),
+            paragraph_role: paragraph.role,
+        })
+    }
+
+    fn local_ranges(&self, paragraph: Range<u32>) -> Result<Vec<LocalRange>, SceneError> {
         if self
             .text
             .get(paragraph.start as usize..paragraph.end as usize)
@@ -330,32 +618,8 @@ impl<'a> Projection<'a> {
                 paragraph,
             ));
         }
-        let span = self
-            .spans
-            .iter()
-            .find(|span| {
-                paragraph.start >= span.paragraph.start && paragraph.end <= span.paragraph.end
-            })
-            .ok_or_else(|| {
-                SceneError::for_source(
-                    SceneErrorKind::SourceCoverage,
-                    self.paragraph,
-                    paragraph.clone(),
-                )
-            })?;
-        Ok(LocalRange {
-            text: span.text,
-            bytes: (paragraph.start - span.paragraph.start)..(paragraph.end - span.paragraph.start),
-        })
-    }
-
-    fn local_ranges(&self, paragraph: Range<u32>) -> Result<Vec<LocalRange>, SceneError> {
         if paragraph.is_empty() {
-            let span = self
-                .spans
-                .iter()
-                .rev()
-                .find(|span| span.paragraph.end == paragraph.start)
+            let span = span_for_position(&self.spans, paragraph.start, TextAffinity::Upstream)
                 .ok_or_else(|| {
                     SceneError::for_source(
                         SceneErrorKind::SourceCoverage,
@@ -363,11 +627,9 @@ impl<'a> Projection<'a> {
                         paragraph.clone(),
                     )
                 })?;
-            return Ok(alloc::vec![LocalRange {
-                text: span.text,
-                bytes: (paragraph.start - span.paragraph.start)
-                    ..(paragraph.end - span.paragraph.start),
-            }]);
+            return Ok(alloc::vec![
+                span.local_range(paragraph.start, paragraph.end)
+            ]);
         }
 
         let mut covered = paragraph.start;
@@ -385,10 +647,7 @@ impl<'a> Projection<'a> {
                     paragraph,
                 ));
             }
-            ranges.push(LocalRange {
-                text: span.text,
-                bytes: (start - span.paragraph.start)..(end - span.paragraph.start),
-            });
+            ranges.push(span.local_range(start, end));
             covered = end;
         }
         if covered != paragraph.end {
@@ -401,14 +660,33 @@ impl<'a> Projection<'a> {
         Ok(ranges)
     }
 
-    fn semantic_for_text(&self, text: TextId) -> Result<SemanticId, SceneError> {
-        self.spans
+    fn semantic_for_range(&self, paragraph: Range<u32>) -> Result<SemanticId, SceneError> {
+        let mut semantics = self
+            .spans
             .iter()
-            .find(|span| span.text == text)
-            .map(|span| span.semantic)
-            .ok_or_else(|| {
-                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, self.paragraph)
+            .filter(|span| {
+                if paragraph.is_empty() {
+                    span.paragraph.start <= paragraph.start && paragraph.start <= span.paragraph.end
+                } else {
+                    span.paragraph.start < paragraph.end && paragraph.start < span.paragraph.end
+                }
             })
+            .map(|span| span.semantic);
+        let Some(first) = semantics.next() else {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph,
+            ));
+        };
+        if semantics.any(|semantic| semantic != first) {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph,
+            ));
+        }
+        Ok(first)
     }
 
     fn position_at(
@@ -423,33 +701,14 @@ impl<'a> Projection<'a> {
                 paragraph_offset..paragraph_offset,
             ));
         }
-        let span = match affinity {
-            TextAffinity::Upstream => self.spans.iter().rev().find(|span| {
-                (span.paragraph.start < paragraph_offset && paragraph_offset <= span.paragraph.end)
-                    || (span.paragraph.is_empty() && span.paragraph.end == paragraph_offset)
-            }),
-            TextAffinity::Downstream => self.spans.iter().find(|span| {
-                (span.paragraph.start <= paragraph_offset && paragraph_offset < span.paragraph.end)
-                    || (span.paragraph.is_empty() && span.paragraph.start == paragraph_offset)
-            }),
-        }
-        .or_else(|| {
-            self.spans.iter().find(|span| {
-                span.paragraph.start <= paragraph_offset && paragraph_offset <= span.paragraph.end
-            })
-        })
-        .ok_or_else(|| {
+        let span = span_for_position(&self.spans, paragraph_offset, affinity).ok_or_else(|| {
             SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
                 paragraph_offset..paragraph_offset,
             )
         })?;
-        Ok(LocalPosition {
-            text: span.text,
-            byte: paragraph_offset - span.paragraph.start,
-            affinity,
-        })
+        Ok(span.local_position(paragraph_offset, affinity))
     }
 
     fn empty_line_height_key(&self) -> u64 {
@@ -461,14 +720,172 @@ impl<'a> Projection<'a> {
             0
         }
     }
+
+    fn composition_identity(&self) -> Option<(CompositionId, crate::CompositionEpoch)> {
+        self.spans.iter().find_map(|span| match span.source {
+            LeafSpanSource::Composition { id, epoch, .. } => Some((id, epoch)),
+            LeafSpanSource::Snapshot { .. } => None,
+        })
+    }
+}
+
+fn append_projection_span<'a>(
+    paragraph: ParagraphId,
+    text: &mut alloc::string::String,
+    spans: &mut Vec<LeafSpan>,
+    shaping_styles: &mut Vec<&'a ShapingStyle>,
+    shaping_runs: &mut Vec<ShapingRun>,
+    inline_flow_styles: &mut Vec<InlineFlowStyle>,
+    inline_flow_runs: &mut Vec<InlineFlowRun>,
+    paint_runs: &mut Vec<PaintRun>,
+    leaf: &crate::document::TextLeaf,
+    value: &str,
+    source: LeafSpanSource,
+    style: &'a crate::ComputedInlineStyle,
+) -> Result<(), SceneError> {
+    let start = u32::try_from(text.len())
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?;
+    text.push_str(value);
+    let end = u32::try_from(text.len())
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?;
+    spans.push(LeafSpan {
+        paragraph: start..end,
+        text: leaf.id,
+        source,
+        leaf_len: u32::try_from(leaf.text.len())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?,
+        role: leaf.role,
+        semantic: leaf.semantic_id(),
+    });
+    if start != end {
+        append_shaping_run(
+            shaping_styles,
+            shaping_runs,
+            start..end,
+            style.shaping(),
+            paragraph,
+        )?;
+        append_inline_flow_run(
+            inline_flow_styles,
+            inline_flow_runs,
+            start..end,
+            style.inline_flow(),
+            paragraph,
+        )?;
+        append_paint_run(paint_runs, start..end, style.paint());
+    }
+    Ok(())
+}
+
+fn span_for_position(
+    spans: &[LeafSpan],
+    paragraph_offset: u32,
+    affinity: TextAffinity,
+) -> Option<&LeafSpan> {
+    match affinity {
+        TextAffinity::Upstream => spans.iter().rev().find(|span| {
+            (span.paragraph.start < paragraph_offset && paragraph_offset <= span.paragraph.end)
+                || (span.paragraph.is_empty() && span.paragraph.end == paragraph_offset)
+        }),
+        TextAffinity::Downstream => spans.iter().find(|span| {
+            (span.paragraph.start <= paragraph_offset && paragraph_offset < span.paragraph.end)
+                || (span.paragraph.is_empty() && span.paragraph.start == paragraph_offset)
+        }),
+    }
+    .or_else(|| {
+        spans.iter().find(|span| {
+            span.paragraph.start <= paragraph_offset && paragraph_offset <= span.paragraph.end
+        })
+    })
 }
 
 #[derive(Clone, Debug)]
 struct LeafSpan {
     paragraph: Range<u32>,
     text: TextId,
+    source: LeafSpanSource,
+    leaf_len: u32,
     role: InlineRole,
     semantic: SemanticId,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LeafSpanSource {
+    Snapshot {
+        start: u32,
+    },
+    Composition {
+        id: CompositionId,
+        epoch: crate::CompositionEpoch,
+        start: u32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProjectionSourceKey {
+    paragraph: Range<u32>,
+    text: TextId,
+    source: ProjectionSourceKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProjectionSourceKind {
+    Snapshot { start: u32 },
+    Composition { start: u32 },
+}
+
+impl ProjectionSourceKey {
+    fn from_projection(projection: &Projection<'_>) -> Vec<Self> {
+        projection
+            .spans
+            .iter()
+            .map(|span| Self {
+                paragraph: span.paragraph.clone(),
+                text: span.text,
+                source: match span.source {
+                    LeafSpanSource::Snapshot { start } => ProjectionSourceKind::Snapshot { start },
+                    LeafSpanSource::Composition { start, .. } => {
+                        ProjectionSourceKind::Composition { start }
+                    }
+                },
+            })
+            .collect()
+    }
+}
+
+impl LeafSpan {
+    fn local_range(&self, paragraph_start: u32, paragraph_end: u32) -> LocalRange {
+        let relative_start = paragraph_start - self.paragraph.start;
+        let relative_end = paragraph_end - self.paragraph.start;
+        match self.source {
+            LeafSpanSource::Snapshot { start } => LocalRange::Snapshot {
+                text: self.text,
+                bytes: (start + relative_start)..(start + relative_end),
+            },
+            LeafSpanSource::Composition { id, epoch, start } => LocalRange::Composition {
+                id,
+                epoch,
+                bytes: (start + relative_start)..(start + relative_end),
+            },
+        }
+    }
+
+    fn local_position(&self, paragraph: u32, affinity: TextAffinity) -> LocalPosition {
+        let relative = paragraph - self.paragraph.start;
+        match self.source {
+            LeafSpanSource::Snapshot { start } => LocalPosition::Snapshot {
+                text: self.text,
+                byte: start + relative,
+                affinity,
+            },
+            LeafSpanSource::Composition { id, epoch, start } => LocalPosition::Composition {
+                id,
+                epoch,
+                byte: start + relative,
+                affinity,
+            },
+        }
+    }
 }
 
 fn append_shaping_run<'a>(
@@ -532,7 +949,15 @@ fn append_inline_flow_run(
 }
 
 fn append_paint_run(runs: &mut Vec<PaintRun>, bytes: Range<u32>, slot: PaintSlot) {
-    runs.push(PaintRun::new(bytes, slot));
+    if let Some(last) = runs.last_mut()
+        && last.bytes().end == bytes.start
+        && last.slot() == slot
+    {
+        let start = last.bytes().start;
+        *last = PaintRun::new(start..bytes.end, slot);
+    } else {
+        runs.push(PaintRun::new(bytes, slot));
+    }
 }
 
 fn validate_styles(
@@ -622,7 +1047,7 @@ fn validate_prepared(
                             source,
                         ));
                     }
-                    projection.local_range(source)?;
+                    projection.local_ranges(source)?;
                 }
             }
             for range in run.unrendered_source() {
@@ -726,7 +1151,7 @@ struct CachedFragment {
     glyphs: Vec<CachedGlyph>,
     paint: PaintSlot,
     transform: Affine,
-    source: LocalRange,
+    sources: Vec<LocalRange>,
     bounds: Rect,
     clip: Rect,
     font: FontData,
@@ -742,12 +1167,12 @@ struct CachedGlyph {
     id: u32,
     position: Point,
     advance: Vec2,
-    source: LocalRange,
+    sources: Vec<LocalRange>,
 }
 
 #[derive(Clone, Debug)]
 struct CachedCluster {
-    source: LocalRange,
+    sources: Vec<LocalRange>,
     semantic_id: SemanticId,
     bounds: Rect,
     line: usize,
@@ -774,7 +1199,7 @@ struct CachedCursorMovement {
 #[derive(Clone, Debug)]
 struct CachedCursorStep {
     target: LocalPosition,
-    source: Option<LocalRange>,
+    source: Option<Vec<LocalRange>>,
 }
 
 #[derive(Clone, Debug)]
@@ -782,21 +1207,113 @@ struct CachedSemantic {
     semantic_id: SemanticId,
     paragraph_role: Option<ParagraphRole>,
     inline_role: Option<InlineRole>,
-    source: Option<LocalRange>,
+    source: Option<Vec<LocalRange>>,
     bounds: Rect,
 }
 
-#[derive(Clone, Debug)]
-struct LocalRange {
-    text: TextId,
-    bytes: Range<u32>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LocalRange {
+    Snapshot {
+        text: TextId,
+        bytes: Range<u32>,
+    },
+    Composition {
+        id: CompositionId,
+        epoch: crate::CompositionEpoch,
+        bytes: Range<u32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct LocalPosition {
-    text: TextId,
-    byte: u32,
-    affinity: TextAffinity,
+enum LocalPosition {
+    Snapshot {
+        text: TextId,
+        byte: u32,
+        affinity: TextAffinity,
+    },
+    Composition {
+        id: CompositionId,
+        epoch: crate::CompositionEpoch,
+        byte: u32,
+        affinity: TextAffinity,
+    },
+}
+
+fn rebind_composition_geometry(
+    geometry: &mut CachedGeometry,
+    id: CompositionId,
+    epoch: crate::CompositionEpoch,
+) {
+    for line in &mut geometry.lines {
+        rebind_ranges(&mut line.sources, id, epoch);
+    }
+    for fragment in &mut geometry.fragments {
+        rebind_ranges(&mut fragment.sources, id, epoch);
+        for glyph in &mut fragment.glyphs {
+            rebind_ranges(&mut glyph.sources, id, epoch);
+        }
+    }
+    for cluster in &mut geometry.clusters {
+        rebind_ranges(&mut cluster.sources, id, epoch);
+        rebind_position(&mut cluster.left, id, epoch);
+        rebind_position(&mut cluster.right, id, epoch);
+    }
+    for caret in &mut geometry.carets {
+        rebind_position(&mut caret.position, id, epoch);
+    }
+    for movement in &mut geometry.movements {
+        rebind_position(&mut movement.position, id, epoch);
+        for step in [
+            &mut movement.previous_visual,
+            &mut movement.next_visual,
+            &mut movement.previous_logical,
+            &mut movement.next_logical,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            rebind_position(&mut step.target, id, epoch);
+            if let Some(source) = &mut step.source {
+                rebind_ranges(source, id, epoch);
+            }
+        }
+    }
+    rebind_ranges(&mut geometry.texts, id, epoch);
+    for semantic in &mut geometry.semantics {
+        if let Some(source) = &mut semantic.source {
+            rebind_ranges(source, id, epoch);
+        }
+    }
+}
+
+fn rebind_ranges(ranges: &mut [LocalRange], id: CompositionId, epoch: crate::CompositionEpoch) {
+    for range in ranges {
+        if let LocalRange::Composition {
+            id: range_id,
+            epoch: range_epoch,
+            ..
+        } = range
+        {
+            *range_id = id;
+            *range_epoch = epoch;
+        }
+    }
+}
+
+fn rebind_position(
+    position: &mut LocalPosition,
+    id: CompositionId,
+    epoch: crate::CompositionEpoch,
+) {
+    if let LocalPosition::Composition {
+        id: position_id,
+        epoch: position_epoch,
+        ..
+    } = position
+    {
+        *position_id = id;
+        *position_epoch = epoch;
+    }
 }
 
 fn build_geometry(
@@ -817,14 +1334,16 @@ fn build_geometry(
         let mut cluster_x = 0.0_f64;
         for cluster in line.clusters() {
             let paragraph_source = cluster.source();
-            let source = projection.local_range(paragraph_source.clone())?;
-            let semantic_id = projection.semantic_for_text(source.text)?;
-            let left = local_cluster_side(&source, &paragraph_source, cluster.left())?;
-            let right = local_cluster_side(&source, &paragraph_source, cluster.right())?;
+            let sources = projection.local_ranges(paragraph_source.clone())?;
+            let semantic_id = projection.semantic_for_range(paragraph_source.clone())?;
+            let left =
+                projection.position_at(cluster.left().offset(), cluster.left().affinity())?;
+            let right =
+                projection.position_at(cluster.right().offset(), cluster.right().affinity())?;
             let next_x = cluster_x + cluster.advance();
             let bounds = Rect::new(cluster_x, line_top, next_x, line_top + line.height());
             clusters.push(CachedCluster {
-                source,
+                sources,
                 semantic_id,
                 bounds,
                 line: line_index,
@@ -842,13 +1361,10 @@ fn build_geometry(
                 TextAffinity::Upstream
             };
             let position = projection.position_at(source.start, affinity)?;
-            let local_source = LocalRange {
-                text: position.text,
-                bytes: position.byte..position.byte,
-            };
+            let local_source = projection.local_ranges(source.clone())?;
             clusters.push(CachedCluster {
-                semantic_id: projection.semantic_for_text(position.text)?,
-                source: local_source,
+                semantic_id: projection.semantic_for_range(source)?,
+                sources: local_source,
                 bounds: Rect::new(0.0, line_top, 0.0, line_top + line.height()),
                 line: line_index,
                 left: position,
@@ -863,7 +1379,7 @@ fn build_geometry(
             for glyph in run.glyphs() {
                 let position = Point::new(x + glyph.offset().x, baseline - glyph.offset().y);
                 for segment in glyph.paint().segments() {
-                    let source = projection.local_range(segment.source())?;
+                    let sources = projection.local_ranges(segment.source())?;
                     let local_clip = segment.local_clip();
                     let clip = Rect::new(
                         position.x + local_clip.x0,
@@ -880,11 +1396,11 @@ fn build_geometry(
                             id: glyph.id(),
                             position,
                             advance: glyph.advance(),
-                            source: source.clone(),
+                            sources: sources.clone(),
                         }],
                         paint: segment.slot(),
                         transform: Affine::IDENTITY,
-                        source,
+                        sources,
                         bounds: clip,
                         clip,
                         font: run.font().clone(),
@@ -911,13 +1427,10 @@ fn build_geometry(
 
     if prepared.lines().is_empty() && projection.text.is_empty() && !projection.spans.is_empty() {
         let position = projection.position_at(0, TextAffinity::Downstream)?;
-        let source = LocalRange {
-            text: position.text,
-            bytes: position.byte..position.byte,
-        };
+        let sources = projection.local_ranges(0..0)?;
         clusters.push(CachedCluster {
-            semantic_id: projection.semantic_for_text(position.text)?,
-            source,
+            semantic_id: projection.semantic_for_range(0..0)?,
+            sources,
             bounds: Rect::new(0.0, 0.0, 0.0, empty_line_height),
             line: 0,
             left: position,
@@ -942,23 +1455,31 @@ fn build_geometry(
             bounds,
         });
     }
-    for span in &projection.spans {
-        if span.paragraph.is_empty() {
+    for (span_index, span) in projection.spans.iter().enumerate() {
+        if span.leaf_len == 0
+            || projection.spans[..span_index]
+                .iter()
+                .any(|previous| previous.text == span.text)
+        {
             continue;
         }
         let mut bounds: Option<Rect> = None;
         for fragment in &fragments {
-            if fragment.source.text == span.text {
+            if fragment.sources.iter().any(|source| {
+                matches!(source, LocalRange::Snapshot { text, .. } if *text == span.text)
+                    || matches!(span.source, LeafSpanSource::Composition { .. })
+                        && matches!(source, LocalRange::Composition { .. })
+            }) {
                 bounds = Some(match bounds {
                     Some(current) => current.union(fragment.bounds),
                     None => fragment.bounds,
                 });
             }
         }
-        let source = LocalRange {
+        let source = alloc::vec![LocalRange::Snapshot {
             text: span.text,
-            bytes: 0..(span.paragraph.end - span.paragraph.start),
-        };
+            bytes: 0..span.leaf_len,
+        }];
         semantics.push(CachedSemantic {
             semantic_id: span.semantic,
             paragraph_role: None,
@@ -1012,10 +1533,7 @@ fn build_geometry(
     let texts = projection
         .spans
         .iter()
-        .map(|span| LocalRange {
-            text: span.text,
-            bytes: 0..(span.paragraph.end - span.paragraph.start),
-        })
+        .map(|span| span.local_range(span.paragraph.start, span.paragraph.end))
         .collect();
 
     Ok(CachedGeometry {
@@ -1044,37 +1562,11 @@ fn cached_cursor_step(
             target: projection.position_at(target.offset(), target.affinity())?,
             source: step
                 .source()
-                .map(|source| projection.local_range(source))
+                .map(|source| projection.local_ranges(source))
                 .transpose()?,
         })
     })
     .transpose()
-}
-
-fn local_cluster_side(
-    source: &LocalRange,
-    paragraph_source: &Range<u32>,
-    side: crate::adapter::PreparedClusterSide,
-) -> Result<LocalPosition, SceneError> {
-    let relative = side
-        .offset()
-        .checked_sub(paragraph_source.start)
-        .filter(|offset| *offset <= paragraph_source.end - paragraph_source.start)
-        .ok_or_else(|| {
-            SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                ParagraphId {
-                    document: source.text.document,
-                    index: source.text.paragraph,
-                },
-                paragraph_source.clone(),
-            )
-        })?;
-    Ok(LocalPosition {
-        text: source.text,
-        byte: source.bytes.start + relative,
-        affinity: side.affinity(),
-    })
 }
 
 fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 {
@@ -1129,12 +1621,12 @@ fn materialize_geometry(
                     id: glyph.id,
                     position: glyph.position + translate,
                     advance: glyph.advance,
-                    source: materialize_range(&glyph.source, revision),
+                    source: materialize_snapshot_range(&glyph.sources, revision),
                 })
                 .collect(),
             paint: fragment.paint,
             transform: fragment.transform,
-            source: Some(materialize_range(&fragment.source, revision)),
+            source: Some(materialize_snapshot_range(&fragment.sources, revision)),
             clip: fragment.clip + translate,
             font: fragment.font.clone(),
             font_size: fragment.font_size,
@@ -1145,7 +1637,7 @@ fn materialize_geometry(
         }
     }));
     clusters.extend(geometry.clusters.iter().map(|cluster| SceneCluster {
-        source: materialize_range(&cluster.source, revision),
+        source: materialize_snapshot_range(&cluster.sources, revision),
         semantic_id: cluster.semantic_id,
         bounds: cluster.bounds + translate,
         line: line_base + cluster.line,
@@ -1189,10 +1681,166 @@ fn materialize_geometry(
             source: semantic
                 .source
                 .as_ref()
-                .map(|source| materialize_range(source, revision)),
+                .map(|source| materialize_snapshot_range(source, revision)),
             bounds: semantic.bounds + translate,
         }
     }));
+}
+
+fn materialize_projected_geometry(
+    geometry: &CachedGeometry,
+    revision: DocumentRevision,
+    y_offset: f64,
+    lines: &mut Vec<SceneLine<ProjectedTextRange>>,
+    fragments: &mut Vec<SceneFragment<ProjectedTextRange>>,
+    clusters: &mut Vec<SceneCluster<ProjectedTextRange, ProjectedTextPosition>>,
+    carets: &mut Vec<SceneCaretStop<ProjectedTextPosition>>,
+    movements: &mut Vec<SceneCursorMovement<ProjectedTextRange, ProjectedTextPosition>>,
+    semantics: &mut Vec<SemanticFragment>,
+) {
+    let translate = Vec2::new(0.0, y_offset);
+    let line_base = lines.len();
+    lines.extend(geometry.lines.iter().map(|line| {
+        SceneLine {
+            bounds: line.bounds + translate,
+            sources: line
+                .sources
+                .iter()
+                .map(|source| projected_range(core::slice::from_ref(source), revision))
+                .collect(),
+            break_reason: line.break_reason,
+            baseline: line.baseline + y_offset,
+            content_ascent: line.content_ascent,
+            content_descent: line.content_descent,
+        }
+    }));
+    fragments.extend(geometry.fragments.iter().map(|fragment| {
+        SceneFragment {
+            id: fragment.id,
+            glyphs: fragment
+                .glyphs
+                .iter()
+                .map(|glyph| SceneGlyph {
+                    id: glyph.id,
+                    position: glyph.position + translate,
+                    advance: glyph.advance,
+                    source: projected_range(&glyph.sources, revision),
+                })
+                .collect(),
+            paint: fragment.paint,
+            transform: fragment.transform,
+            source: Some(projected_range(&fragment.sources, revision)),
+            clip: fragment.clip + translate,
+            font: fragment.font.clone(),
+            font_size: fragment.font_size,
+            synthesis: fragment.synthesis.clone(),
+            normalized_coords: Arc::clone(&fragment.normalized_coords),
+            bidi_level: fragment.bidi_level,
+            script: fragment.script,
+        }
+    }));
+    clusters.extend(geometry.clusters.iter().map(|cluster| SceneCluster {
+        source: projected_range(&cluster.sources, revision),
+        semantic_id: cluster.semantic_id,
+        bounds: cluster.bounds + translate,
+        line: line_base + cluster.line,
+        left: projected_position(cluster.left, revision),
+        right: projected_position(cluster.right, revision),
+        bidi_level: cluster.bidi_level,
+    }));
+    carets.extend(geometry.carets.iter().map(|caret| SceneCaretStop {
+        position: projected_position(caret.position, revision),
+        bounds: caret.bounds + translate,
+    }));
+    movements.extend(
+        geometry
+            .movements
+            .iter()
+            .map(|movement| SceneCursorMovement {
+                position: projected_position(movement.position, revision),
+                previous_visual: projected_cursor_step(movement.previous_visual.as_ref(), revision),
+                next_visual: projected_cursor_step(movement.next_visual.as_ref(), revision),
+                previous_logical: projected_cursor_step(
+                    movement.previous_logical.as_ref(),
+                    revision,
+                ),
+                next_logical: projected_cursor_step(movement.next_logical.as_ref(), revision),
+            }),
+    );
+    semantics.extend(geometry.semantics.iter().map(|semantic| {
+        SemanticFragment {
+            semantic_id: semantic.semantic_id,
+            paragraph_role: semantic.paragraph_role,
+            inline_role: semantic.inline_role,
+            source: semantic
+                .source
+                .as_ref()
+                .and_then(|sources| materialize_optional_snapshot_range(sources, revision)),
+            bounds: semantic.bounds + translate,
+        }
+    }));
+}
+
+fn projected_cursor_step(
+    step: Option<&CachedCursorStep>,
+    revision: DocumentRevision,
+) -> Option<SceneCursorStep<ProjectedTextRange, ProjectedTextPosition>> {
+    step.map(|step| SceneCursorStep {
+        target: projected_position(step.target, revision),
+        source: step
+            .source
+            .as_ref()
+            .map(|source| projected_range(source, revision)),
+    })
+}
+
+fn projected_range(ranges: &[LocalRange], revision: DocumentRevision) -> ProjectedTextRange {
+    ProjectedTextRange::new(
+        ranges
+            .iter()
+            .map(|range| match range {
+                LocalRange::Snapshot { text, bytes } => ProjectedTextSource::Snapshot(
+                    SnapshotTextRange::new(revision, *text, bytes.clone()),
+                ),
+                LocalRange::Composition { id, epoch, bytes } => ProjectedTextSource::Composition(
+                    crate::CompositionTextRange::new(*id, *epoch, bytes.clone()),
+                ),
+            })
+            .collect(),
+    )
+}
+
+fn projected_position(
+    position: LocalPosition,
+    revision: DocumentRevision,
+) -> ProjectedTextPosition {
+    match position {
+        LocalPosition::Snapshot {
+            text,
+            byte,
+            affinity,
+        } => ProjectedTextPosition::Snapshot(SnapshotTextPosition::new(
+            revision, text, byte, affinity,
+        )),
+        LocalPosition::Composition {
+            id,
+            epoch,
+            byte,
+            affinity,
+        } => ProjectedTextPosition::Composition(crate::CompositionTextPosition::new(
+            id, epoch, byte, affinity,
+        )),
+    }
+}
+
+fn materialize_optional_snapshot_range(
+    ranges: &[LocalRange],
+    revision: DocumentRevision,
+) -> Option<SnapshotTextRange> {
+    let [LocalRange::Snapshot { text, bytes }] = ranges else {
+        return None;
+    };
+    Some(SnapshotTextRange::new(revision, *text, bytes.clone()))
 }
 
 fn materialize_cursor_step(
@@ -1204,19 +1852,82 @@ fn materialize_cursor_step(
         source: step
             .source
             .as_ref()
-            .map(|source| materialize_range(source, revision)),
+            .map(|source| materialize_snapshot_range(source, revision)),
     })
 }
 
 fn materialize_range(range: &LocalRange, revision: DocumentRevision) -> SnapshotTextRange {
-    SnapshotTextRange::new(revision, range.text, range.bytes.clone())
+    let LocalRange::Snapshot { text, bytes } = range else {
+        unreachable!("committed geometry cannot contain composition source")
+    };
+    SnapshotTextRange::new(revision, *text, bytes.clone())
+}
+
+fn materialize_snapshot_range(
+    ranges: &[LocalRange],
+    revision: DocumentRevision,
+) -> SnapshotTextRange {
+    let [range] = ranges else {
+        unreachable!("committed geometry source must remain within one semantic text leaf")
+    };
+    materialize_range(range, revision)
 }
 
 fn materialize_position(
     position: LocalPosition,
     revision: DocumentRevision,
 ) -> SnapshotTextPosition {
-    SnapshotTextPosition::new(revision, position.text, position.byte, position.affinity)
+    let LocalPosition::Snapshot {
+        text,
+        byte,
+        affinity,
+    } = position
+    else {
+        unreachable!("committed geometry cannot contain a composition position")
+    };
+    SnapshotTextPosition::new(revision, text, byte, affinity)
+}
+
+/// One provenance-preserving segment of transient projected scene text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProjectedTextSource {
+    /// Bytes retained from the immutable committed snapshot.
+    Snapshot(SnapshotTextRange),
+    /// Bytes generated by the named composition epoch.
+    Composition(crate::CompositionTextRange),
+}
+
+/// Source-complete range covered by one transient scene observation.
+///
+/// A shaped cluster or glyph can cover more than one segment when a generated
+/// combining mark joins an authored base character. Keeping the ordered list
+/// prevents either provenance from being fabricated or discarded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectedTextRange {
+    sources: Arc<[ProjectedTextSource]>,
+}
+
+impl ProjectedTextRange {
+    pub(crate) fn new(sources: Vec<ProjectedTextSource>) -> Self {
+        Self {
+            sources: sources.into(),
+        }
+    }
+
+    /// Returns ordered, source-complete provenance segments.
+    #[must_use]
+    pub fn sources(&self) -> &[ProjectedTextSource] {
+        &self.sources
+    }
+}
+
+/// Exact caret position in either committed or generated projected text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ProjectedTextPosition {
+    /// Position in the immutable document snapshot.
+    Snapshot(SnapshotTextPosition),
+    /// Position in the current generated composition epoch.
+    Composition(crate::CompositionTextPosition),
 }
 
 /// Immutable prepared scene and exact work report.
@@ -1224,6 +1935,27 @@ fn materialize_position(
 pub struct SceneOutput {
     scene: TextScene,
     work: WorkReport,
+}
+
+/// Immutable transient scene for one exact composition epoch.
+#[derive(Clone, Debug)]
+pub struct CompositionSceneOutput {
+    scene: CompositionScene,
+    work: WorkReport,
+}
+
+impl CompositionSceneOutput {
+    /// Returns the prepared transient scene.
+    #[must_use]
+    pub const fn scene(&self) -> &CompositionScene {
+        &self.scene
+    }
+
+    /// Returns actual work performed for this transient request.
+    #[must_use]
+    pub const fn work(&self) -> &WorkReport {
+        &self.work
+    }
 }
 
 impl SceneOutput {
@@ -1336,6 +2068,192 @@ impl WorkReport {
     }
 }
 
+/// Immutable renderer-neutral scene for one generated composition epoch.
+#[derive(Clone, Debug)]
+pub struct CompositionScene {
+    document: crate::DocumentId,
+    revision: DocumentRevision,
+    composition: CompositionId,
+    epoch: crate::CompositionEpoch,
+    lines: Vec<SceneLine<ProjectedTextRange>>,
+    fragments: Vec<SceneFragment<ProjectedTextRange>>,
+    clusters: Vec<SceneCluster<ProjectedTextRange, ProjectedTextPosition>>,
+    carets: Vec<SceneCaretStop<ProjectedTextPosition>>,
+    movements: Vec<SceneCursorMovement<ProjectedTextRange, ProjectedTextPosition>>,
+    paint: PaintTable,
+    semantics: Vec<SemanticFragment>,
+}
+
+impl CompositionScene {
+    /// Returns the immutable document identity below the transient projection.
+    #[must_use]
+    pub const fn document(&self) -> crate::DocumentId {
+        self.document
+    }
+
+    /// Returns the immutable base revision below the transient projection.
+    #[must_use]
+    pub const fn revision(&self) -> DocumentRevision {
+        self.revision
+    }
+
+    /// Returns the native composition identity.
+    #[must_use]
+    pub const fn composition(&self) -> CompositionId {
+        self.composition
+    }
+
+    /// Returns the exact transient epoch represented by this scene.
+    #[must_use]
+    pub const fn epoch(&self) -> crate::CompositionEpoch {
+        self.epoch
+    }
+
+    /// Returns visual lines in flow order.
+    #[must_use]
+    pub fn lines(&self) -> &[SceneLine<ProjectedTextRange>] {
+        &self.lines
+    }
+
+    /// Returns paint-homogeneous projected glyph fragments.
+    #[must_use]
+    pub fn fragments(&self) -> &[SceneFragment<ProjectedTextRange>] {
+        &self.fragments
+    }
+
+    /// Returns immutable paint values referenced by fragment slots.
+    #[must_use]
+    pub const fn paint(&self) -> &PaintTable {
+        &self.paint
+    }
+
+    /// Iterates semantic fragments in document order.
+    pub fn semantics(&self) -> impl Iterator<Item = &SemanticFragment> {
+        self.semantics.iter()
+    }
+
+    /// Returns the exact projected cluster under a point.
+    #[must_use]
+    pub fn hit_test(
+        &self,
+        point: Point,
+    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+        self.clusters
+            .iter()
+            .find(|cluster| cluster.bounds.contains(point))
+            .map(|cluster| cluster.hit(point))
+    }
+
+    /// Returns the closest projected cluster side for native point queries.
+    #[must_use]
+    pub fn hit_test_closest(
+        &self,
+        point: Point,
+    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+        let mut closest: Option<(
+            &SceneCluster<ProjectedTextRange, ProjectedTextPosition>,
+            f64,
+            f64,
+        )> = None;
+        for cluster in &self.clusters {
+            let (block_distance, inline_distance) = distance_to_rect_axes(point, cluster.bounds);
+            if closest.is_none_or(|(_, current_block, current_inline)| {
+                block_distance < current_block
+                    || (block_distance == current_block && inline_distance < current_inline)
+            }) {
+                closest = Some((cluster, block_distance, inline_distance));
+            }
+        }
+        closest.map(|(cluster, _, _)| cluster.hit(point))
+    }
+
+    /// Resolves exact scene geometry for one projected caret position.
+    #[must_use]
+    pub fn caret(
+        &self,
+        position: &ProjectedTextPosition,
+    ) -> Option<SceneCaret<ProjectedTextPosition>> {
+        self.carets
+            .iter()
+            .find(|caret| caret.position == *position)
+            .map(|caret| SceneCaret {
+                position: caret.position,
+                bounds: caret.bounds,
+            })
+    }
+
+    /// Moves one position through the adapter-produced cluster map.
+    #[must_use]
+    pub fn move_position(
+        &self,
+        position: &ProjectedTextPosition,
+        movement: TextMovement,
+    ) -> Option<ProjectedTextPosition> {
+        let record = self
+            .movements
+            .iter()
+            .find(|record| record.position == *position)?;
+        let step = match movement {
+            TextMovement::PreviousVisual => record.previous_visual.as_ref(),
+            TextMovement::NextVisual => record.next_visual.as_ref(),
+            TextMovement::PreviousLogical => record.previous_logical.as_ref(),
+            TextMovement::NextLogical => record.next_logical.as_ref(),
+        }?;
+        Some(step.target)
+    }
+
+    /// Resolves highlight rectangles for the selected range inside preedit.
+    pub fn composition_selection_geometry(
+        &self,
+        session: &CompositionSession,
+    ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
+        if session.document() != self.document
+            || session.base_revision() != self.revision
+            || session.id() != self.composition
+            || session.epoch() != self.epoch
+        {
+            return Err(CompositionError::new(CompositionErrorKind::WrongSnapshot));
+        }
+        let Some(selection) = session.selection() else {
+            return Ok(Vec::new());
+        };
+        let mut geometry: Vec<SceneCompositionRect> = Vec::new();
+        for cluster in &self.clusters {
+            if !cluster.source.sources().iter().any(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
+                    if range.id() == self.composition
+                        && range.epoch() == self.epoch
+                        && range.bytes().start < selection.end
+                        && selection.start < range.bytes().end)
+            }) {
+                continue;
+            }
+            if let Some(previous) = geometry.last_mut()
+                && previous.line == cluster.line
+                && previous.bidi_level == cluster.bidi_level
+                && nearly_equal(previous.bounds.x1, cluster.bounds.x0)
+            {
+                previous.bounds.x1 = cluster.bounds.x1;
+            } else {
+                geometry.push(SceneCompositionRect {
+                    line: cluster.line,
+                    bounds: cluster.bounds,
+                    bidi_level: cluster.bidi_level,
+                });
+            }
+        }
+        Ok(geometry)
+    }
+
+    pub(crate) fn range_geometry(&self, range: &ProjectedTextRange) -> Vec<(usize, Rect)> {
+        self.clusters
+            .iter()
+            .filter(|cluster| projected_ranges_overlap(&cluster.source, range))
+            .map(|cluster| (cluster.line, cluster.bounds))
+            .collect()
+    }
+}
+
 /// Immutable renderer-neutral text scene.
 #[derive(Clone, Debug)]
 pub struct TextScene {
@@ -1352,6 +2270,54 @@ pub struct TextScene {
 }
 
 impl TextScene {
+    /// Returns the document identity represented by this scene.
+    #[must_use]
+    pub const fn document(&self) -> crate::DocumentId {
+        self.document
+    }
+
+    /// Returns the exact immutable snapshot revision represented by this scene.
+    #[must_use]
+    pub const fn revision(&self) -> DocumentRevision {
+        self.revision
+    }
+
+    /// Starts one native composition over the current primary insertion point.
+    ///
+    /// Native composition protocols expose one marked region. A sole logical
+    /// selection becomes that replacement target. If the scene has several
+    /// independent selections, or the primary visual selection has several
+    /// disjoint logical ranges, the host-visible set is explicitly normalized
+    /// to one collapsed primary extent before composition starts. Callers can
+    /// observe that normalization through [`CompositionStart::selection_changed`].
+    pub fn begin_composition(
+        &self,
+        selections: &SnapshotTextSelectionSet,
+        id: CompositionId,
+    ) -> Result<CompositionStart, CompositionError> {
+        if selections.document() != self.document || selections.revision() != self.revision {
+            return Err(CompositionError::new(CompositionErrorKind::WrongSnapshot));
+        }
+        let Some(primary) = selections.primary() else {
+            return Err(CompositionError::new(
+                CompositionErrorKind::EmptySelectionSet,
+            ));
+        };
+        let normalized = if selections.selections().len() == 1 && primary.ranges().len() == 1 {
+            self.selection_set([primary.clone()])
+        } else {
+            self.collapsed_selection(primary.extent())
+                .and_then(|selection| self.selection_set([selection]))
+        }
+        .map_err(|_| CompositionError::new(CompositionErrorKind::WrongSnapshot))?;
+        let selection_changed = &normalized != selections;
+        Ok(CompositionStart::new(
+            CompositionSession::new(id, normalized.clone()),
+            normalized,
+            selection_changed,
+        ))
+    }
+
     /// Returns an empty selection set bound to this scene revision.
     #[must_use]
     pub fn empty_selection_set(&self) -> SnapshotTextSelectionSet {
@@ -1815,6 +2781,32 @@ impl TextScene {
             .position(|range| range.text() == text)
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))
     }
+
+    pub(crate) fn range_geometry(&self, range: &SnapshotTextRange) -> Vec<(usize, Rect)> {
+        self.clusters
+            .iter()
+            .filter(|cluster| ranges_overlap(range, &cluster.source))
+            .map(|cluster| (cluster.line, cluster.bounds))
+            .collect()
+    }
+}
+
+fn projected_ranges_overlap(first: &ProjectedTextRange, second: &ProjectedTextRange) -> bool {
+    first.sources().iter().any(|first| {
+        second.sources().iter().any(|second| match (first, second) {
+            (ProjectedTextSource::Snapshot(first), ProjectedTextSource::Snapshot(second)) => {
+                ranges_overlap(first, second)
+            }
+            (ProjectedTextSource::Composition(first), ProjectedTextSource::Composition(second))
+                if first.id() == second.id() && first.epoch() == second.epoch() =>
+            {
+                let first = first.bytes();
+                let second = second.bytes();
+                first.start < second.end && second.start < first.end
+            }
+            _ => false,
+        })
+    })
 }
 
 fn movement_mode(movement: TextMovement) -> TextSelectionMode {
@@ -1900,18 +2892,18 @@ fn nearly_equal(first: f64, second: f64) -> bool {
 }
 
 #[derive(Clone, Debug)]
-struct SceneCluster {
-    source: SnapshotTextRange,
+struct SceneCluster<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+    source: Source,
     semantic_id: SemanticId,
     bounds: Rect,
     line: usize,
-    left: SnapshotTextPosition,
-    right: SnapshotTextPosition,
+    left: Position,
+    right: Position,
     bidi_level: u8,
 }
 
-impl SceneCluster {
-    fn hit(&self, point: Point) -> TextHit {
+impl<Source: Clone, Position: Copy> SceneCluster<Source, Position> {
+    fn hit(&self, point: Point) -> TextHit<Source, Position> {
         let midpoint = self.bounds.x0 + self.bounds.width() * 0.5;
         TextHit {
             source: self.source.clone(),
@@ -1927,24 +2919,24 @@ impl SceneCluster {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct SceneCaretStop {
-    position: SnapshotTextPosition,
+struct SceneCaretStop<Position = SnapshotTextPosition> {
+    position: Position,
     bounds: Rect,
 }
 
 #[derive(Clone, Debug)]
-struct SceneCursorMovement {
-    position: SnapshotTextPosition,
-    previous_visual: Option<SceneCursorStep>,
-    next_visual: Option<SceneCursorStep>,
-    previous_logical: Option<SceneCursorStep>,
-    next_logical: Option<SceneCursorStep>,
+struct SceneCursorMovement<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+    position: Position,
+    previous_visual: Option<SceneCursorStep<Source, Position>>,
+    next_visual: Option<SceneCursorStep<Source, Position>>,
+    previous_logical: Option<SceneCursorStep<Source, Position>>,
+    next_logical: Option<SceneCursorStep<Source, Position>>,
 }
 
 #[derive(Clone, Debug)]
-struct SceneCursorStep {
-    target: SnapshotTextPosition,
-    source: Option<SnapshotTextRange>,
+struct SceneCursorStep<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+    target: Position,
+    source: Option<Source>,
 }
 
 fn distance_to_rect_axes(point: Point, bounds: Rect) -> (f64, f64) {
@@ -1967,27 +2959,27 @@ fn distance_to_rect_axes(point: Point, bounds: Rect) -> (f64, f64) {
 
 /// One visual line.
 #[derive(Clone, Debug)]
-pub struct SceneLine {
+pub struct SceneLine<Source = SnapshotTextRange> {
     bounds: Rect,
-    sources: Vec<SnapshotTextRange>,
+    sources: Vec<Source>,
     break_reason: LineBreakReason,
     baseline: f64,
     content_ascent: f64,
     content_descent: f64,
 }
 
-impl SceneLine {
+impl<Source> SceneLine<Source> {
     /// Returns scene-space line bounds.
     #[must_use]
     pub const fn bounds(&self) -> Rect {
         self.bounds
     }
 
-    /// Returns the source-complete snapshot-local slices represented by the line.
+    /// Returns the source-complete slices represented by the line.
     ///
     /// A line has multiple slices when it crosses semantic text leaves.
     #[must_use]
-    pub fn sources(&self) -> &[SnapshotTextRange] {
+    pub fn sources(&self) -> &[Source] {
         &self.sources
     }
 
@@ -2022,12 +3014,12 @@ pub struct SceneFragmentId(u64);
 
 /// Paint-homogeneous shaped glyph fragment.
 #[derive(Clone, Debug)]
-pub struct SceneFragment {
+pub struct SceneFragment<Source = SnapshotTextRange> {
     id: SceneFragmentId,
-    glyphs: Vec<SceneGlyph>,
+    glyphs: Vec<SceneGlyph<Source>>,
     paint: PaintSlot,
     transform: Affine,
-    source: Option<SnapshotTextRange>,
+    source: Option<Source>,
     clip: Rect,
     font: FontData,
     font_size: f32,
@@ -2037,7 +3029,7 @@ pub struct SceneFragment {
     script: [u8; 4],
 }
 
-impl SceneFragment {
+impl<Source> SceneFragment<Source> {
     /// Returns the retained fragment identity.
     #[must_use]
     pub const fn id(&self) -> SceneFragmentId {
@@ -2046,7 +3038,7 @@ impl SceneFragment {
 
     /// Returns shaped glyph observations.
     #[must_use]
-    pub fn glyphs(&self) -> &[SceneGlyph] {
+    pub fn glyphs(&self) -> &[SceneGlyph<Source>] {
         &self.glyphs
     }
 
@@ -2062,9 +3054,9 @@ impl SceneFragment {
         self.transform
     }
 
-    /// Returns snapshot-local source when the fragment represents authored text.
+    /// Returns the source covered by this fragment when one is present.
     #[must_use]
-    pub const fn source(&self) -> Option<&SnapshotTextRange> {
+    pub const fn source(&self) -> Option<&Source> {
         self.source.as_ref()
     }
 
@@ -2113,14 +3105,14 @@ impl SceneFragment {
 
 /// One shaped glyph observation.
 #[derive(Clone, Debug)]
-pub struct SceneGlyph {
+pub struct SceneGlyph<Source = SnapshotTextRange> {
     id: u32,
     position: Point,
     advance: Vec2,
-    source: SnapshotTextRange,
+    source: Source,
 }
 
-impl SceneGlyph {
+impl<Source> SceneGlyph<Source> {
     /// Returns the backend glyph identifier.
     #[must_use]
     pub const fn id(&self) -> u32 {
@@ -2139,9 +3131,9 @@ impl SceneGlyph {
         self.advance
     }
 
-    /// Returns the snapshot-local source covered by this painted glyph observation.
+    /// Returns the source covered by this painted glyph observation.
     #[must_use]
-    pub const fn source(&self) -> &SnapshotTextRange {
+    pub const fn source(&self) -> &Source {
         &self.source
     }
 }
@@ -2190,23 +3182,23 @@ impl SemanticFragment {
 
 /// Result of scene-space hit testing.
 #[derive(Clone, Debug)]
-pub struct TextHit {
-    source: SnapshotTextRange,
-    position: SnapshotTextPosition,
+pub struct TextHit<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+    source: Source,
+    position: Position,
     semantic_id: SemanticId,
     bidi_level: u8,
 }
 
-impl TextHit {
-    /// Returns the exact snapshot-local cluster under the point.
+impl<Source, Position> TextHit<Source, Position> {
+    /// Returns the exact source-complete cluster under the point.
     #[must_use]
-    pub const fn source(&self) -> &SnapshotTextRange {
+    pub const fn source(&self) -> &Source {
         &self.source
     }
 
-    /// Returns the collapsed snapshot position selected by the cluster side.
+    /// Returns the collapsed position selected by the cluster side.
     #[must_use]
-    pub const fn position(&self) -> &SnapshotTextPosition {
+    pub const fn position(&self) -> &Position {
         &self.position
     }
 
@@ -2225,15 +3217,15 @@ impl TextHit {
 
 /// Exact scene-space caret for one snapshot position.
 #[derive(Clone, Copy, Debug)]
-pub struct SceneCaret {
-    position: SnapshotTextPosition,
+pub struct SceneCaret<Position = SnapshotTextPosition> {
+    position: Position,
     bounds: Rect,
 }
 
-impl SceneCaret {
-    /// Returns the revision-bound position represented by the caret.
+impl<Position> SceneCaret<Position> {
+    /// Returns the revision- or epoch-bound position represented by the caret.
     #[must_use]
-    pub const fn position(&self) -> &SnapshotTextPosition {
+    pub const fn position(&self) -> &Position {
         &self.position
     }
 
@@ -2252,6 +3244,34 @@ pub struct SceneSelectionRect {
     line: usize,
     bounds: Rect,
     bidi_level: u8,
+}
+
+/// One visual highlight rectangle for selected generated preedit text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneCompositionRect {
+    line: usize,
+    bounds: Rect,
+    bidi_level: u8,
+}
+
+impl SceneCompositionRect {
+    /// Returns the visual line index within the transient scene.
+    #[must_use]
+    pub const fn line(self) -> usize {
+        self.line
+    }
+
+    /// Returns scene-space highlight bounds.
+    #[must_use]
+    pub const fn bounds(self) -> Rect {
+        self.bounds
+    }
+
+    /// Returns the bidi level of the covered visual run.
+    #[must_use]
+    pub const fn bidi_level(self) -> u8 {
+        self.bidi_level
+    }
 }
 
 impl SceneSelectionRect {
@@ -2301,9 +3321,13 @@ mod tests {
         PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
     };
     use crate::{
-        Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontData, FontFamily,
-        InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, Rect, SceneErrorKind,
-        SceneRequest, ShapingStyle, StyleMap, Vec2,
+        Brush, Color, CompositionClause, CompositionClauseKind, CompositionErrorKind,
+        CompositionId, CompositionSession, CompositionUpdate, ComputedInlineStyle, Document,
+        DocumentId, EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily,
+        InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, Point,
+        ProjectedTextSource, Rect, SceneErrorKind, SceneRequest, ShapingStyle,
+        SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
+        StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextId, TextSelectionMode, Vec2,
     };
 
     #[derive(Debug)]
@@ -2671,6 +3695,293 @@ mod tests {
         assert_eq!(spacious_scene.work().flow().paragraphs(), 1);
         assert_eq!(compact_scene.scene().lines()[0].bounds().y0, 10.0);
         assert_eq!(spacious_scene.scene().lines()[0].bounds().y0, 20.0);
+    }
+
+    #[test]
+    fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
+        let (mut document, styles, paint) = one_leaf_document(*b"scene-test-doc09", "office");
+        let snapshot = document.snapshot();
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            glyphless: false,
+            interior_cursor: false,
+        });
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let committed = layout
+            .prepare(&snapshot, &request)
+            .expect("committed scene must prepare");
+        let left = committed
+            .scene()
+            .hit_test(Point::new(0.0, 1.0))
+            .expect("left cluster side must hit");
+        let right = committed
+            .scene()
+            .hit_test(Point::new(9.9, 1.0))
+            .expect("right cluster side must hit");
+        let selection = committed
+            .scene()
+            .selection(
+                left.position(),
+                right.position(),
+                TextSelectionMode::Logical,
+            )
+            .expect("whole-leaf selection must form");
+        let selections = committed
+            .scene()
+            .selection_set([selection])
+            .expect("selection set must validate");
+        let start = committed
+            .scene()
+            .begin_composition(&selections, CompositionId::from_bytes(*b"composition-0001"))
+            .expect("composition must start");
+        assert!(!start.selection_changed());
+        let mut session = start.into_session();
+        let initial_epoch = session.epoch();
+        let first_epoch = session
+            .update(
+                initial_epoch,
+                CompositionUpdate::new("a\u{301}")
+                    .with_selection(0..3)
+                    .with_clauses([CompositionClause::new(
+                        0..3,
+                        CompositionClauseKind::Selected,
+                    )]),
+            )
+            .expect("combining preedit must validate");
+        let invalid_selection = session
+            .update(
+                first_epoch,
+                CompositionUpdate::new("é").with_selection(1..1),
+            )
+            .expect_err("a selection inside one UTF-8 scalar must fail atomically");
+        assert_eq!(
+            invalid_selection.kind(),
+            CompositionErrorKind::InvalidPreeditRange,
+            "the error must identify the preedit selection rather than mutate it"
+        );
+        assert_eq!(
+            session.epoch(),
+            first_epoch,
+            "a rejected preedit update must not advance the epoch"
+        );
+        assert_eq!(
+            session.text(),
+            "a\u{301}",
+            "a rejected preedit update must retain the preceding text"
+        );
+        let invalid_clauses = session
+            .update(
+                first_epoch,
+                CompositionUpdate::new("abcd").with_clauses([
+                    CompositionClause::new(0..3, CompositionClauseKind::Raw),
+                    CompositionClause::new(2..4, CompositionClauseKind::Selected),
+                ]),
+            )
+            .expect_err("overlapping native clauses must fail atomically");
+        assert_eq!(
+            invalid_clauses.kind(),
+            CompositionErrorKind::InvalidClauseRange,
+            "the error must distinguish clause topology from the preedit selection"
+        );
+        assert_eq!(
+            session.epoch(),
+            first_epoch,
+            "a rejected clause update must not advance the epoch"
+        );
+
+        let first = layout
+            .prepare_composition(&snapshot, &request, &session)
+            .expect("first transient epoch must prepare");
+        assert_eq!(first.work().shape().paragraphs(), 1);
+        assert_eq!(first.scene().epoch(), first_epoch);
+        assert!(first.scene().fragments().iter().all(|fragment| {
+            fragment.source().is_some_and(|source| {
+                source.sources().iter().all(|segment| {
+                    matches!(segment, ProjectedTextSource::Composition(range)
+                        if range.id() == session.id() && range.epoch() == first_epoch)
+                })
+            })
+        }));
+        assert!(
+            !first
+                .scene()
+                .composition_selection_geometry(&session)
+                .expect("preedit selection geometry must resolve")
+                .is_empty()
+        );
+
+        let repeated = layout
+            .prepare_composition(&snapshot, &request, &session)
+            .expect("same epoch must reuse transient work");
+        assert_eq!(repeated.work().shape().paragraphs(), 0);
+        assert_eq!(repeated.work().reused_paragraphs(), 1);
+
+        let selection_epoch = session
+            .update(
+                first_epoch,
+                CompositionUpdate::new("a\u{301}").with_selection(3..3),
+            )
+            .expect("selection-only preedit change must advance the epoch");
+        let selection_only = layout
+            .prepare_composition(&snapshot, &request, &session)
+            .expect("selection-only epoch must rebind retained geometry");
+        assert_eq!(selection_only.work().shape().paragraphs(), 0);
+        assert_eq!(selection_only.work().geometry().paragraphs(), 0);
+        assert_eq!(selection_only.work().reused_paragraphs(), 1);
+        assert!(selection_only.scene().fragments().iter().all(|fragment| {
+            fragment.source().is_some_and(|source| {
+                source.sources().iter().all(|segment| {
+                    matches!(segment, ProjectedTextSource::Composition(range)
+                        if range.epoch() == selection_epoch)
+                })
+            })
+        }));
+        assert!(
+            selection_only
+                .scene()
+                .composition_selection_geometry(&session)
+                .expect("rebound selected range must resolve")
+                .is_empty()
+        );
+
+        let second_epoch = session
+            .update(
+                selection_epoch,
+                CompositionUpdate::new("مرحبا").with_selection(10..10),
+            )
+            .expect("Arabic preedit must validate");
+        assert_eq!(second_epoch.get(), selection_epoch.get() + 1);
+        let stale = session
+            .update(first_epoch, CompositionUpdate::new("stale"))
+            .expect_err("delayed epoch must fail");
+        assert_eq!(stale.kind(), CompositionErrorKind::StaleEpoch);
+        let second = layout
+            .prepare_composition(&snapshot, &request, &session)
+            .expect("updated transient epoch must prepare");
+        assert_eq!(second.work().shape().paragraphs(), 1);
+        assert_eq!(snapshot.text(left.position().text()), Some("office"));
+        let surface = EditableSurface::new(
+            &snapshot,
+            [EditableSurfaceElement::text(left.position().text())],
+        )
+        .expect("focused surface must flatten the selected semantic leaf");
+        let host = surface
+            .bind_composition(second.scene(), &session)
+            .expect("host queries must bind to the exact composition epoch");
+        assert_eq!(
+            surface
+                .bind_composition(first.scene(), &session)
+                .expect_err("host queries must reject geometry from an older epoch")
+                .kind(),
+            SurfaceErrorKind::WrongSnapshot,
+            "text and geometry from different composition epochs must never be combined"
+        );
+        assert_eq!(host.text(), "مرحبا");
+        assert_eq!(host.marked_range(), Some(0..10));
+        assert_eq!(host.host_selection(), Some(10..10));
+        assert_eq!(
+            host.range_in_encoding(0..10, SurfaceTextEncoding::Utf16)
+                .expect("Arabic range must convert to UTF-16"),
+            0..5
+        );
+        assert_eq!(
+            host.range_from_encoding(0..5, SurfaceTextEncoding::Utf16)
+                .expect("UTF-16 range must round trip"),
+            0..10
+        );
+        assert_eq!(
+            host.text_for_range(0..10)
+                .expect("synchronous text query must resolve"),
+            "مرحبا"
+        );
+        assert!(host.caret_rect().is_some());
+        assert!(
+            host.first_rect_for_range(0..10)
+                .expect("synchronous geometry query must resolve")
+                .is_some()
+        );
+        assert!(
+            host.offset_for_point(Point::new(0.0, 1.0)).is_some(),
+            "point queries must map through the same transient scene"
+        );
+
+        let cancelled = layout
+            .prepare(&snapshot, &request)
+            .expect("cancelling must reveal committed geometry");
+        assert_eq!(cancelled.work().shape().paragraphs(), 0);
+        assert_eq!(cancelled.work().geometry().paragraphs(), 0);
+        assert_eq!(cancelled.work().reused_paragraphs(), 1);
+
+        let stale_session = session.clone();
+        let replacement = session
+            .commit(&mut document, "مرحبا")
+            .expect("commit must publish one replacement");
+        assert_eq!(replacement.publication().changes().paragraphs().len(), 1);
+        assert_eq!(snapshot.text(left.position().text()), Some("office"));
+        assert_eq!(
+            replacement
+                .publication()
+                .snapshot()
+                .text(left.position().text()),
+            Some("مرحبا")
+        );
+        assert_eq!(
+            layout
+                .prepare_composition(
+                    replacement.publication().snapshot(),
+                    &request,
+                    &stale_session,
+                )
+                .expect_err("a committed document revision must reject its stale preedit")
+                .kind(),
+            SceneErrorKind::InvalidComposition,
+            "composition base revisions are exact rather than relocatable"
+        );
+    }
+
+    #[test]
+    fn composition_projection_rejects_a_missing_semantic_target() {
+        let (document, styles, paint) = one_leaf_document(*b"scene-test-doc10", "office");
+        let snapshot = document.snapshot();
+        let missing = TextId {
+            document: snapshot.id(),
+            paragraph: 0,
+            index: 99,
+        };
+        let position =
+            SnapshotTextPosition::new(snapshot.revision(), missing, 0, TextAffinity::Downstream);
+        let selection = SnapshotTextSelection::new(
+            position,
+            position,
+            TextSelectionMode::Logical,
+            vec![SnapshotTextRange::new(snapshot.revision(), missing, 0..0)],
+        );
+        let selections =
+            SnapshotTextSelectionSet::new(snapshot.id(), snapshot.revision(), vec![selection]);
+        let session =
+            CompositionSession::new(CompositionId::from_bytes(*b"missing-target01"), selections);
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            glyphless: false,
+            interior_cursor: false,
+        });
+        assert_eq!(
+            layout
+                .prepare_composition(&snapshot, &request, &session)
+                .expect_err("generated text must not be projected into a missing leaf")
+                .kind(),
+            SceneErrorKind::InvalidComposition,
+            "a matching paragraph index is insufficient without the semantic text leaf"
+        );
     }
 
     fn one_leaf_document(identity: [u8; 16], text: &str) -> (Document, StyleMap, PaintTable) {

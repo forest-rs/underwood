@@ -8,6 +8,102 @@ use crate::adapter::PreparationErrorKind;
 use crate::document::{DocumentId, ParagraphId, TextId};
 use crate::style::PaintSlot;
 
+/// Stable category for composition-state failures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CompositionErrorKind {
+    /// The composition or selection belongs to another document revision.
+    WrongSnapshot,
+    /// Composition requires at least one insertion point.
+    EmptySelectionSet,
+    /// The replacement target cannot be represented by the first composition slice.
+    UnsupportedSelection,
+    /// A preedit selection is reversed, out of bounds, or not on UTF-8 boundaries.
+    InvalidPreeditRange,
+    /// An IME clause is invalid, reversed, overlapping, or not on UTF-8 boundaries.
+    InvalidClauseRange,
+    /// A delayed update named an epoch older or newer than the current state.
+    StaleEpoch,
+    /// The session exhausted its monotonic epoch space.
+    EpochExhausted,
+}
+
+/// Concrete composition-state error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CompositionError {
+    kind: CompositionErrorKind,
+}
+
+impl CompositionError {
+    pub(crate) const fn new(kind: CompositionErrorKind) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable error category.
+    #[must_use]
+    pub const fn kind(&self) -> CompositionErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Display for CompositionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "composition operation failed: {:?}", self.kind)
+    }
+}
+
+impl core::error::Error for CompositionError {}
+
+/// Stable category for revisioned editable-surface failures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SurfaceErrorKind {
+    /// The scene, selection, or composition belongs to another snapshot.
+    WrongSnapshot,
+    /// A requested semantic text leaf is absent from the snapshot.
+    UnknownText,
+    /// A text leaf appears more than once in one flattened surface.
+    DuplicateText,
+    /// A range is reversed, out of bounds, or not on a valid encoding boundary.
+    InvalidRange,
+    /// Surface-only separator bytes cannot be mapped back to document text.
+    UnmappedRange,
+    /// A native query cannot represent the requested multi-range selection.
+    UnsupportedSelection,
+}
+
+/// Concrete editable-surface error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SurfaceError {
+    kind: SurfaceErrorKind,
+}
+
+impl SurfaceError {
+    pub(crate) const fn new(kind: SurfaceErrorKind) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable error category.
+    #[must_use]
+    pub const fn kind(&self) -> SurfaceErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Display for SurfaceError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "editable surface operation failed: {:?}",
+            self.kind
+        )
+    }
+}
+
+impl core::error::Error for SurfaceError {}
+
 /// Stable category for document-edit failures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -182,6 +278,8 @@ pub enum SceneErrorKind {
     Flow,
     /// A style references an absent paint slot or text leaf.
     InvalidStyle,
+    /// A composition does not belong to the requested snapshot or has an invalid target.
+    InvalidComposition,
 }
 
 /// Concrete scene-preparation error.

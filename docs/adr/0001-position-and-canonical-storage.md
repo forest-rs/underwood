@@ -280,6 +280,23 @@ insertion. These values remain derived snapshot observations, not durable
 anchors. Cross-leaf and structural replacement remain future transaction
 operations rather than implied behavior of this addendum.
 
+### Accepted composition addendum — 2026-07-22
+
+IME preedit is a generated projection epoch over one exact committed revision,
+not a sequence of authored document revisions. A composition source position
+therefore names its session ID, epoch, UTF-8 boundary, and affinity separately
+from a snapshot position. Text, selection, source mapping, and geometry exposed
+to a native host must all come from one bound document revision and composition
+epoch.
+
+This does not weaken the two-level selection law. Scenes and committed editable
+surfaces continue to support several independent selections, each of which may
+own several logical ranges for visual bidi selection. A native marked-text
+session is explicitly singular: when the host protocol cannot represent the
+complete set, composition begins at a collapsed primary extent and reports the
+selection change. It must not silently union a disjoint visual selection or
+present platform offsets as durable/global document positions.
+
 ## Migration
 
 Any accepted public position or storage contract requires a migration note even
