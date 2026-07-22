@@ -34,11 +34,18 @@ Underwood does not yet make compatibility promises.
 - Added `FontSynthesis::skew_transform` as the canonical `no_std` affine used
   by coverage adapters and renderers. Existing callers may replace local
   degree-to-shear math with this method; `skew_degrees` remains available.
+- Added `ParagraphRole::HEADING_1` and `ParagraphRole::HEADING_2`. These roles
+  preserve authored heading semantics in `TextScene`; callers still resolve
+  their computed visual styles explicitly through `StyleMap`.
 
 ### Added
 
 - Deterministic CPU-rendered visual proof through `imaging` and
   `imaging_vello_cpu`, kept in a separate top-level example crate.
+- Native resizable document showcase through `winit`, `softbuffer`, `imaging`,
+  and `imaging_vello_cpu`, kept in a separate top-level host crate. Resize,
+  local-edit, paint-only, variable-axis animation, and diagnostic controls all
+  execute the public retained Underwood path.
 - Executable repository constitution and governance workflow.
 - Beads capability, decision, and proof planning graph.
 - Machine-readable proof ledger.

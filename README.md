@@ -15,12 +15,12 @@ physics. Overstory is the flagship experience layer.
 
 Underwood has completed its executable constitution, first semantic-to-scene
 slice, computed inline-style spine, Fontique-backed font requests, retained
-Parley Core `ShapedText`, and CPU visual proof. It is now replacing provisional
-scene wrapping with Parley-backed paragraph formation. The complete architecture
-is [specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
+Parley Core `ShapedText`, Parley-backed paragraph formation, ink-accurate glyph
+coverage, and CPU visual proof. The complete architecture is
+[specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
 first pre-stable public slice and its exact dependency fence: `underwood` owns
-the `no_std + alloc` document, flow, and scene path, while
-`underwood_parley` owns adaptation to pinned Parley Core.
+the `no_std + alloc` document, flow, and scene path, while `underwood_parley`
+owns adaptation to pinned Parley Core.
 
 The five mandatory foundation records are accepted:
 
@@ -44,6 +44,16 @@ typography, diagnostics, and displayed work counters all come from public
 Underwood output.
 
 ![Underwood visual proof](examples/visual-proof/snapshots/underwood-visual-proof.png)
+
+The external `examples/showcase` host presents one real semantic heading/body
+document in a native resizable window. Resizing drives retained finite-width
+formation; Space performs a local edit; `P` changes paint without repeating
+text physics; `A` animates the Roboto Flex weight axis; and `G` reveals legal
+line and baseline evidence. Run the optimized meeting demo with:
+
+```sh
+cargo run --release -p underwood_showcase
+```
 
 Product performance lives in `benches/semantic-scene` and measures those same
 public crates. Pre-product hypothesis implementations live under

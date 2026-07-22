@@ -12,7 +12,8 @@ pre-stable [`adapter`] contract to the repository's pinned Parley revision.
 The first draft public slice is deliberately complete end to end:
 
 - [`Document`] publishes immutable [`DocumentSnapshot`] revisions through
-  atomic staged edits;
+  atomic staged edits and preserves body and heading paragraph roles without
+  prescribing their visual styling;
 - [`LayoutEngine`] retains formed paragraphs and avoids analysis or shaping
   for unchanged siblings, paint-value changes, and width-only changes;
 - [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
