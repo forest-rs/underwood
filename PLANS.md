@@ -586,3 +586,97 @@ fence remains unchanged, and the full local and remote workspace gates pass.
 The live meeting demonstration succeeded, and GitHub Actions run `29911682384`
 proved the eight-job matrix across Linux, macOS, Windows, MSRV, rustdoc,
 repository policy, formatting, bare metal, and WebAssembly.
+
+## Interactive semantic document campaign
+
+**Status:** Active — exact hit/caret slice started 2026-07-22
+
+**Design:** Design-0009
+
+### Goal
+
+Replace diagnostic interaction approximations with real paragraph-engine
+cluster/caret mechanics, then make the live semantic document directly
+selectable and editable through validated transactions and a separate IME
+composition epoch. The IME boundary must serve both Winit-like event feeds and
+host-driven native protocols that query selection, text, ranges, geometry, and
+hit testing synchronously.
+
+### Fence
+
+Parley owns paragraph-local cluster, bidi, caret-affinity, and cursor physics;
+Underwood owns revision-bound semantic positions, selection geometry,
+transactions, source projection, revisioned editable surfaces, composition
+epochs, and retained work; the showcase owns native gestures, keyboard/IME
+translation, focus, blinking, action routing, and presentation. Platform
+adapters own offset encodings, synchronous protocol callbacks, coordinate
+transforms, locking, and lifecycle notifications. Durable collaborative
+anchors, history, clipboard policy, permanent link schema, and block flow are
+outside this campaign.
+
+### Integration
+
+```text
+Parley shaped/formatted clusters
+              |
+              v
+portable paragraph interaction map
+              |
+              v
+snapshot positions -> selection / transaction / composition
+              |
+              v
+retained TextScene -> imaging -> live native proof
+```
+
+### Steps
+
+1. Complete `und-oh0.2.3` with a conformance-first portable cluster and caret
+   map; delete fragment-bounds hit testing and query-point caret geometry.
+2. Add revision-bound collapsed positions, bidi-correct selection rectangles,
+   visual/logical cluster movement, and validated same-leaf range replacement
+   with a returned position in the new revision.
+3. Specify the shared editable-surface contract for both Winit-like event feeds
+   and AppKit/UIKit/Android/TSF-like host conversations. Add an explicit
+   generated-source composition projection and a cache that retains committed
+   paragraph formation across preedit churn and cancel.
+4. Translate native pointer, keyboard, and Winit IME events in the showcase;
+   render selection, caret, and composition overlays without changing text
+   physics or moving host policy into core.
+5. Add exact semantic hover, press cancellation, and activation through a
+   showcase-owned `SemanticId` action registry; keep URL execution in the host
+   and avoid stabilizing a permanent core link schema.
+6. Run the mixed-script/ligature/combining/break/empty-text corpus, event-feed
+   and host-query IME traces, native visual review, full local/remote gates, and
+   land coherent PR slices.
+
+### Risks and controls
+
+- **Byte offsets renamed positions:** every position names a snapshot revision,
+  validated UTF-8 boundary, semantic leaf, and affinity; stale use fails.
+- **Underwood grows a second cursor engine:** cluster and affinity facts enter
+  through the paragraph adapter; scene code only maps and composes them.
+- **IME commits every preedit:** composition has a separate epoch and generated
+  source mapping; only commit publishes a document transaction.
+- **Winit defines the core IME model:** a revisioned editable surface answers
+  the richer host-driven text/range/geometry/hit-query contract; Winit is one
+  reduced-information adapter over the same state machine.
+- **Native offsets escape into document APIs:** platform UTF-16, code-point, or
+  protocol offsets are converted at the explicit focused-surface boundary;
+  semantic snapshot positions remain the internal currency.
+- **Composition destroys reuse:** transient and committed paragraph formations
+  coexist; cancel must reuse the committed entry.
+- **Editor policy invades core:** key chords, focus, pointer gestures, blink,
+  and platform IME event translation stay in the example host.
+- **Durable-position overclaim:** snapshot positions are never serialized or
+  presented as surviving unrelated edits; ADR-0001's anchor gate remains.
+
+### Completion
+
+The campaign is complete when a user can click and drag through mixed LTR/RTL
+and ligature text, see exact carets and selection, type and delete through one
+atomic paragraph-local transaction, exercise real IME preedit/commit/cancel,
+serve both event-feed and synchronous host-query IME traces from one state,
+activate semantic content through exact hits, and observe honest retained
+work—while the old interaction approximations are gone and every local, remote,
+portability, API, and proof gate is green.
