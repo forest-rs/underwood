@@ -352,7 +352,7 @@ WebAssembly gates. Paragraph breaking continues independently as
 
 ## Parley-backed paragraph formation
 
-**Status:** Ready for remote validation — bounded break reshaping executes in the product path
+**Status:** Complete — bounded break reshaping executes in the product path
 
 **Bead:** `und-oh0.2.2`
 
@@ -412,10 +412,11 @@ proves concat restores the exact canonical shape before the adapter commits the
 earlier legal boundary.
 
 The full local stable, MSRV, denied-warning rustdoc, repository/text policy,
-Beads, bare-metal, and WebAssembly matrix passes on the candidate pin. Remote
-validation remains before landing. Upstream adoption and removal of the
-temporary fork URL are isolated in `und-oh0.2.7`; that lifecycle work does not
-erase or postpone the executable product result in this campaign.
+Beads, bare-metal, and WebAssembly matrix passes on the candidate pin. GitHub
+Actions run `29894614476` passes all eight jobs across Linux, macOS, and
+Windows. Upstream adoption and removal of the temporary fork URL are isolated
+in `und-oh0.2.7`; that lifecycle work does not erase or postpone the executable
+product result in this completed campaign.
 
 ### Risks and controls
 

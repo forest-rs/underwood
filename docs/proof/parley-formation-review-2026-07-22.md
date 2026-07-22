@@ -131,6 +131,9 @@ evidence updates:
   `wasm32-unknown-unknown` with exact Rust 1.96.0;
 - `cargo xtask check`, `bd lint --status all`, and `bd dep cycles`.
 
-Remote validation of the final candidate commit remains before landing. The
-earlier eight-job run `29870025982` validates only safe-break checkpoint
-`023c777` and is not cited as evidence for the bounded reshape implementation.
+GitHub Actions run `29894614476` passed all eight jobs on final implementation
+head `d878dbf`. Linux, macOS, and Windows passed workspace Clippy and tests;
+formatting/text policy, repository policy, MSRV, denied-warning rustdoc,
+bare-metal, and WebAssembly jobs are green. This is the remote evidence for the
+bounded reshape implementation. Earlier run `29870025982` validates only the
+safe-break checkpoint and is not substituted for the final run.
