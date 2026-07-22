@@ -4,8 +4,12 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ops::Range;
 
-use crate::{EditError, EditErrorKind};
+use crate::{
+    EditError, EditErrorKind, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+    SnapshotTextSelectionSet, TextAffinity, TextSelectionMode,
+};
 
 /// Opaque identity of one document.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -135,6 +139,275 @@ impl Document {
             document: self,
         }
     }
+
+    /// Atomically replaces every independent snapshot selection.
+    ///
+    /// Each selection is one insertion point: all of its logical ranges are
+    /// removed, and `replacement` is inserted once at its first logical
+    /// boundary. Independent selections each receive one insertion. The whole
+    /// set is validated before any edit is staged.
+    pub fn replace_selections(
+        &mut self,
+        selections: &SnapshotTextSelectionSet,
+        replacement: &str,
+    ) -> Result<SelectionReplacement, EditError> {
+        let replacement_len = u32::try_from(replacement.len())
+            .map_err(|_| EditError::for_document(EditErrorKind::OversizedText, self.state.id))?;
+        let plans = validate_replacement_plans(&self.state, selections, replacement_len)?;
+        let mut operations = Vec::new();
+        for plan in &plans {
+            for (range_index, range) in plan.ranges.iter().enumerate() {
+                operations.push(ReplacementOperation {
+                    selection: plan.selection,
+                    text: plan.text,
+                    bytes: range.clone(),
+                    inserts: range_index == 0,
+                });
+            }
+        }
+        operations.sort_unstable_by(|first, second| {
+            (
+                second.text.paragraph,
+                second.text.index,
+                second.bytes.start,
+                second.bytes.end,
+            )
+                .cmp(&(
+                    first.text.paragraph,
+                    first.text.index,
+                    first.bytes.start,
+                    first.bytes.end,
+                ))
+        });
+
+        let mut edit = self.edit();
+        for operation in &operations {
+            edit.replace_text_range(
+                operation.text,
+                operation.bytes.clone(),
+                if operation.inserts { replacement } else { "" },
+            )?;
+        }
+        let publication = edit.commit()?;
+        let revision = publication.snapshot().revision();
+        let mut resulting = Vec::with_capacity(plans.len());
+        for plan in &plans {
+            let mut byte = i64::from(plan.insertion);
+            for operation in &operations {
+                if operation.text != plan.text {
+                    continue;
+                }
+                if !operation.bytes.is_empty() && operation.bytes.end <= plan.insertion {
+                    byte -= i64::from(operation.bytes.end - operation.bytes.start);
+                }
+                if operation.inserts
+                    && (operation.bytes.start < plan.insertion
+                        || operation.selection == plan.selection)
+                {
+                    byte += i64::from(replacement_len);
+                }
+            }
+            let byte = u32::try_from(byte)
+                .map_err(|_| EditError::for_text(EditErrorKind::OversizedText, plan.text))?;
+            let position = SnapshotTextPosition::new(
+                revision,
+                plan.text,
+                byte,
+                if byte == 0 {
+                    TextAffinity::Downstream
+                } else {
+                    TextAffinity::Upstream
+                },
+            );
+            resulting.push(SnapshotTextSelection::new(
+                position,
+                position,
+                TextSelectionMode::Logical,
+                alloc::vec![SnapshotTextRange::new(revision, plan.text, byte..byte,)],
+            ));
+        }
+        Ok(SelectionReplacement {
+            publication,
+            selections: SnapshotTextSelectionSet::new(self.state.id, revision, resulting),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ReplacementPlan {
+    selection: usize,
+    text: TextId,
+    insertion: u32,
+    ranges: Vec<Range<u32>>,
+}
+
+#[derive(Clone, Debug)]
+struct ReplacementOperation {
+    selection: usize,
+    text: TextId,
+    bytes: Range<u32>,
+    inserts: bool,
+}
+
+fn validate_replacement_plans(
+    state: &DocumentState,
+    selections: &SnapshotTextSelectionSet,
+    replacement_len: u32,
+) -> Result<Vec<ReplacementPlan>, EditError> {
+    if selections.document() != state.id {
+        return Err(EditError::for_document(
+            EditErrorKind::WrongDocument,
+            state.id,
+        ));
+    }
+    if selections.revision() != state.revision {
+        return Err(EditError::for_document(
+            EditErrorKind::RevisionConflict,
+            state.id,
+        ));
+    }
+    if selections.is_empty() {
+        return Err(EditError::for_document(
+            EditErrorKind::EmptySelectionSet,
+            state.id,
+        ));
+    }
+    let mut plans = Vec::with_capacity(selections.selections().len());
+    for (selection_index, selection) in selections.selections().iter().enumerate() {
+        if selection.anchor().revision() != state.revision
+            || selection.extent().revision() != state.revision
+        {
+            return Err(EditError::for_document(
+                EditErrorKind::RevisionConflict,
+                state.id,
+            ));
+        }
+        if selection.anchor().text().document != state.id
+            || selection.extent().text().document != state.id
+        {
+            return Err(EditError::for_document(
+                EditErrorKind::WrongDocument,
+                state.id,
+            ));
+        }
+        let Some(first) = selection.ranges().first() else {
+            return Err(EditError::for_document(
+                EditErrorKind::InvalidTextRange,
+                state.id,
+            ));
+        };
+        let text = first.text();
+        let leaf = state
+            .paragraphs
+            .get(text.paragraph as usize)
+            .and_then(|paragraph| paragraph.leaves.get(text.index as usize))
+            .filter(|leaf| leaf.id == text)
+            .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
+        let mut previous_end = None;
+        let mut ranges = Vec::with_capacity(selection.ranges().len());
+        for range in selection.ranges() {
+            if range.revision() != state.revision {
+                return Err(EditError::for_text(
+                    EditErrorKind::RevisionConflict,
+                    range.text(),
+                ));
+            }
+            if range.text() != text {
+                return Err(EditError::for_text(
+                    EditErrorKind::CrossLeafSelection,
+                    range.text(),
+                ));
+            }
+            let bytes = range.bytes();
+            if bytes.start > bytes.end
+                || previous_end.is_some_and(|end| end > bytes.start)
+                || leaf
+                    .text
+                    .get(bytes.start as usize..bytes.end as usize)
+                    .is_none()
+            {
+                return Err(EditError::for_text(EditErrorKind::InvalidTextRange, text));
+            }
+            previous_end = Some(bytes.end);
+            ranges.push(bytes);
+        }
+        plans.push(ReplacementPlan {
+            selection: selection_index,
+            text,
+            insertion: first.bytes().start,
+            ranges,
+        });
+    }
+    for (index, plan) in plans.iter().enumerate() {
+        for other in &plans[..index] {
+            if plan.text != other.text {
+                continue;
+            }
+            for range in &plan.ranges {
+                for other_range in &other.ranges {
+                    if edit_ranges_conflict(range, other_range) {
+                        return Err(EditError::for_text(
+                            EditErrorKind::OverlappingSelections,
+                            plan.text,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for (index, plan) in plans.iter().enumerate() {
+        if plans[..index]
+            .iter()
+            .any(|previous| previous.text == plan.text)
+        {
+            continue;
+        }
+        let original = state
+            .paragraphs
+            .get(plan.text.paragraph as usize)
+            .and_then(|paragraph| paragraph.leaves.get(plan.text.index as usize))
+            .filter(|leaf| leaf.id == plan.text)
+            .map(|leaf| leaf.text.len() as u64)
+            .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, plan.text))?;
+        let removed = plans
+            .iter()
+            .filter(|candidate| candidate.text == plan.text)
+            .flat_map(|candidate| &candidate.ranges)
+            .try_fold(0_u64, |total, range| {
+                total.checked_add(u64::from(range.end - range.start))
+            })
+            .ok_or_else(|| EditError::for_text(EditErrorKind::OversizedText, plan.text))?;
+        let selection_count = u64::try_from(
+            plans
+                .iter()
+                .filter(|candidate| candidate.text == plan.text)
+                .count(),
+        )
+        .map_err(|_| EditError::for_text(EditErrorKind::OversizedText, plan.text))?;
+        let inserted = u64::from(replacement_len)
+            .checked_mul(selection_count)
+            .ok_or_else(|| EditError::for_text(EditErrorKind::OversizedText, plan.text))?;
+        let resulting = original
+            .checked_sub(removed)
+            .and_then(|length| length.checked_add(inserted))
+            .ok_or_else(|| EditError::for_text(EditErrorKind::OversizedText, plan.text))?;
+        if resulting > u64::from(u32::MAX) {
+            return Err(EditError::for_text(EditErrorKind::OversizedText, plan.text));
+        }
+    }
+    Ok(plans)
+}
+
+fn edit_ranges_conflict(first: &Range<u32>, second: &Range<u32>) -> bool {
+    if first.is_empty() && second.is_empty() {
+        first.start == second.start
+    } else if first.is_empty() {
+        second.start <= first.start && first.start <= second.end
+    } else if second.is_empty() {
+        first.start <= second.start && second.start <= first.end
+    } else {
+        first.start < second.end && second.start < first.end
+    }
 }
 
 /// Immutable, cheaply cloneable view of one exact document revision.
@@ -256,6 +529,40 @@ impl Edit<'_> {
         Ok(())
     }
 
+    fn replace_text_range(
+        &mut self,
+        text: TextId,
+        bytes: Range<u32>,
+        replacement: &str,
+    ) -> Result<(), EditError> {
+        if text.document != self.staged.id {
+            return Err(EditError::for_text(EditErrorKind::WrongDocument, text));
+        }
+        let paragraph = self
+            .staged
+            .paragraphs
+            .get_mut(text.paragraph as usize)
+            .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
+        let leaf = paragraph
+            .leaves
+            .get_mut(text.index as usize)
+            .filter(|leaf| leaf.id == text)
+            .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
+        let mut value = String::from(leaf.text.as_ref());
+        if value
+            .get(bytes.start as usize..bytes.end as usize)
+            .is_none()
+        {
+            return Err(EditError::for_text(EditErrorKind::InvalidTextRange, text));
+        }
+        value.replace_range(bytes.start as usize..bytes.end as usize, replacement);
+        leaf.text = Arc::from(value);
+        paragraph.version = paragraph.version.saturating_add(1);
+        let paragraph_id = paragraph.id;
+        self.mark_changed(paragraph_id);
+        Ok(())
+    }
+
     /// Atomically publishes the staged revision.
     pub fn commit(mut self) -> Result<Publication, EditError> {
         if self.document.state.revision != self.base_revision {
@@ -268,6 +575,8 @@ impl Edit<'_> {
             DocumentRevision(self.base_revision.0.checked_add(1).ok_or_else(|| {
                 EditError::for_document(EditErrorKind::RevisionConflict, self.staged.id)
             })?);
+        self.changed
+            .sort_unstable_by_key(|paragraph| paragraph.index);
         let state = Arc::new(self.staged);
         self.document.state = Arc::clone(&state);
         Ok(Publication {
@@ -303,6 +612,33 @@ pub struct Publication {
     changes: ChangeSet,
 }
 
+/// Result of one atomic selection-set replacement.
+#[derive(Clone, Debug)]
+pub struct SelectionReplacement {
+    publication: Publication,
+    selections: SnapshotTextSelectionSet,
+}
+
+impl SelectionReplacement {
+    /// Returns the newly published document revision and change summary.
+    #[must_use]
+    pub const fn publication(&self) -> &Publication {
+        &self.publication
+    }
+
+    /// Returns collapsed post-edit selections in input order.
+    #[must_use]
+    pub const fn selections(&self) -> &SnapshotTextSelectionSet {
+        &self.selections
+    }
+
+    /// Consumes the result into its publication and post-edit selections.
+    #[must_use]
+    pub fn into_parts(self) -> (Publication, SnapshotTextSelectionSet) {
+        (self.publication, self.selections)
+    }
+}
+
 impl Publication {
     /// Returns the newly published snapshot.
     #[must_use]
@@ -324,7 +660,7 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
-    /// Returns paragraphs touched by the transaction in document order of first mutation.
+    /// Returns paragraphs touched by the transaction in document order.
     #[must_use]
     pub fn paragraphs(&self) -> &[ParagraphId] {
         &self.paragraphs
@@ -362,6 +698,10 @@ impl TextLeaf {
 #[cfg(test)]
 mod tests {
     use super::{Document, DocumentId, InlineRole, ParagraphRole};
+    use crate::{
+        EditErrorKind, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+        SnapshotTextSelectionSet, TextAffinity, TextSelectionMode,
+    };
 
     #[test]
     fn dropped_edit_publishes_nothing_and_old_snapshot_survives() {
@@ -416,5 +756,210 @@ mod tests {
                 ParagraphRole::BODY
             ]
         );
+    }
+
+    #[test]
+    fn selection_replacement_handles_interleaved_ranges_and_multiple_paragraphs() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"document-test-03"));
+        let mut edit = document.edit();
+        let first_paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("first paragraph must append");
+        let first = edit
+            .append_text(first_paragraph, InlineRole::TEXT, "abcdefghij")
+            .expect("first text must append");
+        let second_paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("second paragraph must append");
+        let second = edit
+            .append_text(second_paragraph, InlineRole::TEXT, "klm")
+            .expect("second text must append");
+        let initial = edit.commit().expect("fixture must publish");
+        let revision = initial.snapshot().revision();
+
+        let visual = selection(revision, first, 1, TextSelectionMode::Visual, [1..2, 5..6]);
+        let middle = selection(
+            revision,
+            first,
+            3,
+            TextSelectionMode::Logical,
+            core::iter::once(3..4),
+        );
+        let other_paragraph = selection(
+            revision,
+            second,
+            1,
+            TextSelectionMode::Logical,
+            core::iter::once(1..1),
+        );
+        let selections = SnapshotTextSelectionSet::new(
+            document.snapshot().id(),
+            revision,
+            alloc::vec![other_paragraph, middle, visual],
+        );
+        let result = document
+            .replace_selections(&selections, "X")
+            .expect("the whole set must publish");
+        assert_eq!(
+            result.publication().snapshot().text(first),
+            Some("aXcXeghij")
+        );
+        assert_eq!(result.publication().snapshot().text(second), Some("kXlm"));
+        assert_eq!(
+            result.publication().changes().paragraphs(),
+            [first_paragraph, second_paragraph]
+        );
+        assert_eq!(
+            result
+                .selections()
+                .selections()
+                .iter()
+                .map(|selection| (selection.extent().text(), selection.extent().byte()))
+                .collect::<alloc::vec::Vec<_>>(),
+            [(second, 2), (first, 4), (first, 2)],
+            "post-edit carets must preserve reverse-document input order"
+        );
+        assert_eq!(
+            document
+                .replace_selections(&selections, "stale")
+                .expect_err("old selections must be rejected")
+                .kind(),
+            EditErrorKind::RevisionConflict
+        );
+    }
+
+    #[test]
+    fn selection_replacement_rejects_cross_leaf_and_utf8_interior_ranges() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"document-test-04"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("paragraph must append");
+        let first = edit
+            .append_text(paragraph, InlineRole::TEXT, "é")
+            .expect("first text must append");
+        let second = edit
+            .append_text(paragraph, InlineRole::TEXT, "z")
+            .expect("second text must append");
+        let publication = edit.commit().expect("fixture must publish");
+        let revision = publication.snapshot().revision();
+
+        let empty =
+            SnapshotTextSelectionSet::new(document.snapshot().id(), revision, alloc::vec![]);
+        assert_eq!(
+            document
+                .replace_selections(&empty, "x")
+                .expect_err("an empty set must not publish a phantom edit")
+                .kind(),
+            EditErrorKind::EmptySelectionSet
+        );
+
+        let foreign = SnapshotTextSelectionSet::new(
+            DocumentId::from_bytes(*b"document-test-05"),
+            revision,
+            alloc::vec![selection(
+                revision,
+                first,
+                0,
+                TextSelectionMode::Logical,
+                core::iter::once(0..0),
+            )],
+        );
+        assert_eq!(
+            document
+                .replace_selections(&foreign, "x")
+                .expect_err("a selection set from another document must fail as a unit")
+                .kind(),
+            EditErrorKind::WrongDocument
+        );
+
+        let duplicate = selection(
+            revision,
+            first,
+            0,
+            TextSelectionMode::Logical,
+            core::iter::once(0..0),
+        );
+        let duplicates = SnapshotTextSelectionSet::new(
+            document.snapshot().id(),
+            revision,
+            alloc::vec![duplicate.clone(), duplicate],
+        );
+        assert_eq!(
+            document
+                .replace_selections(&duplicates, "x")
+                .expect_err("duplicate insertion points must not apply in arbitrary order")
+                .kind(),
+            EditErrorKind::OverlappingSelections
+        );
+
+        let position = SnapshotTextPosition::new(revision, first, 0, TextAffinity::Downstream);
+        let cross_leaf = SnapshotTextSelection::new(
+            position,
+            position,
+            TextSelectionMode::Logical,
+            alloc::vec![
+                SnapshotTextRange::new(revision, first, 0..2),
+                SnapshotTextRange::new(revision, second, 0..1),
+            ],
+        );
+        let cross_leaf = SnapshotTextSelectionSet::new(
+            document.snapshot().id(),
+            revision,
+            alloc::vec![cross_leaf],
+        );
+        assert_eq!(
+            document
+                .replace_selections(&cross_leaf, "x")
+                .expect_err("one insertion point cannot cross leaves yet")
+                .kind(),
+            EditErrorKind::CrossLeafSelection
+        );
+
+        let invalid = selection(
+            revision,
+            first,
+            1,
+            TextSelectionMode::Logical,
+            core::iter::once(1..1),
+        );
+        let invalid =
+            SnapshotTextSelectionSet::new(document.snapshot().id(), revision, alloc::vec![invalid]);
+        assert_eq!(
+            document
+                .replace_selections(&invalid, "x")
+                .expect_err("a UTF-8 interior offset must fail before publication")
+                .kind(),
+            EditErrorKind::InvalidTextRange
+        );
+        assert_eq!(document.snapshot().revision(), revision);
+    }
+
+    fn selection(
+        revision: crate::DocumentRevision,
+        text: crate::TextId,
+        byte: u32,
+        mode: TextSelectionMode,
+        ranges: impl IntoIterator<Item = core::ops::Range<u32>>,
+    ) -> SnapshotTextSelection {
+        let position = SnapshotTextPosition::new(
+            revision,
+            text,
+            byte,
+            if byte == 0 {
+                TextAffinity::Downstream
+            } else {
+                TextAffinity::Upstream
+            },
+        );
+        SnapshotTextSelection::new(
+            position,
+            position,
+            mode,
+            ranges
+                .into_iter()
+                .map(|range| SnapshotTextRange::new(revision, text, range))
+                .collect(),
+        )
     }
 }

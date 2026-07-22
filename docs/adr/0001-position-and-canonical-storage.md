@@ -260,6 +260,26 @@ authorize `Document<S>`, stabilize a public position type, add Loro as a
 production dependency, or create a new workspace crate without its normal
 review gate.
 
+### Accepted interaction addendum — 2026-07-22
+
+The interactive snapshot slice ratifies the dense, revision-bound selection
+shape specified by Design-0009:
+
+- one snapshot position names a document revision, semantic text leaf, UTF-8
+  boundary, and affinity;
+- one snapshot selection is one insertion point and owns one or more logically
+  ordered ranges; visual bidi selection may therefore be logically disjoint;
+- one snapshot selection set owns zero or more independent selections, with
+  the first member designated as primary; and
+- a replacement transaction consumes a current selection set and returns
+  collapsed selections for the newly published revision.
+
+The two levels are not interchangeable: several ranges in one visual selection
+receive one insertion, while several independent selections each receive an
+insertion. These values remain derived snapshot observations, not durable
+anchors. Cross-leaf and structural replacement remain future transaction
+operations rather than implied behavior of this addendum.
+
 ## Migration
 
 Any accepted public position or storage contract requires a migration note even

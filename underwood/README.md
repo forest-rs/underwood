@@ -29,17 +29,17 @@ The first draft public slice is deliberately complete end to end:
   them without moving font matching into this crate;
 - [`TextScene`] exposes real glyph resources, paint clips, source mapping,
   exact shaped-cluster hits and carets (including whitespace, ligature
-  components, bidi affinities, and empty editable leaves), and semantic
-  observations;
+  components, bidi affinities, and empty editable leaves), revision-bound
+  logical and visual selection sets, and semantic observations;
 - document IDs are opaque and document-scoped, while [`SnapshotTextRange`] and
   [`SnapshotTextPosition`] values are dense observations valid only for their
   named revision.
 
 The API is unpublished and pre-stable. Snapshot positions expose validated
 UTF-8 boundaries but have no raw constructor and are not durable anchors. The
-crate still introduces no byte-offset mutation API, persistence format,
-renderer, or compatibility promise. See the external `examples/headless`
-workspace crate for the normative call path.
+crate still introduces no caller-constructed byte-offset mutation API,
+persistence format, renderer, or compatibility promise. See the external
+`examples/headless` workspace crate for the normative preparation call path.
 
 ## Exact scene interaction
 
@@ -62,6 +62,40 @@ if let Some(hit) = hit {
 leaf, UTF-8 byte boundary, and upstream/downstream affinity. Passing a position
 from another revision or scene to [`TextScene::caret`] returns `None` rather
 than silently relocating it.
+
+## Selection sets and replacement
+
+One [`SnapshotTextSelection`] is one insertion point. It can retain several
+logically ordered ranges when a visually contiguous bidi selection is
+logically disjoint. A [`SnapshotTextSelectionSet`] holds several independent
+insertion points for multi-caret interaction; these two levels are not
+flattened together.
+
+```rust,ignore
+use underwood::{TextMovement, TextSelectionMode};
+
+let anchor = scene.hit_test_closest(drag_start).unwrap();
+let extent = scene.hit_test_closest(drag_end).unwrap();
+let visual = scene.selection(
+    anchor.position(),
+    extent.position(),
+    TextSelectionMode::Visual,
+)?;
+let selections = scene.selection_set([visual])?;
+let selections = scene.move_selections(
+    &selections,
+    TextMovement::NextVisual,
+    true,
+)?;
+let replacement = document.replace_selections(&selections, "typed once")?;
+let (publication, selections) = replacement.into_parts();
+```
+
+Selection geometry preserves both selection and logical-range indices.
+Replacement validates the complete set, deletes every range in one selection,
+inserts once for that insertion point, repeats once per independent selection,
+and publishes one revision. Snapshot selections remain dense revision-local
+values, not durable anchors.
 
 ## Computed inline styles
 

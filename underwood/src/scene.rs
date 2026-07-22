@@ -15,7 +15,9 @@ use crate::document::Paragraph;
 use crate::{
     Affine, DocumentRevision, DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, PaintSlot,
     PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError, SceneErrorKind, SceneRequest,
-    SemanticId, ShapingStyle, TextId, Vec2,
+    SelectionError, SelectionErrorKind, SemanticId, ShapingStyle, SnapshotTextPosition,
+    SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet, TextId, TextMovement,
+    TextSelectionMode, Vec2,
 };
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
@@ -56,6 +58,8 @@ impl LayoutEngine {
         let mut fragments = Vec::new();
         let mut clusters = Vec::new();
         let mut carets = Vec::new();
+        let mut movements = Vec::new();
+        let mut texts = Vec::new();
         let mut semantics = Vec::new();
         let mut y_offset = 0.0;
 
@@ -154,6 +158,8 @@ impl LayoutEngine {
                 &mut fragments,
                 &mut clusters,
                 &mut carets,
+                &mut movements,
+                &mut texts,
                 &mut semantics,
             );
             y_offset += geometry.height;
@@ -165,10 +171,14 @@ impl LayoutEngine {
         };
         Ok(SceneOutput {
             scene: TextScene {
+                document: snapshot.id(),
+                revision: snapshot.revision(),
                 lines,
                 fragments,
                 clusters,
                 carets,
+                movements,
+                texts,
                 paint: request.paint.clone(),
                 semantics,
             },
@@ -309,6 +319,17 @@ impl<'a> Projection<'a> {
     }
 
     fn local_range(&self, paragraph: Range<u32>) -> Result<LocalRange, SceneError> {
+        if self
+            .text
+            .get(paragraph.start as usize..paragraph.end as usize)
+            .is_none()
+        {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph,
+            ));
+        }
         let span = self
             .spans
             .iter()
@@ -395,6 +416,13 @@ impl<'a> Projection<'a> {
         paragraph_offset: u32,
         affinity: TextAffinity,
     ) -> Result<LocalPosition, SceneError> {
+        if !self.text.is_char_boundary(paragraph_offset as usize) {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph_offset..paragraph_offset,
+            ));
+        }
         let span = match affinity {
             TextAffinity::Upstream => self.spans.iter().rev().find(|span| {
                 (span.paragraph.start < paragraph_offset && paragraph_offset <= span.paragraph.end)
@@ -677,6 +705,8 @@ struct CachedGeometry {
     fragments: Vec<CachedFragment>,
     clusters: Vec<CachedCluster>,
     carets: Vec<CachedCaret>,
+    movements: Vec<CachedCursorMovement>,
+    texts: Vec<LocalRange>,
     semantics: Vec<CachedSemantic>,
 }
 
@@ -720,6 +750,7 @@ struct CachedCluster {
     source: LocalRange,
     semantic_id: SemanticId,
     bounds: Rect,
+    line: usize,
     left: LocalPosition,
     right: LocalPosition,
     bidi_level: u8,
@@ -729,6 +760,21 @@ struct CachedCluster {
 struct CachedCaret {
     position: LocalPosition,
     bounds: Rect,
+}
+
+#[derive(Clone, Debug)]
+struct CachedCursorMovement {
+    position: LocalPosition,
+    previous_visual: Option<CachedCursorStep>,
+    next_visual: Option<CachedCursorStep>,
+    previous_logical: Option<CachedCursorStep>,
+    next_logical: Option<CachedCursorStep>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedCursorStep {
+    target: LocalPosition,
+    source: Option<LocalRange>,
 }
 
 #[derive(Clone, Debug)]
@@ -766,6 +812,7 @@ fn build_geometry(
     let mut carets = Vec::new();
 
     for line in prepared.lines() {
+        let line_index = lines.len();
         let baseline = line_top + line.baseline();
         let mut cluster_x = 0.0_f64;
         for cluster in line.clusters() {
@@ -780,22 +827,10 @@ fn build_geometry(
                 source,
                 semantic_id,
                 bounds,
+                line: line_index,
                 left,
                 right,
                 bidi_level: cluster.bidi_level(),
-            });
-            carets.push(CachedCaret {
-                position: left,
-                bounds: Rect::new(
-                    cluster_x,
-                    line_top,
-                    cluster_x + 1.0,
-                    line_top + line.height(),
-                ),
-            });
-            carets.push(CachedCaret {
-                position: right,
-                bounds: Rect::new(next_x, line_top, next_x + 1.0, line_top + line.height()),
             });
             cluster_x = next_x;
         }
@@ -815,13 +850,10 @@ fn build_geometry(
                 semantic_id: projection.semantic_for_text(position.text)?,
                 source: local_source,
                 bounds: Rect::new(0.0, line_top, 0.0, line_top + line.height()),
+                line: line_index,
                 left: position,
                 right: position,
                 bidi_level: 0,
-            });
-            carets.push(CachedCaret {
-                position,
-                bounds: Rect::new(0.0, line_top, 1.0, line_top + line.height()),
             });
         }
         let mut x = 0.0_f64;
@@ -887,13 +919,10 @@ fn build_geometry(
             semantic_id: projection.semantic_for_text(position.text)?,
             source,
             bounds: Rect::new(0.0, 0.0, 0.0, empty_line_height),
+            line: 0,
             left: position,
             right: position,
             bidi_level: 0,
-        });
-        carets.push(CachedCaret {
-            position,
-            bounds: Rect::new(0.0, 0.0, 1.0, empty_line_height),
         });
     }
 
@@ -939,6 +968,56 @@ fn build_geometry(
         });
     }
 
+    let movements = if projection.spans.is_empty() {
+        Vec::new()
+    } else {
+        prepared
+            .movements()
+            .iter()
+            .map(|movement| {
+                Ok(CachedCursorMovement {
+                    position: projection.position_at(
+                        movement.position().offset(),
+                        movement.position().affinity(),
+                    )?,
+                    previous_visual: cached_cursor_step(movement.previous_visual(), projection)?,
+                    next_visual: cached_cursor_step(movement.next_visual(), projection)?,
+                    previous_logical: cached_cursor_step(movement.previous_logical(), projection)?,
+                    next_logical: cached_cursor_step(movement.next_logical(), projection)?,
+                })
+            })
+            .collect::<Result<Vec<_>, SceneError>>()?
+    };
+    for (prepared_movement, movement) in prepared.movements().iter().zip(&movements) {
+        let caret = prepared_movement.caret();
+        let line = usize::try_from(caret.line()).map_err(|_| {
+            SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
+        })?;
+        let line_bounds = lines.get(line).map(|line| line.bounds).unwrap_or(Rect::new(
+            0.0,
+            0.0,
+            1.0,
+            empty_line_height,
+        ));
+        carets.push(CachedCaret {
+            position: movement.position,
+            bounds: Rect::new(
+                caret.inline(),
+                line_bounds.y0,
+                caret.inline() + 1.0,
+                line_bounds.y1,
+            ),
+        });
+    }
+    let texts = projection
+        .spans
+        .iter()
+        .map(|span| LocalRange {
+            text: span.text,
+            bytes: 0..(span.paragraph.end - span.paragraph.start),
+        })
+        .collect();
+
     Ok(CachedGeometry {
         height: if prepared.lines().is_empty() {
             empty_line_height
@@ -949,8 +1028,27 @@ fn build_geometry(
         fragments,
         clusters,
         carets,
+        movements,
+        texts,
         semantics,
     })
+}
+
+fn cached_cursor_step(
+    step: Option<&crate::adapter::PreparedCursorStep>,
+    projection: &Projection<'_>,
+) -> Result<Option<CachedCursorStep>, SceneError> {
+    step.map(|step| {
+        let target = step.target();
+        Ok(CachedCursorStep {
+            target: projection.position_at(target.offset(), target.affinity())?,
+            source: step
+                .source()
+                .map(|source| projection.local_range(source))
+                .transpose()?,
+        })
+    })
+    .transpose()
 }
 
 fn local_cluster_side(
@@ -1001,9 +1099,12 @@ fn materialize_geometry(
     fragments: &mut Vec<SceneFragment>,
     clusters: &mut Vec<SceneCluster>,
     carets: &mut Vec<SceneCaretStop>,
+    movements: &mut Vec<SceneCursorMovement>,
+    texts: &mut Vec<SnapshotTextRange>,
     semantics: &mut Vec<SemanticFragment>,
 ) {
     let translate = Vec2::new(0.0, y_offset);
+    let line_base = lines.len();
     lines.extend(geometry.lines.iter().map(|line| {
         SceneLine {
             bounds: line.bounds + translate,
@@ -1047,6 +1148,7 @@ fn materialize_geometry(
         source: materialize_range(&cluster.source, revision),
         semantic_id: cluster.semantic_id,
         bounds: cluster.bounds + translate,
+        line: line_base + cluster.line,
         left: materialize_position(cluster.left, revision),
         right: materialize_position(cluster.right, revision),
         bidi_level: cluster.bidi_level,
@@ -1055,6 +1157,30 @@ fn materialize_geometry(
         position: materialize_position(caret.position, revision),
         bounds: caret.bounds + translate,
     }));
+    movements.extend(
+        geometry
+            .movements
+            .iter()
+            .map(|movement| SceneCursorMovement {
+                position: materialize_position(movement.position, revision),
+                previous_visual: materialize_cursor_step(
+                    movement.previous_visual.as_ref(),
+                    revision,
+                ),
+                next_visual: materialize_cursor_step(movement.next_visual.as_ref(), revision),
+                previous_logical: materialize_cursor_step(
+                    movement.previous_logical.as_ref(),
+                    revision,
+                ),
+                next_logical: materialize_cursor_step(movement.next_logical.as_ref(), revision),
+            }),
+    );
+    texts.extend(
+        geometry
+            .texts
+            .iter()
+            .map(|range| materialize_range(range, revision)),
+    );
     semantics.extend(geometry.semantics.iter().map(|semantic| {
         SemanticFragment {
             semantic_id: semantic.semantic_id,
@@ -1069,24 +1195,28 @@ fn materialize_geometry(
     }));
 }
 
+fn materialize_cursor_step(
+    step: Option<&CachedCursorStep>,
+    revision: DocumentRevision,
+) -> Option<SceneCursorStep> {
+    step.map(|step| SceneCursorStep {
+        target: materialize_position(step.target, revision),
+        source: step
+            .source
+            .as_ref()
+            .map(|source| materialize_range(source, revision)),
+    })
+}
+
 fn materialize_range(range: &LocalRange, revision: DocumentRevision) -> SnapshotTextRange {
-    SnapshotTextRange {
-        revision,
-        text: range.text,
-        bytes: range.bytes.clone(),
-    }
+    SnapshotTextRange::new(revision, range.text, range.bytes.clone())
 }
 
 fn materialize_position(
     position: LocalPosition,
     revision: DocumentRevision,
 ) -> SnapshotTextPosition {
-    SnapshotTextPosition {
-        revision,
-        text: position.text,
-        byte: position.byte,
-        affinity: position.affinity,
-    }
+    SnapshotTextPosition::new(revision, position.text, position.byte, position.affinity)
 }
 
 /// Immutable prepared scene and exact work report.
@@ -1209,15 +1339,158 @@ impl WorkReport {
 /// Immutable renderer-neutral text scene.
 #[derive(Clone, Debug)]
 pub struct TextScene {
+    document: crate::DocumentId,
+    revision: DocumentRevision,
     lines: Vec<SceneLine>,
     fragments: Vec<SceneFragment>,
     clusters: Vec<SceneCluster>,
     carets: Vec<SceneCaretStop>,
+    movements: Vec<SceneCursorMovement>,
+    texts: Vec<SnapshotTextRange>,
     paint: PaintTable,
     semantics: Vec<SemanticFragment>,
 }
 
 impl TextScene {
+    /// Returns an empty selection set bound to this scene revision.
+    #[must_use]
+    pub fn empty_selection_set(&self) -> SnapshotTextSelectionSet {
+        SnapshotTextSelectionSet::new(self.document, self.revision, Vec::new())
+    }
+
+    /// Creates one collapsed selection at an exact scene position.
+    pub fn collapsed_selection(
+        &self,
+        position: &SnapshotTextPosition,
+    ) -> Result<SnapshotTextSelection, SelectionError> {
+        self.validate_position(position)?;
+        Ok(SnapshotTextSelection::new(
+            *position,
+            *position,
+            TextSelectionMode::Logical,
+            alloc::vec![SnapshotTextRange::new(
+                self.revision,
+                position.text(),
+                position.byte()..position.byte(),
+            )],
+        ))
+    }
+
+    /// Creates one logical or visual selection between two exact positions.
+    ///
+    /// A visual selection follows adapter-owned caret transitions and can
+    /// expose several noncontiguous logical ranges across bidi boundaries.
+    pub fn selection(
+        &self,
+        anchor: &SnapshotTextPosition,
+        extent: &SnapshotTextPosition,
+        mode: TextSelectionMode,
+    ) -> Result<SnapshotTextSelection, SelectionError> {
+        self.validate_position(anchor)?;
+        self.validate_position(extent)?;
+        let ranges = match mode {
+            TextSelectionMode::Logical => self.logical_ranges(anchor, extent)?,
+            TextSelectionMode::Visual => self.visual_ranges(anchor, extent)?,
+        };
+        Ok(SnapshotTextSelection::new(*anchor, *extent, mode, ranges))
+    }
+
+    /// Validates and collects independent selections for this scene.
+    pub fn selection_set(
+        &self,
+        selections: impl IntoIterator<Item = SnapshotTextSelection>,
+    ) -> Result<SnapshotTextSelectionSet, SelectionError> {
+        let selections: Vec<_> = selections.into_iter().collect();
+        for selection in &selections {
+            let expected =
+                self.selection(selection.anchor(), selection.extent(), selection.mode())?;
+            if expected.ranges() != selection.ranges() {
+                return Err(SelectionError::new(SelectionErrorKind::UnknownPosition));
+            }
+        }
+        validate_independent_selections(&selections)?;
+        Ok(SnapshotTextSelectionSet::new(
+            self.document,
+            self.revision,
+            selections,
+        ))
+    }
+
+    /// Moves every independent selection through the exact scene cursor map.
+    ///
+    /// When `extend` is true, each anchor is retained and the extent is moved.
+    /// Otherwise a noncollapsed selection first collapses toward the requested
+    /// direction and a collapsed selection advances by one cluster step.
+    pub fn move_selections(
+        &self,
+        selections: &SnapshotTextSelectionSet,
+        movement: TextMovement,
+        extend: bool,
+    ) -> Result<SnapshotTextSelectionSet, SelectionError> {
+        if selections.document() != self.document || selections.revision() != self.revision {
+            return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
+        }
+        let mode = movement_mode(movement);
+        let mut moved = Vec::with_capacity(selections.selections().len());
+        for selection in selections.selections() {
+            let next = if !extend && !selection.is_collapsed() {
+                self.collapse_for_movement(selection, movement)?
+            } else {
+                let extent = self
+                    .cursor_step(selection.extent(), movement)?
+                    .map_or(*selection.extent(), |step| step.target);
+                if extend {
+                    self.selection(selection.anchor(), &extent, mode)?
+                } else {
+                    self.collapsed_selection(&extent)?
+                }
+            };
+            moved.push(next);
+        }
+        self.selection_set(moved)
+    }
+
+    /// Resolves visual highlight rectangles for a complete selection set.
+    pub fn selection_geometry(
+        &self,
+        selections: &SnapshotTextSelectionSet,
+    ) -> Result<Vec<SceneSelectionRect>, SelectionError> {
+        if selections.document() != self.document || selections.revision() != self.revision {
+            return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
+        }
+        let mut geometry: Vec<SceneSelectionRect> = Vec::new();
+        for (selection_index, selection) in selections.selections().iter().enumerate() {
+            for cluster in &self.clusters {
+                let Some((range_index, _)) = selection
+                    .ranges()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, range)| ranges_overlap(range, &cluster.source))
+                else {
+                    continue;
+                };
+                if let Some(previous) = geometry.last_mut()
+                    && previous.selection == selection_index
+                    && previous.range == range_index
+                    && previous.line == cluster.line
+                    && previous.bidi_level == cluster.bidi_level
+                    && nearly_equal(previous.bounds.x1, cluster.bounds.x0)
+                {
+                    previous.bounds.x1 = cluster.bounds.x1;
+                } else {
+                    geometry.push(SceneSelectionRect {
+                        selection: selection_index,
+                        range: range_index,
+                        line: cluster.line,
+                        bounds: cluster.bounds,
+                        bidi_level: cluster.bidi_level,
+                    });
+                }
+            }
+        }
+        Ok(geometry)
+    }
+
     /// Returns visual lines in flow order.
     #[must_use]
     pub fn lines(&self) -> &[SceneLine] {
@@ -1286,6 +1559,344 @@ impl TextScene {
                 bounds: caret.bounds,
             })
     }
+
+    fn validate_position(&self, position: &SnapshotTextPosition) -> Result<(), SelectionError> {
+        if position.revision() != self.revision || position.text().document != self.document {
+            return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
+        }
+        if self
+            .movements
+            .iter()
+            .any(|movement| movement.position == *position)
+        {
+            Ok(())
+        } else {
+            Err(SelectionError::new(SelectionErrorKind::UnknownPosition))
+        }
+    }
+
+    fn logical_ranges(
+        &self,
+        anchor: &SnapshotTextPosition,
+        extent: &SnapshotTextPosition,
+    ) -> Result<Vec<SnapshotTextRange>, SelectionError> {
+        let anchor_text = self.text_rank(anchor.text())?;
+        let extent_text = self.text_rank(extent.text())?;
+        let ordering = (anchor_text, anchor.byte()).cmp(&(extent_text, extent.byte()));
+        let (start, start_text, end, end_text) = if ordering.is_gt() {
+            (extent, extent_text, anchor, anchor_text)
+        } else {
+            (anchor, anchor_text, extent, extent_text)
+        };
+        if start_text == end_text && start.byte() == end.byte() {
+            return Ok(alloc::vec![SnapshotTextRange::new(
+                self.revision,
+                extent.text(),
+                extent.byte()..extent.byte(),
+            )]);
+        }
+        let mut ranges = Vec::new();
+        for index in start_text..=end_text {
+            let text = &self.texts[index];
+            let bytes = if start_text == end_text {
+                start.byte()..end.byte()
+            } else if index == start_text {
+                start.byte()..text.bytes().end
+            } else if index == end_text {
+                0..end.byte()
+            } else {
+                text.bytes()
+            };
+            if !bytes.is_empty() {
+                ranges.push(SnapshotTextRange::new(self.revision, text.text(), bytes));
+            }
+        }
+        if ranges.is_empty() {
+            ranges.push(SnapshotTextRange::new(
+                self.revision,
+                extent.text(),
+                extent.byte()..extent.byte(),
+            ));
+        }
+        Ok(ranges)
+    }
+
+    fn visual_ranges(
+        &self,
+        anchor: &SnapshotTextPosition,
+        extent: &SnapshotTextPosition,
+    ) -> Result<Vec<SnapshotTextRange>, SelectionError> {
+        if anchor == extent {
+            return Ok(alloc::vec![SnapshotTextRange::new(
+                self.revision,
+                extent.text(),
+                extent.byte()..extent.byte(),
+            )]);
+        }
+        let ranges = self
+            .walk_visual_ranges(anchor, extent, TextMovement::NextVisual)?
+            .or(self.walk_visual_ranges(anchor, extent, TextMovement::PreviousVisual)?);
+        let Some(mut ranges) = ranges else {
+            return Err(SelectionError::new(
+                SelectionErrorKind::DisconnectedMovement,
+            ));
+        };
+        canonicalize_ranges(&mut ranges, &self.texts);
+        if ranges.is_empty() {
+            ranges.push(SnapshotTextRange::new(
+                self.revision,
+                extent.text(),
+                extent.byte()..extent.byte(),
+            ));
+        }
+        Ok(ranges)
+    }
+
+    fn walk_visual_ranges(
+        &self,
+        start: &SnapshotTextPosition,
+        end: &SnapshotTextPosition,
+        movement: TextMovement,
+    ) -> Result<Option<Vec<SnapshotTextRange>>, SelectionError> {
+        let mut position = *start;
+        let mut ranges = Vec::new();
+        for _ in 0..=self.movements.len() {
+            if position == *end {
+                return Ok(Some(ranges));
+            }
+            let Some(step) = self.cursor_step(&position, movement)? else {
+                return Ok(None);
+            };
+            if let Some(source) = step.source {
+                ranges.push(source);
+            }
+            position = step.target;
+        }
+        Ok(None)
+    }
+
+    fn cursor_step(
+        &self,
+        position: &SnapshotTextPosition,
+        movement: TextMovement,
+    ) -> Result<Option<SceneCursorStep>, SelectionError> {
+        self.validate_position(position)?;
+        let record = self
+            .movements
+            .iter()
+            .find(|record| record.position == *position)
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        let step = match movement {
+            TextMovement::PreviousVisual => record.previous_visual.clone(),
+            TextMovement::NextVisual => record.next_visual.clone(),
+            TextMovement::PreviousLogical => record.previous_logical.clone(),
+            TextMovement::NextLogical => record.next_logical.clone(),
+        };
+        Ok(step.or_else(|| self.adjacent_paragraph_step(position, movement)))
+    }
+
+    fn adjacent_paragraph_step(
+        &self,
+        position: &SnapshotTextPosition,
+        movement: TextMovement,
+    ) -> Option<SceneCursorStep> {
+        let current = position.text().paragraph;
+        let previous = matches!(
+            movement,
+            TextMovement::PreviousVisual | TextMovement::PreviousLogical
+        );
+        let paragraph = self
+            .movements
+            .iter()
+            .map(|movement| movement.position.text().paragraph)
+            .filter(|paragraph| {
+                if previous {
+                    *paragraph < current
+                } else {
+                    *paragraph > current
+                }
+            })
+            .reduce(|candidate, paragraph| {
+                if previous {
+                    candidate.max(paragraph)
+                } else {
+                    candidate.min(paragraph)
+                }
+            })?;
+        let mut candidates = self.movements.iter().filter(|record| {
+            record.position.text().paragraph == paragraph
+                && match movement {
+                    TextMovement::PreviousVisual => record.next_visual.is_none(),
+                    TextMovement::NextVisual => record.previous_visual.is_none(),
+                    TextMovement::PreviousLogical => record.next_logical.is_none(),
+                    TextMovement::NextLogical => record.previous_logical.is_none(),
+                }
+        });
+        let target = candidates.next()?.position;
+        if candidates.next().is_some() {
+            return None;
+        }
+        Some(SceneCursorStep {
+            target,
+            source: None,
+        })
+    }
+
+    fn collapse_for_movement(
+        &self,
+        selection: &SnapshotTextSelection,
+        movement: TextMovement,
+    ) -> Result<SnapshotTextSelection, SelectionError> {
+        let anchor = *selection.anchor();
+        let extent = *selection.extent();
+        let choose_anchor = match movement {
+            TextMovement::PreviousVisual | TextMovement::NextVisual => {
+                let anchor_before = self.visual_ordering(&anchor, &extent)?.is_lt();
+                matches!(movement, TextMovement::PreviousVisual) == anchor_before
+            }
+            TextMovement::PreviousLogical | TextMovement::NextLogical => {
+                let anchor_before = self.compare_positions(&anchor, &extent)?.is_lt();
+                matches!(movement, TextMovement::PreviousLogical) == anchor_before
+            }
+        };
+        self.collapsed_selection(if choose_anchor { &anchor } else { &extent })
+    }
+
+    fn visual_ordering(
+        &self,
+        first: &SnapshotTextPosition,
+        second: &SnapshotTextPosition,
+    ) -> Result<core::cmp::Ordering, SelectionError> {
+        if first == second {
+            return Ok(core::cmp::Ordering::Equal);
+        }
+        if self.can_reach_visual(first, second, TextMovement::NextVisual)? {
+            return Ok(core::cmp::Ordering::Less);
+        }
+        if self.can_reach_visual(first, second, TextMovement::PreviousVisual)? {
+            return Ok(core::cmp::Ordering::Greater);
+        }
+        Err(SelectionError::new(
+            SelectionErrorKind::DisconnectedMovement,
+        ))
+    }
+
+    fn can_reach_visual(
+        &self,
+        start: &SnapshotTextPosition,
+        end: &SnapshotTextPosition,
+        movement: TextMovement,
+    ) -> Result<bool, SelectionError> {
+        let mut position = *start;
+        for _ in 0..=self.movements.len() {
+            if position == *end {
+                return Ok(true);
+            }
+            let Some(step) = self.cursor_step(&position, movement)? else {
+                return Ok(false);
+            };
+            position = step.target;
+        }
+        Ok(false)
+    }
+
+    fn compare_positions(
+        &self,
+        first: &SnapshotTextPosition,
+        second: &SnapshotTextPosition,
+    ) -> Result<core::cmp::Ordering, SelectionError> {
+        Ok((self.text_rank(first.text())?, first.byte())
+            .cmp(&(self.text_rank(second.text())?, second.byte())))
+    }
+
+    fn text_rank(&self, text: TextId) -> Result<usize, SelectionError> {
+        self.texts
+            .iter()
+            .position(|range| range.text() == text)
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))
+    }
+}
+
+fn movement_mode(movement: TextMovement) -> TextSelectionMode {
+    match movement {
+        TextMovement::PreviousVisual | TextMovement::NextVisual => TextSelectionMode::Visual,
+        TextMovement::PreviousLogical | TextMovement::NextLogical => TextSelectionMode::Logical,
+    }
+}
+
+fn canonicalize_ranges(ranges: &mut Vec<SnapshotTextRange>, texts: &[SnapshotTextRange]) {
+    ranges.sort_by_key(|range| {
+        (
+            texts
+                .iter()
+                .position(|text| text.text() == range.text())
+                .unwrap_or(usize::MAX),
+            range.bytes().start,
+        )
+    });
+    let mut canonical: Vec<SnapshotTextRange> = Vec::with_capacity(ranges.len());
+    for range in ranges.drain(..) {
+        if let Some(previous) = canonical.last_mut()
+            && previous.text() == range.text()
+            && previous.bytes().end >= range.bytes().start
+        {
+            let start = previous.bytes().start;
+            let end = previous.bytes().end.max(range.bytes().end);
+            *previous = SnapshotTextRange::new(previous.revision(), previous.text(), start..end);
+        } else {
+            canonical.push(range);
+        }
+    }
+    *ranges = canonical;
+}
+
+fn validate_independent_selections(
+    selections: &[SnapshotTextSelection],
+) -> Result<(), SelectionError> {
+    for (index, selection) in selections.iter().enumerate() {
+        for other in &selections[..index] {
+            for range in selection.ranges() {
+                for other_range in other.ranges() {
+                    if ranges_conflict(range, other_range) {
+                        return Err(SelectionError::new(
+                            SelectionErrorKind::OverlappingSelections,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ranges_conflict(first: &SnapshotTextRange, second: &SnapshotTextRange) -> bool {
+    if first.text() != second.text() {
+        return false;
+    }
+    let first = first.bytes();
+    let second = second.bytes();
+    if first.is_empty() && second.is_empty() {
+        first.start == second.start
+    } else if first.is_empty() {
+        second.start <= first.start && first.start <= second.end
+    } else if second.is_empty() {
+        first.start <= second.start && second.start <= first.end
+    } else {
+        first.start < second.end && second.start < first.end
+    }
+}
+
+fn ranges_overlap(first: &SnapshotTextRange, second: &SnapshotTextRange) -> bool {
+    if first.text() != second.text() {
+        return false;
+    }
+    let first = first.bytes();
+    let second = second.bytes();
+    first.start < second.end && second.start < first.end
+}
+
+fn nearly_equal(first: f64, second: f64) -> bool {
+    (first - second).abs() <= f64::max(1.0, first.abs().max(second.abs())) * 1.0e-9
 }
 
 #[derive(Clone, Debug)]
@@ -1293,6 +1904,7 @@ struct SceneCluster {
     source: SnapshotTextRange,
     semantic_id: SemanticId,
     bounds: Rect,
+    line: usize,
     left: SnapshotTextPosition,
     right: SnapshotTextPosition,
     bidi_level: u8,
@@ -1318,6 +1930,21 @@ impl SceneCluster {
 struct SceneCaretStop {
     position: SnapshotTextPosition,
     bounds: Rect,
+}
+
+#[derive(Clone, Debug)]
+struct SceneCursorMovement {
+    position: SnapshotTextPosition,
+    previous_visual: Option<SceneCursorStep>,
+    next_visual: Option<SceneCursorStep>,
+    previous_logical: Option<SceneCursorStep>,
+    next_logical: Option<SceneCursorStep>,
+}
+
+#[derive(Clone, Debug)]
+struct SceneCursorStep {
+    target: SnapshotTextPosition,
+    source: Option<SnapshotTextRange>,
 }
 
 fn distance_to_rect_axes(point: Point, bounds: Rect) -> (f64, f64) {
@@ -1617,66 +2244,45 @@ impl SceneCaret {
     }
 }
 
-/// Collapsed text position valid only for one immutable snapshot revision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SnapshotTextPosition {
-    revision: DocumentRevision,
-    text: TextId,
-    byte: u32,
-    affinity: TextAffinity,
+/// One visual highlight rectangle owned by a selection and logical range.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneSelectionRect {
+    selection: usize,
+    range: usize,
+    line: usize,
+    bounds: Rect,
+    bidi_level: u8,
 }
 
-impl SnapshotTextPosition {
-    /// Returns the exact snapshot revision.
+impl SceneSelectionRect {
+    /// Returns the selection index within the requested selection set.
     #[must_use]
-    pub const fn revision(self) -> DocumentRevision {
-        self.revision
+    pub const fn selection(self) -> usize {
+        self.selection
     }
 
-    /// Returns the semantic text leaf containing the position.
+    /// Returns the logical-range index within the owning selection.
     #[must_use]
-    pub const fn text(self) -> TextId {
-        self.text
+    pub const fn range(self) -> usize {
+        self.range
     }
 
-    /// Returns the UTF-8 byte boundary within the text leaf.
+    /// Returns the visual line index within the scene.
     #[must_use]
-    pub const fn byte(self) -> u32 {
-        self.byte
+    pub const fn line(self) -> usize {
+        self.line
     }
 
-    /// Returns which logical side owns the position.
+    /// Returns the scene-space highlight bounds.
     #[must_use]
-    pub const fn affinity(self) -> TextAffinity {
-        self.affinity
-    }
-}
-
-/// Dense source range valid only for one exact immutable snapshot revision.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SnapshotTextRange {
-    revision: DocumentRevision,
-    text: TextId,
-    bytes: Range<u32>,
-}
-
-impl SnapshotTextRange {
-    /// Returns the exact snapshot revision.
-    #[must_use]
-    pub const fn revision(&self) -> DocumentRevision {
-        self.revision
+    pub const fn bounds(self) -> Rect {
+        self.bounds
     }
 
-    /// Returns the text leaf identity.
+    /// Returns the bidi level of the covered visual run.
     #[must_use]
-    pub const fn text(&self) -> TextId {
-        self.text
-    }
-
-    /// Returns the UTF-8 byte range within the text leaf.
-    #[must_use]
-    pub fn bytes(&self) -> Range<u32> {
-        self.bytes.clone()
+    pub const fn bidi_level(self) -> u8 {
+        self.bidi_level
     }
 }
 
@@ -1690,9 +2296,9 @@ mod tests {
     use crate::adapter::{
         ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
         GlyphPaintSegment, LineBreakReason, ParagraphConstraints, ParagraphFormation,
-        ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCluster,
-        PreparedClusterSide, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
-        TextAffinity,
+        ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCaret, PreparedCluster,
+        PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph,
+        PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
     };
     use crate::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontData, FontFamily,
@@ -1704,6 +2310,7 @@ mod tests {
     struct EchoAdapter {
         split_utf8: bool,
         glyphless: bool,
+        interior_cursor: bool,
     }
 
     impl ParagraphFormation for EchoAdapter {
@@ -1715,7 +2322,17 @@ mod tests {
             let text_len = u32::try_from(input.text().len())
                 .map_err(|_| PreparationError::invalid_output())?;
             if text_len == 0 {
-                let paragraph = PreparedParagraph::try_from_lines(input.paragraph(), text_len, [])?;
+                let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
+                let movements = [PreparedCursorMovement::new(
+                    position,
+                    PreparedCaret::try_new(0, 0.0)?,
+                    None,
+                    None,
+                    None,
+                    None,
+                )];
+                let paragraph =
+                    PreparedParagraph::try_new(input.paragraph(), text_len, [], movements)?;
                 return Ok(ParagraphFormationOutput::new(
                     paragraph,
                     FormationWork::new(true, true, 0, 0, 0, 0, 0),
@@ -1781,7 +2398,38 @@ mod tests {
                 )?],
                 [run],
             )?;
-            let paragraph = PreparedParagraph::try_from_lines(input.paragraph(), text_len, [line])?;
+            let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
+            let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
+            let mut movements = vec![
+                PreparedCursorMovement::new(
+                    start,
+                    PreparedCaret::try_new(0, 0.0)?,
+                    None,
+                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
+                    None,
+                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
+                ),
+                PreparedCursorMovement::new(
+                    end,
+                    PreparedCaret::try_new(0, 10.0)?,
+                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
+                    None,
+                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
+                    None,
+                ),
+            ];
+            if self.interior_cursor {
+                movements.push(PreparedCursorMovement::new(
+                    PreparedClusterSide::new(1, TextAffinity::Downstream),
+                    PreparedCaret::try_new(0, 5.0)?,
+                    None,
+                    None,
+                    None,
+                    None,
+                ));
+            }
+            let paragraph =
+                PreparedParagraph::try_new(input.paragraph(), text_len, [line], movements)?;
             Ok(ParagraphFormationOutput::new(
                 paragraph,
                 FormationWork::new(true, true, 1, 1, 1, 1, 2),
@@ -1795,6 +2443,7 @@ mod tests {
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: true,
             glyphless: false,
+            interior_cursor: false,
         });
         let request = SceneRequest::new(
             FiniteWidth::new(100.).expect("test width is valid"),
@@ -1821,11 +2470,32 @@ mod tests {
     }
 
     #[test]
+    fn layout_rejects_a_cursor_inside_a_utf8_scalar() {
+        let (document, styles, paint) = one_leaf_document(*b"scene-test-doc08", "é");
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            glyphless: false,
+            interior_cursor: true,
+        });
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let error = layout
+            .prepare(&document.snapshot(), &request)
+            .expect_err("mid-scalar cursor output must be rejected");
+        assert_eq!(error.kind(), SceneErrorKind::SourceCoverage);
+        assert_eq!(error.source(), Some(1..1));
+    }
+
+    #[test]
     fn layout_rejects_glyphless_non_control_source() {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc06", "a");
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
             glyphless: true,
+            interior_cursor: false,
         });
         let request = SceneRequest::new(
             FiniteWidth::new(100.).expect("test width is valid"),
@@ -1845,6 +2515,7 @@ mod tests {
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: true,
             glyphless: false,
+            interior_cursor: false,
         });
         let request = SceneRequest::new(
             FiniteWidth::new(100.).expect("test width is valid"),
@@ -1865,6 +2536,7 @@ mod tests {
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
             glyphless: false,
+            interior_cursor: false,
         });
         let width = FiniteWidth::new(100.).expect("test width is valid");
         let first_request = SceneRequest::new(width, &first_styles, &first_paint);
@@ -1984,6 +2656,7 @@ mod tests {
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
             glyphless: false,
+            interior_cursor: false,
         });
 
         let compact_request = SceneRequest::new(width, &compact_styles, &paint);

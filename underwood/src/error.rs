@@ -20,6 +20,14 @@ pub enum EditErrorKind {
     OversizedText,
     /// The transaction's base revision is no longer current.
     RevisionConflict,
+    /// A snapshot selection contains an invalid or non-boundary text range.
+    InvalidTextRange,
+    /// One selection crosses semantic text leaves unsupported by this slice.
+    CrossLeafSelection,
+    /// Independent selections overlap or duplicate an insertion point.
+    OverlappingSelections,
+    /// A replacement was requested for a set with no insertion points.
+    EmptySelectionSet,
 }
 
 /// Concrete document-edit error.
@@ -283,3 +291,44 @@ impl fmt::Display for SceneError {
 }
 
 impl core::error::Error for SceneError {}
+
+/// Stable category for snapshot-selection failures.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SelectionErrorKind {
+    /// A position or selection belongs to another document or scene revision.
+    WrongSnapshot,
+    /// A position is not present in the scene interaction map.
+    UnknownPosition,
+    /// Cursor transitions do not connect the requested visual selection.
+    DisconnectedMovement,
+    /// Independent selections overlap or duplicate an insertion point.
+    OverlappingSelections,
+}
+
+/// Concrete snapshot-selection error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SelectionError {
+    kind: SelectionErrorKind,
+}
+
+impl SelectionError {
+    pub(crate) const fn new(kind: SelectionErrorKind) -> Self {
+        Self { kind }
+    }
+
+    /// Returns the stable error category.
+    #[must_use]
+    pub const fn kind(&self) -> SelectionErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Display for SelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "snapshot selection failed: {:?}", self.kind)
+    }
+}
+
+impl core::error::Error for SelectionError {}

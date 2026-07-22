@@ -623,7 +623,7 @@ Parley shaped/formatted clusters
 portable paragraph interaction map
               |
               v
-snapshot positions -> selection / transaction / composition
+snapshot positions -> selections / transaction / composition
               |
               v
 retained TextScene -> imaging -> live native proof
@@ -633,9 +633,10 @@ retained TextScene -> imaging -> live native proof
 
 1. Complete `und-oh0.2.3` with a conformance-first portable cluster and caret
    map; delete fragment-bounds hit testing and query-point caret geometry.
-2. Add revision-bound collapsed positions, bidi-correct selection rectangles,
-   visual/logical cluster movement, and validated same-leaf range replacement
-   with a returned position in the new revision.
+2. Add revision-bound collapsed positions, selection sets, bidi-correct visual
+   selections that may contain multiple logical ranges, owned selection
+   rectangles, visual/logical cluster movement, and validated same-leaf-per-
+   selection replacement with returned selections in the new revision.
 3. Specify the shared editable-surface contract for both Winit-like event feeds
    and AppKit/UIKit/Android/TSF-like host conversations. Add an explicit
    generated-source composition projection and a cache that retains committed
@@ -656,6 +657,12 @@ retained TextScene -> imaging -> live native proof
   validated UTF-8 boundary, semantic leaf, and affinity; stale use fails.
 - **Underwood grows a second cursor engine:** cluster and affinity facts enter
   through the paragraph adapter; scene code only maps and composes them.
+- **One range masquerades as bidi selection:** one selection may retain several
+  logically ordered source ranges, while the scene separately owns a set of
+  independent selections/insertion points. Geometry preserves both indices.
+- **Multi-caret edits become order-dependent:** validate the whole selection
+  set, reject overlap and duplicate insertion points, then apply source edits
+  in reverse order and publish exactly once.
 - **IME commits every preedit:** composition has a separate epoch and generated
   source mapping; only commit publishes a document transaction.
 - **Winit defines the core IME model:** a revisioned editable surface answers
@@ -674,8 +681,9 @@ retained TextScene -> imaging -> live native proof
 ### Completion
 
 The campaign is complete when a user can click and drag through mixed LTR/RTL
-and ligature text, see exact carets and selection, type and delete through one
-atomic paragraph-local transaction, exercise real IME preedit/commit/cancel,
+and ligature text, create multiple independent carets, see a visual bidi
+selection retain its disjoint logical ranges, type and delete through one
+atomic multi-selection transaction, exercise real IME preedit/commit/cancel,
 serve both event-feed and synchronous host-query IME traces from one state,
 activate semantic content through exact hits, and observe honest retained
 work—while the old interaction approximations are gone and every local, remote,
