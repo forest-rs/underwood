@@ -2,14 +2,16 @@
 
 ## Disposition
 
-The safe-break checkpoint in commit `023c777` is real, product-path work and is
-fit for a draft pull request. It is not the completion of `und-oh0.2.2` and must
-not land as though break-sensitive shaping were solved. The pinned Parley Core
-revision `6c81e1dd9b67793cdd959c65cc650c96a1262fb7` still lacks bounded
-break/concat reshaping, so the bead and upstream gate remain open.
+The safe-break checkpoint in commit `023c777` was real product-path work but
+was not sufficient to close `und-oh0.2.2`. The final branch now pins the narrow
+Parley candidate `181664b28144cb59671a7f1b736757c6ebe270f2`, commits unsafe line boundaries
+through bounded Core reshaping, and preserves the original unbroken
+`ShapedText` as reusable width-independent physics.
 
-No `unsafe` code or production dependency was added. The public API changes are
-covered by the approved Design-0006 migration note.
+No `unsafe` code or new production dependency was added. The existing Parley
+dependency moves temporarily to an exact public fork commit under ADR-0004's
+upstream-and-removal lifecycle. The public API changes are covered by the
+approved Design-0006 migration note.
 
 ## Summary judgment
 
@@ -19,10 +21,11 @@ from retained Parley facts, computes font-derived line boxes, reorders each line
 visually, and returns portable formed lines. Scene construction consumes those
 lines directly. The old glyph-edge wrapper and 80/20 baseline split are gone.
 
-**Mirage if overclaimed:** committed boundaries still reuse unbroken shaping.
-That is correct only for safe boundaries. `FormationWork::break_reshapes` and
-`WorkReport::break_reshapes` therefore remain zero on the production adapter;
-no test, document, or visual label calls that missing work complete.
+**Break-sensitive path:** each width formation starts from the retained
+unbroken shape. Safe boundaries remain zero-work. At an unsafe boundary the
+adapter calls Parley Core `apply_break`, recollects actual advances and glyphs,
+and backs up to an earlier legal opportunity if the reshaped line no longer
+fits. Only the committed broken result is lowered into portable lines.
 
 ## Must findings resolved
 
@@ -46,17 +49,27 @@ no test, document, or visual label calls that missing work complete.
    their break reasons, real baselines, mixed LTR/RTL ordering, and fallback
    fonts through the public scene API.
 
-## Open Must gate
+## Resolved Must gate
 
-Parley PR #634's bounded `apply_break` / `apply_concat` capability, or an
-equivalent reviewed Core seam on main, must execute an Arabic joining or Latin
-ligature boundary and restore the unbroken result after concat. Until then:
+The narrow Core candidate executes both required semantic traps: an Arabic
+cursive break changes glyph output and a Latin `fi` break decomposes the
+ligature; `apply_concat` restores exact shaped structure in both cases and
+across a legal U+200B default-ignorable seam. Safe boundaries are proven
+no-ops. The Underwood product corpus additionally commits a legal U+200B break
+inside Arabic cursive context and proves that:
 
-- `und-oh0.2.2` stays open;
-- Design-0006 retains status “upstream reshape gate open”;
-- the pull request stays draft and is not landed;
-- the safe-break implementation may be reviewed and measured, but not promoted
-  as complete paragraph formation.
+- the width-only request performs zero analysis and initial shaping;
+- real glyph IDs and sources change after the committed break;
+- no glyph source crosses the new line seam;
+- `WorkReport::break_reshapes()` is exactly one.
+
+The adapter policy corpus also chooses an unsafe boundary whose reshaped
+advance no longer fits. It proves `apply_concat` restores the exact canonical
+`ShapedText` before selection backs up to the earlier legal safe boundary.
+
+Upstream adoption remains the explicit `und-oh0.2.7` dependency-lifecycle
+follow-up, not a false product claim or a reason to leave PR #9 artificially
+incomplete.
 
 ## Product evidence
 
@@ -72,8 +85,17 @@ The focused corpus executes through `Document`, `LayoutEngine`,
 - bidi isolate controls without phantom glyph fragments;
 - width-only and line-height-only formation with zero analysis, selection, or
   shaping work;
+- a legal Arabic zero-width opportunity requiring one bounded reshape with
+  changed glyph output and seam-local source coverage;
+- reshape-induced overflow with exact concat rollback and legal backtracking;
 - exact visual snapshot SHA-256
   `547f0f6eb8d6ad43454818c0917ee09638ef70b3ac4323b07b2945345940dd45`.
+
+The hash proves deterministic CPU reproduction, not complete visual
+conformance. An Arabic-reader audit found the dots below `ب` are absent because
+the temporary paint-coverage policy gives Noto Kufi's zero-advance dot glyph a
+zero-width clip. Source text, bidi order, and shaping are correct; the
+renderer-neutral ink-coverage defect is explicit follow-up `und-oh0.2.4`.
 
 The experiment-only high-level Parley oracle covers the applicable policy and
 metric cases. Its current overflowing-NBSP divergence remains recorded rather
@@ -82,8 +104,8 @@ than copied into production.
 ## Should / tracked boundaries
 
 - Ligature paint clips still use the temporary coverage policy owned by
-  `und-oh0.2.4`; this checkpoint does not claim caret-accurate component paint
-  geometry.
+  `und-oh0.2.4`; it is now known to clip zero-advance Arabic dots and this
+  checkpoint does not claim ink-accurate component paint geometry.
 - Fontique selector convergence remains owned by `und-oh0.2.6`.
 - Tabs, hyphenation, justification, inline objects, regions, and pagination are
   outside Design-0006's first constraint record and are not implied by the
@@ -109,8 +131,6 @@ evidence updates:
   `wasm32-unknown-unknown` with exact Rust 1.96.0;
 - `cargo xtask check`, `bd lint --status all`, and `bd dep cycles`.
 
-GitHub Actions run `29870025982` passed all eight jobs. Linux, macOS, and Windows
-each passed workspace Clippy and tests, including exact reproduction of the CPU
-poster; formatting/text policy, repository policy, MSRV, denied-warning
-rustdoc, bare-metal, and WebAssembly jobs also passed. This validates the
-safe-break checkpoint but does not satisfy the upstream break-reshape gate.
+Remote validation of the final candidate commit remains before landing. The
+earlier eight-job run `29870025982` validates only safe-break checkpoint
+`023c777` and is not cited as evidence for the bounded reshape implementation.

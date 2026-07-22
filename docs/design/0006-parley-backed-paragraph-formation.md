@@ -1,6 +1,6 @@
 # Design-0006: Parley-backed paragraph formation
 
-- **Status:** Approved for implementation, upstream reshape gate open
+- **Status:** Implemented on an upstream-candidate pin; upstream adoption pending
 - **Approved:** 2026-07-22 by Bruce Mitchener
 - **Bead:** `und-oh0.2.2`
 - **Supersedes:** the private glyph-width breaker in Design-0002
@@ -83,9 +83,11 @@ and commits the best boundary when the interval is exceeded. Future Knuth-
 Plass, hyphenation, or exclusion-aware policies can replace it without moving
 Unicode or shaping ownership.
 
-## Exact upstream snapshot
+## Exact dependency snapshot
 
-The production fence remains Parley commit
+The production fence is Parley commit
+[`181664b28144cb59671a7f1b736757c6ebe270f2`](https://github.com/waywardmonkeys/parley/commit/181664b28144cb59671a7f1b736757c6ebe270f2),
+the `bounded-break-reshape` upstream-candidate branch based directly on main
 `6c81e1dd9b67793cdd959c65cc650c96a1262fb7`.
 
 At that commit:
@@ -97,13 +99,15 @@ At that commit:
   boxes, CRLF handling, overflow policy, and per-line bidi reordering;
 - high-level breaker inputs and mutable state are coupled to private
   `LayoutData`, so an external adapter cannot feed it retained Core output;
-- Core exposes neither a line breaker nor bounded break/concat reshaping.
+- Core retains the original per-run reshape inputs, exposes unsafe break and
+  concat regions, provides bounded `Shaper::apply_break` / `apply_concat`, and
+  retains the bounded pre-break fragment for exact reversal.
 
-Draft [Parley PR #634](https://github.com/linebender/parley/pull/634)
-specifies `ShapeContext::apply_break` and `apply_concat`, unsafe-region discovery,
-and a caller-owned greedy-break example. Those operations are not on main. The
-Underwood production path must not manufacture equivalent-looking output and
-call the gap closed.
+The fork pin is a temporary reviewed divergence under ADR-0004, not a permanent
+Parley fork. Its lifecycle owner is `und-oh0.2.7`; it is removed as soon as an
+equivalent commit is available from `linebender/parley`. Underwood calls the
+Core methods at selected boundaries and does not contain a second shaping
+implementation.
 
 ## Public contract
 
@@ -263,20 +267,24 @@ acceptance criterion false. The branch may make that progress, but the bead and
 PR do not become complete until the upstream seam is executable. Rejected as a
 landing claim.
 
-## Upstream packet for Tom
+## Upstream candidate for Tom
 
-Underwood needs a reviewable extraction from PR #634, not the entire umbrella:
+The reviewable extraction from PR #634 is published as
+[`waywardmonkeys/parley:bounded-break-reshape`](https://github.com/waywardmonkeys/parley/tree/bounded-break-reshape):
 
 1. On current `parley_core::ShapedText`, expose whether a cluster boundary is
    safe to break/concat and the minimal affected ranges.
 2. Add bounded `Shaper::apply_break` and `apply_concat` using the original
    analysis, shape options/font-selection context, and retained output.
 3. Guarantee no-op behavior at safe boundaries, contiguous source coverage,
-   bounded work, and break+concat equivalence.
-4. Include Arabic cursive and Latin ligature tests plus a caller-owned greedy
-   break example.
+   bounded work, and break+concat equivalence, including default-ignorable
+   separators that lose concat metadata after breaking.
+4. Include Arabic cursive, legal U+200B, and Latin ligature tests plus a
+   caller-owned greedy break example.
 
-Underwood can supply its wind-tunnel corpus and consume an immutable main
-revision immediately. Until that lands, the production implementation and
-oracle can prove every other formation law, while the unsafe-break test remains
-a named upstream gate rather than hidden technical debt.
+Underwood pins the immutable candidate commit while it is reviewed. The product
+corpus commits a real Unicode zero-width line opportunity inside Arabic cursive
+context, observes changed glyph output, rejects glyphs spanning the line seam,
+and reports one bounded reshape without rerunning analysis or initial shaping.
+A fit-change trap additionally proves exact concat rollback before legal
+backtracking.

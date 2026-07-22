@@ -15,7 +15,7 @@ use parley_core::{
     ShapedText, Shaper, shape::ClusterData,
 };
 
-const PARLEY_REVISION: &str = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7";
+const PARLEY_REVISION: &str = "181664b28144cb59671a7f1b736757c6ebe270f2";
 const CORPUS: &str = "office affinity — مرحبا بالعالم";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,7 +90,6 @@ struct ShapeConfig<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CurrentGap {
-    BoundedBreakReshaping,
     VerticalShaping,
     CoreInlineObjects,
     TextDataIdentity,
@@ -98,7 +97,6 @@ enum CurrentGap {
 
 fn current_gaps() -> &'static [CurrentGap] {
     &[
-        CurrentGap::BoundedBreakReshaping,
         CurrentGap::VerticalShaping,
         CurrentGap::CoreInlineObjects,
         CurrentGap::TextDataIdentity,
@@ -776,11 +774,10 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_current_main_seams_remain_explicit_gaps() {
+    fn unsupported_candidate_seams_remain_explicit_gaps() {
         assert_eq!(
             current_gaps(),
             &[
-                CurrentGap::BoundedBreakReshaping,
                 CurrentGap::VerticalShaping,
                 CurrentGap::CoreInlineObjects,
                 CurrentGap::TextDataIdentity,

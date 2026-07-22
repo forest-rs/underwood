@@ -352,7 +352,7 @@ WebAssembly gates. Paragraph breaking continues independently as
 
 ## Parley-backed paragraph formation
 
-**Status:** Active — safe-break product checkpoint committed; upstream reshape gate open
+**Status:** Ready for remote validation — bounded break reshaping executes in the product path
 
 **Bead:** `und-oh0.2.2`
 
@@ -390,7 +390,7 @@ exists.
 6. Update the visual proof, run Cedar/Lynx/Rook review, measure the product
    path, and pass all local and remote gates before landing.
 
-### Executable checkpoint
+### Executable implementation
 
 Commit `023c777` completes the safe-break portion through the public product
 path: legal and mandatory boundaries, real metrics, mixed bidi, complete
@@ -400,15 +400,22 @@ same-machine benchmark are recorded in
 `docs/proof/parley-formation-review-2026-07-22.md` and
 `docs/proof/parley-formation-benchmark-2026-07-22.md`.
 
-The full local stable, MSRV, rustdoc, repository/text policy, Beads,
-bare-metal, and WebAssembly matrix passes. GitHub Actions run `29870025982`
-passes all eight jobs across Linux, macOS, and Windows, including exact poster
-pixels. Remote success validates the checkpoint; it is not permission to close
-the upstream-dependent acceptance criterion.
+The final implementation pins public Parley candidate `181664b`, derived
+directly from audited main revision `6c81e1d`. Parley Core retains the inputs
+needed for bounded break/concat reshaping; `underwood_parley` applies that seam
+at selected legal boundaries, backtracks if reshaping changes fit, and lowers
+only the committed formed result. The product corpus proves a legal Arabic
+zero-width break changes real glyph output without rerunning analysis or
+initial shaping, leaves no glyph crossing the line seam, and reports exactly
+one bounded reshape. A second trap makes that reshape exceed the width, then
+proves concat restores the exact canonical shape before the adapter commits the
+earlier legal boundary.
 
-Step 5 remains a hard completion gate. The adapter reports zero bounded break
-reshapes because pinned Parley Core does not expose them; the bead and draft PR
-stay open rather than promoting this checkpoint as the finished campaign.
+The full local stable, MSRV, denied-warning rustdoc, repository/text policy,
+Beads, bare-metal, and WebAssembly matrix passes on the candidate pin. Remote
+validation remains before landing. Upstream adoption and removal of the
+temporary fork URL are isolated in `und-oh0.2.7`; that lifecycle work does not
+erase or postpone the executable product result in this campaign.
 
 ### Risks and controls
 

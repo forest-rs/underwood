@@ -94,3 +94,23 @@ by current main. Keep the campaign branch and bead open until the bounded
 reshape slice lands upstream or an explicitly reviewed narrow patch is carried
 under ADR-0004's lifecycle rules. Do not merge a safe-break-only implementation
 under the full capability name.
+
+## Implementation addendum
+
+The gap identified by this audit is now executable on the narrow
+[`bounded-break-reshape`](https://github.com/waywardmonkeys/parley/tree/bounded-break-reshape)
+candidate, commit `181664b28144cb59671a7f1b736757c6ebe270f2`. The Core patch is based on the
+audited main revision and retains the font, normalized coordinates, script,
+language, features, and character style data needed to reshape only the unsafe
+fragment. It also retains that bounded pre-break fragment so concat can restore
+exact output even when the break erased HarfBuzz's concat metadata. Arabic
+cursive, Latin ligature, and legal U+200B tests require break output to change
+and concat to restore the original `ShapedText`; safe boundaries are no-ops.
+
+Underwood consumes that public immutable commit. Its product test selects a
+legal U+200B opportunity inside Arabic joining context, reuses the original
+analysis and shaping on a width-only request, observes changed glyph IDs and
+sources, proves no glyph crosses the committed seam, and reports one bounded
+reshape. A separate fit-change trap rejects that unsafe boundary, restores the
+canonical shape exactly, and selects the earlier legal boundary. The remaining
+lifecycle gate is upstream adoption, not missing product semantics.

@@ -26,8 +26,8 @@ The first draft public slice is deliberately complete end to end:
 - [`ShapingStyle`] carries backend-neutral family, weight, width, style,
   language, feature, and variation requests; the separate adapter resolves
   them without moving font matching into this crate;
-- [`TextScene`] exposes real glyph resources, paint clips, source mapping, hit
-  testing, caret geometry, and semantic observations;
+- [`TextScene`] exposes real glyph resources, paint clips, source mapping,
+  fragment-bound diagnostic hit/caret observations, and semantic observations;
 - document IDs are opaque and document-scoped, while [`SnapshotTextRange`]
   values are dense observations valid only for their named revision.
 

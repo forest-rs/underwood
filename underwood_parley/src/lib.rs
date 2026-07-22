@@ -230,8 +230,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 self.cache[index].shaping_styles.clear();
                 self.cache[index].shaping_runs.clear();
                 self.cache[index].shaped_text.clear();
+                self.cache[index].formed_text.clear();
                 self.cache[index].scripts.clear();
                 self.cache[index].logical_clusters.clear();
+                self.cache[index].formed_clusters.clear();
                 self.cache[index].line_plans.clear();
                 (index, true)
             }
@@ -243,13 +245,16 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 shaping_styles: Vec::new(),
                 shaping_runs: Vec::new(),
                 shaped_text: ShapedText::new(),
+                formed_text: ShapedText::new(),
                 scripts: Vec::new(),
                 logical_clusters: Vec::new(),
+                formed_clusters: Vec::new(),
                 selected_clusters: 0,
                 inline_flow_styles: Vec::new(),
                 inline_flow_runs: Vec::new(),
                 max_inline_advance: 0,
                 line_plans: Vec::new(),
+                break_reshapes: 0,
             });
             (self.cache.len() - 1, true)
         };
@@ -274,6 +279,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
             cache.shaping_runs = input.shaping_runs().to_vec();
             cache.selected_clusters = selected_clusters;
             cache.logical_clusters = collect_logical_clusters(input.text(), &cache.shaped_text)?;
+            cache.formed_text.clear();
+            cache.formed_clusters.clear();
             cache.line_plans.clear();
         }
 
@@ -284,10 +291,14 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 != constraints.max_inline_advance().to_bits();
         if needs_formation {
             let cache = &mut self.cache[cache_index];
-            form_lines(
+            cache.formed_text.clone_from(&cache.shaped_text);
+            cache.formed_clusters.clone_from(&cache.logical_clusters);
+            cache.break_reshapes = form_lines(
+                &mut self.shaper,
+                &cache.analysis,
                 input.text(),
-                &cache.shaped_text,
-                &cache.logical_clusters,
+                &mut cache.formed_text,
+                &mut cache.formed_clusters,
                 input.inline_flow_styles(),
                 input.inline_flow_runs(),
                 constraints.max_inline_advance(),
@@ -299,18 +310,18 @@ impl ParagraphFormation for ParleyParagraphEngine {
         }
 
         let physics = &self.cache[cache_index];
-        if physics.shaped_text.runs().len() != physics.scripts.len() {
+        if physics.formed_text.runs().len() != physics.scripts.len() {
             return Err(PreparationError::invalid_output());
         }
         let mut prepared_lines = Vec::with_capacity(physics.line_plans.len());
         let mut glyph_count = 0_u32;
         for plan in &physics.line_plans {
-            let mut pieces = line_run_pieces(&physics.shaped_text, plan.clusters.clone())?;
-            reorder_visual_pieces(&physics.shaped_text, &mut pieces);
+            let mut pieces = line_run_pieces(&physics.formed_text, plan.clusters.clone())?;
+            reorder_visual_pieces(&physics.formed_text, &mut pieces);
             let mut prepared_runs = Vec::with_capacity(pieces.len());
             for piece in pieces {
                 let run = physics
-                    .shaped_text
+                    .formed_text
                     .runs()
                     .get(piece.run)
                     .ok_or_else(PreparationError::invalid_output)?;
@@ -319,12 +330,12 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     .get(piece.run)
                     .ok_or_else(PreparationError::invalid_output)?;
                 let font = physics
-                    .shaped_text
+                    .formed_text
                     .fonts()
                     .get(run.font_index)
                     .ok_or_else(PreparationError::invalid_output)?;
                 let normalized_coords = physics
-                    .shaped_text
+                    .formed_text
                     .normalized_coords()
                     .get(run.normalized_coords_range.clone())
                     .ok_or_else(PreparationError::invalid_output)?;
@@ -346,7 +357,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 let prepared_glyphs = lower_glyphs(
                     input.text(),
                     &physics.analysis,
-                    &physics.shaped_text,
+                    &physics.formed_text,
                     run,
                     piece.clusters.clone(),
                     input.paint_runs(),
@@ -391,7 +402,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             shaped,
             if shaped { physics.selected_clusters } else { 0 },
             if shaped {
-                u32::try_from(physics.shaped_text.runs().len()).unwrap_or(u32::MAX)
+                u32::try_from(physics.formed_text.runs().len()).unwrap_or(u32::MAX)
             } else {
                 0
             },
@@ -401,7 +412,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
             } else {
                 0
             },
-            0,
+            if needs_formation {
+                physics.break_reshapes
+            } else {
+                0
+            },
         );
         Ok(ParagraphFormationOutput::new(paragraph, work))
     }
@@ -415,13 +430,16 @@ struct PhysicsCache {
     shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
     shaped_text: ShapedText,
+    formed_text: ShapedText,
     scripts: Vec<[u8; 4]>,
     logical_clusters: Vec<LogicalCluster>,
+    formed_clusters: Vec<LogicalCluster>,
     selected_clusters: u32,
     inline_flow_styles: Vec<InlineFlowStyle>,
     inline_flow_runs: Vec<InlineFlowRun>,
     max_inline_advance: u64,
     line_plans: Vec<LinePlan>,
+    break_reshapes: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -455,95 +473,56 @@ struct RunPiece {
 }
 
 fn form_lines(
+    shaper: &mut Shaper,
+    analysis: &Analysis,
     text: &str,
-    shaped_text: &ShapedText,
-    clusters: &[LogicalCluster],
+    shaped_text: &mut ShapedText,
+    clusters: &mut Vec<LogicalCluster>,
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
     max_inline_advance: f64,
     plans: &mut Vec<LinePlan>,
-) -> Result<(), PreparationError> {
+) -> Result<u32, PreparationError> {
     plans.clear();
     if text.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     if clusters.is_empty() {
         return Err(PreparationError::invalid_output());
     }
 
+    let mut break_reshapes = 0_u32;
     let mut start = 0_usize;
     while start < clusters.len() {
-        let mut index = start;
-        let mut advance = 0.0_f64;
-        let mut last_opportunity: Option<(usize, f64)> = None;
-        let mut committed = false;
-        while index < clusters.len() {
-            let cluster = &clusters[index];
-            if cluster.boundary == Boundary::Line && !cluster.ligature_component && index > start {
-                last_opportunity = Some((index, advance));
-            }
-
-            let next_advance = advance + cluster.advance;
-            let is_newline = cluster.whitespace == Whitespace::Newline;
-            if is_newline {
-                advance = next_advance;
-                index += 1;
-                let cr_before_lf = cluster.source_char == '\r'
-                    && clusters
-                        .get(index)
-                        .is_some_and(|next| next.source_char == '\n');
-                if cr_before_lf {
-                    continue;
-                }
-                plans.push(make_line_plan(
-                    shaped_text,
-                    clusters,
-                    inline_flow_styles,
-                    inline_flow_runs,
-                    start..index,
-                    LineBreakReason::Mandatory,
-                    advance,
-                    None,
-                )?);
-                start = index;
-                committed = true;
-                break;
-            }
-
-            if next_advance > max_inline_advance
-                && let Some((opportunity, opportunity_advance)) = last_opportunity
-            {
-                plans.push(make_line_plan(
-                    shaped_text,
-                    clusters,
-                    inline_flow_styles,
-                    inline_flow_runs,
-                    start..opportunity,
-                    LineBreakReason::Regular,
-                    opportunity_advance,
-                    None,
-                )?);
-                start = opportunity;
-                committed = true;
-                break;
-            }
-
-            advance = next_advance;
-            index += 1;
-        }
-        if !committed {
-            plans.push(make_line_plan(
+        let choice = choose_line(clusters, start, max_inline_advance)?;
+        let (end, advance, reshaped) = if choice.reason == LineBreakReason::Regular {
+            commit_regular_break(
+                shaper,
+                analysis,
+                text,
                 shaped_text,
                 clusters,
-                inline_flow_styles,
-                inline_flow_runs,
-                start..clusters.len(),
-                LineBreakReason::End,
-                advance,
-                None,
-            )?);
-            start = clusters.len();
+                start,
+                choice.end,
+                max_inline_advance,
+            )?
+        } else {
+            (choice.end, choice.advance, false)
+        };
+        if reshaped {
+            break_reshapes = break_reshapes.saturating_add(1);
         }
+        plans.push(make_line_plan(
+            shaped_text,
+            clusters,
+            inline_flow_styles,
+            inline_flow_runs,
+            start..end,
+            choice.reason,
+            advance,
+            None,
+        )?);
+        start = end;
     }
 
     if plans
@@ -565,7 +544,109 @@ fn form_lines(
             Some(&previous),
         )?);
     }
-    Ok(())
+    Ok(break_reshapes)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LineChoice {
+    end: usize,
+    reason: LineBreakReason,
+    advance: f64,
+}
+
+fn choose_line(
+    clusters: &[LogicalCluster],
+    start: usize,
+    max_inline_advance: f64,
+) -> Result<LineChoice, PreparationError> {
+    let mut index = start;
+    let mut advance = 0.0_f64;
+    let mut last_opportunity: Option<(usize, f64)> = None;
+    while index < clusters.len() {
+        let cluster = &clusters[index];
+        if cluster.boundary == Boundary::Line && !cluster.ligature_component && index > start {
+            last_opportunity = Some((index, advance));
+        }
+
+        let next_advance = advance + cluster.advance;
+        if cluster.whitespace == Whitespace::Newline {
+            advance = next_advance;
+            index += 1;
+            let cr_before_lf = cluster.source_char == '\r'
+                && clusters
+                    .get(index)
+                    .is_some_and(|next| next.source_char == '\n');
+            if cr_before_lf {
+                continue;
+            }
+            return Ok(LineChoice {
+                end: index,
+                reason: LineBreakReason::Mandatory,
+                advance,
+            });
+        }
+
+        if next_advance > max_inline_advance
+            && let Some((end, opportunity_advance)) = last_opportunity
+        {
+            return Ok(LineChoice {
+                end,
+                reason: LineBreakReason::Regular,
+                advance: opportunity_advance,
+            });
+        }
+        advance = next_advance;
+        index += 1;
+    }
+    Ok(LineChoice {
+        end: clusters.len(),
+        reason: LineBreakReason::End,
+        advance,
+    })
+}
+
+fn commit_regular_break(
+    shaper: &mut Shaper,
+    analysis: &Analysis,
+    text: &str,
+    shaped_text: &mut ShapedText,
+    clusters: &mut Vec<LogicalCluster>,
+    start: usize,
+    mut end: usize,
+    max_inline_advance: f64,
+) -> Result<(usize, f64, bool), PreparationError> {
+    loop {
+        let pos = clusters
+            .get(end)
+            .ok_or_else(PreparationError::invalid_output)?
+            .source
+            .start;
+        let reshaped = !shaped_text.unsafe_break_region(pos).is_empty();
+        if reshaped {
+            shaper.apply_break(text, analysis, shaped_text, pos);
+            *clusters = collect_logical_clusters(text, shaped_text)?;
+        }
+        let advance = clusters[start..end]
+            .iter()
+            .map(|cluster| cluster.advance)
+            .sum();
+        if advance <= max_inline_advance {
+            return Ok((end, advance, reshaped));
+        }
+
+        let previous = (start + 1..end).rev().find(|&index| {
+            let cluster = &clusters[index];
+            cluster.boundary == Boundary::Line && !cluster.ligature_component
+        });
+        let Some(previous) = previous else {
+            return Ok((end, advance, reshaped));
+        };
+        if reshaped {
+            shaper.apply_concat(text, analysis, shaped_text, pos);
+            *clusters = collect_logical_clusters(text, shaped_text)?;
+        }
+        end = previous;
+    }
 }
 
 fn collect_logical_clusters(
@@ -1365,6 +1446,10 @@ impl core::error::Error for AdapterError {}
 mod tests {
     use alloc::{vec, vec::Vec};
 
+    use fontique::{Blob, Synthesis};
+    use parley_core::{AnalysisDataSources, FontInstance, ShapeOptions, ShapedText, Shaper};
+
+    use underwood::adapter::LineBreakReason as TestLineBreakReason;
     use underwood::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFamily,
         GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot,
@@ -1373,14 +1458,45 @@ mod tests {
     use underwood::{Language, Script};
 
     use super::{
-        AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, TextData, analyze_text, read_u16,
-        read_u32, split_item_after,
+        AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, TextData, analyze_text,
+        choose_line, collect_logical_clusters, commit_regular_break, read_u16, read_u32,
+        split_item_after,
     };
 
     const LATIN_FONT: &[u8] =
         include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
     const ARABIC_FONT: &[u8] =
         include_bytes!("../../examples/headless/fonts/NotoKufiArabic-Regular.otf");
+
+    fn shape_arabic(text: &str) -> (parley_core::Analysis, Shaper, ShapedText) {
+        let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
+        let data_sources = AnalysisDataSources::new();
+        let font = FontInstance {
+            font: underwood::FontData::new(Blob::from(ARABIC_FONT.to_vec()), 0),
+            synthesis: Synthesis::default(),
+        };
+        let style_indices = vec![0; text.chars().count()];
+        let mut shaper = Shaper::default();
+        let mut shaped = ShapedText::new();
+        for item in analysis.itemize(text, |_| false) {
+            shaper.shape_item(
+                text,
+                &analysis,
+                &item,
+                &ShapeOptions {
+                    font_size: 20.0,
+                    language: None,
+                    features: &[],
+                    variations: &[],
+                    char_style_indices: &style_indices,
+                },
+                |_| Some(font.clone()),
+                &data_sources,
+                &mut shaped,
+            );
+        }
+        (analysis, shaper, shaped)
+    }
 
     #[test]
     fn big_endian_readers_reject_short_input() {
@@ -1717,6 +1833,135 @@ mod tests {
         assert!(
             respaced.scene().lines()[0].bounds().height()
                 > narrowed.scene().lines()[0].bounds().height()
+        );
+    }
+
+    #[test]
+    fn legal_zero_width_break_reshapes_an_arabic_join() {
+        let text = "سل\u{200b}ام";
+        let break_at = u32::try_from(text.find("ام").expect("break suffix is present"))
+            .expect("fixture range fits");
+        let (document, styles, paint) = fixture_document(text, 1.2);
+        let fonts = FontSet::try_from_fonts([
+            Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid")
+        ])
+        .expect("fixture catalog is valid")
+        .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
+        .expect("Arabic fallback is valid");
+        let mut engine = LayoutEngine::new(
+            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
+                .expect("fixture adapter is valid"),
+        );
+        let wide = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let unbroken = engine
+            .prepare(&document.snapshot(), &wide)
+            .expect("unbroken shaping succeeds");
+        let unbroken_glyphs: Vec<_> = unbroken
+            .scene()
+            .fragments()
+            .iter()
+            .flat_map(|fragment| fragment.glyphs())
+            .map(|glyph| (glyph.id(), glyph.source().bytes()))
+            .collect();
+
+        let narrow = SceneRequest::new(
+            FiniteWidth::new(25.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &narrow)
+            .expect("the legal break reshapes its bounded cursive context");
+        assert_eq!(output.work().analysis().paragraphs(), 0);
+        assert_eq!(output.work().shape().paragraphs(), 0);
+        assert_eq!(output.work().break_reshapes(), 1);
+        let broken_glyphs: Vec<_> = output
+            .scene()
+            .fragments()
+            .iter()
+            .flat_map(|fragment| fragment.glyphs())
+            .map(|glyph| (glyph.id(), glyph.source().bytes()))
+            .collect();
+        assert_ne!(
+            broken_glyphs, unbroken_glyphs,
+            "committing the break must change real Arabic glyph output"
+        );
+        assert_eq!(output.scene().lines().len(), 2);
+        assert_eq!(output.scene().lines()[0].sources()[0].bytes(), 0..break_at);
+        assert_eq!(
+            output.scene().lines()[1].sources()[0].bytes(),
+            break_at..u32::try_from(text.len()).expect("fixture range fits")
+        );
+        assert!(output.scene().fragments().iter().all(|fragment| {
+            fragment.glyphs().iter().all(|glyph| {
+                let source = glyph.source().bytes();
+                source.end <= break_at || source.start >= break_at
+            })
+        }));
+    }
+
+    #[test]
+    fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
+        let text = "س سل\u{200b}ام";
+        let pos = text.find("ام").expect("unsafe suffix exists");
+        let (analysis, mut shaper, canonical) = shape_arabic(text);
+        let mut formed = canonical.clone();
+        let mut clusters =
+            collect_logical_clusters(text, &formed).expect("canonical clusters are valid");
+        let unsafe_end = clusters
+            .iter()
+            .position(|cluster| cluster.source.start == pos)
+            .expect("unsafe break cluster exists");
+        let prior_safe = (1..unsafe_end)
+            .rev()
+            .find(|&index| {
+                let cluster = &clusters[index];
+                cluster.boundary == parley_core::Boundary::Line && !cluster.ligature_component
+            })
+            .expect("fixture has an earlier legal break");
+        let unbroken_advance: f64 = clusters[..unsafe_end]
+            .iter()
+            .map(|cluster| cluster.advance)
+            .sum();
+        shaper.apply_break(text, &analysis, &mut formed, pos);
+        let broken_clusters =
+            collect_logical_clusters(text, &formed).expect("broken clusters are valid");
+        let broken_advance: f64 = broken_clusters[..unsafe_end]
+            .iter()
+            .map(|cluster| cluster.advance)
+            .sum();
+        assert!(
+            broken_advance > unbroken_advance,
+            "the fixture must make break shaping change fit"
+        );
+        shaper.apply_concat(text, &analysis, &mut formed, pos);
+        clusters = collect_logical_clusters(text, &formed).expect("restored clusters are valid");
+
+        let width = (unbroken_advance + broken_advance) * 0.5;
+        let initial = choose_line(&clusters, 0, width).expect("initial selection succeeds");
+        assert_eq!(initial.reason, TestLineBreakReason::Regular);
+        assert_eq!(initial.end, unsafe_end, "clusters: {clusters:#?}");
+        let (committed_end, committed_advance, committed_reshape) = commit_regular_break(
+            &mut shaper,
+            &analysis,
+            text,
+            &mut formed,
+            &mut clusters,
+            0,
+            unsafe_end,
+            width,
+        )
+        .expect("overflowing reshaped break backs up");
+        assert_eq!(committed_end, prior_safe);
+        assert!(committed_advance <= width);
+        assert!(!committed_reshape, "the committed earlier seam is safe");
+        assert_eq!(
+            formed, canonical,
+            "rejecting the unsafe seam must concat it before backing up"
         );
     }
 

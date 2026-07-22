@@ -152,7 +152,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.0"
-source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=181664b28144cb59671a7f1b736757c6ebe270f2#181664b28144cb59671a7f1b736757c6ebe270f2"
 dependencies = [
  "hashbrown",
  "linebender_resource_handle",
@@ -441,12 +441,12 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=181664b28144cb59671a7f1b736757c6ebe270f2#181664b28144cb59671a7f1b736757c6ebe270f2"
 
 [[package]]
 name = "parley"
 version = "0.11.0"
-source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=181664b28144cb59671a7f1b736757c6ebe270f2#181664b28144cb59671a7f1b736757c6ebe270f2"
 dependencies = [
  "fontique",
  "hashbrown",
@@ -459,7 +459,7 @@ dependencies = [
 [[package]]
 name = "parley_core"
 version = "0.11.0"
-source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=181664b28144cb59671a7f1b736757c6ebe270f2#181664b28144cb59671a7f1b736757c6ebe270f2"
 dependencies = [
  "fontique",
  "harfrust",
@@ -476,7 +476,7 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.11.0"
-source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=181664b28144cb59671a7f1b736757c6ebe270f2#181664b28144cb59671a7f1b736757c6ebe270f2"
 dependencies = [
  "icu_properties",
 ]
@@ -484,7 +484,7 @@ dependencies = [
 [[package]]
 name = "parley_dev"
 version = "0.0.0"
-source = "git+https://github.com/linebender/parley.git?rev=6c81e1dd9b67793cdd959c65cc650c96a1262fb7#6c81e1dd9b67793cdd959c65cc650c96a1262fb7"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=181664b28144cb59671a7f1b736757c6ebe270f2#181664b28144cb59671a7f1b736757c6ebe270f2"
 
 [[package]]
 name = "peniko"

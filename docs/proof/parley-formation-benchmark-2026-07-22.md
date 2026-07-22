@@ -52,3 +52,26 @@ single retained `ShapedText` truth.
 
 These are diagnostic same-machine observations, not release thresholds or a
 universal speed claim.
+
+## Bounded-reshape candidate addendum
+
+The final candidate was measured against safe-break checkpoint `023c777` in
+the same session. Each cell is again the midpoint of two complete benchmark
+processes. The corpus uses safe line opportunities, so this measures the
+always-ready retained reshape state and disposable formed copy, not the
+additional cost of executing an unsafe break.
+
+| Workload | Safe-break ns/iteration | Final candidate ns/iteration | Delta |
+| --- | ---: | ---: | ---: |
+| Cold scene | 1,803,747 | 1,780,811 | -1.3% |
+| Retained unchanged | 90,980 | 98,171 | +7.9% |
+| Paint only | 89,321 | 97,115 | +8.7% |
+| Width only | 567,117 | 592,346 | +4.4% |
+| One-paragraph edit | 109,709 | 117,767 | +7.3% |
+
+The width-only path adds about 25 microseconds for all 64 paragraphs, or 0.39
+microseconds per paragraph, while preserving zero analysis and initial-shaping
+work. Retained and paint-only requests do not clone the formed shape; their
+small observed increase is recorded without attributing it to the reshape path
+from timing alone. No second shaped-glyph cache or special safe-only fast path
+was introduced to conceal the cost.
