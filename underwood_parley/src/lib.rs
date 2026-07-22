@@ -22,10 +22,11 @@ use parley_core::{
     shape::{CharCluster, ClusterData, Status, Whitespace},
 };
 use underwood::adapter::{
-    FontSynthesis, FormationWork, GlyphPaintCoverage, GlyphPaintSegment, InlineFlowRun,
-    LineBreakReason, ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput,
-    ParagraphInput, PreparationError, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
-    ShapingRun,
+    ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
+    GlyphPaintSegment, InlineFlowRun, LineBreakReason, ParagraphConstraints, ParagraphFormation,
+    ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCluster,
+    PreparedClusterSide, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun, ShapingRun,
+    TextAffinity,
 };
 use underwood::{
     FontData, FontFamilyName, FontVariation, GenericFamily, InlineFlowStyle, Language, ParagraphId,
@@ -318,6 +319,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
         for plan in &physics.line_plans {
             let mut pieces = line_run_pieces(&physics.formed_text, plan.clusters.clone())?;
             reorder_visual_pieces(&physics.formed_text, &mut pieces);
+            let prepared_clusters = lower_visual_clusters(
+                &physics.formed_text,
+                &pieces,
+                plan.reason == LineBreakReason::Mandatory,
+            )?;
             let mut prepared_runs = Vec::with_capacity(pieces.len());
             for piece in pieces {
                 let run = physics
@@ -398,6 +404,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 plan.height,
                 plan.content_ascent,
                 plan.content_descent,
+                prepared_clusters,
                 prepared_runs,
             )?);
         }
@@ -839,6 +846,93 @@ fn reorder_visual_pieces(shaped_text: &ShapedText, pieces: &mut [RunPiece]) {
             start = end;
         }
     }
+}
+
+fn lower_visual_clusters(
+    shaped_text: &ShapedText,
+    pieces: &[RunPiece],
+    mandatory_line_end: bool,
+) -> Result<Vec<PreparedCluster>, PreparationError> {
+    let cluster_count = pieces.iter().map(|piece| piece.clusters.len()).sum();
+    let mut prepared = Vec::with_capacity(cluster_count);
+    for piece in pieces {
+        let run = shaped_text
+            .runs()
+            .get(piece.run)
+            .ok_or_else(PreparationError::invalid_output)?;
+        if run.bidi_level & 1 == 1 {
+            for index in piece.clusters.clone().rev() {
+                prepared.push(lower_prepared_cluster(shaped_text, run, index, false)?);
+            }
+        } else {
+            for index in piece.clusters.clone() {
+                let is_last = prepared.len() + 1 == cluster_count;
+                prepared.push(lower_prepared_cluster(
+                    shaped_text,
+                    run,
+                    index,
+                    mandatory_line_end && is_last,
+                )?);
+            }
+        }
+    }
+    Ok(prepared)
+}
+
+fn lower_prepared_cluster(
+    shaped_text: &ShapedText,
+    run: &parley_core::ShapedRun,
+    index: usize,
+    force_before_hard_break: bool,
+) -> Result<PreparedCluster, PreparationError> {
+    let cluster = shaped_text
+        .clusters()
+        .get(index)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let start = run
+        .range
+        .byte_range
+        .start
+        .checked_add(usize::from(cluster.text_offset))
+        .ok_or_else(PreparationError::invalid_output)?;
+    let end = start
+        .checked_add(usize::from(cluster.text_len))
+        .ok_or_else(PreparationError::invalid_output)?;
+    let source = checked_source_range(&(start..end))?;
+    let (left, right) = if run.bidi_level & 1 == 1 {
+        (
+            PreparedClusterSide::new(source.end, TextAffinity::Upstream),
+            PreparedClusterSide::new(source.start, TextAffinity::Downstream),
+        )
+    } else if force_before_hard_break {
+        let before = PreparedClusterSide::new(source.start, TextAffinity::Downstream);
+        (before, before)
+    } else {
+        (
+            PreparedClusterSide::new(source.start, TextAffinity::Downstream),
+            PreparedClusterSide::new(source.end, TextAffinity::Upstream),
+        )
+    };
+    PreparedCluster::try_new(
+        source,
+        f64::from(cluster.advance),
+        run.bidi_level,
+        match cluster.info.boundary() {
+            Boundary::None => ClusterBoundary::None,
+            Boundary::Word => ClusterBoundary::Word,
+            Boundary::Line => ClusterBoundary::Line,
+            Boundary::Mandatory => ClusterBoundary::Mandatory,
+        },
+        match cluster.info.whitespace() {
+            Whitespace::None => ClusterWhitespace::None,
+            Whitespace::Space => ClusterWhitespace::Space,
+            Whitespace::NoBreakSpace => ClusterWhitespace::NoBreakSpace,
+            Whitespace::Tab => ClusterWhitespace::Tab,
+            Whitespace::Newline => ClusterWhitespace::Newline,
+        },
+        left,
+        right,
+    )
 }
 
 fn analyze_text(analyzer: &mut Analyzer, text: &str) -> Analysis {
@@ -1417,7 +1511,8 @@ mod tests {
     use underwood::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFamily,
         GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot,
-        PaintTable, ParagraphRole, SceneRequest, ShapingStyle, StyleMap,
+        PaintTable, ParagraphRole, Point, SceneRequest, ShapingStyle, StyleMap, TextAffinity,
+        TextScene,
     };
     use underwood::{Language, Script};
 
@@ -1957,6 +2052,423 @@ mod tests {
                 && arabic.windows(2).any(|pair| pair[0].1 > pair[1].1),
             "RTL glyph records run in visual order opposite logical source: {arabic:?}"
         );
+    }
+
+    #[test]
+    fn exact_interaction_uses_ligature_components_not_glyph_ink() {
+        let (document, styles, paint) = fixture_document("office", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("ligature interaction must prepare");
+        let scene = output.scene();
+        assert!(
+            scene.fragments().len() < 6,
+            "the fixture must contain a substituted multi-source glyph"
+        );
+
+        let hits = scan_line_hits(scene, 0);
+        let sources: Vec<_> = hits.iter().map(|hit| hit.source.clone()).collect();
+        assert_eq!(
+            sources,
+            vec![0..1, 1..2, 2..3, 3..4, 4..5, 5..6],
+            "each ligature component must retain its own hit interval: {hits:?}"
+        );
+
+        let y = scene.lines()[0].bounds().center().y;
+        let first = scene
+            .hit_test(Point::new(0.1, y))
+            .expect("the first cluster must be hittable");
+        let second = scene
+            .hit_test(Point::new(0.5, y))
+            .expect("a second point in the same cluster must be hittable");
+        assert_eq!(first.position(), second.position());
+        assert_eq!(
+            scene
+                .caret(first.position())
+                .expect("first hit caret must resolve")
+                .bounds(),
+            scene
+                .caret(second.position())
+                .expect("second hit caret must resolve")
+                .bounds(),
+            "caret geometry must come from the prepared stop, not the query x coordinate"
+        );
+    }
+
+    #[test]
+    fn interaction_map_keeps_combining_and_whitespace_source() {
+        for (text, expected) in [
+            ("e\u{301}", vec![0..1, 1..3]),
+            ("a b", vec![0..1, 1..2, 2..3]),
+        ] {
+            let (document, styles, paint) = fixture_document(text, 1.2);
+            let mut engine = fixture_engine();
+            let request = SceneRequest::new(
+                FiniteWidth::new(1_000.0).expect("test width is valid"),
+                &styles,
+                &paint,
+            );
+            let output = engine
+                .prepare(&document.snapshot(), &request)
+                .expect("cluster interaction must prepare");
+            let hits = scan_line_hits(output.scene(), 0);
+            assert_eq!(
+                hits.iter()
+                    .map(|hit| hit.source.clone())
+                    .collect::<Vec<_>>(),
+                expected,
+                "non-ink source must remain independently hittable for {text:?}: {hits:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rtl_visual_hits_retain_reversed_logical_sides() {
+        let (document, styles, paint) = fixture_document("مرحبا", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("RTL interaction must prepare");
+        let hits = scan_line_hits(output.scene(), 0);
+        assert!(
+            hits.len() >= 5,
+            "Arabic source must expose real clusters: {hits:?}"
+        );
+        assert!(
+            hits.windows(2)
+                .all(|pair| pair[0].source.start > pair[1].source.start),
+            "visual left-to-right traversal must retain descending RTL source: {hits:?}"
+        );
+        assert!(
+            hits.iter().all(|hit| {
+                hit.position == hit.source.end && hit.affinity == TextAffinity::Upstream
+            }),
+            "the visual left side of every RTL cluster must resolve to its logical end: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn soft_wrap_exposes_both_affinities_for_one_logical_boundary() {
+        let (document, styles, paint) = fixture_document("alpha beta gamma", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(72.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("wrapped interaction must prepare");
+        let first = scan_line_hits(output.scene(), 0);
+        let second = scan_line_hits(output.scene(), 1);
+        let at_end = first.last().expect("first line has a final cluster");
+        let at_start = second.first().expect("second line has an initial cluster");
+        let end_hit = output
+            .scene()
+            .hit_test(Point::new(
+                at_end.max_x,
+                output.scene().lines()[0].bounds().center().y,
+            ))
+            .expect("line-end cluster must be hittable");
+        let start_hit = output
+            .scene()
+            .hit_test(Point::new(
+                at_start.min_x,
+                output.scene().lines()[1].bounds().center().y,
+            ))
+            .expect("next-line cluster must be hittable");
+        assert_eq!(end_hit.position().byte(), start_hit.position().byte());
+        assert_eq!(end_hit.position().affinity(), TextAffinity::Upstream);
+        assert_eq!(start_hit.position().affinity(), TextAffinity::Downstream);
+        assert_ne!(
+            output
+                .scene()
+                .caret(end_hit.position())
+                .expect("upstream caret must resolve")
+                .bounds()
+                .y0,
+            output
+                .scene()
+                .caret(start_hit.position())
+                .expect("downstream caret must resolve")
+                .bounds()
+                .y0,
+            "affinity must select the correct side of the soft wrap"
+        );
+    }
+
+    #[test]
+    fn empty_editable_leaf_has_a_closest_hit_and_exact_caret() {
+        let (document, styles, paint) = fixture_document("", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("empty editable text must prepare");
+        let hit = output
+            .scene()
+            .hit_test_closest(Point::new(200.0, 80.0))
+            .expect("empty semantic text must expose a clamped position");
+        assert_eq!(hit.source().bytes(), 0..0);
+        assert_eq!(hit.position().byte(), 0);
+        assert_eq!(hit.position().affinity(), TextAffinity::Downstream);
+        let caret = output
+            .scene()
+            .caret(hit.position())
+            .expect("empty position must have caret geometry");
+        assert_eq!(caret.bounds().x0, 0.0);
+        assert!(caret.bounds().height() > 0.0);
+    }
+
+    #[test]
+    fn structurally_leafless_paragraph_is_not_editable() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"leafless-hit-001"));
+        let mut edit = document.edit();
+        edit.append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        edit.commit().expect("fixture edit is valid");
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+                .expect("fixture shaping style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = fixture_engine()
+            .prepare(&document.snapshot(), &request)
+            .expect("a leafless paragraph must still prepare");
+        assert!(
+            output
+                .scene()
+                .hit_test_closest(Point::new(0.0, 0.0))
+                .is_none(),
+            "structure without a semantic text leaf must not manufacture an editable position"
+        );
+    }
+
+    #[test]
+    fn semantic_leaf_boundary_ownership_follows_affinity() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"leaf-boundary-01"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        let first_text = edit
+            .append_text(paragraph, InlineRole::TEXT, "ab")
+            .expect("first leaf is valid");
+        let second_text = edit
+            .append_text(paragraph, InlineRole::EMPHASIS, "cd")
+            .expect("second leaf is valid");
+        edit.commit().expect("fixture edit is valid");
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+                .expect("fixture shaping style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let mut engine = fixture_engine();
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("multi-leaf interaction must prepare");
+        let scene = output.scene();
+        let y = scene.lines()[0].bounds().center().y;
+        let mut first_right = None;
+        let mut second_left = None;
+        let mut x = scene.lines()[0].bounds().x0;
+        while x <= scene.lines()[0].bounds().x1 {
+            if let Some(hit) = scene.hit_test(Point::new(x, y)) {
+                if hit.source().text() == first_text {
+                    first_right = Some((x, hit.semantic_id()));
+                } else if hit.source().text() == second_text && second_left.is_none() {
+                    second_left = Some((x, hit.semantic_id()));
+                }
+            }
+            x += 0.05;
+        }
+        let (first_x, first_semantic) = first_right.expect("first leaf must be hittable");
+        let (second_x, second_semantic) = second_left.expect("second leaf must be hittable");
+        let first_hit = scene
+            .hit_test(Point::new(first_x, y))
+            .expect("first leaf trailing side must resolve");
+        let second_hit = scene
+            .hit_test(Point::new(second_x, y))
+            .expect("second leaf leading side must resolve");
+        assert_eq!(first_hit.position().text(), first_text);
+        assert_eq!(first_hit.position().byte(), 2);
+        assert_eq!(first_hit.position().affinity(), TextAffinity::Upstream);
+        assert_eq!(second_hit.position().text(), second_text);
+        assert_eq!(second_hit.position().byte(), 0);
+        assert_eq!(second_hit.position().affinity(), TextAffinity::Downstream);
+        assert_ne!(first_semantic, second_semantic);
+        assert_eq!(first_hit.semantic_id(), first_semantic);
+        assert_eq!(second_hit.semantic_id(), second_semantic);
+    }
+
+    #[test]
+    fn caret_rejects_a_position_from_another_revision() {
+        let (mut document, styles, paint) = fixture_document("abc", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let old_output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("old interaction must prepare");
+        let old_hit = old_output
+            .scene()
+            .hit_test(Point::new(
+                0.0,
+                old_output.scene().lines()[0].bounds().center().y,
+            ))
+            .expect("old scene must be hittable");
+        let old_position = *old_hit.position();
+        let mut edit = document.edit();
+        edit.replace_text(old_position.text(), "abcd")
+            .expect("replacement is valid");
+        edit.commit().expect("replacement must publish");
+        let new_output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("new interaction must prepare");
+        assert!(
+            new_output.scene().caret(&old_position).is_none(),
+            "a snapshot position must not silently migrate to a newer revision"
+        );
+    }
+
+    #[test]
+    fn closest_hit_selects_the_nearest_line_before_its_inline_edge() {
+        let text = "a\nsupercalifragilisticexpialidocious";
+        let (document, styles, paint) = fixture_document(text, 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("explicitly broken interaction must prepare");
+        assert_eq!(output.scene().lines().len(), 2);
+        let hit = output
+            .scene()
+            .hit_test_closest(Point::new(
+                10_000.0,
+                output.scene().lines()[0].bounds().center().y,
+            ))
+            .expect("first line must clamp despite a much wider later line");
+        assert!(
+            hit.source().bytes().end <= 2,
+            "block-axis selection must happen before inline clamping: {hit:?}"
+        );
+    }
+
+    #[test]
+    fn mandatory_break_keeps_before_and_after_carets_on_distinct_lines() {
+        let (document, styles, paint) = fixture_document("a\n", 1.2);
+        let mut engine = fixture_engine();
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("mandatory-break interaction must prepare");
+        assert_eq!(output.scene().lines().len(), 2);
+        let before = output
+            .scene()
+            .hit_test_closest(Point::new(
+                10_000.0,
+                output.scene().lines()[0].bounds().center().y,
+            ))
+            .expect("the broken line must clamp before the control");
+        let after = output
+            .scene()
+            .hit_test_closest(Point::new(
+                10_000.0,
+                output.scene().lines()[1].bounds().center().y,
+            ))
+            .expect("the final empty line must expose the post-break caret");
+        assert_eq!(before.position().byte(), 1);
+        assert_eq!(after.position().byte(), 2);
+        assert_ne!(
+            output
+                .scene()
+                .caret(before.position())
+                .expect("pre-break caret must resolve")
+                .bounds()
+                .y0,
+            output
+                .scene()
+                .caret(after.position())
+                .expect("post-break caret must resolve")
+                .bounds()
+                .y0
+        );
+    }
+
+    #[derive(Clone, Debug)]
+    struct ScannedHit {
+        source: core::ops::Range<u32>,
+        position: u32,
+        affinity: TextAffinity,
+        min_x: f64,
+        max_x: f64,
+    }
+
+    fn scan_line_hits(scene: &TextScene, line_index: usize) -> Vec<ScannedHit> {
+        let bounds = scene.lines()[line_index].bounds();
+        let y = bounds.center().y;
+        let mut hits: Vec<ScannedHit> = Vec::new();
+        let mut x = bounds.x0;
+        while x <= bounds.x1 {
+            if let Some(hit) = scene.hit_test(Point::new(x, y)) {
+                let source = hit.source().bytes();
+                if let Some(existing) = hits.iter_mut().find(|existing| existing.source == source) {
+                    existing.max_x = x;
+                } else {
+                    hits.push(ScannedHit {
+                        source,
+                        position: hit.position().byte(),
+                        affinity: hit.position().affinity(),
+                        min_x: x,
+                        max_x: x,
+                    });
+                }
+            }
+            x += 0.05;
+        }
+        hits
     }
 
     #[test]

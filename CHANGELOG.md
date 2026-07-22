@@ -37,6 +37,19 @@ Underwood does not yet make compatibility promises.
 - Added `ParagraphRole::HEADING_1` and `ParagraphRole::HEADING_2`. These roles
   preserve authored heading semantics in `TextScene`; callers still resolve
   their computed visual styles explicitly through `StyleMap`.
+- Replaced fragment-ink hit testing and pointer-derived carets with exact
+  Parley-backed cluster geometry. `PreparedLine::try_new` now receives visual
+  `PreparedCluster` records whose sides carry explicit UTF-8 boundaries and
+  `TextAffinity`; paragraph-adapter implementations must provide source-complete
+  clusters in addition to visual runs. `TextHit::source` now names the exact
+  cluster, while `TextHit::position` returns a revision-bound
+  `SnapshotTextPosition` and `TextHit::semantic_id` returns its semantic leaf.
+  Migrate `scene.caret(&hit)` to
+  `scene.caret(hit.position()).expect("position belongs to scene")` and handle
+  `None` for stale or foreign positions. Use `TextScene::hit_test_closest` for
+  pointer selection that clamps through whitespace or empty editable text;
+  `TextScene::hit_test` remains exact and returns `None` outside cluster
+  geometry.
 
 ### Added
 

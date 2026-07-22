@@ -28,13 +28,40 @@ The first draft public slice is deliberately complete end to end:
   language, feature, and variation requests; the separate adapter resolves
   them without moving font matching into this crate;
 - [`TextScene`] exposes real glyph resources, paint clips, source mapping,
-  fragment-bound diagnostic hit/caret observations, and semantic observations;
-- document IDs are opaque and document-scoped, while [`SnapshotTextRange`]
-  values are dense observations valid only for their named revision.
+  exact shaped-cluster hits and carets (including whitespace, ligature
+  components, bidi affinities, and empty editable leaves), and semantic
+  observations;
+- document IDs are opaque and document-scoped, while [`SnapshotTextRange`] and
+  [`SnapshotTextPosition`] values are dense observations valid only for their
+  named revision.
 
-The API is unpublished and pre-stable. It introduces no byte-offset editing,
-durable anchors, persistence format, renderer, or compatibility promise. See
-the external `examples/headless` workspace crate for the normative call path.
+The API is unpublished and pre-stable. Snapshot positions expose validated
+UTF-8 boundaries but have no raw constructor and are not durable anchors. The
+crate still introduces no byte-offset mutation API, persistence format,
+renderer, or compatibility promise. See the external `examples/headless`
+workspace crate for the normative call path.
+
+## Exact scene interaction
+
+Paragraph adapters provide source-complete visual clusters separately from
+painted glyphs. Exact hits therefore cover glyph interiors, ligature
+components, and whitespace without pretending that ink bounds are cursor
+geometry. Closest hits also clamp to an empty editable leaf:
+
+```rust,ignore
+let hit = scene.hit_test(point).or_else(|| scene.hit_test_closest(point));
+if let Some(hit) = hit {
+    let caret = scene
+        .caret(hit.position())
+        .expect("a hit from this scene has a matching caret stop");
+    assert_eq!(caret.position(), hit.position());
+}
+```
+
+`SnapshotTextPosition` includes the exact document revision, semantic text
+leaf, UTF-8 byte boundary, and upstream/downstream affinity. Passing a position
+from another revision or scene to [`TextScene::caret`] returns `None` rather
+than silently relocating it.
 
 ## Computed inline styles
 

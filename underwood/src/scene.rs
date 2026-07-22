@@ -9,7 +9,7 @@ use core::ops::Range;
 use crate::adapter::{
     FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId, LineBreakReason, PaintRun,
     ParagraphConstraints, ParagraphFormation, ParagraphInput, PreparedParagraph, ShapingRun,
-    ShapingStyleId,
+    ShapingStyleId, TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{
@@ -54,6 +54,8 @@ impl LayoutEngine {
         let mut work = WorkReport::default();
         let mut lines = Vec::new();
         let mut fragments = Vec::new();
+        let mut clusters = Vec::new();
+        let mut carets = Vec::new();
         let mut semantics = Vec::new();
         let mut y_offset = 0.0;
 
@@ -150,6 +152,8 @@ impl LayoutEngine {
                 y_offset,
                 &mut lines,
                 &mut fragments,
+                &mut clusters,
+                &mut carets,
                 &mut semantics,
             );
             y_offset += geometry.height;
@@ -163,6 +167,8 @@ impl LayoutEngine {
             scene: TextScene {
                 lines,
                 fragments,
+                clusters,
+                carets,
                 paint: request.paint.clone(),
                 semantics,
             },
@@ -372,6 +378,50 @@ impl<'a> Projection<'a> {
             ));
         }
         Ok(ranges)
+    }
+
+    fn semantic_for_text(&self, text: TextId) -> Result<SemanticId, SceneError> {
+        self.spans
+            .iter()
+            .find(|span| span.text == text)
+            .map(|span| span.semantic)
+            .ok_or_else(|| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, self.paragraph)
+            })
+    }
+
+    fn position_at(
+        &self,
+        paragraph_offset: u32,
+        affinity: TextAffinity,
+    ) -> Result<LocalPosition, SceneError> {
+        let span = match affinity {
+            TextAffinity::Upstream => self.spans.iter().rev().find(|span| {
+                (span.paragraph.start < paragraph_offset && paragraph_offset <= span.paragraph.end)
+                    || (span.paragraph.is_empty() && span.paragraph.end == paragraph_offset)
+            }),
+            TextAffinity::Downstream => self.spans.iter().find(|span| {
+                (span.paragraph.start <= paragraph_offset && paragraph_offset < span.paragraph.end)
+                    || (span.paragraph.is_empty() && span.paragraph.start == paragraph_offset)
+            }),
+        }
+        .or_else(|| {
+            self.spans.iter().find(|span| {
+                span.paragraph.start <= paragraph_offset && paragraph_offset <= span.paragraph.end
+            })
+        })
+        .ok_or_else(|| {
+            SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph_offset..paragraph_offset,
+            )
+        })?;
+        Ok(LocalPosition {
+            text: span.text,
+            byte: paragraph_offset - span.paragraph.start,
+            affinity,
+        })
     }
 
     fn empty_line_height_key(&self) -> u64 {
@@ -625,6 +675,8 @@ struct CachedGeometry {
     height: f64,
     lines: Vec<CachedLine>,
     fragments: Vec<CachedFragment>,
+    clusters: Vec<CachedCluster>,
+    carets: Vec<CachedCaret>,
     semantics: Vec<CachedSemantic>,
 }
 
@@ -664,6 +716,22 @@ struct CachedGlyph {
 }
 
 #[derive(Clone, Debug)]
+struct CachedCluster {
+    source: LocalRange,
+    semantic_id: SemanticId,
+    bounds: Rect,
+    left: LocalPosition,
+    right: LocalPosition,
+    bidi_level: u8,
+}
+
+#[derive(Clone, Debug)]
+struct CachedCaret {
+    position: LocalPosition,
+    bounds: Rect,
+}
+
+#[derive(Clone, Debug)]
 struct CachedSemantic {
     semantic_id: SemanticId,
     paragraph_role: Option<ParagraphRole>,
@@ -678,6 +746,13 @@ struct LocalRange {
     bytes: Range<u32>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocalPosition {
+    text: TextId,
+    byte: u32,
+    affinity: TextAffinity,
+}
+
 fn build_geometry(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
@@ -687,9 +762,68 @@ fn build_geometry(
     let mut line_top = 0.0;
     let mut lines = Vec::new();
     let mut fragments = Vec::new();
+    let mut clusters = Vec::new();
+    let mut carets = Vec::new();
 
     for line in prepared.lines() {
         let baseline = line_top + line.baseline();
+        let mut cluster_x = 0.0_f64;
+        for cluster in line.clusters() {
+            let paragraph_source = cluster.source();
+            let source = projection.local_range(paragraph_source.clone())?;
+            let semantic_id = projection.semantic_for_text(source.text)?;
+            let left = local_cluster_side(&source, &paragraph_source, cluster.left())?;
+            let right = local_cluster_side(&source, &paragraph_source, cluster.right())?;
+            let next_x = cluster_x + cluster.advance();
+            let bounds = Rect::new(cluster_x, line_top, next_x, line_top + line.height());
+            clusters.push(CachedCluster {
+                source,
+                semantic_id,
+                bounds,
+                left,
+                right,
+                bidi_level: cluster.bidi_level(),
+            });
+            carets.push(CachedCaret {
+                position: left,
+                bounds: Rect::new(
+                    cluster_x,
+                    line_top,
+                    cluster_x + 1.0,
+                    line_top + line.height(),
+                ),
+            });
+            carets.push(CachedCaret {
+                position: right,
+                bounds: Rect::new(next_x, line_top, next_x + 1.0, line_top + line.height()),
+            });
+            cluster_x = next_x;
+        }
+        if line.clusters().is_empty() && !projection.spans.is_empty() {
+            let source = line.source();
+            let affinity = if source.start == 0 {
+                TextAffinity::Downstream
+            } else {
+                TextAffinity::Upstream
+            };
+            let position = projection.position_at(source.start, affinity)?;
+            let local_source = LocalRange {
+                text: position.text,
+                bytes: position.byte..position.byte,
+            };
+            clusters.push(CachedCluster {
+                semantic_id: projection.semantic_for_text(position.text)?,
+                source: local_source,
+                bounds: Rect::new(0.0, line_top, 0.0, line_top + line.height()),
+                left: position,
+                right: position,
+                bidi_level: 0,
+            });
+            carets.push(CachedCaret {
+                position,
+                bounds: Rect::new(0.0, line_top, 1.0, line_top + line.height()),
+            });
+        }
         let mut x = 0.0_f64;
         let mut right = line.advance();
         for run in line.runs() {
@@ -743,6 +877,26 @@ fn build_geometry(
         line_top += line.height();
     }
 
+    if prepared.lines().is_empty() && projection.text.is_empty() && !projection.spans.is_empty() {
+        let position = projection.position_at(0, TextAffinity::Downstream)?;
+        let source = LocalRange {
+            text: position.text,
+            bytes: position.byte..position.byte,
+        };
+        clusters.push(CachedCluster {
+            semantic_id: projection.semantic_for_text(position.text)?,
+            source,
+            bounds: Rect::new(0.0, 0.0, 0.0, empty_line_height),
+            left: position,
+            right: position,
+            bidi_level: 0,
+        });
+        carets.push(CachedCaret {
+            position,
+            bounds: Rect::new(0.0, 0.0, 1.0, empty_line_height),
+        });
+    }
+
     let mut semantics = Vec::new();
     if !projection.spans.is_empty()
         && let Some(first_line) = lines.first()
@@ -793,7 +947,35 @@ fn build_geometry(
         },
         lines,
         fragments,
+        clusters,
+        carets,
         semantics,
+    })
+}
+
+fn local_cluster_side(
+    source: &LocalRange,
+    paragraph_source: &Range<u32>,
+    side: crate::adapter::PreparedClusterSide,
+) -> Result<LocalPosition, SceneError> {
+    let relative = side
+        .offset()
+        .checked_sub(paragraph_source.start)
+        .filter(|offset| *offset <= paragraph_source.end - paragraph_source.start)
+        .ok_or_else(|| {
+            SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                ParagraphId {
+                    document: source.text.document,
+                    index: source.text.paragraph,
+                },
+                paragraph_source.clone(),
+            )
+        })?;
+    Ok(LocalPosition {
+        text: source.text,
+        byte: source.bytes.start + relative,
+        affinity: side.affinity(),
     })
 }
 
@@ -817,6 +999,8 @@ fn materialize_geometry(
     y_offset: f64,
     lines: &mut Vec<SceneLine>,
     fragments: &mut Vec<SceneFragment>,
+    clusters: &mut Vec<SceneCluster>,
+    carets: &mut Vec<SceneCaretStop>,
     semantics: &mut Vec<SemanticFragment>,
 ) {
     let translate = Vec2::new(0.0, y_offset);
@@ -850,7 +1034,6 @@ fn materialize_geometry(
             paint: fragment.paint,
             transform: fragment.transform,
             source: Some(materialize_range(&fragment.source, revision)),
-            bounds: fragment.bounds + translate,
             clip: fragment.clip + translate,
             font: fragment.font.clone(),
             font_size: fragment.font_size,
@@ -859,6 +1042,18 @@ fn materialize_geometry(
             bidi_level: fragment.bidi_level,
             script: fragment.script,
         }
+    }));
+    clusters.extend(geometry.clusters.iter().map(|cluster| SceneCluster {
+        source: materialize_range(&cluster.source, revision),
+        semantic_id: cluster.semantic_id,
+        bounds: cluster.bounds + translate,
+        left: materialize_position(cluster.left, revision),
+        right: materialize_position(cluster.right, revision),
+        bidi_level: cluster.bidi_level,
+    }));
+    carets.extend(geometry.carets.iter().map(|caret| SceneCaretStop {
+        position: materialize_position(caret.position, revision),
+        bounds: caret.bounds + translate,
     }));
     semantics.extend(geometry.semantics.iter().map(|semantic| {
         SemanticFragment {
@@ -879,6 +1074,18 @@ fn materialize_range(range: &LocalRange, revision: DocumentRevision) -> Snapshot
         revision,
         text: range.text,
         bytes: range.bytes.clone(),
+    }
+}
+
+fn materialize_position(
+    position: LocalPosition,
+    revision: DocumentRevision,
+) -> SnapshotTextPosition {
+    SnapshotTextPosition {
+        revision,
+        text: position.text,
+        byte: position.byte,
+        affinity: position.affinity,
     }
 }
 
@@ -1004,6 +1211,8 @@ impl WorkReport {
 pub struct TextScene {
     lines: Vec<SceneLine>,
     fragments: Vec<SceneFragment>,
+    clusters: Vec<SceneCluster>,
+    carets: Vec<SceneCaretStop>,
     paint: PaintTable,
     semantics: Vec<SemanticFragment>,
 }
@@ -1032,34 +1241,101 @@ impl TextScene {
         self.semantics.iter()
     }
 
-    /// Returns the source under a scene-space point.
+    /// Returns an exact shaped-cluster hit under a scene-space point.
+    ///
+    /// Unlike selection hit testing, this does not clamp points outside cluster
+    /// geometry to the nearest line edge.
     #[must_use]
     pub fn hit_test(&self, point: Point) -> Option<TextHit> {
-        self.fragments
+        self.clusters
             .iter()
-            .find(|fragment| fragment.bounds.contains(point))
-            .and_then(|fragment| {
-                fragment.source.clone().map(|source| TextHit {
-                    source,
-                    point,
-                    line_height: fragment.bounds.height().max(1.0),
-                })
-            })
+            .find(|cluster| cluster.bounds.contains(point))
+            .map(|cluster| cluster.hit(point))
     }
 
-    /// Produces caret geometry for a hit belonging to this scene revision.
+    /// Returns the closest shaped-cluster side for pointer selection.
+    ///
+    /// This includes whitespace and empty editable text which may have no
+    /// painted glyph fragment.
     #[must_use]
-    pub fn caret(&self, hit: &TextHit) -> SceneCaret {
-        SceneCaret {
-            source: hit.source.clone(),
-            bounds: Rect::new(
-                hit.point.x,
-                hit.point.y - hit.line_height,
-                hit.point.x + 1.0,
-                hit.point.y,
-            ),
+    pub fn hit_test_closest(&self, point: Point) -> Option<TextHit> {
+        let mut closest: Option<(&SceneCluster, f64, f64)> = None;
+        for cluster in &self.clusters {
+            let (block_distance, inline_distance) = distance_to_rect_axes(point, cluster.bounds);
+            if closest.is_none_or(|(_, current_block, current_inline)| {
+                block_distance < current_block
+                    || (block_distance == current_block && inline_distance < current_inline)
+            }) {
+                closest = Some((cluster, block_distance, inline_distance));
+            }
+        }
+        closest.map(|(cluster, _, _)| cluster.hit(point))
+    }
+
+    /// Resolves exact scene-space caret geometry for a snapshot position.
+    ///
+    /// Returns `None` for a stale revision, foreign text leaf, invalid
+    /// affinity, or a valid snapshot position not represented by this scene.
+    #[must_use]
+    pub fn caret(&self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
+        self.carets
+            .iter()
+            .find(|caret| caret.position == *position)
+            .map(|caret| SceneCaret {
+                position: caret.position,
+                bounds: caret.bounds,
+            })
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SceneCluster {
+    source: SnapshotTextRange,
+    semantic_id: SemanticId,
+    bounds: Rect,
+    left: SnapshotTextPosition,
+    right: SnapshotTextPosition,
+    bidi_level: u8,
+}
+
+impl SceneCluster {
+    fn hit(&self, point: Point) -> TextHit {
+        let midpoint = self.bounds.x0 + self.bounds.width() * 0.5;
+        TextHit {
+            source: self.source.clone(),
+            position: if point.x <= midpoint {
+                self.left
+            } else {
+                self.right
+            },
+            semantic_id: self.semantic_id,
+            bidi_level: self.bidi_level,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SceneCaretStop {
+    position: SnapshotTextPosition,
+    bounds: Rect,
+}
+
+fn distance_to_rect_axes(point: Point, bounds: Rect) -> (f64, f64) {
+    let inline = if point.x < bounds.x0 {
+        bounds.x0 - point.x
+    } else if point.x > bounds.x1 {
+        point.x - bounds.x1
+    } else {
+        0.0
+    };
+    let block = if point.y < bounds.y0 {
+        bounds.y0 - point.y
+    } else if point.y > bounds.y1 {
+        point.y - bounds.y1
+    } else {
+        0.0
+    };
+    (block, inline)
 }
 
 /// One visual line.
@@ -1125,7 +1401,6 @@ pub struct SceneFragment {
     paint: PaintSlot,
     transform: Affine,
     source: Option<SnapshotTextRange>,
-    bounds: Rect,
     clip: Rect,
     font: FontData,
     font_size: f32,
@@ -1290,42 +1565,90 @@ impl SemanticFragment {
 #[derive(Clone, Debug)]
 pub struct TextHit {
     source: SnapshotTextRange,
-    point: Point,
-    line_height: f64,
+    position: SnapshotTextPosition,
+    semantic_id: SemanticId,
+    bidi_level: u8,
 }
 
 impl TextHit {
-    /// Returns the snapshot-local source under the point.
+    /// Returns the exact snapshot-local cluster under the point.
     #[must_use]
     pub const fn source(&self) -> &SnapshotTextRange {
         &self.source
     }
 
-    /// Returns the queried scene-space point.
+    /// Returns the collapsed snapshot position selected by the cluster side.
     #[must_use]
-    pub const fn point(&self) -> Point {
-        self.point
+    pub const fn position(&self) -> &SnapshotTextPosition {
+        &self.position
+    }
+
+    /// Returns the semantic text-node identity under the point.
+    #[must_use]
+    pub const fn semantic_id(&self) -> SemanticId {
+        self.semantic_id
+    }
+
+    /// Returns the resolved bidi level of the hit cluster.
+    #[must_use]
+    pub const fn bidi_level(&self) -> u8 {
+        self.bidi_level
     }
 }
 
-/// Scene-space caret derived from one text hit.
-#[derive(Clone, Debug)]
+/// Exact scene-space caret for one snapshot position.
+#[derive(Clone, Copy, Debug)]
 pub struct SceneCaret {
-    source: SnapshotTextRange,
+    position: SnapshotTextPosition,
     bounds: Rect,
 }
 
 impl SceneCaret {
-    /// Returns the snapshot-local caret source.
+    /// Returns the revision-bound position represented by the caret.
     #[must_use]
-    pub const fn source(&self) -> &SnapshotTextRange {
-        &self.source
+    pub const fn position(&self) -> &SnapshotTextPosition {
+        &self.position
     }
 
     /// Returns scene-space caret bounds.
     #[must_use]
     pub const fn bounds(&self) -> Rect {
         self.bounds
+    }
+}
+
+/// Collapsed text position valid only for one immutable snapshot revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SnapshotTextPosition {
+    revision: DocumentRevision,
+    text: TextId,
+    byte: u32,
+    affinity: TextAffinity,
+}
+
+impl SnapshotTextPosition {
+    /// Returns the exact snapshot revision.
+    #[must_use]
+    pub const fn revision(self) -> DocumentRevision {
+        self.revision
+    }
+
+    /// Returns the semantic text leaf containing the position.
+    #[must_use]
+    pub const fn text(self) -> TextId {
+        self.text
+    }
+
+    /// Returns the UTF-8 byte boundary within the text leaf.
+    #[must_use]
+    pub const fn byte(self) -> u32 {
+        self.byte
+    }
+
+    /// Returns which logical side owns the position.
+    #[must_use]
+    pub const fn affinity(self) -> TextAffinity {
+        self.affinity
     }
 }
 
@@ -1365,9 +1688,11 @@ mod tests {
 
     use super::{LayoutEngine, append_inline_flow_run, append_shaping_run};
     use crate::adapter::{
-        FontSynthesis, FormationWork, GlyphPaintCoverage, GlyphPaintSegment, LineBreakReason,
-        ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput,
-        PreparationError, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
+        ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
+        GlyphPaintSegment, LineBreakReason, ParagraphConstraints, ParagraphFormation,
+        ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCluster,
+        PreparedClusterSide, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
+        TextAffinity,
     };
     use crate::{
         Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontData, FontFamily,
@@ -1445,6 +1770,15 @@ mod tests {
                 line_height,
                 f64::from(font_size) * 0.75,
                 f64::from(font_size) * 0.25,
+                [PreparedCluster::try_new(
+                    0..text_len,
+                    10.0,
+                    0,
+                    ClusterBoundary::None,
+                    ClusterWhitespace::None,
+                    PreparedClusterSide::new(0, TextAffinity::Downstream),
+                    PreparedClusterSide::new(text_len, TextAffinity::Upstream),
+                )?],
                 [run],
             )?;
             let paragraph = PreparedParagraph::try_from_lines(input.paragraph(), text_len, [line])?;

@@ -245,7 +245,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .scene()
         .hit_test(hit_point)
         .expect("the first fragment must be hittable");
-    let caret = first_scene.scene().caret(&hit);
+    let caret = first_scene
+        .scene()
+        .caret(hit.position())
+        .expect("the hit position must resolve in its source scene");
     assert!(
         caret.bounds().height() > 0.0,
         "a scene hit must produce visible caret geometry"
