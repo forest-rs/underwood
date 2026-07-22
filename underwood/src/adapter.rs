@@ -11,15 +11,18 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::ops::Range;
 
-use crate::{FontData, FontVariation, PaintSlot, ParagraphId, Rect, ShapingStyle, Vec2};
+use crate::{
+    FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId, Rect, ShapingStyle, Vec2,
+};
 
-/// Prepares analyzed, itemized, and shaped data for one paragraph.
-pub trait ParagraphPreparation {
-    /// Produces validated, owned prepared data for `input`.
-    fn prepare(
+/// Forms portable lines for one paragraph through a retained text backend.
+pub trait ParagraphFormation {
+    /// Produces validated, owned formed lines for `input` and `constraints`.
+    fn form(
         &mut self,
         input: ParagraphInput<'_>,
-    ) -> Result<ParagraphPreparationOutput, PreparationError>;
+        constraints: ParagraphConstraints,
+    ) -> Result<ParagraphFormationOutput, PreparationError>;
 }
 
 /// Borrowed projection of one semantic paragraph.
@@ -29,6 +32,8 @@ pub struct ParagraphInput<'a> {
     text: &'a str,
     shaping_styles: &'a [ShapingStyle],
     shaping_runs: &'a [ShapingRun],
+    inline_flow_styles: &'a [InlineFlowStyle],
+    inline_flow_runs: &'a [InlineFlowRun],
     paint_runs: &'a [PaintRun],
 }
 
@@ -38,6 +43,8 @@ impl<'a> ParagraphInput<'a> {
         text: &'a str,
         shaping_styles: &'a [ShapingStyle],
         shaping_runs: &'a [ShapingRun],
+        inline_flow_styles: &'a [InlineFlowStyle],
+        inline_flow_runs: &'a [InlineFlowRun],
         paint_runs: &'a [PaintRun],
     ) -> Self {
         Self {
@@ -45,6 +52,8 @@ impl<'a> ParagraphInput<'a> {
             text,
             shaping_styles,
             shaping_runs,
+            inline_flow_styles,
+            inline_flow_runs,
             paint_runs,
         }
     }
@@ -73,10 +82,43 @@ impl<'a> ParagraphInput<'a> {
         self.shaping_runs
     }
 
+    /// Returns the paragraph-local table of unique inline-flow values.
+    #[must_use]
+    pub const fn inline_flow_styles(&self) -> &[InlineFlowStyle] {
+        self.inline_flow_styles
+    }
+
+    /// Returns source-ordered inline-flow metadata covering the paragraph.
+    #[must_use]
+    pub const fn inline_flow_runs(&self) -> &[InlineFlowRun] {
+        self.inline_flow_runs
+    }
+
     /// Returns source-ordered paint metadata covering the paragraph.
     #[must_use]
     pub const fn paint_runs(&self) -> &[PaintRun] {
         self.paint_runs
+    }
+}
+
+/// Validated paragraph formation constraints.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParagraphConstraints {
+    max_inline_advance: f64,
+}
+
+impl ParagraphConstraints {
+    pub(crate) fn try_new(max_inline_advance: f64) -> Result<Self, PreparationError> {
+        if !max_inline_advance.is_finite() || max_inline_advance <= 0.0 {
+            return Err(PreparationError::invalid_output());
+        }
+        Ok(Self { max_inline_advance })
+    }
+
+    /// Returns the finite positive maximum inline advance.
+    #[must_use]
+    pub const fn max_inline_advance(self) -> f64 {
+        self.max_inline_advance
     }
 }
 
@@ -121,6 +163,47 @@ impl ShapingRun {
     }
 }
 
+/// Dense paragraph-local identity for one entry in the inline-flow table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InlineFlowStyleId(u16);
+
+impl InlineFlowStyleId {
+    pub(crate) const fn new(index: u16) -> Self {
+        Self(index)
+    }
+
+    /// Returns the paragraph-local table index.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Complete inline-flow values over a paragraph-local UTF-8 byte range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlineFlowRun {
+    bytes: Range<u32>,
+    style: InlineFlowStyleId,
+}
+
+impl InlineFlowRun {
+    pub(crate) const fn new(bytes: Range<u32>, style: InlineFlowStyleId) -> Self {
+        Self { bytes, style }
+    }
+
+    /// Returns the paragraph-local UTF-8 byte range.
+    #[must_use]
+    pub fn bytes(&self) -> Range<u32> {
+        self.bytes.clone()
+    }
+
+    /// Returns the paragraph-local inline-flow-style identity for this range.
+    #[must_use]
+    pub const fn style(&self) -> InlineFlowStyleId {
+        self.style
+    }
+}
+
 /// Paint slot over a paragraph-local UTF-8 byte range.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaintRun {
@@ -148,15 +231,15 @@ impl PaintRun {
 
 /// Owned paragraph data and exact work performed to produce it.
 #[derive(Clone, Debug)]
-pub struct ParagraphPreparationOutput {
+pub struct ParagraphFormationOutput {
     paragraph: PreparedParagraph,
-    work: PreparationWork,
+    work: FormationWork,
 }
 
-impl ParagraphPreparationOutput {
+impl ParagraphFormationOutput {
     /// Pairs validated prepared data with actual backend work.
     #[must_use]
-    pub const fn new(paragraph: PreparedParagraph, work: PreparationWork) -> Self {
+    pub const fn new(paragraph: PreparedParagraph, work: FormationWork) -> Self {
         Self { paragraph, work }
     }
 
@@ -168,26 +251,24 @@ impl ParagraphPreparationOutput {
 
     /// Returns the work performed by the adapter.
     #[must_use]
-    pub const fn work(&self) -> PreparationWork {
+    pub const fn work(&self) -> FormationWork {
         self.work
-    }
-
-    pub(crate) fn into_paragraph(self) -> PreparedParagraph {
-        self.paragraph
     }
 }
 
 /// Actual adapter work performed during one preparation call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct PreparationWork {
+pub struct FormationWork {
     analyzed: bool,
     itemized: bool,
     selected_clusters: u32,
     shaped_runs: u32,
     shaped_glyphs: u32,
+    formed_lines: u32,
+    break_reshapes: u32,
 }
 
-impl PreparationWork {
+impl FormationWork {
     /// Creates a work record from backend observations.
     #[must_use]
     pub const fn new(
@@ -196,6 +277,8 @@ impl PreparationWork {
         selected_clusters: u32,
         shaped_runs: u32,
         shaped_glyphs: u32,
+        formed_lines: u32,
+        break_reshapes: u32,
     ) -> Self {
         Self {
             analyzed,
@@ -203,6 +286,8 @@ impl PreparationWork {
             selected_clusters,
             shaped_runs,
             shaped_glyphs,
+            formed_lines,
+            break_reshapes,
         }
     }
 
@@ -234,6 +319,18 @@ impl PreparationWork {
     #[must_use]
     pub const fn shaped_glyphs(self) -> u32 {
         self.shaped_glyphs
+    }
+
+    /// Returns the number of lines formed for new constraints or flow values.
+    #[must_use]
+    pub const fn formed_lines(self) -> u32 {
+        self.formed_lines
+    }
+
+    /// Returns the number of committed boundaries that required bounded reshaping.
+    #[must_use]
+    pub const fn break_reshapes(self) -> u32 {
+        self.break_reshapes
     }
 }
 
@@ -317,28 +414,158 @@ impl FontSynthesis {
     }
 }
 
-/// Validated owned preparation for one paragraph.
+/// Why a formed line ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineBreakReason {
+    /// The paragraph ended without another break.
+    End,
+    /// The line ended at a legal soft-wrap opportunity.
+    Regular,
+    /// The line ended at an explicit mandatory break.
+    Mandatory,
+}
+
+/// One source-complete line with backend-derived metrics and visual runs.
+#[derive(Clone, Debug)]
+pub struct PreparedLine {
+    source: Range<u32>,
+    break_reason: LineBreakReason,
+    advance: f64,
+    baseline: f64,
+    height: f64,
+    content_ascent: f64,
+    content_descent: f64,
+    runs: Vec<PreparedRun>,
+}
+
+impl PreparedLine {
+    /// Validates and owns one formed line.
+    pub fn try_new(
+        source: Range<u32>,
+        break_reason: LineBreakReason,
+        advance: f64,
+        baseline: f64,
+        height: f64,
+        content_ascent: f64,
+        content_descent: f64,
+        runs: impl IntoIterator<Item = PreparedRun>,
+    ) -> Result<Self, PreparationError> {
+        if source.start > source.end
+            || !advance.is_finite()
+            || advance < 0.0
+            || !baseline.is_finite()
+            || baseline < 0.0
+            || !height.is_finite()
+            || height <= 0.0
+            || baseline > height
+            || !content_ascent.is_finite()
+            || content_ascent < 0.0
+            || !content_descent.is_finite()
+            || content_descent < 0.0
+        {
+            return Err(PreparationError::invalid_output());
+        }
+        let runs: Vec<_> = runs.into_iter().collect();
+        let mut coverage: Vec<_> = runs.iter().map(|run| run.source.clone()).collect();
+        coverage.sort_unstable_by_key(|range| range.start);
+        let source_is_valid = if source.is_empty() {
+            break_reason == LineBreakReason::End && advance == 0.0 && runs.is_empty()
+        } else {
+            let mut covered = source.start;
+            for range in &coverage {
+                if range.start != covered || range.end > source.end {
+                    return Err(PreparationError::invalid_output());
+                }
+                covered = range.end;
+            }
+            covered == source.end
+        };
+        if !source_is_valid {
+            return Err(PreparationError::invalid_output());
+        }
+        Ok(Self {
+            source,
+            break_reason,
+            advance,
+            baseline,
+            height,
+            content_ascent,
+            content_descent,
+            runs,
+        })
+    }
+
+    /// Returns the paragraph-local source range, including a terminating control.
+    #[must_use]
+    pub fn source(&self) -> Range<u32> {
+        self.source.clone()
+    }
+
+    /// Returns why the line ended.
+    #[must_use]
+    pub const fn break_reason(&self) -> LineBreakReason {
+        self.break_reason
+    }
+
+    /// Returns the full inline advance, including trailing whitespace.
+    #[must_use]
+    pub const fn advance(&self) -> f64 {
+        self.advance
+    }
+
+    /// Returns the baseline offset from the top of the line box.
+    #[must_use]
+    pub const fn baseline(&self) -> f64 {
+        self.baseline
+    }
+
+    /// Returns the block-axis line-box extent.
+    #[must_use]
+    pub const fn height(&self) -> f64 {
+        self.height
+    }
+
+    /// Returns the maximum font ascent contributing to the line.
+    #[must_use]
+    pub const fn content_ascent(&self) -> f64 {
+        self.content_ascent
+    }
+
+    /// Returns the maximum font descent contributing to the line.
+    #[must_use]
+    pub const fn content_descent(&self) -> f64 {
+        self.content_descent
+    }
+
+    /// Returns shaped runs in line-local visual order.
+    #[must_use]
+    pub fn runs(&self) -> &[PreparedRun] {
+        &self.runs
+    }
+}
+
+/// Validated owned formed lines for one paragraph.
 #[derive(Clone, Debug)]
 pub struct PreparedParagraph {
     paragraph: ParagraphId,
     text_len: u32,
-    runs: Vec<PreparedRun>,
+    lines: Vec<PreparedLine>,
 }
 
 impl PreparedParagraph {
-    /// Validates and collects source-ordered shaped runs.
-    pub fn try_from_runs(
+    /// Validates and collects source-ordered formed lines.
+    pub fn try_from_lines(
         paragraph: ParagraphId,
         text_len: u32,
-        runs: impl IntoIterator<Item = PreparedRun>,
+        lines: impl IntoIterator<Item = PreparedLine>,
     ) -> Result<Self, PreparationError> {
-        let runs: Vec<_> = runs.into_iter().collect();
+        let lines: Vec<_> = lines.into_iter().collect();
         let mut previous_end = 0;
-        for run in &runs {
-            if run.source.start != previous_end || run.source.end > text_len {
+        for line in &lines {
+            if line.source.start != previous_end || line.source.end > text_len {
                 return Err(PreparationError::invalid_output());
             }
-            previous_end = run.source.end;
+            previous_end = line.source.end;
         }
         if previous_end != text_len {
             return Err(PreparationError::invalid_output());
@@ -346,7 +573,7 @@ impl PreparedParagraph {
         Ok(Self {
             paragraph,
             text_len,
-            runs,
+            lines,
         })
     }
 
@@ -362,10 +589,10 @@ impl PreparedParagraph {
         self.text_len
     }
 
-    /// Returns the source-ordered prepared runs.
+    /// Returns the source-ordered formed lines.
     #[must_use]
-    pub fn runs(&self) -> &[PreparedRun] {
-        &self.runs
+    pub fn lines(&self) -> &[PreparedLine] {
+        &self.lines
     }
 }
 
@@ -379,6 +606,7 @@ pub struct PreparedRun {
     font_size: f32,
     synthesis: FontSynthesis,
     normalized_coords: Vec<i16>,
+    unrendered_source: Vec<Range<u32>>,
     glyphs: Vec<PreparedGlyph>,
 }
 
@@ -395,15 +623,27 @@ impl PreparedRun {
         font_size: f32,
         synthesis: FontSynthesis,
         normalized_coords: impl IntoIterator<Item = i16>,
+        unrendered_source: impl IntoIterator<Item = Range<u32>>,
         glyphs: impl IntoIterator<Item = PreparedGlyph>,
     ) -> Result<Self, PreparationError> {
         if source.start >= source.end || !font_size.is_finite() || font_size <= 0.0 {
             return Err(PreparationError::invalid_output());
         }
+        let unrendered_source: Vec<_> = unrendered_source.into_iter().collect();
         let glyphs: Vec<_> = glyphs.into_iter().collect();
-        if glyphs
-            .iter()
-            .any(|glyph| glyph.source.start < source.start || glyph.source.end > source.end)
+        if unrendered_source.iter().any(|range| {
+            range.start < source.start
+                || range.start >= range.end
+                || range.end > source.end
+                || glyphs
+                    .iter()
+                    .any(|glyph| glyph.source.start < range.end && glyph.source.end > range.start)
+        }) || unrendered_source
+            .windows(2)
+            .any(|pair| pair[0].end >= pair[1].start)
+            || glyphs
+                .iter()
+                .any(|glyph| glyph.source.start < source.start || glyph.source.end > source.end)
         {
             return Err(PreparationError::invalid_output());
         }
@@ -415,6 +655,7 @@ impl PreparedRun {
             font_size,
             synthesis,
             normalized_coords: normalized_coords.into_iter().collect(),
+            unrendered_source,
             glyphs,
         })
     }
@@ -461,9 +702,19 @@ impl PreparedRun {
         &self.normalized_coords
     }
 
+    /// Returns source-ordered ranges which intentionally produce no glyphs.
+    ///
+    /// Paragraph adapters use this for controls and format characters which
+    /// participate in text semantics but not font shaping.
+    #[must_use]
+    pub fn unrendered_source(&self) -> &[Range<u32>] {
+        &self.unrendered_source
+    }
+
     /// Returns glyphs in backend-provided visual order.
     ///
-    /// This is empty for a control-only shaped run.
+    /// This is empty for a control-only shaped run, whose source remains
+    /// explicit in [`Self::unrendered_source`].
     #[must_use]
     pub fn glyphs(&self) -> &[PreparedGlyph] {
         &self.glyphs
@@ -710,8 +961,8 @@ mod tests {
     use peniko::Blob;
 
     use super::{
-        FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, PreparationErrorKind, PreparedGlyph,
-        PreparedParagraph, PreparedRun,
+        FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment, LineBreakReason,
+        PreparationErrorKind, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
     };
     use crate::{DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, Tag, Vec2};
 
@@ -750,20 +1001,50 @@ mod tests {
     }
 
     #[test]
-    fn prepared_paragraph_rejects_a_gap_between_runs() {
+    fn prepared_paragraph_rejects_a_gap_between_lines() {
         let paragraph = ParagraphId {
             document: DocumentId::from_bytes(*b"adapter-test-001"),
             index: 0,
         };
-        let first = run(0..1);
-        let second = run(2..3);
-        let error = PreparedParagraph::try_from_runs(paragraph, 3, [first, second])
+        let first = line(0..1);
+        let second = line(2..3);
+        let error = PreparedParagraph::try_from_lines(paragraph, 3, [first, second])
             .expect_err("source gaps must be rejected at the adapter boundary");
         assert_eq!(
             error.kind(),
             PreparationErrorKind::InvalidOutput,
             "a source gap is invalid adapter output"
         );
+    }
+
+    #[test]
+    fn prepared_line_rejects_missing_run_source() {
+        let error = PreparedLine::try_new(
+            0..2,
+            LineBreakReason::End,
+            1.0,
+            0.8,
+            1.0,
+            0.8,
+            0.2,
+            [run(0..1)],
+        )
+        .expect_err("visual runs must cover the complete non-empty line source");
+        assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
+    }
+
+    fn line(source: core::ops::Range<u32>) -> PreparedLine {
+        PreparedLine::try_new(
+            source.clone(),
+            LineBreakReason::End,
+            1.0,
+            0.8,
+            1.0,
+            0.8,
+            0.2,
+            [run(source)],
+        )
+        .expect("test line is valid")
     }
 
     #[test]
@@ -776,6 +1057,7 @@ mod tests {
             16.,
             FontSynthesis::default(),
             [],
+            core::iter::once(0..1),
             [],
         )
         .expect("control-only source does not require a fabricated glyph");
@@ -803,6 +1085,7 @@ mod tests {
             FontData::new(Blob::from(vec![0_u8]), 0),
             16.,
             FontSynthesis::default(),
+            [],
             [],
             [glyph],
         )

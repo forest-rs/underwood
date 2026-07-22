@@ -15,7 +15,7 @@ use parley_core::{
     ShapedText, Shaper, shape::ClusterData,
 };
 
-const PARLEY_REVISION: &str = "6c81e1dd9b67793cdd959c65cc650c96a1262fb7";
+const PARLEY_REVISION: &str = "181664b28144cb59671a7f1b736757c6ebe270f2";
 const CORPUS: &str = "office affinity — مرحبا بالعالم";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,7 +90,6 @@ struct ShapeConfig<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CurrentGap {
-    BoundedBreakReshaping,
     VerticalShaping,
     CoreInlineObjects,
     TextDataIdentity,
@@ -98,7 +97,6 @@ enum CurrentGap {
 
 fn current_gaps() -> &'static [CurrentGap] {
     &[
-        CurrentGap::BoundedBreakReshaping,
         CurrentGap::VerticalShaping,
         CurrentGap::CoreInlineObjects,
         CurrentGap::TextDataIdentity,
@@ -544,14 +542,69 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use fontique::{Blob, Collection, CollectionOptions, SourceCache};
     use parlance::Tag;
+    use parley::{
+        BreakReason, FontContext, FontFamily, FontFamilyName, LayoutContext, LineHeight,
+        StyleProperty,
+    };
 
     use super::{
         CORPUS, CurrentGap, FontChoice, FontFeature, FontVariation, config, current_gaps,
-        default_slots, load_fonts, lower_paint, prepare, slots_with_paint_boundaries,
+        default_slots, find_font, load_fonts, lower_paint, prepare, slots_with_paint_boundaries,
     };
 
     const FEATURE_CORPUS: &str = "AV";
+
+    #[derive(Clone, Debug)]
+    struct OracleLine {
+        source: std::ops::Range<usize>,
+        reason: BreakReason,
+        line_height: f32,
+        baseline: f32,
+        advance: f32,
+        rtl_runs: Vec<bool>,
+    }
+
+    fn oracle_lines(text: &str, max_advance: f32, line_height: f32) -> Vec<OracleLine> {
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        for file_name in ["RobotoFlex-VariableFont.ttf", "NotoKufiArabic-Regular.otf"] {
+            let path = find_font(file_name).expect("pinned Parley oracle font must exist");
+            let bytes = std::fs::read(path).expect("pinned Parley oracle font must be readable");
+            collection.register_fonts(Blob::new(Arc::new(bytes)), None);
+        }
+        let mut font_context = FontContext {
+            collection,
+            source_cache: SourceCache::default(),
+        };
+        let mut layout_context: LayoutContext<[u8; 4]> = LayoutContext::new();
+        let families = [
+            FontFamilyName::named("Roboto Flex"),
+            FontFamilyName::named("Noto Kufi Arabic"),
+        ];
+        let mut builder = layout_context.ranged_builder(&mut font_context, text, 1.0, false);
+        builder.push_default(FontFamily::from(&families[..]));
+        builder.push_default(StyleProperty::FontSize(20.0));
+        builder.push_default(LineHeight::FontSizeRelative(line_height));
+        let mut layout = builder.build(text);
+        layout.break_all_lines(Some(max_advance));
+        layout
+            .lines()
+            .map(|line| OracleLine {
+                source: line.text_range(),
+                reason: line.break_reason(),
+                line_height: line.metrics().line_height,
+                baseline: line.metrics().baseline,
+                advance: line.metrics().advance,
+                rtl_runs: line.runs().map(|run| run.is_rtl()).collect(),
+            })
+            .collect()
+    }
 
     #[test]
     fn retained_shaped_text_produces_deterministic_observations() {
@@ -721,16 +774,104 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_current_main_seams_remain_explicit_gaps() {
+    fn unsupported_candidate_seams_remain_explicit_gaps() {
         assert_eq!(
             current_gaps(),
             &[
-                CurrentGap::BoundedBreakReshaping,
                 CurrentGap::VerticalShaping,
                 CurrentGap::CoreInlineObjects,
                 CurrentGap::TextDataIdentity,
             ],
             "the wind tunnel must not impersonate absent upstream seams"
+        );
+    }
+
+    #[test]
+    fn high_level_oracle_wraps_only_at_legal_boundaries() {
+        let text = "alpha beta gamma";
+        let lines = oracle_lines(text, 72.0, 1.2);
+        assert_eq!(lines.len(), 3, "oracle evidence: {lines:#?}");
+        assert_eq!(lines[0].source.start, 0);
+        assert_eq!(
+            lines[1].source.start,
+            text.find("beta").expect("beta is present")
+        );
+        assert_eq!(
+            lines[2].source.start,
+            text.find("gamma").expect("gamma is present")
+        );
+        assert_eq!(lines[0].reason, BreakReason::Regular);
+        assert_eq!(lines[1].reason, BreakReason::Regular);
+        assert_eq!(lines[2].reason, BreakReason::None);
+    }
+
+    #[test]
+    fn high_level_oracle_coalesces_crlf_and_honors_mandatory_breaks() {
+        let text = "a\r\nb\nc\u{2028}d\u{2029}e";
+        let lines = oracle_lines(text, 1_000.0, 1.2);
+        assert_eq!(lines.len(), 5, "oracle evidence: {lines:#?}");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.reason == BreakReason::Explicit)
+                .count(),
+            4,
+            "CRLF must be one explicit break; LF, LS, and PS add one each"
+        );
+        assert_eq!(lines[0].source, 0..3, "CRLF stays on one source line");
+        assert_eq!(
+            lines.last().expect("final line exists").source.end,
+            text.len()
+        );
+    }
+
+    #[test]
+    fn high_level_oracle_uses_real_line_metrics() {
+        let lines = oracle_lines("Ag", 1_000.0, 1.5);
+        assert_eq!(lines.len(), 1);
+        let line = &lines[0];
+        assert_eq!(line.line_height, 30.0);
+        assert!(line.baseline > 0.0 && line.baseline < line.line_height);
+        assert_ne!(
+            line.baseline, 24.0,
+            "baseline must not be the provisional 80% split"
+        );
+    }
+
+    #[test]
+    fn high_level_oracle_overflows_an_unbreakable_word() {
+        let lines = oracle_lines("alphabet", 1.0, 1.2);
+        assert_eq!(
+            lines.len(),
+            1,
+            "a word without legal opportunities must not split: {lines:#?}"
+        );
+        assert!(
+            lines[0].advance > 1.0,
+            "unbreakable content overflows honestly"
+        );
+    }
+
+    #[test]
+    fn high_level_oracle_records_current_nbsp_divergence() {
+        let text = "alpha\u{00a0}beta";
+        let lines = oracle_lines(text, 1.0, 1.2);
+        assert_eq!(lines.len(), 2, "oracle evidence changed: {lines:#?}");
+        assert_eq!(
+            lines[1].source.start,
+            text.find("beta").expect("beta is present"),
+            "pinned high-level Parley hangs NBSP then breaks after it; Underwood must not copy this policy"
+        );
+    }
+
+    #[test]
+    fn high_level_oracle_exposes_line_local_mixed_bidi() {
+        let lines = oracle_lines("office مرحبا world", 1_000.0, 1.2);
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0].rtl_runs.iter().any(|is_rtl| !is_rtl)
+                && lines[0].rtl_runs.iter().any(|is_rtl| *is_rtl),
+            "one line must contain both LTR and RTL runs: {lines:#?}"
         );
     }
 }

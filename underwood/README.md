@@ -1,7 +1,7 @@
 # Underwood
 
 `underwood` is the small, renderer-independent foundation for immutable
-semantic documents, retained paragraph preparation, finite-width flow, and
+semantic documents, retained paragraph formation, finite-width flow, and
 text scenes.
 
 The crate is `no_std + alloc`. It owns no shaping engine, platform host policy,
@@ -13,16 +13,21 @@ The first draft public slice is deliberately complete end to end:
 
 - [`Document`] publishes immutable [`DocumentSnapshot`] revisions through
   atomic staged edits;
-- [`LayoutEngine`] retains prepared paragraphs and avoids analysis or shaping
+- [`LayoutEngine`] retains formed paragraphs and avoids analysis or shaping
   for unchanged siblings, paint-value changes, and width-only changes;
+- [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
+  and font-derived metrics behind the paragraph-engine boundary instead of
+  hiding text physics in scene construction; formed lines retain complete
+  source slices across semantic leaves and distinguish real glyphs from
+  intentionally unrendered controls;
 - [`ComputedInlineStyle`] keeps [`ShapingStyle`], [`InlineFlowStyle`], and
   [`PaintSlot`] values in separate invalidation partitions while [`StyleMap`]
   assigns complete styles to semantic text leaves;
 - [`ShapingStyle`] carries backend-neutral family, weight, width, style,
   language, feature, and variation requests; the separate adapter resolves
   them without moving font matching into this crate;
-- [`TextScene`] exposes real glyph resources, paint clips, source mapping, hit
-  testing, caret geometry, and semantic observations;
+- [`TextScene`] exposes real glyph resources, paint clips, source mapping,
+  fragment-bound diagnostic hit/caret observations, and semantic observations;
 - document IDs are opaque and document-scoped, while [`SnapshotTextRange`]
   values are dense observations valid only for their named revision.
 

@@ -90,6 +90,20 @@ remains the evidence that justified the contingency; its retained-output gap
 is now resolved. Bounded break reshaping, vertical shaping, core inline
 objects, and identified text-data provisioning remain open.
 
+### Implementation update — bounded reshape candidate, 2026-07-22
+
+Underwood temporarily pins
+[`waywardmonkeys/parley@181664b`](https://github.com/waywardmonkeys/parley/commit/181664b28144cb59671a7f1b736757c6ebe270f2),
+a single commit based on `6c81e1d` that retains per-run reshape inputs and adds
+unsafe-region discovery plus bounded `Shaper::apply_break` / `apply_concat`.
+The shaped result retains only each bounded pre-break fragment so concat stays
+exact even when breaking removes HarfBuzz's concat-safety metadata.
+The generally applicable code lives in the Parley fork branch, not in
+`underwood_parley`; the adapter owns only legal greedy selection, backtracking,
+portable lowering, and the exact committed-reshape count. `und-oh0.2.7` owns
+upstream review and replacing the fork URL with `linebender/parley` as soon as
+the capability lands there.
+
 ## Seam matrix
 
 | Capability | Current upstream seam | Underwood position | Readiness |
@@ -100,7 +114,7 @@ objects, and identified text-data provisioning remain open.
 | Font selection | `Shaper::shape_item` callback over clusters | Bridge the Underwood font resolver | Usable |
 | Shaping | Callback-borrowed `ShapedRun` | Prototype against the seam; do not stabilize storage around it | Transitional |
 | Retained shaped text | PR #679 | Prefer upstream; require owned immutable output | Active upstream work |
-| Bounded break reshaping | Draft PR #634 | Require `break`/`concat` equivalence and bounded work | Gap |
+| Bounded break reshaping | Candidate `181664b` extracted onto current `ShapedText` | Consume exact pin; upstream and retire fork URL | Executable, upstream review pending |
 | Greedy line breaking | High-level `BreakLines` and `BreakerState` | Evidence source and possible temporary adapter, not document flow | Usable but wrong ownership |
 | Arbitrary line intervals | Mutable line geometry and custom out-of-flow yield | Drive an Underwood breaker over core-shaped data | Partial |
 | Vertical shaping | Draft PR #634 only | Upstream first; no horizontal-only public Underwood contract | Gap |
