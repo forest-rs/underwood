@@ -360,3 +360,12 @@ broadens document replacement from same-leaf to same-paragraph ranges:
 
 It does not authorize a second Unicode segmenter, cross-paragraph structural
 editing, semantic-leaf merging, new production dependencies, or `unsafe`.
+
+## Implementation record
+
+The accepted representation and transaction were implemented in `56ce91e` and
+`7349677`. The native release-showcase proof is `4fcd18f`, and the unbundled
+emoji/complex-script interaction corpus is `4c527d3`. The requirement-by-
+requirement review, honest font-proof boundary, public migration handoff, and
+gate record live in
+`docs/proof/source-complete-grapheme-interaction-review-2026-07-24.md`.
