@@ -12,20 +12,20 @@ use crate::{DocumentId, DocumentRevision, TextAffinity, TextId};
 pub enum TextSelectionMode {
     /// Select one contiguous document interval.
     Logical,
-    /// Select the shaped clusters crossed in visual caret order.
+    /// Select the interaction units crossed in visual caret order.
     Visual,
 }
 
-/// One cluster-level cursor movement.
+/// One interaction-unit cursor movement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextMovement {
     /// Move to the preceding caret stop in visual order.
     PreviousVisual,
     /// Move to the following caret stop in visual order.
     NextVisual,
-    /// Move across the preceding source cluster in logical order.
+    /// Move across the preceding interaction unit in logical order.
     PreviousLogical,
-    /// Move across the following source cluster in logical order.
+    /// Move across the following interaction unit in logical order.
     NextLogical,
 }
 
@@ -115,6 +115,30 @@ impl SnapshotTextRange {
 
     pub(crate) fn is_empty(&self) -> bool {
         self.bytes.is_empty()
+    }
+}
+
+/// Source-complete interaction unit in one immutable snapshot revision.
+///
+/// One extended grapheme can cross semantic text-leaf boundaries. Each member
+/// retains its exact [`TextId`] and leaf-local UTF-8 bytes while the ordered
+/// collection remains one atomic movement, selection, and replacement unit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotTextUnit {
+    sources: Arc<[SnapshotTextRange]>,
+}
+
+impl SnapshotTextUnit {
+    pub(crate) fn new(sources: Vec<SnapshotTextRange>) -> Self {
+        Self {
+            sources: sources.into(),
+        }
+    }
+
+    /// Returns the ordered leaf-local ranges comprising this interaction unit.
+    #[must_use]
+    pub fn sources(&self) -> &[SnapshotTextRange] {
+        &self.sources
     }
 }
 

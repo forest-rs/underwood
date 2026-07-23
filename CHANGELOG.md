@@ -51,12 +51,16 @@ Underwood does not yet make compatibility promises.
   preserve authored heading semantics in `TextScene`; callers still resolve
   their computed visual styles explicitly through `StyleMap`.
 - Replaced fragment-ink hit testing and pointer-derived carets with exact
-  Parley-backed cluster geometry. `PreparedLine::try_new` now receives visual
-  `PreparedCluster` records whose sides carry explicit UTF-8 boundaries and
-  `TextAffinity`; paragraph-adapter implementations must provide source-complete
-  clusters in addition to visual runs. `TextHit::source` now names the exact
-  cluster, while `TextHit::position` returns a revision-bound
-  `SnapshotTextPosition` and `TextHit::semantic_id` returns its semantic leaf.
+  Parley-backed interaction geometry. `PreparedLine::try_new` now receives
+  visual `PreparedInteractionUnit` records whose
+  `PreparedInteractionSlice`s retain every shaping-record contribution.
+  Paragraph adapters must derive each unit from Unicode grapheme analysis,
+  expose only its two UTF-8 endpoint sides, and carry the complete unit source
+  through cursor steps. Committed `TextHit::source` now returns a
+  `SnapshotTextUnit`; migrate single-leaf `hit.source().text()` or `.bytes()`
+  calls to the ordered `hit.source().sources()` ranges.
+  `TextHit::position` returns a revision-bound `SnapshotTextPosition`, while
+  `TextHit::semantic_id` remains the exact visual slice under the pointer.
   Migrate `scene.caret(&hit)` to
   `scene.caret(hit.position()).expect("position belongs to scene")` and handle
   `None` for stale or foreign positions. Use `TextScene::hit_test_closest` for
@@ -73,13 +77,15 @@ Underwood does not yet make compatibility promises.
   separate members of the set. `TextScene::selection`, `selection_set`,
   `move_selections`, and `selection_geometry` preserve this distinction.
   `Document::replace_selections` validates and publishes the complete set,
+  accepts canonical ranges spanning semantic leaves within one paragraph,
   inserts once per selection rather than once per range, and returns collapsed
-  post-edit selections in input order.
+  post-edit selections in input order. Cross-paragraph structural replacement
+  is rejected with `EditErrorKind::CrossParagraphSelection`.
 - Replaced `PreparedParagraph::try_from_lines` with
   `PreparedParagraph::try_new`, which also receives complete
   `PreparedCursorMovement` records. Adapter implementations now provide exact
-  caret placement plus visual/logical cursor steps and the source cluster
-  crossed by each step. This keeps bidi, affinity, soft-wrap, and deletion
+  caret placement plus visual/logical cursor steps and the complete interaction
+  unit crossed by each step. This keeps bidi, affinity, soft-wrap, and deletion
   mechanics behind the paragraph seam instead of reconstructing them in
   `TextScene`.
 - `ChangeSet::paragraphs` is now always in document order. Transactions that

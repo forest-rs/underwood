@@ -215,7 +215,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             && arabic_visual_sources
                 .windows(2)
                 .all(|pair| pair[0].start >= pair[1].start),
-        "RTL clusters must lower in visual order while retaining logical source ranges: {arabic_visual_sources:?}"
+        "RTL interaction units must lower in visual order while retaining logical source ranges: {arabic_visual_sources:?}"
     );
     let direct_arabic_fragment = first_scene
         .scene()
@@ -240,7 +240,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .source()
                 .is_some_and(|source| source.text() == first_prefix)
         })
-        .expect("the authored prefix must expose semantic cluster geometry")
+        .expect("the authored prefix must expose semantic interaction geometry")
         .bounds()
         .center();
     let hit = first_scene
@@ -255,10 +255,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         caret.bounds().height() > 0.0,
         "a scene hit must produce visible caret geometry"
     );
-    assert_eq!(
-        hit.source().revision(),
-        published.snapshot().revision(),
-        "hit source must name the exact scene snapshot"
+    assert!(
+        hit.source()
+            .sources()
+            .iter()
+            .all(|source| source.revision() == published.snapshot().revision()),
+        "every hit source must name the exact scene snapshot"
     );
     assert!(
         first_scene

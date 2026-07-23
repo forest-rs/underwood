@@ -825,7 +825,7 @@ impl EditorState {
             .map_err(|error| format!("deletion transaction rejected: {error}"))?;
         self.selections = Some(applied.selections);
         self.status = format!(
-            "logical cluster delete at {} carets; {} paragraph(s) changed",
+            "logical grapheme delete at {} carets; {} paragraph(s) changed",
             self.selection_count(),
             applied.changed_paragraphs
         );
@@ -1283,14 +1283,14 @@ mod tests {
     }
 
     #[test]
-    fn backspace_removes_one_real_adapter_cluster() {
+    fn backspace_removes_one_real_extended_grapheme() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
         let text = content.editable_value();
         let cluster_end = text
             .find("e\u{301}")
             .map(|start| start + "e\u{301}".len())
-            .expect("editor specimen must contain a combining cluster");
+            .expect("editor specimen must contain a combining grapheme");
         let point = point_for_byte(
             &committed.scene,
             content.editable_text(),
@@ -1312,9 +1312,9 @@ mod tests {
             Some(&committed.scene),
         );
         let edited = content.editable_value();
-        assert!(edited.contains("cafe."), "edited text: {edited:?}");
-        assert!(!edited.contains("cafe\u{301}"), "edited text: {edited:?}");
-        assert!(editor.status().contains("logical cluster delete"));
+        assert!(edited.contains("caf."), "edited text: {edited:?}");
+        assert!(!edited.contains("cafe"), "edited text: {edited:?}");
+        assert!(editor.status().contains("logical grapheme delete"));
     }
 
     #[test]
@@ -1520,15 +1520,16 @@ mod tests {
         text: underwood::TextId,
     ) -> Vec<(Point, underwood::SnapshotTextPosition)> {
         let mut points = Vec::new();
-        let bounds = scene
+        let semantic = scene
             .semantics()
             .find(|semantic| {
                 semantic
                     .source()
                     .is_some_and(|source| source.text() == text)
             })
-            .expect("semantic text leaf must expose layout geometry")
-            .bounds();
+            .expect("semantic text leaf must expose layout geometry");
+        let semantic_id = semantic.semantic_id();
+        let bounds = semantic.bounds();
         for line in scene.lines() {
             let line = line.bounds();
             if line.y1 <= bounds.y0 || line.y0 >= bounds.y1 {
@@ -1540,7 +1541,7 @@ mod tests {
             while x <= end {
                 let point = Point::new(x, y);
                 if let Some(hit) = scene.hit_test(point)
-                    && hit.source().text() == text
+                    && hit.semantic_id() == semantic_id
                 {
                     let position = *hit.position();
                     if points.iter().all(|(_, existing)| *existing != position) {
@@ -1553,7 +1554,7 @@ mod tests {
                 let point = Point::new((point.x + 0.25).min(end), y);
                 let Some(position) = scene
                     .hit_test_closest(point)
-                    .filter(|hit| hit.source().text() == text)
+                    .filter(|hit| hit.semantic_id() == semantic_id)
                     .map(|hit| *hit.position())
                 else {
                     continue;
