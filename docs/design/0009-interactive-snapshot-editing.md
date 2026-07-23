@@ -269,7 +269,7 @@ gates pass.
 | A. Exact interaction map | Landed | `underwood_parley` cluster/caret corpus and `docs/proof/exact-interaction-review-2026-07-22.md` |
 | B. Snapshot transaction and selection | Landed | multi-range visual bidi and independent multi-selection transaction corpus; `docs/proof/selection-transaction-review-2026-07-22.md` |
 | C. Composition epoch | Landed | `CompositionSession`, `CompositionScene`, `EditableSurface`, real-Parley feed/host tests, `underwood_ime_compat_experiment`, and PR #14 |
-| D. Product proof and review | Editor executable; semantic activation pending | native pointer/keyboard/Winit IME integration, deterministic editor trace, and `docs/proof/native-editor-review-2026-07-22.md` |
+| D. Product proof and review | Editor complete; semantic activation pending | native pointer/keyboard/Winit IME integration, deterministic editor trace, and `docs/proof/native-editor-review-2026-07-22.md` |
 
 Slice C preserves the general scene model from Slice B. Committed scenes and
 editable surfaces expose every independent selection and every logical range.

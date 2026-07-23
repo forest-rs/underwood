@@ -8,7 +8,8 @@
 - **Dependency watch:** no new direct crate dependency; the showcase enables
   the adapter's optional system-font feature, whose transitive platform
   backends remain confined to that external example path
-- **Remote gate:** pending
+- **Remote gate:** GitHub Actions run `29978412963` passed all eight jobs on
+  editor-only PR #16 at commit `2b13db9`
 
 ## Result
 
@@ -105,5 +106,6 @@ obligations above plus native Han IME commit and true interior Latin-in-Arabic
 fallback regressions. The Parley adapter covers ligature, combining,
 cross-semantic-leaf, Arabic-mark, mixed-bidi, hard-break, retained-work,
 synthetic-embolden, and macOS native-Han cases. Local formatting, Clippy,
-workspace tests, rustdoc, MSRV, repository policy, and no-std portability pass;
-remote CI remains the landing gate.
+workspace tests, rustdoc, MSRV, repository policy, and no-std portability pass.
+GitHub Actions run `29978412963` repeats that proof across Linux, macOS,
+Windows, Rust 1.92, denied-warning rustdoc, bare metal, and WebAssembly.
