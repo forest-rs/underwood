@@ -11,9 +11,11 @@ scene geometry and source mapping, edits one paragraph, and proves paragraph,
 font-request, paint-only, and width-only reuse from actual work counters. It
 also proves variable weight/width synthesis, explicit-axis precedence,
 synthetic-oblique evidence, deterministic missing-family diagnostics, visible
-coverage for a zero-advance Arabic mark, and Latin ink outside shaped advance.
-Real `ffi` substitution and source ownership remain executable, while a
-separate adapter regression requires an explicit error instead of an invented
-paint partition when one ligature crosses paint runs.
+zero-advance Arabic glyphs, and ordinary whole-glyph paint without
+outline-derived renderer clips. Hit testing is exercised through semantic and
+cluster geometry rather than paint geometry. Real `ffi` substitution and
+source ownership remain executable, while a separate adapter regression
+requires an explicit error instead of an invented paint partition when one
+ligature crosses paint runs.
 
 The bundled font fixtures retain their upstream licenses in `fonts/`.

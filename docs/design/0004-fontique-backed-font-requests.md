@@ -54,7 +54,9 @@ facade.
    existing `MissingFont` preparation error.
 9. System font discovery is disabled in deterministic examples, tests, and
    benchmarks. Their results depend only on checked-in font bytes and explicit
-   fallback configuration.
+   fallback configuration. Native hosts may opt into one fixed Fontique system
+   catalog snapshot before engine construction; cached engines do not observe
+   later database mutations.
 10. Core crates remain `no_std + alloc`, gain no dev-dependencies, and contain
     no `unsafe`.
 
@@ -103,6 +105,11 @@ fonts disabled. Explicit builder operations configure named families for each
 generic family and each `(script, optional language)` fallback key. Unknown
 configuration names fail at catalog construction rather than disappearing
 during shaping.
+
+The optional `underwood_parley/system-fonts` feature exposes
+`FontSet::with_system_fonts` for native applications. It loads Fontique's
+platform catalog once before the set enters `ParleyParagraphEngine`; it does
+not introduce live font-database observation or weaken deterministic callers.
 
 The adapter returns portable `FontSynthesis` evidence with every prepared and
 scene run:
@@ -165,8 +172,9 @@ The change is not complete until the public path proves all of the following:
 
 ## Deferred work
 
-- Platform/system font discovery and live collection updates require their own
-  determinism and invalidation contract.
+- Live platform-catalog observation, collection invalidation, and broader
+  fallback policy require their own determinism and invalidation contract; the
+  current native builder takes one fixed startup snapshot.
 - Font generation identity and external resource lifetime remain future scene
   resource concerns.
 - Device-specific embolden fidelity is a renderer capability; the current CPU

@@ -1,5 +1,11 @@
 # Parley paragraph-formation review — 2026-07-22
 
+> **Dependency update:** The reviewed bounded-reshape change is now rebased as
+> [`44d155e`](https://github.com/waywardmonkeys/parley/commit/44d155e17a6dbf455c8b9133c2ae40955c9f2af2)
+> on Parley main `38809fb`. It adopts main's stored-grapheme API and excludes
+> the later, superseded ink-metrics experiment. The behavior and ownership
+> reviewed below are unchanged.
+
 ## Disposition
 
 The safe-break checkpoint in commit `023c777` was real product-path work but

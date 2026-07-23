@@ -1,12 +1,19 @@
-# Design-0007: Ink-accurate glyph coverage
+# Design-0007: Outline-derived glyph coverage
 
-- **Status:** Implemented against an upstream candidate
+- **Status:** Superseded by Design-0010
 - **Date:** 2026-07-22
 - **Beads:** `und-oh0.2.4`, `und-oh0.2.7`, `und-oh0.2.8`
 - **Parley candidate:**
   [`d12c801d8fd298ff095f1ec903b6adaa732fcef2`](https://github.com/waywardmonkeys/parley/commit/d12c801d8fd298ff095f1ec903b6adaa732fcef2)
 
 ## Decision
+
+> **Superseded on 2026-07-22:** This design correctly rejected advance-sized
+> clips and invented character-proportional ligature splits, but it incorrectly
+> made outline bounds a universal rendering prerequisite. Design-0010 removes
+> ordinary per-glyph clips, treats actual paint extent as renderer-owned, and
+> preserves explicit clipped segments only for future conformant split paint.
+> This document remains the historical record of the Arabic-dot investigation.
 
 A glyph's advance is layout distance, not paint geometry. `underwood_parley`
 must derive portable glyph clips from variation-aware font outline bounds. It

@@ -5,7 +5,7 @@
 
 use parley_core::{Analysis, AnalysisOptions, Analyzer, Boundary};
 
-const PARLEY_REVISION: &str = "181664b28144cb59671a7f1b736757c6ebe270f2";
+const PARLEY_REVISION: &str = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2";
 const ICU4X_VERSION: &str = "2.2.0";
 const CORPUS: &str = concat!(
     "Latin cafe\u{301} résumé. ",

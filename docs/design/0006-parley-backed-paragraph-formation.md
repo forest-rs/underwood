@@ -86,9 +86,11 @@ Unicode or shaping ownership.
 ## Exact dependency snapshot
 
 The production fence is Parley commit
-[`181664b28144cb59671a7f1b736757c6ebe270f2`](https://github.com/waywardmonkeys/parley/commit/181664b28144cb59671a7f1b736757c6ebe270f2),
-the `bounded-break-reshape` upstream-candidate branch based directly on main
-`6c81e1dd9b67793cdd959c65cc650c96a1262fb7`.
+[`44d155e17a6dbf455c8b9133c2ae40955c9f2af2`](https://github.com/waywardmonkeys/parley/commit/44d155e17a6dbf455c8b9133c2ae40955c9f2af2),
+the `bounded-break-reshape` upstream-candidate branch rebased directly onto
+current main `38809fb`. It contains the bounded reshape change originally
+reviewed as `181664b`, adopts main's stored-grapheme API, and contains none of
+the superseded glyph-ink experiment.
 
 At that commit:
 

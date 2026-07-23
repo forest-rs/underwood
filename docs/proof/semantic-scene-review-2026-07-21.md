@@ -1,9 +1,11 @@
 # Semantic-scene Lynx and Rook review — 2026-07-21
 
-> **Superseded coverage claim (2026-07-22):** Design-0007 deletes the measured
-> ASCII/proportional ligature split described below. Live code uses real glyph
-> ink bounds and returns `UnsupportedPaintCoverage` when one glyph crosses
-> paint runs. This review remains historical evidence for the first slice.
+> **Superseded coverage claim (2026-07-22):** Design-0007 deleted the measured
+> ASCII/proportional ligature split described below. Design-0010 subsequently
+> removed mandatory outline clips as incomplete paint truth. Live code draws
+> ordinary source-complete glyphs unclipped and returns
+> `UnsupportedPaintCoverage` when one glyph crosses paint runs. This review
+> remains historical evidence for the first slice.
 
 - **Scope:** Design-0002 implementation, external headless path, and product benchmark
 - **Review modes:** Lynx adversarial correctness; Rook real-versus-mirage audit

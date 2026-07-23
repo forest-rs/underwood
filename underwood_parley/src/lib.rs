@@ -23,14 +23,14 @@ use parley_core::{
 };
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
-    GlyphPaintSegment, InlineFlowRun, LineBreakReason, ParagraphConstraints, ParagraphFormation,
+    InlineFlowRun, LineBreakReason, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCaret, PreparedCluster,
     PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedLine,
     PreparedParagraph, PreparedRun, ShapingRun, TextAffinity,
 };
 use underwood::{
     FontData, FontFamilyName, FontVariation, GenericFamily, InlineFlowStyle, Language, ParagraphId,
-    Rect, Script, ShapingStyle, Tag, Vec2,
+    Script, ShapingStyle, Tag, Vec2,
 };
 
 /// Owned validated font bytes and a face within them.
@@ -128,6 +128,22 @@ impl FontSet {
             source_cache: SourceCache::default(),
             font_count,
         })
+    }
+
+    /// Returns a catalog with a fixed snapshot of platform fonts available for fallback.
+    ///
+    /// This operation is available only with the `system-fonts` feature. It is
+    /// intended for native hosts whose users can enter scripts not covered by
+    /// an application's bundled resources. Deterministic proofs and benchmarks
+    /// should continue to use [`Self::try_from_fonts`] alone.
+    ///
+    /// The snapshot is loaded before the catalog enters a paragraph engine;
+    /// this adapter does not observe later platform font-database changes.
+    #[cfg(feature = "system-fonts")]
+    #[must_use]
+    pub fn with_system_fonts(mut self) -> Self {
+        self.collection.load_system_fonts();
+        self
     }
 
     /// Returns a copy whose generic family resolves to the supplied named families.
@@ -361,21 +377,14 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         + usize::from(last.text_offset)
                         + usize::from(last.text_len);
                 let synthesis = portable_synthesis(font.synthesis)?;
-                let prepared_glyphs = physics
-                    .formed_text
-                    .with_glyph_metrics(piece.run, |metrics| {
-                        lower_glyphs(
-                            input.text(),
-                            &physics.analysis,
-                            &physics.formed_text,
-                            run,
-                            metrics,
-                            piece.clusters.clone(),
-                            input.paint_runs(),
-                            &synthesis,
-                        )
-                    })
-                    .ok_or_else(PreparationError::unsupported_paint_coverage)??;
+                let prepared_glyphs = lower_glyphs(
+                    input.text(),
+                    &physics.analysis,
+                    &physics.formed_text,
+                    run,
+                    piece.clusters.clone(),
+                    input.paint_runs(),
+                )?;
                 glyph_count = glyph_count
                     .saturating_add(u32::try_from(prepared_glyphs.len()).unwrap_or(u32::MAX));
                 let unrendered_source = unrendered_source(
@@ -1381,7 +1390,6 @@ fn shape_paragraph(
                     None
                 }
             },
-            &analysis_data,
             shaped_text,
         );
         if missing_font.get() {
@@ -1447,10 +1455,8 @@ fn lower_glyphs(
     analysis: &Analysis,
     shaped_text: &ShapedText,
     run: &parley_core::ShapedRun,
-    glyph_metrics: &parley_core::RunGlyphMetrics<'_>,
     cluster_range: Range<usize>,
     paint_runs: &[underwood::adapter::PaintRun],
-    synthesis: &FontSynthesis,
 ) -> Result<Vec<PreparedGlyph>, PreparationError> {
     let clusters = shaped_text
         .clusters()
@@ -1487,22 +1493,7 @@ fn lower_glyphs(
         }
         lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
             let advance = Vec2::new(f64::from(glyph.advance), 0.0);
-            let bounds = glyph_metrics
-                .ink_bounds(glyph.id)
-                .ok_or_else(PreparationError::unsupported_paint_coverage)?;
-            let mut ink = Rect::new(
-                f64::from(bounds.left),
-                f64::from(bounds.top),
-                f64::from(bounds.right),
-                f64::from(bounds.bottom),
-            );
-            if synthesis.embolden() {
-                return Err(PreparationError::unsupported_paint_coverage());
-            }
-            if let Some(transform) = synthesis.skew_transform() {
-                ink = transform.transform_rect_bbox(ink);
-            }
-            let paint = paint_coverage(source.clone(), ink, paint_runs)?;
+            let paint = paint_coverage(source.clone(), paint_runs)?;
             prepared.push(PreparedGlyph::try_new(
                 glyph.id,
                 source.clone(),
@@ -1700,7 +1691,6 @@ fn portable_synthesis(synthesis: Synthesis) -> Result<FontSynthesis, Preparation
 
 fn paint_coverage(
     source: Range<u32>,
-    ink: Rect,
     paint_runs: &[underwood::adapter::PaintRun],
 ) -> Result<GlyphPaintCoverage, PreparationError> {
     let mut matching = paint_runs.iter().filter(|paint| {
@@ -1716,7 +1706,7 @@ fn paint_coverage(
     {
         return Err(PreparationError::unsupported_paint_coverage());
     }
-    GlyphPaintCoverage::try_from_segments([GlyphPaintSegment::new(source, paint.slot(), ink)?])
+    GlyphPaintCoverage::whole(source, paint.slot())
 }
 
 fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationError> {
@@ -1874,16 +1864,16 @@ mod tests {
     use alloc::{vec, vec::Vec};
 
     use fontique::{Blob, Synthesis};
-    use parley_core::{AnalysisDataSources, FontInstance, ShapeOptions, ShapedText, Shaper};
+    use parley_core::{FontInstance, ShapeOptions, ShapedText, Shaper};
 
     use underwood::adapter::{LineBreakReason as TestLineBreakReason, PreparationErrorKind};
     use underwood::{
         Brush, Color, CompositionId, CompositionUpdate, ComputedInlineStyle, Document, DocumentId,
         EditErrorKind, EditableSurface, EditableSurfaceElement, FiniteWidth, FontFamily,
-        GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot,
-        PaintTable, ParagraphRole, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
-        SelectionErrorKind, ShapingStyle, StyleMap, SurfaceErrorKind, SurfaceTextEncoding,
-        TextAffinity, TextMovement, TextScene, TextSelectionMode,
+        FontWeight, GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight,
+        PaintSlot, PaintTable, ParagraphRole, Point, ProjectedTextPosition, ProjectedTextSource,
+        SceneRequest, SelectionErrorKind, ShapingStyle, StyleMap, SurfaceErrorKind,
+        SurfaceTextEncoding, TextAffinity, TextMovement, TextScene, TextSelectionMode,
     };
     use underwood::{Language, Script};
 
@@ -1900,7 +1890,6 @@ mod tests {
 
     fn shape_arabic(text: &str) -> (parley_core::Analysis, Shaper, ShapedText) {
         let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
-        let data_sources = AnalysisDataSources::new();
         let font = FontInstance {
             font: underwood::FontData::new(Blob::from(ARABIC_FONT.to_vec()), 0),
             synthesis: Synthesis::default(),
@@ -1921,7 +1910,6 @@ mod tests {
                     char_style_indices: &style_indices,
                 },
                 |_| Some(font.clone()),
-                &data_sources,
                 &mut shaped,
             );
         }
@@ -3186,6 +3174,51 @@ mod tests {
     }
 
     #[test]
+    fn combining_sequence_split_across_semantic_leaves_prepares() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"split-grapheme-1"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        let base = edit
+            .append_text(paragraph, InlineRole::TEXT, "e")
+            .expect("base leaf is valid");
+        let mark = edit
+            .append_text(paragraph, InlineRole::EMPHASIS, "\u{301}")
+            .expect("mark leaf is valid");
+        edit.commit().expect("fixture edit is valid");
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+                .expect("fixture shaping style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let mut engine = fixture_engine();
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("a grapheme crossing semantic leaves must still prepare");
+
+        let semantic_texts: Vec<_> = output
+            .scene()
+            .semantics()
+            .filter_map(|semantic| semantic.source().map(|source| source.text()))
+            .collect();
+        assert!(semantic_texts.contains(&base));
+        assert!(semantic_texts.contains(&mark));
+        assert!(output.scene().fragments().iter().any(|fragment| {
+            let texts: Vec<_> = fragment.sources().map(|source| source.text()).collect();
+            texts.contains(&base) && texts.contains(&mark)
+        }));
+    }
+
+    #[test]
     fn rtl_visual_hits_retain_reversed_logical_sides() {
         let (document, styles, paint) = fixture_document("مرحبا", 1.2);
         let mut engine = fixture_engine();
@@ -3529,7 +3562,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_advance_arabic_mark_retains_visible_paint_coverage() {
+    fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
         let (document, styles, paint) = fixture_document("ب", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
@@ -3546,16 +3579,17 @@ mod tests {
             .iter()
             .find(|fragment| fragment.glyphs()[0].advance().x == 0.0)
             .expect("Noto Kufi beh must expose its zero-advance dot glyph");
-        assert!(
-            mark.clip().width() > 0.0 && mark.clip().height() > 0.0,
-            "a zero-advance glyph still has visible ink and cannot have an empty clip: {:?}",
-            mark.clip()
+        assert_eq!(mark.paint(), PaintSlot::new(0));
+        assert_eq!(
+            mark.paint_clip(),
+            None,
+            "ordinary zero-advance marks must let the font rasterizer paint the complete glyph"
         );
     }
 
     #[test]
-    fn glyph_overhang_is_not_clamped_to_advance() {
-        let (document, styles, paint) = fixture_document("j", 1.2);
+    fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
+        let (document, styles, paint) = fixture_document("j office ب", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
             FiniteWidth::new(1_000.0).expect("test width is valid"),
@@ -3564,17 +3598,107 @@ mod tests {
         );
         let output = engine
             .prepare(&document.snapshot(), &request)
-            .expect("overhanging glyph shaping must form a scene");
-        let fragment = &output.scene().fragments()[0];
-        let glyph = &fragment.glyphs()[0];
+            .expect("ordinary glyph shaping must not require outline metrics");
         assert!(
-            fragment.clip().x0 < glyph.position().x
-                || fragment.clip().x1 > glyph.position().x + glyph.advance().x,
-            "the fixture must retain ink outside its advance: clip={:?}, position={:?}, advance={:?}",
-            fragment.clip(),
-            glyph.position(),
-            glyph.advance()
+            !output.scene().fragments().is_empty(),
+            "the mixed fixture must produce renderable glyphs"
         );
+        assert!(
+            output
+                .scene()
+                .fragments()
+                .iter()
+                .all(|fragment| fragment.paint_clip().is_none()),
+            "single-paint glyphs must be complete unclipped draws"
+        );
+    }
+
+    #[test]
+    fn synthetic_embolden_prepares_without_outline_metrics() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"embolden-test-01"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph is valid");
+        edit.append_text(paragraph, InlineRole::TEXT, "مرحبا")
+            .expect("test source is valid");
+        edit.commit().expect("test edit is valid");
+
+        let shaping = ShapingStyle::new(FontFamily::named("Noto Kufi Arabic"), 20.0)
+            .expect("test style is valid")
+            .with_font_weight(FontWeight::BOLD)
+            .expect("bold request is valid");
+        let styles = StyleMap::new(ComputedInlineStyle::new(
+            shaping,
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        ));
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let fonts = FontSet::try_from_fonts([
+            Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid")
+        ])
+        .expect("fixture catalog is valid");
+        let mut engine = LayoutEngine::new(
+            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
+                .expect("fixture adapter is valid"),
+        );
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("synthetic emboldening must not require outline bounds to prepare");
+
+        assert!(!output.scene().fragments().is_empty());
+        assert!(output.scene().fragments().iter().all(|fragment| {
+            fragment.synthesis().embolden() && fragment.paint_clip().is_none()
+        }));
+    }
+
+    #[cfg(all(feature = "system-fonts", target_vendor = "apple"))]
+    #[test]
+    fn system_font_fallback_prepares_han_without_outline_metrics() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"system-han-test1"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph is valid");
+        edit.append_text(paragraph, InlineRole::TEXT, "漢字")
+            .expect("test source is valid");
+        edit.commit().expect("test edit is valid");
+
+        let style = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0).expect("test style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let styles = StyleMap::new(style);
+        let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+        let fonts = FontSet::try_from_fonts([
+            Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        ])
+        .expect("fixture catalog is valid")
+        .with_system_fonts();
+        let mut engine = LayoutEngine::new(
+            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
+                .expect("system-font adapter is valid"),
+        );
+        let request = SceneRequest::new(
+            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let output = engine
+            .prepare(&document.snapshot(), &request)
+            .expect("Han source must prepare through the native fallback catalog");
+
+        assert!(output.scene().fragments().iter().any(|fragment| {
+            fragment.script() == *b"Hani"
+                && fragment.font().data.as_ref() != LATIN_FONT
+                && fragment.paint_clip().is_none()
+        }));
     }
 
     #[test]

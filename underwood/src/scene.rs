@@ -8,8 +8,8 @@ use core::ops::Range;
 
 use crate::adapter::{
     FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId, LineBreakReason, PaintRun,
-    ParagraphConstraints, ParagraphFormation, ParagraphInput, PreparedParagraph, ShapingRun,
-    ShapingStyleId, TextAffinity,
+    ParagraphConstraints, ParagraphFormation, ParagraphInput, PreparationErrorKind,
+    PreparedParagraph, ShapingRun, ShapingStyleId, TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{
@@ -1047,6 +1047,28 @@ fn validate_prepared(
                             source,
                         ));
                     }
+                    let mut matching = projection.paint_runs.iter().filter(|paint| {
+                        let paint_source = paint.bytes();
+                        paint_source.start < source.end && source.start < paint_source.end
+                    });
+                    let Some(paint) = matching.next() else {
+                        return Err(SceneError::from_preparation_source(
+                            prepared.paragraph(),
+                            source,
+                            PreparationErrorKind::InvalidOutput,
+                        ));
+                    };
+                    if matching.next().is_some()
+                        || paint.bytes().start > source.start
+                        || paint.bytes().end < source.end
+                        || paint.slot() != segment.slot()
+                    {
+                        return Err(SceneError::from_preparation_source(
+                            prepared.paragraph(),
+                            source,
+                            PreparationErrorKind::InvalidOutput,
+                        ));
+                    }
                     projection.local_ranges(source)?;
                 }
             }
@@ -1152,8 +1174,7 @@ struct CachedFragment {
     paint: PaintSlot,
     transform: Affine,
     sources: Vec<LocalRange>,
-    bounds: Rect,
-    clip: Rect,
+    paint_clip: Option<Rect>,
     font: FontData,
     font_size: f32,
     synthesis: FontSynthesis,
@@ -1373,21 +1394,20 @@ fn build_geometry(
             });
         }
         let mut x = 0.0_f64;
-        let mut right = line.advance();
         for run in line.runs() {
             let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
             for glyph in run.glyphs() {
                 let position = Point::new(x + glyph.offset().x, baseline - glyph.offset().y);
                 for segment in glyph.paint().segments() {
                     let sources = projection.local_ranges(segment.source())?;
-                    let local_clip = segment.local_clip();
-                    let clip = Rect::new(
-                        position.x + local_clip.x0,
-                        position.y + local_clip.y0,
-                        position.x + local_clip.x1,
-                        position.y + local_clip.y1,
-                    );
-                    right = right.max(clip.x1);
+                    let paint_clip = segment.clip().map(|clip| {
+                        Rect::new(
+                            position.x + clip.x0,
+                            position.y + clip.y0,
+                            position.x + clip.x1,
+                            position.y + clip.y1,
+                        )
+                    });
                     let id =
                         SceneFragmentId(fragment_identity(prepared.paragraph(), fragments.len()));
                     fragments.push(CachedFragment {
@@ -1401,8 +1421,7 @@ fn build_geometry(
                         paint: segment.slot(),
                         transform: Affine::IDENTITY,
                         sources,
-                        bounds: clip,
-                        clip,
+                        paint_clip,
                         font: run.font().clone(),
                         font_size: run.font_size(),
                         synthesis: run.synthesis().clone(),
@@ -1415,7 +1434,12 @@ fn build_geometry(
             }
         }
         lines.push(CachedLine {
-            bounds: Rect::new(0.0, line_top, right.max(1.0), line_top + line.height()),
+            bounds: Rect::new(
+                0.0,
+                line_top,
+                line.advance().max(1.0),
+                line_top + line.height(),
+            ),
             sources: projection.local_ranges(line.source())?,
             break_reason: line.break_reason(),
             baseline,
@@ -1464,15 +1488,15 @@ fn build_geometry(
             continue;
         }
         let mut bounds: Option<Rect> = None;
-        for fragment in &fragments {
-            if fragment.sources.iter().any(|source| {
+        for cluster in &clusters {
+            if cluster.sources.iter().any(|source| {
                 matches!(source, LocalRange::Snapshot { text, .. } if *text == span.text)
                     || matches!(span.source, LeafSpanSource::Composition { .. })
                         && matches!(source, LocalRange::Composition { .. })
             }) {
                 bounds = Some(match bounds {
-                    Some(current) => current.union(fragment.bounds),
-                    None => fragment.bounds,
+                    Some(current) => current.union(cluster.bounds),
+                    None => cluster.bounds,
                 });
             }
         }
@@ -1612,22 +1636,29 @@ fn materialize_geometry(
         }
     }));
     fragments.extend(geometry.fragments.iter().map(|fragment| {
+        let (source, additional_sources) = materialize_sources(&fragment.sources, revision);
         SceneFragment {
             id: fragment.id,
             glyphs: fragment
                 .glyphs
                 .iter()
-                .map(|glyph| SceneGlyph {
-                    id: glyph.id,
-                    position: glyph.position + translate,
-                    advance: glyph.advance,
-                    source: materialize_snapshot_range(&glyph.sources, revision),
+                .map(|glyph| {
+                    let (source, additional_sources) =
+                        materialize_sources(&glyph.sources, revision);
+                    SceneGlyph {
+                        id: glyph.id,
+                        position: glyph.position + translate,
+                        advance: glyph.advance,
+                        source,
+                        additional_sources,
+                    }
                 })
                 .collect(),
             paint: fragment.paint,
             transform: fragment.transform,
-            source: Some(materialize_snapshot_range(&fragment.sources, revision)),
-            clip: fragment.clip + translate,
+            source,
+            additional_sources,
+            paint_clip: fragment.paint_clip.map(|clip| clip + translate),
             font: fragment.font.clone(),
             font_size: fragment.font_size,
             synthesis: fragment.synthesis.clone(),
@@ -1725,12 +1756,14 @@ fn materialize_projected_geometry(
                     position: glyph.position + translate,
                     advance: glyph.advance,
                     source: projected_range(&glyph.sources, revision),
+                    additional_sources: Vec::new(),
                 })
                 .collect(),
             paint: fragment.paint,
             transform: fragment.transform,
-            source: Some(projected_range(&fragment.sources, revision)),
-            clip: fragment.clip + translate,
+            source: projected_range(&fragment.sources, revision),
+            additional_sources: Vec::new(),
+            paint_clip: fragment.paint_clip.map(|clip| clip + translate),
             font: fragment.font.clone(),
             font_size: fragment.font_size,
             synthesis: fragment.synthesis.clone(),
@@ -1871,6 +1904,19 @@ fn materialize_snapshot_range(
         unreachable!("committed geometry source must remain within one semantic text leaf")
     };
     materialize_range(range, revision)
+}
+
+fn materialize_sources(
+    ranges: &[LocalRange],
+    revision: DocumentRevision,
+) -> (SnapshotTextRange, Vec<SnapshotTextRange>) {
+    let mut sources = ranges
+        .iter()
+        .map(|source| materialize_range(source, revision));
+    let source = sources
+        .next()
+        .expect("validated scene observations always retain source");
+    (source, sources.collect())
 }
 
 fn materialize_position(
@@ -3019,8 +3065,9 @@ pub struct SceneFragment<Source = SnapshotTextRange> {
     glyphs: Vec<SceneGlyph<Source>>,
     paint: PaintSlot,
     transform: Affine,
-    source: Option<Source>,
-    clip: Rect,
+    source: Source,
+    additional_sources: Vec<Source>,
+    paint_clip: Option<Rect>,
     font: FontData,
     font_size: f32,
     synthesis: FontSynthesis,
@@ -3054,10 +3101,28 @@ impl<Source> SceneFragment<Source> {
         self.transform
     }
 
-    /// Returns the source covered by this fragment when one is present.
+    /// Returns the first source slice covered by this fragment when present.
+    ///
+    /// Use [`Self::sources`] for source-complete provenance because one glyph
+    /// may cross semantic text leaves.
     #[must_use]
     pub const fn source(&self) -> Option<&Source> {
-        self.source.as_ref()
+        Some(&self.source)
+    }
+
+    /// Iterates over every source slice covered by this fragment.
+    pub fn sources(&self) -> impl DoubleEndedIterator<Item = &Source> {
+        core::iter::once(&self.source).chain(self.additional_sources.iter())
+    }
+
+    /// Returns an explicit scene-space partial-paint clip when one is required.
+    ///
+    /// Ordinary whole-glyph fragments return `None` and must not be clipped to
+    /// outline bounds. This is paint-partition geometry, not hit-test, layout,
+    /// ink, damage, or viewport geometry.
+    #[must_use]
+    pub const fn paint_clip(&self) -> Option<Rect> {
+        self.paint_clip
     }
 
     /// Returns the exact font bytes and face index for these glyphs.
@@ -3084,12 +3149,6 @@ impl<Source> SceneFragment<Source> {
         &self.normalized_coords
     }
 
-    /// Returns the scene-space clip preserving this fragment's paint coverage.
-    #[must_use]
-    pub const fn clip(&self) -> Rect {
-        self.clip
-    }
-
     /// Returns the resolved Unicode bidi level for the shaped run.
     #[must_use]
     pub const fn bidi_level(&self) -> u8 {
@@ -3110,6 +3169,7 @@ pub struct SceneGlyph<Source = SnapshotTextRange> {
     position: Point,
     advance: Vec2,
     source: Source,
+    additional_sources: Vec<Source>,
 }
 
 impl<Source> SceneGlyph<Source> {
@@ -3131,10 +3191,18 @@ impl<Source> SceneGlyph<Source> {
         self.advance
     }
 
-    /// Returns the source covered by this painted glyph observation.
+    /// Returns the first source slice covered by this painted glyph observation.
+    ///
+    /// Use [`Self::sources`] for source-complete provenance because one shaped
+    /// glyph may cross semantic text leaves.
     #[must_use]
     pub const fn source(&self) -> &Source {
         &self.source
+    }
+
+    /// Iterates over every source slice covered by this painted glyph observation.
+    pub fn sources(&self) -> impl DoubleEndedIterator<Item = &Source> {
+        core::iter::once(&self.source).chain(self.additional_sources.iter())
     }
 }
 
@@ -3316,9 +3384,10 @@ mod tests {
     use crate::adapter::{
         ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
         GlyphPaintSegment, LineBreakReason, ParagraphConstraints, ParagraphFormation,
-        ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCaret, PreparedCluster,
-        PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph,
-        PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
+        ParagraphFormationOutput, ParagraphInput, PreparationError, PreparationErrorKind,
+        PreparedCaret, PreparedCluster, PreparedClusterSide, PreparedCursorMovement,
+        PreparedCursorStep, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
+        TextAffinity,
     };
     use crate::{
         Brush, Color, CompositionClause, CompositionClauseKind, CompositionErrorKind,
@@ -3333,6 +3402,8 @@ mod tests {
     #[derive(Debug)]
     struct EchoAdapter {
         split_utf8: bool,
+        split_paint: bool,
+        mismatched_paint: bool,
         glyphless: bool,
         interior_cursor: bool,
     }
@@ -3370,19 +3441,47 @@ mod tests {
             let glyphs = if self.glyphless {
                 Vec::new()
             } else {
-                let segment = GlyphPaintSegment::new(
-                    glyph_source.clone(),
-                    input.paint_runs()[0].slot(),
-                    Rect::new(0., -16., 10., 4.),
-                )?;
-                let coverage = GlyphPaintCoverage::try_from_segments([segment])?;
+                let paint = if self.split_paint {
+                    let [first, second] = input.paint_runs() else {
+                        return Err(PreparationError::invalid_output());
+                    };
+                    GlyphPaintCoverage::try_from_segments([
+                        GlyphPaintSegment::clipped(
+                            first.bytes(),
+                            first.slot(),
+                            Rect::new(0.0, -8.0, 5.0, 2.0),
+                        )?,
+                        GlyphPaintSegment::clipped(
+                            second.bytes(),
+                            second.slot(),
+                            Rect::new(5.0, -8.0, 10.0, 2.0),
+                        )?,
+                    ])?
+                } else {
+                    let slot = if self.mismatched_paint {
+                        PaintSlot::new(99)
+                    } else {
+                        input.paint_runs()[0].slot()
+                    };
+                    GlyphPaintCoverage::whole(glyph_source.clone(), slot)?
+                };
+                let offset = if self.split_paint {
+                    Vec2::new(3.0, 4.0)
+                } else {
+                    Vec2::ZERO
+                };
                 vec![PreparedGlyph::try_new(
                     7,
                     glyph_source,
                     Vec2::new(10., 0.),
-                    Vec2::ZERO,
-                    coverage,
+                    offset,
+                    paint,
                 )?]
+            };
+            let synthesis = if self.split_paint {
+                FontSynthesis::try_new([], false, Some(14.0))?
+            } else {
+                FontSynthesis::default()
             };
             let run = PreparedRun::try_new(
                 0..text_len,
@@ -3390,7 +3489,7 @@ mod tests {
                 *b"Latn",
                 FontData::new(Blob::from(vec![0_u8]), 0),
                 input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size(),
-                FontSynthesis::default(),
+                synthesis,
                 [],
                 [],
                 glyphs,
@@ -3403,6 +3502,41 @@ mod tests {
                         .line_height()
                         .multiplier(),
                 );
+            let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
+            let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
+            let clusters = if self.split_paint {
+                let middle = input.paint_runs()[0].bytes().end;
+                vec![
+                    PreparedCluster::try_new(
+                        0..middle,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        start,
+                        PreparedClusterSide::new(middle, TextAffinity::Upstream),
+                    )?,
+                    PreparedCluster::try_new(
+                        middle..text_len,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        PreparedClusterSide::new(middle, TextAffinity::Upstream),
+                        end,
+                    )?,
+                ]
+            } else {
+                vec![PreparedCluster::try_new(
+                    0..text_len,
+                    10.0,
+                    0,
+                    ClusterBoundary::None,
+                    ClusterWhitespace::None,
+                    start,
+                    end,
+                )?]
+            };
             let line = PreparedLine::try_new(
                 0..text_len,
                 LineBreakReason::End,
@@ -3411,37 +3545,64 @@ mod tests {
                 line_height,
                 f64::from(font_size) * 0.75,
                 f64::from(font_size) * 0.25,
-                [PreparedCluster::try_new(
-                    0..text_len,
-                    10.0,
-                    0,
-                    ClusterBoundary::None,
-                    ClusterWhitespace::None,
-                    PreparedClusterSide::new(0, TextAffinity::Downstream),
-                    PreparedClusterSide::new(text_len, TextAffinity::Upstream),
-                )?],
+                clusters,
                 [run],
             )?;
-            let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
-            let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
-            let mut movements = vec![
-                PreparedCursorMovement::new(
-                    start,
-                    PreparedCaret::try_new(0, 0.0)?,
-                    None,
-                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
-                    None,
-                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
-                ),
-                PreparedCursorMovement::new(
-                    end,
-                    PreparedCaret::try_new(0, 10.0)?,
-                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
-                    None,
-                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
-                    None,
-                ),
-            ];
+            let mut movements = if self.split_paint {
+                let middle_offset = input.paint_runs()[0].bytes().end;
+                let middle = PreparedClusterSide::new(middle_offset, TextAffinity::Upstream);
+                vec![
+                    PreparedCursorMovement::new(
+                        start,
+                        PreparedCaret::try_new(0, 0.0)?,
+                        None,
+                        Some(PreparedCursorStep::new(middle, Some(0..middle_offset))),
+                        None,
+                        Some(PreparedCursorStep::new(middle, Some(0..middle_offset))),
+                    ),
+                    PreparedCursorMovement::new(
+                        middle,
+                        PreparedCaret::try_new(0, 5.0)?,
+                        Some(PreparedCursorStep::new(start, Some(0..middle_offset))),
+                        Some(PreparedCursorStep::new(end, Some(middle_offset..text_len))),
+                        Some(PreparedCursorStep::new(start, Some(0..middle_offset))),
+                        Some(PreparedCursorStep::new(end, Some(middle_offset..text_len))),
+                    ),
+                    PreparedCursorMovement::new(
+                        end,
+                        PreparedCaret::try_new(0, 10.0)?,
+                        Some(PreparedCursorStep::new(
+                            middle,
+                            Some(middle_offset..text_len),
+                        )),
+                        None,
+                        Some(PreparedCursorStep::new(
+                            middle,
+                            Some(middle_offset..text_len),
+                        )),
+                        None,
+                    ),
+                ]
+            } else {
+                vec![
+                    PreparedCursorMovement::new(
+                        start,
+                        PreparedCaret::try_new(0, 0.0)?,
+                        None,
+                        Some(PreparedCursorStep::new(end, Some(0..text_len))),
+                        None,
+                        Some(PreparedCursorStep::new(end, Some(0..text_len))),
+                    ),
+                    PreparedCursorMovement::new(
+                        end,
+                        PreparedCaret::try_new(0, 10.0)?,
+                        Some(PreparedCursorStep::new(start, Some(0..text_len))),
+                        None,
+                        Some(PreparedCursorStep::new(start, Some(0..text_len))),
+                        None,
+                    ),
+                ]
+            };
             if self.interior_cursor {
                 movements.push(PreparedCursorMovement::new(
                     PreparedClusterSide::new(1, TextAffinity::Downstream),
@@ -3466,6 +3627,8 @@ mod tests {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc01", "é");
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: true,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         });
@@ -3498,6 +3661,8 @@ mod tests {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc08", "é");
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: false,
             interior_cursor: true,
         });
@@ -3518,6 +3683,8 @@ mod tests {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc06", "a");
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: true,
             interior_cursor: false,
         });
@@ -3538,6 +3705,8 @@ mod tests {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc07", "ab");
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: true,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         });
@@ -3554,11 +3723,39 @@ mod tests {
     }
 
     #[test]
+    fn layout_reports_adapter_paint_mismatch_as_invalid_preparation() {
+        let (document, styles, paint) = one_leaf_document(*b"scene-test-doc12", "ab");
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: true,
+            glyphless: false,
+            interior_cursor: false,
+        });
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let error = layout
+            .prepare(&document.snapshot(), &request)
+            .expect_err("adapter paint must match the projected paint run");
+        assert_eq!(error.kind(), SceneErrorKind::Preparation);
+        assert_eq!(
+            error.preparation(),
+            Some(PreparationErrorKind::InvalidOutput)
+        );
+        assert_eq!(error.source(), Some(0..2));
+    }
+
+    #[test]
     fn fragment_identity_is_distinct_across_documents() {
         let (first, first_styles, first_paint) = one_leaf_document(*b"scene-test-doc02", "a");
         let (second, second_styles, second_paint) = one_leaf_document(*b"scene-test-doc03", "b");
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         });
@@ -3581,6 +3778,82 @@ mod tests {
             second_scene.scene().fragments()[0].id(),
             "document identity must participate in retained fragment identity"
         );
+        assert_eq!(
+            first_scene.scene().fragments()[0].paint_clip(),
+            None,
+            "ordinary whole-glyph paint must not create a renderer clip"
+        );
+    }
+
+    #[test]
+    fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"scene-test-doc11"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph must append");
+        let first_text = edit
+            .append_text(paragraph, InlineRole::TEXT, "a")
+            .expect("first text must append");
+        let second_text = edit
+            .append_text(paragraph, InlineRole::EMPHASIS, "b")
+            .expect("second text must append");
+        edit.commit().expect("test document must commit");
+
+        let base = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0).expect("test style must be valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let mut styles = StyleMap::new(base.clone());
+        styles.set(first_text, base.clone());
+        styles.set(second_text, base.with_paint(PaintSlot::new(1)));
+        let paint = PaintTable::from_brushes([
+            Brush::Solid(Color::BLACK),
+            Brush::Solid(Color::from_rgb8(0xff, 0x00, 0x00)),
+        ]);
+        let request = SceneRequest::new(
+            FiniteWidth::new(100.0).expect("test width is valid"),
+            &styles,
+            &paint,
+        );
+        let mut layout = LayoutEngine::new(EchoAdapter {
+            split_utf8: false,
+            split_paint: true,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        });
+        let output = layout
+            .prepare(&document.snapshot(), &request)
+            .expect("explicitly clipped split paint must lower");
+        let [first, second] = output.scene().fragments() else {
+            panic!("one split glyph must lower to exactly two draw fragments");
+        };
+
+        assert_eq!(first.glyphs()[0].id(), second.glyphs()[0].id());
+        assert_eq!(
+            first.glyphs()[0].position(),
+            second.glyphs()[0].position(),
+            "paint splitting must not duplicate shaping or move the glyph"
+        );
+        assert_eq!(first.paint(), PaintSlot::new(0));
+        assert_eq!(second.paint(), PaintSlot::new(1));
+        assert_eq!(first.source().expect("first source").text(), first_text);
+        assert_eq!(second.source().expect("second source").text(), second_text);
+        assert!(first.synthesis().skew_transform().is_some());
+        let origin = first.glyphs()[0].position();
+        assert_eq!(first.paint_clip().expect("first clip").x0, origin.x);
+        assert_eq!(first.paint_clip().expect("first clip").x1, origin.x + 5.0);
+        assert_eq!(first.paint_clip().expect("first clip").y0, origin.y - 8.0);
+        assert_eq!(first.paint_clip().expect("first clip").y1, origin.y + 2.0);
+        assert_eq!(second.paint_clip().expect("second clip").x0, origin.x + 5.0);
+        assert_eq!(
+            second.paint_clip().expect("second clip").x1,
+            origin.x + 10.0
+        );
+        assert_eq!(second.paint_clip().expect("second clip").y0, origin.y - 8.0);
+        assert_eq!(second.paint_clip().expect("second clip").y1, origin.y + 2.0);
     }
 
     #[test]
@@ -3679,6 +3952,8 @@ mod tests {
         let width = FiniteWidth::new(100.).expect("test width is valid");
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         });
@@ -3703,6 +3978,8 @@ mod tests {
         let snapshot = document.snapshot();
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         });
@@ -3971,6 +4248,8 @@ mod tests {
         );
         let mut layout = LayoutEngine::new(EchoAdapter {
             split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         });
