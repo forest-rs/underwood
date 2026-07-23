@@ -446,7 +446,7 @@ the improvement; and local plus remote validation are green.
 
 ## Renderer-owned glyph paint extent
 
-**Status:** In progress — correctness prerequisite for the native editor
+**Status:** Complete — local and remote proof green in PR #15
 
 **Beads:** `und-oh0.2.4`, `und-oh0.2.9`
 

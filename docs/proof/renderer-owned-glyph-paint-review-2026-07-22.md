@@ -82,8 +82,16 @@ reshaping work independently of a rendering policy Underwood no longer wants.
 
 Formatting, all-target/all-feature Clippy with warnings denied, and the full
 workspace all-feature test suite pass. The suite includes 35 Underwood tests,
-37 Parley-adapter tests, 21 native showcase tests, the headless public path,
+37 Parley-adapter tests, 15 native showcase tests, the headless public path,
 and the exact CPU snapshot. The clean Parley commit independently passes its
 20 Core tests plus doctest, all-target/all-feature Clippy, and
 `no-default-features + libm` checking. Repository policy, rustdoc, MSRV, and
-portability also pass locally. Remote CI remains the landing gate.
+portability also pass locally.
+
+## Remote validation
+
+Renderer-only PR #15 passed all eight required jobs in GitHub Actions run
+29970742844 at commit `384fc74`. Linux, macOS, and Windows passed the locked
+all-feature Clippy and test suite; formatting and text policy, repository
+policy, Rust 1.92 MSRV, denied-warning rustdoc, x86_64 bare-metal, and
+WebAssembly also passed.
