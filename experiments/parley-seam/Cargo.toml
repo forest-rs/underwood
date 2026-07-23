@@ -11,19 +11,19 @@ license.workspace = true
 publish = false
 
 [dependencies]
-fontique = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2", default-features = false, features = [
+fontique = { git = "https://github.com/waywardmonkeys/parley.git", rev = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2", default-features = false, features = [
   "std",
 ] }
-parlance = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2", default-features = false, features = [
+parlance = { git = "https://github.com/waywardmonkeys/parley.git", rev = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2", default-features = false, features = [
   "std",
 ] }
-parley = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2", default-features = false, features = [
+parley = { git = "https://github.com/waywardmonkeys/parley.git", rev = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2", default-features = false, features = [
   "std",
 ] }
-parley_core = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2", default-features = false, features = [
+parley_core = { git = "https://github.com/waywardmonkeys/parley.git", rev = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2", default-features = false, features = [
   "std",
 ] }
-parley_dev = { git = "https://github.com/waywardmonkeys/parley.git", rev = "d12c801d8fd298ff095f1ec903b6adaa732fcef2" }
+parley_dev = { git = "https://github.com/waywardmonkeys/parley.git", rev = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2" }
 
 [lints]
 workspace = true

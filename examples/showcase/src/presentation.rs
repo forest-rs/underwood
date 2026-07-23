@@ -151,7 +151,7 @@ impl<'a> TextSceneAdapter<'a> {
                 y: finite_f32(glyph.position().y),
             });
             let transform = self.placement * fragment.transform();
-            painter.with_fill_clip_transformed(fragment.clip(), self.placement, |painter| {
+            let draw = |painter: &mut Painter<'_, S>| {
                 painter
                     .glyphs(fragment.font(), brush)
                     .transform(transform)
@@ -159,7 +159,12 @@ impl<'a> TextSceneAdapter<'a> {
                     .font_size(fragment.font_size())
                     .normalized_coords(fragment.normalized_coords())
                     .draw(&fill, glyphs);
-            });
+            };
+            if let Some(clip) = fragment.paint_clip() {
+                painter.with_fill_clip_transformed(clip, self.placement, draw);
+            } else {
+                draw(painter);
+            }
         }
     }
 

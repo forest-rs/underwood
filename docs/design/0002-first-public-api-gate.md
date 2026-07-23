@@ -52,12 +52,14 @@ table: all three Parley dependencies now resolve together from
 `6c81e1dd9b67793cdd959c65cc650c96a1262fb7`. Crate ownership, features, and the
 no-system-font policy are unchanged.
 
-Design-0007 subsequently supersedes the paint-coverage behavior in this first
-slice. The live pin is `d12c801d8fd298ff095f1ec903b6adaa732fcef2`;
-glyph clips use real outline bounds, and a paint boundary inside one shaped
-glyph returns `UnsupportedPaintCoverage` instead of a proportional split. The
-historical example and acceptance text below record what the initial gate
-approved, not the current conformance claim.
+Design-0007 subsequently replaced the first slice's advance-sized and
+proportional clips with outline-derived clips and explicit rejection. Runtime
+evidence then showed that mandatory outline geometry rejects valid synthesized
+and non-outline paint. Design-0010 is now authoritative: ordinary glyphs carry
+complete paint ownership without a clip, while a paint boundary inside one
+shaped glyph remains `UnsupportedPaintCoverage` until conformant component
+geometry exists. The historical example and acceptance text below record what
+the initial gate approved, not the current conformance claim.
 
 The local forest consistently uses Kurbo 0.13.x without default features;
 Overstory uses Kurbo 0.13.1 and Peniko 0.6.1 with `libm`. The audited releases

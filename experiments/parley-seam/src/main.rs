@@ -11,11 +11,11 @@ use std::path::PathBuf;
 use fontique::{Blob, Synthesis};
 use parlance::{FontFeature, FontVariation};
 use parley_core::{
-    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, Boundary, FontInstance, ShapeOptions,
-    ShapedText, Shaper, shape::ClusterData,
+    Analysis, AnalysisOptions, Analyzer, Boundary, FontInstance, ShapeOptions, ShapedText, Shaper,
+    shape::ClusterData,
 };
 
-const PARLEY_REVISION: &str = "181664b28144cb59671a7f1b736757c6ebe270f2";
+const PARLEY_REVISION: &str = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2";
 const CORPUS: &str = "office affinity — مرحبا بالعالم";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,7 +174,6 @@ fn prepare(
         &mut analysis,
     );
     let analysis_digest = digest_analysis(&analysis);
-    let analysis_data_sources = AnalysisDataSources::new();
     let mut shaper = Shaper::default();
     let mut shaped_text = ShapedText::new();
     let mut items = Vec::new();
@@ -207,7 +206,6 @@ fn prepare(
                 char_style_indices: paint_slots,
             },
             |_| Some(font.instance.clone()),
-            &analysis_data_sources,
             &mut shaped_text,
         );
         runs.extend(

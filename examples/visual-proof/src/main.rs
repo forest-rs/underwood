@@ -42,7 +42,6 @@ const CORAL_COLOR: Color = Color::from_rgb8(0xff, 0x6b, 0x67);
 const GOLD_COLOR: Color = Color::from_rgb8(0xf5, 0xc4, 0x51);
 const MUTED_COLOR: Color = Color::from_rgb8(0x85, 0x96, 0xad);
 const DIAGNOSTIC_COLOR: Color = Color::from_rgb8(0xb6, 0x9c, 0xff);
-const DIAGNOSTIC_FILL: Color = Color::from_rgba8(0xb6, 0x9c, 0xff, 0x12);
 
 type AnyError = Box<dyn std::error::Error>;
 
@@ -98,9 +97,6 @@ impl<'a> TextSceneAdapter<'a> {
         if self.line_diagnostics {
             self.paint_line_diagnostics_behind(painter);
         }
-        if self.diagnostics {
-            self.paint_diagnostics_behind(painter);
-        }
 
         for fragment in self.scene.fragments() {
             let brush = self
@@ -115,7 +111,7 @@ impl<'a> TextSceneAdapter<'a> {
             });
             let transform = self.placement * fragment.transform();
             let glyph_transform = fragment.synthesis().skew_transform();
-            painter.with_fill_clip_transformed(fragment.clip(), self.placement, |painter| {
+            let draw = |painter: &mut Painter<'_, S>| {
                 painter
                     .glyphs(fragment.font(), brush)
                     .transform(transform)
@@ -123,7 +119,12 @@ impl<'a> TextSceneAdapter<'a> {
                     .font_size(fragment.font_size())
                     .normalized_coords(fragment.normalized_coords())
                     .draw(&fill, glyphs);
-            });
+            };
+            if let Some(clip) = fragment.paint_clip() {
+                painter.with_fill_clip_transformed(clip, self.placement, draw);
+            } else {
+                draw(painter);
+            }
         }
 
         if self.diagnostics {
@@ -175,40 +176,13 @@ impl<'a> TextSceneAdapter<'a> {
         }
     }
 
-    fn paint_diagnostics_behind<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        for fragment in self.scene.fragments().iter().filter(|fragment| {
-            is_zero_advance_ink(fragment) || is_latin_horizontal_overhang(fragment)
-        }) {
-            painter
-                .fill(fragment.clip(), DIAGNOSTIC_FILL)
-                .transform(self.placement)
-                .draw();
-        }
-    }
-
     fn paint_diagnostics_above<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        let clip_stroke = Stroke::new(1.5).with_dashes(0.0, [8.0, 5.0]);
-        for fragment in self.scene.fragments().iter().filter(|fragment| {
-            is_zero_advance_ink(fragment) || is_latin_horizontal_overhang(fragment)
-        }) {
-            painter
-                .stroke(fragment.clip(), &clip_stroke, DIAGNOSTIC_COLOR)
-                .transform(self.placement)
-                .draw();
-            let clip = fragment.clip();
-            painter
-                .fill(
-                    Rect::new(
-                        clip.x0,
-                        clip.y0,
-                        (clip.x0 + 28.0).min(clip.x1),
-                        clip.y0 + 4.0,
-                    ),
-                    DIAGNOSTIC_COLOR,
-                )
-                .transform(self.placement)
-                .draw();
-
+        for fragment in self
+            .scene
+            .fragments()
+            .iter()
+            .filter(|fragment| is_zero_advance_glyph(fragment))
+        {
             let glyph = &fragment.glyphs()[0];
             let origin = glyph.position();
             let advance_end = origin.x + glyph.advance().x;
@@ -269,24 +243,20 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         ],
     )?;
 
-    let zero_advance_ink = hero
+    let zero_advance_glyphs = hero
         .fragments()
         .iter()
-        .filter(|fragment| is_zero_advance_ink(fragment))
+        .filter(|fragment| is_zero_advance_glyph(fragment))
         .count();
-    let zero_advance_clip = hero
-        .fragments()
-        .iter()
-        .find(|fragment| is_zero_advance_ink(fragment))
-        .expect("the hero must contain a zero-advance Arabic glyph")
-        .clip();
     assert!(
-        zero_advance_ink > 0,
-        "the hero must retain visible ink for a zero-advance Arabic glyph"
+        zero_advance_glyphs > 0,
+        "the hero must retain a real zero-advance Arabic glyph"
     );
     assert!(
-        hero.fragments().iter().any(is_latin_horizontal_overhang),
-        "the hero must retain Latin ink outside shaped advance"
+        hero.fragments()
+            .iter()
+            .all(|fragment| fragment.paint_clip().is_none()),
+        "ordinary poster glyphs must not carry outline-derived paint clips"
     );
     assert!(
         hero.fragments()
@@ -303,7 +273,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     assert!(
         hero.semantics()
             .any(|fragment| fragment.inline_role() == Some(InlineRole::EMPHASIS)),
-        "the diagnostic overlay must be backed by real inline semantics"
+        "the hero must retain real inline semantics alongside glyph diagnostics"
     );
     let arabic_fragment = mixed_direction
         .fragments()
@@ -347,11 +317,11 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
 
     let title = layout_label(&mut layout, 0x23, 72.0, "UNDERWOOD", INK)?;
     let computed_styles = computed_style_specimen(&mut layout)?;
-    let ink_evidence = layout_label(
+    let paint_evidence = layout_label(
         &mut layout,
         0x2d,
         18.0,
-        &format!("INK BOUNDS / {zero_advance_ink} ZERO-ADVANCE GLYPH / j OVERHANG"),
+        &format!("UNCLIPPED GLYPH PAINT / {zero_advance_glyphs} ZERO-ADVANCE / FONT RASTERIZATION"),
         CORAL,
     )?;
     let mixed_direction_evidence = layout_label(
@@ -411,7 +381,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         paint_backdrop(&mut painter);
 
         TextSceneAdapter::new(&title, 120.0, 52.0).paint_into(&mut painter);
-        TextSceneAdapter::new(&ink_evidence, 124.0, 184.0).paint_into(&mut painter);
+        TextSceneAdapter::new(&paint_evidence, 124.0, 184.0).paint_into(&mut painter);
         TextSceneAdapter::new(&hero, 116.0, 252.0)
             .with_diagnostics()
             .paint_into(&mut painter);
@@ -455,16 +425,6 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
 
     let mut renderer = VelloCpuRenderer::new(WIDTH, HEIGHT);
     let image = renderer.render_scene(&scene, WIDTH, HEIGHT)?;
-    let placed_mark_clip = Rect::new(
-        zero_advance_clip.x0 + 116.0,
-        zero_advance_clip.y0 + 252.0,
-        zero_advance_clip.x1 + 116.0,
-        zero_advance_clip.y1 + 252.0,
-    );
-    assert!(
-        rect_contains_rgba(&image, placed_mark_clip, [0xf5, 0xc4, 0x51, 0xff]),
-        "the CPU rendering must contain visible Arabic mark pixels inside its ink clip"
-    );
     Ok(image)
 }
 
@@ -827,40 +787,8 @@ fn poster_paints() -> PaintTable {
     ])
 }
 
-fn is_zero_advance_ink(fragment: &underwood::SceneFragment) -> bool {
-    fragment.glyphs().len() == 1
-        && fragment.glyphs()[0].advance().x == 0.0
-        && fragment.clip().width() > 0.0
-        && fragment.clip().height() > 0.0
-}
-
-fn is_latin_horizontal_overhang(fragment: &underwood::SceneFragment) -> bool {
-    let Some(glyph) = fragment.glyphs().first() else {
-        return false;
-    };
-    fragment.script() == *b"Latn"
-        && (fragment.clip().x0 < glyph.position().x
-            || fragment.clip().x1 > glyph.position().x + glyph.advance().x)
-}
-
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the rectangle is clamped to finite non-negative image dimensions before conversion"
-)]
-fn rect_contains_rgba(image: &RgbaImage, rect: Rect, rgba: [u8; 4]) -> bool {
-    let x0 = rect.x0.floor().clamp(0.0, f64::from(image.width)) as u32;
-    let y0 = rect.y0.floor().clamp(0.0, f64::from(image.height)) as u32;
-    let x1 = rect.x1.ceil().clamp(0.0, f64::from(image.width)) as u32;
-    let y1 = rect.y1.ceil().clamp(0.0, f64::from(image.height)) as u32;
-
-    (y0..y1).any(|y| {
-        (x0..x1).any(|x| {
-            let index = usize::try_from((y * image.width + x) * 4)
-                .expect("the allocated image index must fit usize");
-            image.data[index..index + 4] == rgba
-        })
-    })
+fn is_zero_advance_glyph(fragment: &underwood::SceneFragment) -> bool {
+    fragment.glyphs().len() == 1 && fragment.glyphs()[0].advance().x == 0.0
 }
 
 fn paint_backdrop<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>) {

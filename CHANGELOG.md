@@ -24,16 +24,29 @@ Underwood does not yet make compatibility promises.
   instead of exposing only their first slice. `PreparedRun::try_new` now also
   receives explicit unrendered source ranges for controls and format characters;
   adapters must account for every scalar without manufacturing phantom glyphs.
-- Replaced advance-sized and character-proportional glyph paint clips with
-  variation-aware font outline bounds from Parley Core. Zero-advance marks and
-  glyph overhangs now retain their real ink coverage. Adapter callers that put
-  a paint boundary inside one shaped glyph, or request synthetic emboldening
-  without exact expanded bounds, must handle
-  `PreparationErrorKind::UnsupportedPaintCoverage`; Underwood no longer emits
-  approximate component clips for those cases.
+- Replaced advance-sized, character-proportional, and mandatory outline-derived
+  glyph clips with explicit source-to-paint ownership. Ordinary whole glyphs
+  now render without a clip, so missing outline metrics and synthetic
+  emboldening no longer fail preparation. Adapter callers that put a paint
+  boundary inside one shaped glyph must still handle
+  `PreparationErrorKind::UnsupportedPaintCoverage` until they can provide
+  exact component geometry. `SceneFragment::clip` is replaced by optional
+  `SceneFragment::paint_clip`; renderer adapters must draw directly for `None`
+  and clip only explicit partial-paint segments. Paragraph adapters replace
+  `GlyphPaintSegment::new` and `local_clip` with
+  `GlyphPaintCoverage::whole` for ordinary paint or
+  `GlyphPaintSegment::clipped` and optional `clip` for a validated split.
+  Explicit clips are post-synthesis glyph-local geometry; adapters account for
+  skew/emboldening and renderers translate the rectangle without applying
+  synthesis to it again.
 - Added `FontSynthesis::skew_transform` as the canonical `no_std` affine used
   by coverage adapters and renderers. Existing callers may replace local
   degree-to-shear math with this method; `skew_degrees` remains available.
+- Added an opt-in `underwood_parley/system-fonts` feature and
+  `FontSet::with_system_fonts` for native hosts that need one fixed platform
+  catalog snapshot. The default adapter remains caller-font-only and
+  deterministic. Linux loads Fontconfig dynamically so enabling the feature
+  does not require development headers at build time.
 - Added `ParagraphRole::HEADING_1` and `ParagraphRole::HEADING_2`. These roles
   preserve authored heading semantics in `TextScene`; callers still resolve
   their computed visual styles explicitly through `StyleMap`.
@@ -50,6 +63,10 @@ Underwood does not yet make compatibility promises.
   pointer selection that clamps through whitespace or empty editable text;
   `TextScene::hit_test` remains exact and returns `None` outside cluster
   geometry.
+- Added `SceneGlyph::sources` and `SceneFragment::sources` for source-complete
+  provenance when one shaped glyph crosses semantic text leaves. Existing
+  `source` accessors remain as first-slice conveniences; callers performing
+  mapping or auditing must migrate to `sources`.
 - Added revision-bound `SnapshotTextSelectionSet` support. Each
   `SnapshotTextSelection` is one insertion point and can expose several
   logically ordered ranges for visual bidi selection; independent carets are

@@ -97,6 +97,12 @@ under the full capability name.
 
 ## Implementation addendum
 
+The public branch has since been cleanly rebased onto Parley main `38809fb` as
+commit `44d155e17a6dbf455c8b9133c2ae40955c9f2af2`. The original `181664b`
+identifier below names the reviewed implementation before that rebase; the
+current commit contains the same bounded-reshape capability plus main's stored
+grapheme API and no glyph-ink patch.
+
 The gap identified by this audit is now executable on the narrow
 [`bounded-break-reshape`](https://github.com/waywardmonkeys/parley/tree/bounded-break-reshape)
 candidate, commit `181664b28144cb59671a7f1b736757c6ebe270f2`. The Core patch is based on the

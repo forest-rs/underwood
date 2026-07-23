@@ -110,7 +110,7 @@ jobs:
           toolchain: ${{ env.RUST_MIN_VER }}
 
       - name: check workspace at MSRV
-        run: cargo check --workspace --all-targets --locked
+        run: cargo check --workspace --all-targets --all-features --locked
 
   documentation:
     name: rustdoc

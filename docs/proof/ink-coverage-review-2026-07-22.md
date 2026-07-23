@@ -1,5 +1,13 @@
 # Ink-coverage conformance review — 2026-07-22
 
+> **Historical result, superseded by Design-0010:** This review proved that
+> advance rectangles and proportional ligature splits were wrong, and it fixed
+> the Arabic-dot snapshot. It did not prove that outline bounds are complete
+> painted-ink truth. Native Han fallback with synthetic emboldening exposed the
+> mandatory outline clip as a preparation bug. Ordinary glyphs now render
+> without a per-glyph clip; this record remains evidence for the original
+> failure and the abandoned Parley ink candidate.
+
 - **Scope:** Parley Core ink-metrics candidate, `underwood_parley` lowering,
   public headless path, semantic-scene benchmark, and CPU visual proof
 - **Design:** Design-0007

@@ -351,6 +351,20 @@ impl SceneError {
         }
     }
 
+    pub(crate) fn from_preparation_source(
+        paragraph: ParagraphId,
+        source: Range<u32>,
+        preparation: PreparationErrorKind,
+    ) -> Self {
+        Self {
+            kind: SceneErrorKind::Preparation,
+            document: Some(paragraph.document),
+            paragraph: Some(paragraph),
+            source: Some(source),
+            preparation: Some(preparation),
+        }
+    }
+
     /// Returns the stable error category.
     #[must_use]
     pub const fn kind(&self) -> SceneErrorKind {
@@ -384,7 +398,11 @@ impl SceneError {
 
 impl fmt::Display for SceneError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "scene preparation failed: {:?}", self.kind)
+        write!(formatter, "scene preparation failed: {:?}", self.kind)?;
+        if let Some(preparation) = self.preparation {
+            write!(formatter, " ({preparation:?})")?;
+        }
+        Ok(())
     }
 }
 
@@ -430,3 +448,26 @@ impl fmt::Display for SelectionError {
 }
 
 impl core::error::Error for SelectionError {}
+
+#[cfg(test)]
+mod tests {
+    use alloc::format;
+
+    use super::{PreparationErrorKind, SceneError};
+    use crate::{DocumentId, ParagraphId};
+
+    #[test]
+    fn scene_error_display_includes_the_preparation_category() {
+        let error = SceneError::from_preparation(
+            ParagraphId {
+                document: DocumentId::from_bytes(*b"scene-error-doc1"),
+                index: 4,
+            },
+            PreparationErrorKind::UnsupportedPaintCoverage,
+        );
+        assert_eq!(
+            format!("{error}"),
+            "scene preparation failed: Preparation (UnsupportedPaintCoverage)"
+        );
+    }
+}

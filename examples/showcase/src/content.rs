@@ -545,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn arabic_specimen_uses_real_rtl_fallback_with_visible_mark_ink() {
+    fn arabic_specimen_uses_real_rtl_fallback_with_unclipped_mark_glyph() {
         let mut content = ShowcaseContent::new().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
         let arabic: Vec<_> = frame
@@ -569,8 +569,7 @@ mod tests {
                 .glyphs()
                 .iter()
                 .any(|glyph| glyph.advance().x == 0.0)
-                && fragment.clip().width() > 0.0
-                && fragment.clip().height() > 0.0
+                && fragment.paint_clip().is_none()
         }));
         let visual_sources: Vec<_> = arabic
             .iter()

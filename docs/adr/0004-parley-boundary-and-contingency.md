@@ -106,7 +106,13 @@ the capability lands there.
 
 ### Implementation update — ink metrics candidate, 2026-07-22
 
-Underwood now pins
+> **Superseded by Design-0010:** The candidate below was implemented and
+> reviewed, but Underwood no longer requires its outline queries. Outline
+> bounds cannot represent all bitmap or color-font paint and made synthetic
+> emboldening a preparation failure. The clean upstream candidate retains only
+> bounded reshape; actual painted extent belongs to the renderer.
+
+The superseded revision was
 [`waywardmonkeys/parley@d12c801`](https://github.com/waywardmonkeys/parley/commit/d12c801d8fd298ff095f1ec903b6adaa732fcef2),
 which layers run-scoped, variation-aware glyph ink metrics on the bounded
 reshape candidate. This deletes Underwood's advance-sized and
@@ -122,6 +128,16 @@ work accounting, and portable scenes. Future sharing should extract similarly
 small line-formation mechanisms rather than couple Underwood to private
 high-level `LayoutData`.
 
+### Implementation update — clean bounded-reshape rebase, 2026-07-22
+
+Underwood now pins
+[`waywardmonkeys/parley@44d155e`](https://github.com/waywardmonkeys/parley/commit/44d155e17a6dbf455c8b9133c2ae40955c9f2af2).
+This is the bounded break/concat change replayed onto current Parley main
+`38809fb`, including main's stored grapheme boundaries and excluding the
+superseded outline-bounds commit. The public fork branch
+`bounded-break-reshape` points to this clean commit. All Underwood workspace
+members use the same immutable revision.
+
 ## Seam matrix
 
 | Capability | Current upstream seam | Underwood position | Readiness |
@@ -132,13 +148,13 @@ high-level `LayoutData`.
 | Font selection | `Shaper::shape_item` callback over clusters | Bridge the Underwood font resolver | Usable |
 | Shaping | Owned `ShapedText` on current Parley `main` | Retain directly; do not maintain a second shaped-run model | Usable |
 | Retained shaped text | Landed PR #679 | Consume the owned immutable output | Usable |
-| Bounded break reshaping | Candidate `181664b` extracted onto current `ShapedText` | Consume exact pin; upstream and retire fork URL | Executable, upstream review pending |
-| Glyph ink metrics | Candidate `d12c801` exposes run-scoped, variation-aware bounds | Consume for portable paint clips; keep paint identity outside Parley | Executable, upstream review pending |
+| Bounded break reshaping | Candidate `44d155e` on current main | Consume exact pin; upstream and retire fork URL | Executable, upstream review pending |
+| Glyph ink metrics | Superseded candidate `d12c801` | Do not consume; actual paint extent belongs to the renderer under Design-0010 | Retired from Underwood |
 | Greedy line breaking | High-level `BreakLines` and `BreakerState` | Evidence source and possible temporary adapter, not document flow | Usable but wrong ownership |
 | Arbitrary line intervals | Mutable line geometry and custom out-of-flow yield | Drive an Underwood breaker over core-shaped data | Partial |
 | Vertical shaping | Draft PR #634 only | Upstream first; no horizontal-only public Underwood contract | Gap |
 | Inline objects | High-level out-of-band `InlineBox` | Require core marker semantics plus high-level adapter equivalence | Partial |
-| Paint-only boundaries | Font ink is available; exact ligature-component paint ownership is not | Retain slots without changing shaping; reject a boundary inside one glyph | Single-owner executable; multi-paint gap |
+| Paint-only boundaries | Exact ligature-component paint ownership is not available | Retain whole-glyph slots without changing shaping; reject a boundary inside one glyph | Single-owner executable; multi-paint gap |
 | Text-data injection | Compiled/baked constructors inside core | Coordinate with ADR-0003; upstream provider seam required | Gap |
 
 ## Required retained contracts

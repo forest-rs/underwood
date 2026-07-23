@@ -15,8 +15,9 @@ physics. Overstory is the flagship experience layer.
 
 Underwood has completed its executable constitution, first semantic-to-scene
 slice, computed inline-style spine, Fontique-backed font requests, retained
-Parley Core `ShapedText`, Parley-backed paragraph formation, ink-accurate glyph
-coverage, CPU visual proof, exact cluster interaction, and revision-bound
+Parley Core `ShapedText`, Parley-backed paragraph formation, renderer-owned
+glyph paint with explicit source ownership, CPU visual proof, exact cluster
+interaction, and revision-bound
 multi-selection transactions. A generated-source IME composition epoch and
 revisioned editable-surface query layer now execute against the same retained
 Parley geometry for both event-feed and host-driven protocol shapes. The

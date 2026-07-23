@@ -1206,7 +1206,7 @@ impl PreparedGlyph {
         self.offset
     }
 
-    /// Returns source and local-clip paint coverage.
+    /// Returns complete source-to-paint coverage.
     #[must_use]
     pub const fn paint(&self) -> &GlyphPaintCoverage {
         &self.paint
@@ -1220,15 +1220,31 @@ pub struct GlyphPaintCoverage {
 }
 
 impl GlyphPaintCoverage {
+    /// Creates whole-glyph coverage with no renderer clip.
+    pub fn whole(source: Range<u32>, slot: PaintSlot) -> Result<Self, PreparationError> {
+        Self::try_from_segments([GlyphPaintSegment::whole(source, slot)?])
+    }
+
     /// Validates non-empty, contiguous, source-ordered segments.
+    ///
+    /// One unclipped segment represents ordinary whole-glyph paint. Several
+    /// segments require an explicit clip for every segment; mixing clipped and
+    /// unclipped coverage would make the paint boundary ambiguous.
     pub fn try_from_segments(
         segments: impl IntoIterator<Item = GlyphPaintSegment>,
     ) -> Result<Self, PreparationError> {
         let segments: Vec<_> = segments.into_iter().collect();
+        let clipped = segments
+            .iter()
+            .filter(|segment| segment.clip.is_some())
+            .count();
         if segments.is_empty()
             || segments
                 .windows(2)
                 .any(|pair| pair[0].source.end != pair[1].source.start)
+            || (clipped != 0 && clipped != segments.len())
+            || (clipped == 0 && segments.len() != 1)
+            || (clipped != 0 && segments.len() < 2)
         {
             return Err(PreparationError::unsupported_paint_coverage());
         }
@@ -1242,36 +1258,51 @@ impl GlyphPaintCoverage {
     }
 }
 
-/// Paint and local clip for one source portion of a shaped glyph.
+/// Paint ownership for one source portion of a shaped glyph.
 #[derive(Clone, Debug)]
 pub struct GlyphPaintSegment {
     source: Range<u32>,
     slot: PaintSlot,
-    local_clip: Rect,
+    clip: Option<Rect>,
 }
 
 impl GlyphPaintSegment {
-    /// Creates a finite, non-empty coverage segment.
-    pub fn new(
+    /// Creates ordinary whole-glyph paint without a renderer clip.
+    pub fn whole(source: Range<u32>, slot: PaintSlot) -> Result<Self, PreparationError> {
+        Self::validate(source, slot, None)
+    }
+
+    /// Creates partial-glyph paint with explicit post-synthesis glyph-local clip geometry.
+    ///
+    /// The adapter must account for synthetic skew or emboldening when it derives this
+    /// rectangle. Scene lowering translates the clip by the positioned glyph origin, and
+    /// renderers must not apply [`FontSynthesis`] to the clip a second time.
+    pub fn clipped(
         source: Range<u32>,
         slot: PaintSlot,
-        local_clip: Rect,
+        clip: Rect,
+    ) -> Result<Self, PreparationError> {
+        Self::validate(source, slot, Some(clip))
+    }
+
+    fn validate(
+        source: Range<u32>,
+        slot: PaintSlot,
+        clip: Option<Rect>,
     ) -> Result<Self, PreparationError> {
         if source.start >= source.end
-            || !local_clip.x0.is_finite()
-            || !local_clip.y0.is_finite()
-            || !local_clip.x1.is_finite()
-            || !local_clip.y1.is_finite()
-            || local_clip.width() < 0.0
-            || local_clip.height() < 0.0
+            || clip.is_some_and(|clip| {
+                !clip.x0.is_finite()
+                    || !clip.y0.is_finite()
+                    || !clip.x1.is_finite()
+                    || !clip.y1.is_finite()
+                    || clip.width() < 0.0
+                    || clip.height() < 0.0
+            })
         {
             return Err(PreparationError::unsupported_paint_coverage());
         }
-        Ok(Self {
-            source,
-            slot,
-            local_clip,
-        })
+        Ok(Self { source, slot, clip })
     }
 
     /// Returns the paragraph-local UTF-8 source range.
@@ -1286,10 +1317,10 @@ impl GlyphPaintSegment {
         self.slot
     }
 
-    /// Returns glyph-local clip geometry.
+    /// Returns post-synthesis glyph-local partial-paint clip geometry when one is required.
     #[must_use]
-    pub const fn local_clip(&self) -> Rect {
-        self.local_clip
+    pub const fn clip(&self) -> Option<Rect> {
+        self.clip
     }
 }
 
@@ -1426,6 +1457,72 @@ mod tests {
         assert!(
             FontSynthesis::try_new([FontVariation::new(wght, f32::NAN)], false, None).is_err(),
             "non-finite synthesis evidence must fail at the adapter boundary"
+        );
+    }
+
+    #[test]
+    fn whole_glyph_paint_is_exactly_one_unclipped_segment() {
+        let coverage = GlyphPaintCoverage::whole(2..5, PaintSlot::new(3))
+            .expect("whole-glyph coverage must be valid");
+        let [segment] = coverage.segments() else {
+            panic!("whole-glyph coverage must contain exactly one segment");
+        };
+        assert_eq!(segment.source(), 2..5);
+        assert_eq!(segment.slot(), PaintSlot::new(3));
+        assert_eq!(segment.clip(), None);
+    }
+
+    #[test]
+    fn split_glyph_paint_requires_explicit_clips_for_every_segment() {
+        let left = Rect::new(-1.0, -8.0, 4.0, 2.0);
+        let right = Rect::new(4.0, -8.0, 11.0, 2.0);
+        let coverage = GlyphPaintCoverage::try_from_segments([
+            GlyphPaintSegment::clipped(0..1, PaintSlot::new(0), left)
+                .expect("left split must be valid"),
+            GlyphPaintSegment::clipped(1..3, PaintSlot::new(1), right)
+                .expect("right split must be valid"),
+        ])
+        .expect("contiguous explicitly clipped coverage must be valid");
+        let glyph = PreparedGlyph::try_new(17, 0..3, Vec2::new(10.0, 0.0), Vec2::ZERO, coverage)
+            .expect("split coverage must preserve one shaped glyph");
+        assert_eq!(glyph.paint().segments().len(), 2);
+        assert_eq!(glyph.paint().segments()[0].clip(), Some(left));
+        assert_eq!(glyph.paint().segments()[1].clip(), Some(right));
+    }
+
+    #[test]
+    fn glyph_paint_rejects_mixed_unclipped_and_clipped_segments() {
+        let error = GlyphPaintCoverage::try_from_segments([
+            GlyphPaintSegment::whole(0..1, PaintSlot::new(0))
+                .expect("whole segment must be valid alone"),
+            GlyphPaintSegment::clipped(1..2, PaintSlot::new(1), Rect::new(5.0, -8.0, 10.0, 2.0))
+                .expect("clipped segment must be valid alone"),
+        ])
+        .expect_err("mixed full and partial paint would make clipping ambiguous");
+        assert_eq!(error.kind(), PreparationErrorKind::UnsupportedPaintCoverage);
+    }
+
+    #[test]
+    fn glyph_paint_rejects_source_gaps_and_single_partial_segments() {
+        let gap = GlyphPaintCoverage::try_from_segments([
+            GlyphPaintSegment::clipped(0..1, PaintSlot::new(0), Rect::new(0.0, -8.0, 4.0, 2.0))
+                .expect("first clipped segment must be valid"),
+            GlyphPaintSegment::clipped(2..3, PaintSlot::new(1), Rect::new(6.0, -8.0, 10.0, 2.0))
+                .expect("second clipped segment must be valid"),
+        ])
+        .expect_err("source gaps cannot describe complete glyph paint");
+        assert_eq!(gap.kind(), PreparationErrorKind::UnsupportedPaintCoverage);
+
+        let partial = GlyphPaintCoverage::try_from_segments([GlyphPaintSegment::clipped(
+            0..1,
+            PaintSlot::new(0),
+            Rect::new(0.0, -8.0, 4.0, 2.0),
+        )
+        .expect("the segment geometry itself is valid")])
+        .expect_err("one complete paint owner must use the unclipped whole-glyph form");
+        assert_eq!(
+            partial.kind(),
+            PreparationErrorKind::UnsupportedPaintCoverage
         );
     }
 
@@ -1637,16 +1734,10 @@ mod tests {
     }
 
     fn run(source: core::ops::Range<u32>) -> PreparedRun {
-        let coverage = GlyphPaintCoverage::try_from_segments([GlyphPaintSegment::new(
-            source.clone(),
-            PaintSlot::new(0),
-            Rect::new(0., 0., 1., 1.),
-        )
-        .expect("test coverage is finite")])
-        .expect("test coverage is contiguous");
-        let glyph =
-            PreparedGlyph::try_new(1, source.clone(), Vec2::new(1., 0.), Vec2::ZERO, coverage)
-                .expect("test glyph is valid");
+        let paint = GlyphPaintCoverage::whole(source.clone(), PaintSlot::new(0))
+            .expect("whole-glyph paint is valid");
+        let glyph = PreparedGlyph::try_new(1, source.clone(), Vec2::new(1., 0.), Vec2::ZERO, paint)
+            .expect("test glyph is valid");
         PreparedRun::try_new(
             source,
             0,

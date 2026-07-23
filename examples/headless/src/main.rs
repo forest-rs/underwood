@@ -140,21 +140,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         16.0,
         "scene fragments must retain the font scale required for rendering"
     );
-    let overhang = first_scene
-        .scene()
-        .fragments()
-        .iter()
-        .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == first_prefix && source.bytes() == (0..1))
-        })
-        .expect("the Latin j overhang probe must produce a scene fragment");
-    let overhang_glyph = &overhang.glyphs()[0];
     assert!(
-        overhang.clip().x0 < overhang_glyph.position().x
-            || overhang.clip().x1 > overhang_glyph.position().x + overhang_glyph.advance().x,
-        "real glyph ink must not be clamped to shaped advance"
+        first_scene
+            .scene()
+            .fragments()
+            .iter()
+            .all(|fragment| fragment.paint_clip().is_none()),
+        "ordinary whole-glyph paint must not manufacture outline-derived clips"
     );
     assert!(
         first_scene
@@ -196,8 +188,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .expect("Noto Kufi must expose a zero-advance Arabic mark");
     assert!(
-        zero_advance_mark.clip().width() > 0.0 && zero_advance_mark.clip().height() > 0.0,
-        "zero-advance Arabic ink must retain visible paint coverage"
+        zero_advance_mark.paint_clip().is_none(),
+        "a zero-advance Arabic glyph must reach the renderer without an ordinary paint clip"
     );
     let arabic_visual_sources: Vec<_> = first_scene
         .scene()
@@ -240,7 +232,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_bytes!("../fonts/NotoKufiArabic-Regular.otf"),
         "a direct Noto Kufi family request must select the bundled resource"
     );
-    let hit_point = fragment.clip().center();
+    let hit_point = first_scene
+        .scene()
+        .semantics()
+        .find(|semantic| {
+            semantic
+                .source()
+                .is_some_and(|source| source.text() == first_prefix)
+        })
+        .expect("the authored prefix must expose semantic cluster geometry")
+        .bounds()
+        .center();
     let hit = first_scene
         .scene()
         .hit_test(hit_point)

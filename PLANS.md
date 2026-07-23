@@ -400,8 +400,9 @@ same-machine benchmark are recorded in
 `docs/proof/parley-formation-review-2026-07-22.md` and
 `docs/proof/parley-formation-benchmark-2026-07-22.md`.
 
-The final implementation pins public Parley candidate `181664b`, derived
-directly from audited main revision `6c81e1d`. Parley Core retains the inputs
+The final implementation now pins public Parley candidate `44d155e`, rebased
+directly onto current main revision `38809fb` without the superseded glyph-ink
+experiment. Parley Core retains the inputs
 needed for bounded break/concat reshaping; `underwood_parley` applies that seam
 at selected legal boundaries, backtracks if reshaping changes fit, and lowers
 only the committed formed result. The product corpus proves a legal Arabic
@@ -443,85 +444,60 @@ execute through the product path; the provisional scene breaker is deleted;
 the migration and upstream lifecycle are recorded; the visual specimen exposes
 the improvement; and local plus remote validation are green.
 
-## Ink-accurate glyph paint coverage
+## Renderer-owned glyph paint extent
 
-**Status:** Complete — local and remote proof green in PR #10
+**Status:** In progress — correctness prerequisite for the native editor
 
-**Bead:** `und-oh0.2.4`
+**Beads:** `und-oh0.2.4`, `und-oh0.2.9`
 
 ### Goal
 
-Replace advance-sized and character-proportional glyph clips with coverage
-derived from the selected font instance's real glyph ink and from explicit
-source-component boundaries. Repair the missing Arabic dots in the public CPU
-proof while making combining marks, overhangs, bidi, and split ligatures part
-of one renderer-neutral contract.
+Keep the Arabic-dot and no-invented-ligature lessons from the original paint
+coverage work while removing outline bounds as a prerequisite for ordinary
+glyph rendering. Support synthesized and non-outline glyph paint without
+pretending that an outline rectangle describes all backend output.
 
 ### Fence
 
-Parley Core owns reusable font-instance glyph metrics and any OpenType
-ligature-caret truth. `underwood_parley` owns the adapter from shaped clusters,
-paint runs, and those metrics into portable source/clip segments. Underwood
-owns paint identity and scene composition. Renderers consume the resulting
-clips; they do not infer text coverage. This campaign explicitly does not move
-paint identity into Parley, add a production dependency, special-case Arabic,
-or claim exact multi-paint coverage when the font supplies no trustworthy
-component geometry.
-
-### Integration
-
-```text
-Parley Core shaped run + font ink/caret metrics
-                         |
-                         v
-underwood_parley source/paint segmentation
-                         |
-                         v
-Underwood portable fragments and clips
-                         |
-                         v
-imaging + imaging_vello_cpu proof
-```
+Parley Core and Fontique own shaping, font selection, and synthesis.
+`underwood_parley` owns complete source-to-paint assignment. Underwood owns the
+portable retained scene and explicit partial-paint clips. The renderer owns
+actual painted extent. Hit testing and editing use cluster geometry. No layer
+substitutes advance bounds for ink or requires outline metadata to draw a whole
+glyph.
 
 ### Steps
 
-1. Add the smallest public-path trap for Noto Kufi `ب`: its zero-advance dot
-   glyph must retain non-empty ink coverage. Prove it fails before changing
-   behavior.
-2. Audit the pinned Parley/Skrifa data already available for variation-aware
-   glyph bounds and trustworthy ligature component positions. Add only small,
-   generally useful Parley Core primitives, with no new dependency edge.
-3. Replace `paint_coverage`'s font-size rectangle and character-count fractions
-   with ink bounds and source-aligned component geometry. Reject unsupported
-   multi-paint splits explicitly.
-4. Add adapter and public conformance tests for Arabic cursive marks, a Latin
-   ligature, combining marks or equivalent zero-advance glyphs, overhangs,
-   mixed direction, and the explicit unsupported path.
-5. Regenerate and inspect the CPU poster, update the exact snapshot and proof
-   record, measure the retained product path, and run the complete local and
-   remote Definition of Done before landing.
+1. Keep the native Chinese IME commit as a failing product-path regression; it
+   must resolve a real Han system fallback and pass preparation.
+2. Make ordinary paint coverage source-complete and unclipped. Preserve the
+   future conformant split seam as explicit, validated clipped segments.
+3. Remove outline-metric and synthetic-embolden rejection from
+   `underwood_parley` while retaining cross-paint rejection.
+4. Migrate render adapters, diagnostics, and pointer tests away from mandatory
+   glyph clips. Prove Arabic pixels remain present.
+5. Supersede the stale design and proof claims, remove the abandoned Parley ink
+   candidate from the pin, and run all local and remote gates.
 
 ### Risks and controls
 
-- **Advance mistaken for ink:** every supported glyph clip contains its real
-  outline bounds after offsets and supported synthesis transforms.
-- **Ligature approximation renamed:** interior paint boundaries come from
-  explicit component geometry; absent or unsupported data is an error, never a
-  character-count fallback.
-- **Variable-font drift:** bounds and carets use the run's exact normalized
-  coordinates and font size.
-- **Backend dependence:** portable rectangles are produced before scene
-  lowering and asserted without relying solely on snapshot pixels.
-- **Scope invasion:** any generally useful font mechanic is implemented and
-  tested in Parley Core; Underwood retains only its adapter policy.
+- **Unknown extent treated as empty:** ordinary glyphs draw without a clip;
+  future damage and culling stay conservative.
+- **Advance renamed as ink:** no universal ink-bounds API is introduced.
+- **Split-paint mirage:** only exact, complete segment clips are accepted;
+  current cross-paint Parley glyphs remain explicitly unsupported.
+- **Interaction regression:** hits, carets, selections, and IME rectangles use
+  cluster and line geometry, never painted extent.
+- **Backend synthesis gap:** preparation retains Fontique's synthesis request;
+  renderer fidelity is reported independently and not overstated.
 
 ### Completion
 
-The campaign is complete when the Arabic dot is visibly and structurally
-present, the proportional approximation is deleted, supported ligature/bidi/
-mark/overhang cases have public conformance evidence, unsupported coverage
-fails explicitly, the visual proof is regenerated and inspected, and all local
-plus remote gates pass.
+The campaign is complete when the exact Chinese IME regression, synthetic
+emboldening, ordinary unclipped paint, explicit split validation, Arabic pixel
+proof, documentation migration, clean Parley bounded-reshape pin, and all local
+plus remote gates pass. Design-0010 is authoritative; Design-0007 remains only
+the historical record of the earlier investigation.
 
 ## Live document showcase
 
