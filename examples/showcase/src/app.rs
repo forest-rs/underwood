@@ -7,12 +7,19 @@ use std::time::{Duration, Instant};
 
 use crate::content::{PreparedCompositionFrame, PreparedDocumentFrame, ShowcaseContent};
 use crate::host::{self, Command, Frame, HostApplication};
-use crate::interaction::{EditorEvent, EditorState};
+use crate::interaction::{
+    ActionRegistry, EditorEvent, EditorResponse, EditorState, ShowcaseAction,
+};
 use crate::presentation::{self, FrameLayout};
 use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{TextScene, WorkReport};
 
 type AnyError = Box<dyn std::error::Error>;
+
+const SOURCE_ACTION: ShowcaseAction = ShowcaseAction::visit_url(
+    "forest-rs/underwood on GitHub",
+    "https://github.com/forest-rs/underwood",
+);
 
 enum PreparedFrame {
     Committed(PreparedDocumentFrame),
@@ -29,6 +36,7 @@ struct ShowcaseApp {
     renderer: VelloCpuRenderer,
     axis_animation: AxisAnimation,
     editor: EditorState,
+    action_registry: ActionRegistry,
     show_guides: bool,
     last_elapsed: Duration,
     last_layout: Option<FrameLayout>,
@@ -44,6 +52,7 @@ impl ShowcaseApp {
             renderer: VelloCpuRenderer::new(1, 1),
             axis_animation: AxisAnimation::new(),
             editor: EditorState::default(),
+            action_registry: ActionRegistry::default(),
             show_guides: false,
             last_elapsed: Duration::ZERO,
             last_layout: None,
@@ -69,11 +78,22 @@ impl ShowcaseApp {
             layout.content_width,
             self.axis_animation.phase(self.last_elapsed),
         ) {
-            Ok(prepared) => self.last_committed_scene = Some(prepared.scene),
+            Ok(prepared) => {
+                if let Err(error) = self.remember_committed_scene(prepared.scene) {
+                    self.editor.report_error(error);
+                }
+            }
             Err(error) => self
                 .editor
                 .report_error(format!("interaction reprepare failed: {error}")),
         }
+    }
+
+    fn remember_committed_scene(&mut self, scene: TextScene) -> Result<(), String> {
+        self.action_registry =
+            ActionRegistry::bind(&scene, [(self.content.action_text(), SOURCE_ACTION)])?;
+        self.last_committed_scene = Some(scene);
+        Ok(())
     }
 }
 
@@ -149,7 +169,7 @@ impl HostApplication for ShowcaseApp {
                     self.editor
                         .ime_cursor_rect(&self.content, Some(&prepared.scene), None);
                 let clipped = layout.document_is_clipped(&prepared.scene);
-                self.last_committed_scene = Some(prepared.scene);
+                self.remember_committed_scene(prepared.scene)?;
                 (
                     scene,
                     prepared.work,
@@ -217,6 +237,7 @@ impl HostApplication for ShowcaseApp {
             Command::Reset => {
                 self.content.reset();
                 self.editor.reset();
+                self.action_registry = ActionRegistry::default();
                 self.axis_animation.reset();
                 self.show_guides = false;
                 self.last_committed_scene = None;
@@ -225,7 +246,7 @@ impl HostApplication for ShowcaseApp {
         }
     }
 
-    fn editor_event(&mut self, event: EditorEvent) {
+    fn editor_event(&mut self, event: EditorEvent) -> EditorResponse {
         self.refresh_stale_interaction_scene();
         let revision = self.content.snapshot().revision();
         let event = self
@@ -251,11 +272,16 @@ impl HostApplication for ShowcaseApp {
         ) {
             self.axis_animation.pause(self.last_elapsed);
         }
-        self.editor
-            .handle(event, &mut self.content, self.last_committed_scene.as_ref());
+        let response = self.editor.handle_with_actions(
+            event,
+            &mut self.content,
+            self.last_committed_scene.as_ref(),
+            &self.action_registry,
+        );
         if self.content.snapshot().revision() != revision {
             self.capture_next_work = true;
         }
+        response
     }
 
     fn animation_enabled(&self) -> bool {

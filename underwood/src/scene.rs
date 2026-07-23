@@ -2672,9 +2672,18 @@ impl TextScene {
                 extent.byte()..extent.byte(),
             )]);
         }
-        let ranges = self
-            .walk_visual_ranges(anchor, extent, TextMovement::NextVisual)?
-            .or(self.walk_visual_ranges(anchor, extent, TextMovement::PreviousVisual)?);
+        let mut ranges = None;
+        for (start, end, movement) in [
+            (anchor, extent, TextMovement::NextVisual),
+            (anchor, extent, TextMovement::PreviousVisual),
+            (extent, anchor, TextMovement::NextVisual),
+            (extent, anchor, TextMovement::PreviousVisual),
+        ] {
+            if let Some(found) = self.walk_visual_ranges(start, end, movement)? {
+                ranges = Some(found);
+                break;
+            }
+        }
         let Some(mut ranges) = ranges else {
             return Err(SelectionError::new(
                 SelectionErrorKind::DisconnectedMovement,
@@ -2814,6 +2823,12 @@ impl TextScene {
         }
         if self.can_reach_visual(first, second, TextMovement::PreviousVisual)? {
             return Ok(core::cmp::Ordering::Greater);
+        }
+        if self.can_reach_visual(second, first, TextMovement::NextVisual)? {
+            return Ok(core::cmp::Ordering::Greater);
+        }
+        if self.can_reach_visual(second, first, TextMovement::PreviousVisual)? {
+            return Ok(core::cmp::Ordering::Less);
         }
         Err(SelectionError::new(
             SelectionErrorKind::DisconnectedMovement,
@@ -3423,7 +3438,8 @@ mod tests {
         InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, Point,
         ProjectedTextSource, Rect, SceneErrorKind, SceneRequest, ShapingStyle,
         SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
-        StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextId, TextSelectionMode, Vec2,
+        StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextId, TextMovement, TextSelectionMode,
+        Vec2,
     };
 
     #[derive(Debug)]
@@ -4258,6 +4274,74 @@ mod tests {
                 .kind(),
             SceneErrorKind::InvalidComposition,
             "composition base revisions are exact rather than relocatable"
+        );
+    }
+
+    #[test]
+    fn visual_selection_uses_the_reciprocal_caret_path() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"scene-visual-dir"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph must append");
+        let text = edit
+            .append_text(paragraph, InlineRole::TEXT, "ab")
+            .expect("test text must append");
+        edit.commit().expect("test document must commit");
+        let snapshot = document.snapshot();
+        let start =
+            SnapshotTextPosition::new(snapshot.revision(), text, 0, TextAffinity::Downstream);
+        let end = SnapshotTextPosition::new(snapshot.revision(), text, 2, TextAffinity::Upstream);
+        let source = SnapshotTextRange::new(snapshot.revision(), text, 0..2);
+        let scene = super::TextScene {
+            document: snapshot.id(),
+            revision: snapshot.revision(),
+            lines: Vec::new(),
+            fragments: Vec::new(),
+            clusters: Vec::new(),
+            carets: Vec::new(),
+            movements: vec![
+                super::SceneCursorMovement {
+                    position: start,
+                    previous_visual: None,
+                    next_visual: None,
+                    previous_logical: None,
+                    next_logical: None,
+                },
+                super::SceneCursorMovement {
+                    position: end,
+                    previous_visual: Some(super::SceneCursorStep {
+                        target: start,
+                        source: Some(source.clone()),
+                    }),
+                    next_visual: None,
+                    previous_logical: None,
+                    next_logical: None,
+                },
+            ],
+            texts: vec![source.clone()],
+            paint: PaintTable::from_brushes([Brush::Solid(Color::BLACK)]),
+            semantics: Vec::new(),
+        };
+
+        let forward = scene
+            .selection(&start, &end, TextSelectionMode::Visual)
+            .expect("selection must use the equivalent reverse traversal");
+        let reverse = scene
+            .selection(&end, &start, TextSelectionMode::Visual)
+            .expect("the represented traversal must select");
+        assert_eq!(forward.ranges(), reverse.ranges());
+        assert_eq!(forward.ranges(), [source]);
+
+        let selections = scene
+            .selection_set([forward])
+            .expect("direction-independent selection must validate");
+        let collapsed = scene
+            .move_selections(&selections, TextMovement::PreviousVisual, false)
+            .expect("visual ordering must use the reciprocal traversal");
+        assert_eq!(
+            collapsed.primary().expect("caret must survive").extent(),
+            &start
         );
     }
 

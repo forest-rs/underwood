@@ -29,6 +29,15 @@ const CHANGED_EDIT_TEXT: &str = "One local edit landed here: مكتب + office +
 
 type AnyError = Box<dyn std::error::Error>;
 
+/// Showcase-owned paint state for the actionable semantic specimen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ActionVisual {
+    #[default]
+    Idle,
+    Hovered,
+    Pressed,
+}
+
 /// One prepared live frame and its observed work.
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedDocumentFrame {
@@ -60,6 +69,7 @@ pub(crate) struct ShowcaseContent {
     layout: LayoutEngine,
     leaves: Leaves,
     alternate_paint: bool,
+    action_visual: ActionVisual,
     load_system_fonts: bool,
 }
 
@@ -73,6 +83,7 @@ struct Leaves {
     arabic: TextId,
     #[cfg(test)]
     mixed_suffix: TextId,
+    action: TextId,
     section_two: TextId,
     width_narrow: TextId,
     width_regular: TextId,
@@ -144,7 +155,12 @@ impl ShowcaseContent {
         let _mixed_suffix = edit.append_text(
             body,
             InlineRole::TEXT,
-            " runs right-to-left—with every dot intact—inside the same flowing paragraph.",
+            " runs right-to-left—with every dot intact—inside the same flowing paragraph. ",
+        )?;
+        let action = edit.append_text(
+            body,
+            InlineRole::EMPHASIS,
+            "Explore the source on GitHub — اقرأ المزيد عن Underwood",
         )?;
 
         let section_two = edit.append_paragraph(ParagraphRole::HEADING_2)?;
@@ -203,6 +219,7 @@ impl ShowcaseContent {
                 arabic,
                 #[cfg(test)]
                 mixed_suffix: _mixed_suffix,
+                action,
                 section_two,
                 width_narrow,
                 width_regular,
@@ -214,6 +231,7 @@ impl ShowcaseContent {
                 controls,
             },
             alternate_paint: false,
+            action_visual: ActionVisual::Idle,
             load_system_fonts,
         })
     }
@@ -268,6 +286,16 @@ impl ShowcaseContent {
     #[cfg(test)]
     pub(crate) const fn editable_text(&self) -> TextId {
         self.leaves.editable
+    }
+
+    /// Returns the semantic text leaf associated with the showcase action.
+    pub(crate) const fn action_text(&self) -> TextId {
+        self.leaves.action
+    }
+
+    /// Updates only the paint identity of the actionable semantic leaf.
+    pub(crate) fn set_action_visual(&mut self, visual: ActionVisual) {
+        self.action_visual = visual;
     }
 
     /// Returns the current authored editor specimen text for deterministic tests.
@@ -423,6 +451,17 @@ impl ShowcaseContent {
             InlineFlowStyle::new(LineHeight::from_multiplier(1.6)?),
             CORAL,
         );
+        let action = ComputedInlineStyle::new(
+            body_shaping
+                .clone()
+                .with_font_weight(FontWeight::new(610.0))?,
+            InlineFlowStyle::new(LineHeight::from_multiplier(1.48)?),
+            match self.action_visual {
+                ActionVisual::Idle => CYAN,
+                ActionVisual::Hovered => GOLD,
+                ActionVisual::Pressed => CORAL,
+            },
+        );
         let controls = ComputedInlineStyle::new(
             ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 14.0)?
                 .with_language(Some(english))
@@ -448,6 +487,7 @@ impl ShowcaseContent {
         styles.set(self.leaves.width_wide, width_style(125.0, GOLD)?);
         styles.set(self.leaves.ligatures_on, ligatures_on);
         styles.set(self.leaves.ligatures_off, ligatures_off);
+        styles.set(self.leaves.action, action);
         styles.set(self.leaves.editable, editable);
         styles.set(self.leaves.controls, controls);
         Ok(styles)

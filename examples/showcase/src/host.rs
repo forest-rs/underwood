@@ -14,11 +14,14 @@ use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, Ime, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
-use winit::window::{Window, WindowAttributes, WindowId};
+use winit::window::{CursorIcon, Window, WindowAttributes, WindowId};
 
 use underwood::{Point, Rect};
 
-use crate::interaction::{EditorEvent, EditorKey, ImeInput, InputModifiers, PointerState};
+use crate::interaction::{
+    EditorEvent, EditorKey, EditorResponse, ImeInput, InputModifiers, PointerAffordance,
+    PointerState, ShowcaseAction,
+};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
@@ -53,7 +56,7 @@ pub(crate) trait HostApplication {
 
     fn command(&mut self, command: Command);
 
-    fn editor_event(&mut self, event: EditorEvent);
+    fn editor_event(&mut self, event: EditorEvent) -> EditorResponse;
 
     fn animation_enabled(&self) -> bool;
 }
@@ -81,6 +84,7 @@ struct NativeHost<A> {
     next_frame: Instant,
     cursor_position: Option<Point>,
     modifiers: ModifiersState,
+    activation_receipt: Option<ShowcaseAction>,
     fatal_error: Option<HostError>,
 }
 
@@ -96,6 +100,7 @@ impl<A> NativeHost<A> {
             next_frame: now,
             cursor_position: None,
             modifiers: ModifiersState::default(),
+            activation_receipt: None,
             fatal_error: None,
         }
     }
@@ -149,7 +154,12 @@ impl<A: HostApplication> NativeHost<A> {
             self.fail(event_loop, error);
             return;
         }
-        window.set_title(&frame.window_title);
+        let mut window_title = frame.window_title;
+        if let Some(action) = self.activation_receipt {
+            window_title.push_str(" · HOST RECEIVED ");
+            window_title.push_str(action.url());
+        }
+        window.set_title(&window_title);
         if let Some(cursor) = frame.ime_cursor_area {
             window.set_ime_cursor_area(
                 LogicalPosition::new(cursor.x0, cursor.y0),
@@ -167,12 +177,28 @@ impl<A: HostApplication> NativeHost<A> {
     }
 
     fn dispatch_editor(&mut self, event: EditorEvent) {
-        self.app.editor_event(event);
+        let response = self.app.editor_event(event);
+        let pointer = accept_editor_response(&mut self.activation_receipt, response);
         self.next_frame = Instant::now();
         if let Some(window) = &self.window {
+            window.set_cursor(match pointer {
+                PointerAffordance::Arrow => CursorIcon::Default,
+                PointerAffordance::Text => CursorIcon::Text,
+                PointerAffordance::Action => CursorIcon::Pointer,
+            });
             window.request_redraw();
         }
     }
+}
+
+fn accept_editor_response(
+    receipt: &mut Option<ShowcaseAction>,
+    response: EditorResponse,
+) -> PointerAffordance {
+    if let Some(action) = response.activation {
+        *receipt = Some(action);
+    }
+    response.pointer
 }
 
 impl<A: HostApplication> ApplicationHandler for NativeHost<A> {
@@ -403,8 +429,11 @@ impl std::error::Error for HostError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, command_for_key, copy_rgba_to_softbuffer, editor_key_for_key};
-    use crate::interaction::EditorKey;
+    use super::{
+        Command, accept_editor_response, command_for_key, copy_rgba_to_softbuffer,
+        editor_key_for_key,
+    };
+    use crate::interaction::{EditorKey, EditorResponse, PointerAffordance, ShowcaseAction};
     use winit::keyboard::{Key, NamedKey};
 
     #[test]
@@ -439,5 +468,20 @@ mod tests {
         let error = copy_rgba_to_softbuffer(&mut target, &[0; 4])
             .expect_err("short frame must be rejected");
         assert!(error.to_string().contains("expected 8"));
+    }
+
+    #[test]
+    fn host_accepts_semantic_activation_and_pointer_affordance() {
+        let action = ShowcaseAction::visit_url("source", "https://example.invalid/source");
+        let mut receipt = None;
+        let pointer = accept_editor_response(
+            &mut receipt,
+            EditorResponse {
+                activation: Some(action),
+                pointer: PointerAffordance::Action,
+            },
+        );
+        assert_eq!(receipt, Some(action));
+        assert_eq!(pointer, PointerAffordance::Action);
     }
 }
