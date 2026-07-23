@@ -1287,14 +1287,11 @@ mod tests {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
         let text = content.editable_value();
-        let cluster_end = text
-            .find("e\u{301}")
-            .map(|start| start + "e\u{301}".len())
-            .expect("editor specimen must contain a combining grapheme");
-        let point = point_for_byte(
+        assert!(text.contains("e\u{301}"));
+        let (_, trailing) = split_grapheme_points(
             &committed.scene,
             content.editable_text(),
-            u32::try_from(cluster_end).expect("test string fits u32"),
+            content.editable_mark_text(),
         );
         let mut editor = EditorState::default();
         editor.handle(
@@ -1302,7 +1299,7 @@ mod tests {
             &mut content,
             Some(&committed.scene),
         );
-        click(&mut editor, &mut content, &committed.scene, point, false);
+        click(&mut editor, &mut content, &committed.scene, trailing, false);
         editor.handle(
             EditorEvent::Key {
                 key: EditorKey::Backspace,
@@ -1315,6 +1312,137 @@ mod tests {
         assert!(edited.contains("caf."), "edited text: {edited:?}");
         assert!(!edited.contains("cafe"), "edited text: {edited:?}");
         assert!(editor.status().contains("logical grapheme delete"));
+    }
+
+    #[test]
+    fn delete_removes_one_real_extended_grapheme() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
+        let (leading, _) = split_grapheme_points(
+            &committed.scene,
+            content.editable_text(),
+            content.editable_mark_text(),
+        );
+        let mut editor = EditorState::default();
+        editor.handle(
+            EditorEvent::Focused(true),
+            &mut content,
+            Some(&committed.scene),
+        );
+        click(&mut editor, &mut content, &committed.scene, leading, false);
+        editor.handle(
+            EditorEvent::Key {
+                key: EditorKey::Delete,
+                extend: false,
+            },
+            &mut content,
+            Some(&committed.scene),
+        );
+        let edited = content.editable_value();
+        assert!(edited.contains("caf."), "edited text: {edited:?}");
+        assert!(!edited.contains("cafe"), "edited text: {edited:?}");
+        assert!(editor.status().contains("logical grapheme delete"));
+    }
+
+    #[test]
+    fn arrows_cross_one_real_extended_grapheme() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
+        let base = content.editable_text();
+        let mark = content.editable_mark_text();
+        let (leading, _) = split_grapheme_points(&committed.scene, base, mark);
+        let mut editor = EditorState::default();
+        editor.handle(
+            EditorEvent::Focused(true),
+            &mut content,
+            Some(&committed.scene),
+        );
+        click(&mut editor, &mut content, &committed.scene, leading, false);
+
+        editor.handle(
+            EditorEvent::Key {
+                key: EditorKey::MoveRight,
+                extend: false,
+            },
+            &mut content,
+            Some(&committed.scene),
+        );
+        let trailing = editor
+            .selections()
+            .and_then(underwood::SnapshotTextSelectionSet::primary)
+            .expect("movement must retain a primary caret")
+            .extent();
+        assert_eq!(trailing.text(), mark);
+        assert_eq!(trailing.byte(), 2);
+
+        editor.handle(
+            EditorEvent::Key {
+                key: EditorKey::MoveLeft,
+                extend: false,
+            },
+            &mut content,
+            Some(&committed.scene),
+        );
+        let leading = editor
+            .selections()
+            .and_then(underwood::SnapshotTextSelectionSet::primary)
+            .expect("reverse movement must retain a primary caret")
+            .extent();
+        assert_eq!(leading.text(), base);
+    }
+
+    #[test]
+    fn two_pointer_carets_delete_complete_units_atomically() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
+        let base = content.editable_text();
+        let (_, split_trailing) =
+            split_grapheme_points(&committed.scene, base, content.editable_mark_text());
+        let original = content.editable_value();
+        let office_end = original
+            .find("office")
+            .map(|start| start + "office".len())
+            .expect("editor specimen must contain office");
+        let office_trailing = point_for_position(
+            &committed.scene,
+            base,
+            u32::try_from(office_end).expect("test string fits u32"),
+        );
+        let mut editor = EditorState::default();
+        editor.handle(
+            EditorEvent::Focused(true),
+            &mut content,
+            Some(&committed.scene),
+        );
+        click(
+            &mut editor,
+            &mut content,
+            &committed.scene,
+            split_trailing,
+            false,
+        );
+        click(
+            &mut editor,
+            &mut content,
+            &committed.scene,
+            office_trailing,
+            true,
+        );
+        editor.handle(
+            EditorEvent::Key {
+                key: EditorKey::Backspace,
+                extend: false,
+            },
+            &mut content,
+            Some(&committed.scene),
+        );
+
+        let edited = content.editable_value();
+        assert_eq!(edited.len() + 4, original.len(), "edited text: {edited:?}");
+        assert!(!edited.contains("office"), "edited text: {edited:?}");
+        assert!(edited.contains("caf."), "edited text: {edited:?}");
+        assert!(!edited.contains("cafe"), "edited text: {edited:?}");
+        assert!(editor.status().contains("delete at 2 carets"));
     }
 
     #[test]
@@ -1357,6 +1485,11 @@ mod tests {
         );
         assert_eq!(content.snapshot().revision(), revision);
         assert!(editor.composition().is_none());
+        let cancelled = content
+            .prepare(760.0, 0.5)
+            .expect("cancelled preedit must return to committed formation");
+        assert_eq!(cancelled.work.shape().paragraphs(), 0);
+        assert_eq!(cancelled.work.reused_paragraphs(), 10);
 
         editor.handle(
             EditorEvent::Ime(ImeInput::Preedit {
@@ -1375,6 +1508,12 @@ mod tests {
         assert_ne!(content.snapshot().revision(), revision);
         assert!(editor.composition().is_none());
         assert!(editor.status().contains("committed once"));
+        let committed = content
+            .prepare(760.0, 0.5)
+            .expect("committed preedit must form");
+        assert!(committed.work.shape().paragraphs() <= 1);
+        assert!(committed.work.reused_paragraphs() >= 9);
+        assert!(content.editable_value().contains("مرحبا"));
     }
 
     #[cfg(target_vendor = "apple")]
@@ -1507,7 +1646,43 @@ mod tests {
         panic!("mixed-bidi editor specimen must expose a disjoint visual selection");
     }
 
-    fn point_for_byte(scene: &underwood::TextScene, text: underwood::TextId, byte: u32) -> Point {
+    fn split_grapheme_points(
+        scene: &underwood::TextScene,
+        base: underwood::TextId,
+        mark: underwood::TextId,
+    ) -> (Point, Point) {
+        let mut leading = None;
+        let mut trailing = None;
+        for line in scene.lines() {
+            let bounds = line.bounds();
+            let mut x = bounds.x0;
+            while x <= bounds.x1 {
+                let point = Point::new(x, bounds.center().y);
+                if let Some(hit) = scene.hit_test(point)
+                    && hit.source().sources().len() == 2
+                    && hit.source().sources()[0].text() == base
+                    && hit.source().sources()[1].text() == mark
+                {
+                    if hit.position().text() == base {
+                        leading = Some(point);
+                    } else if hit.position().text() == mark && hit.position().byte() == 2 {
+                        trailing = Some(point);
+                    }
+                }
+                x += 0.25;
+            }
+        }
+        (
+            leading.expect("the split semantic grapheme must expose its leading side"),
+            trailing.expect("the split semantic grapheme must expose its trailing side"),
+        )
+    }
+
+    fn point_for_position(
+        scene: &underwood::TextScene,
+        text: underwood::TextId,
+        byte: u32,
+    ) -> Point {
         caret_points(scene, text)
             .into_iter()
             .find(|(_, position)| position.byte() == byte)

@@ -23,7 +23,11 @@ const GOLD: PaintSlot = PaintSlot::new(3);
 const MUTED: PaintSlot = PaintSlot::new(4);
 const TITLE: PaintSlot = PaintSlot::new(5);
 
+#[cfg(test)]
 const ORIGINAL_EDIT_TEXT: &str = "Edit me: office meets مرحبا بالعالم and cafe\u{301}. Drag across both directions; Alt-click adds another caret.";
+const ORIGINAL_EDIT_PREFIX: &str = "Edit me: office meets مرحبا بالعالم and cafe";
+const ORIGINAL_EDIT_MARK: &str = "\u{301}";
+const ORIGINAL_EDIT_SUFFIX: &str = ". Drag across both directions; Alt-click adds another caret.";
 #[cfg(test)]
 const CHANGED_EDIT_TEXT: &str = "One local edit landed here: مكتب + office + cafe\u{301}. This paragraph reshaped; nine siblings stayed retained.";
 
@@ -92,6 +96,8 @@ struct Leaves {
     ligatures_off: TextId,
     section_three: TextId,
     editable: TextId,
+    editable_mark: TextId,
+    editable_suffix: TextId,
     controls: TextId,
 }
 
@@ -196,7 +202,19 @@ impl ShowcaseContent {
         )?;
 
         let editable = edit.append_paragraph(ParagraphRole::BODY)?;
-        let editable = edit.append_text(editable, InlineRole::EMPHASIS, ORIGINAL_EDIT_TEXT)?;
+        let editable_paragraph = editable;
+        let editable = edit.append_text(
+            editable_paragraph,
+            InlineRole::EMPHASIS,
+            ORIGINAL_EDIT_PREFIX,
+        )?;
+        let editable_mark =
+            edit.append_text(editable_paragraph, InlineRole::TEXT, ORIGINAL_EDIT_MARK)?;
+        let editable_suffix = edit.append_text(
+            editable_paragraph,
+            InlineRole::EMPHASIS,
+            ORIGINAL_EDIT_SUFFIX,
+        )?;
 
         let controls = edit.append_paragraph(ParagraphRole::BODY)?;
         let controls = edit.append_text(
@@ -228,6 +246,8 @@ impl ShowcaseContent {
                 ligatures_off,
                 section_three,
                 editable,
+                editable_mark,
+                editable_suffix,
                 controls,
             },
             alternate_paint: false,
@@ -288,6 +308,12 @@ impl ShowcaseContent {
         self.leaves.editable
     }
 
+    /// Returns the distinct semantic leaf containing the editor's combining mark.
+    #[cfg(test)]
+    pub(crate) const fn editable_mark_text(&self) -> TextId {
+        self.leaves.editable_mark
+    }
+
     /// Returns the semantic text leaf associated with the showcase action.
     pub(crate) const fn action_text(&self) -> TextId {
         self.leaves.action
@@ -301,11 +327,19 @@ impl ShowcaseContent {
     /// Returns the current authored editor specimen text for deterministic tests.
     #[cfg(test)]
     pub(crate) fn editable_value(&self) -> String {
-        self.document
-            .snapshot()
-            .text(self.leaves.editable)
-            .expect("showcase editor leaf must remain present")
-            .to_owned()
+        let snapshot = self.document.snapshot();
+        [
+            self.leaves.editable,
+            self.leaves.editable_mark,
+            self.leaves.editable_suffix,
+        ]
+        .into_iter()
+        .map(|text| {
+            snapshot
+                .text(text)
+                .expect("showcase editor leaves must remain present")
+        })
+        .collect()
     }
 
     /// Publishes one validated replacement for every independent selection.
@@ -339,8 +373,7 @@ impl ShowcaseContent {
     /// Toggles one real paragraph-local document edit.
     #[cfg(test)]
     pub(crate) fn toggle_edit(&mut self) {
-        let edited =
-            self.document.snapshot().text(self.leaves.editable) != Some(ORIGINAL_EDIT_TEXT);
+        let edited = self.editable_value() != ORIGINAL_EDIT_TEXT;
         self.replace_editable(if edited {
             ORIGINAL_EDIT_TEXT
         } else {
@@ -362,8 +395,21 @@ impl ShowcaseContent {
     #[cfg(test)]
     fn replace_editable(&mut self, text: &str) {
         let mut edit = self.document.edit();
-        edit.replace_text(self.leaves.editable, text)
+        let (prefix, mark, suffix) = if text == ORIGINAL_EDIT_TEXT {
+            (
+                ORIGINAL_EDIT_PREFIX,
+                ORIGINAL_EDIT_MARK,
+                ORIGINAL_EDIT_SUFFIX,
+            )
+        } else {
+            (text, "", "")
+        };
+        edit.replace_text(self.leaves.editable, prefix)
             .expect("showcase TextId must remain valid for its owning document");
+        edit.replace_text(self.leaves.editable_mark, mark)
+            .expect("showcase mark TextId must remain valid for its owning document");
+        edit.replace_text(self.leaves.editable_suffix, suffix)
+            .expect("showcase suffix TextId must remain valid for its owning document");
         edit.commit()
             .expect("showcase replacement must preserve document structure");
     }
@@ -488,7 +534,13 @@ impl ShowcaseContent {
         styles.set(self.leaves.ligatures_on, ligatures_on);
         styles.set(self.leaves.ligatures_off, ligatures_off);
         styles.set(self.leaves.action, action);
-        styles.set(self.leaves.editable, editable);
+        for leaf in [
+            self.leaves.editable,
+            self.leaves.editable_mark,
+            self.leaves.editable_suffix,
+        ] {
+            styles.set(leaf, editable.clone());
+        }
         styles.set(self.leaves.controls, controls);
         Ok(styles)
     }
@@ -580,6 +632,11 @@ mod tests {
     fn local_edit_reshapes_only_its_paragraph() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let initial = content.prepare(760.0, 0.5).expect("initial must prepare");
+        let editable = [
+            content.leaves.editable,
+            content.leaves.editable_mark,
+            content.leaves.editable_suffix,
+        ];
         let sibling_ids: Vec<_> = initial
             .scene
             .fragments()
@@ -587,7 +644,7 @@ mod tests {
             .filter(|fragment| {
                 fragment
                     .source()
-                    .is_none_or(|source| source.text() != content.leaves.editable)
+                    .is_none_or(|source| !editable.contains(&source.text()))
             })
             .map(underwood::SceneFragment::id)
             .collect();
@@ -602,7 +659,7 @@ mod tests {
             .filter(|fragment| {
                 fragment
                     .source()
-                    .is_none_or(|source| source.text() != content.leaves.editable)
+                    .is_none_or(|source| !editable.contains(&source.text()))
             })
             .map(underwood::SceneFragment::id)
             .collect();
