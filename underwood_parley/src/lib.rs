@@ -2012,15 +2012,21 @@ mod tests {
     use fontique::{Blob, Synthesis};
     use parley_core::{FontInstance, ShapeOptions, ShapedText, Shaper};
 
-    use underwood::adapter::{LineBreakReason as TestLineBreakReason, PreparationErrorKind};
+    use underwood::adapter::{
+        ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
+        LineBreakReason as TestLineBreakReason, ParagraphConstraints, ParagraphFormation,
+        ParagraphFormationOutput, PreparationErrorKind, PreparedClusterSide, PreparedGlyph,
+        PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
+        PreparedRun,
+    };
     use underwood::{
         Brush, Color, CompositionId, CompositionUpdate, ComputedInlineStyle, Document, DocumentId,
-        EditErrorKind, EditableSurface, EditableSurfaceElement, FiniteWidth, FontFamily,
+        EditErrorKind, EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily,
         FontWeight, GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight,
         PaintSlot, PaintTable, ParagraphRole, Point, ProjectedTextPosition, ProjectedTextSource,
         SceneRequest, SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap,
         SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextMovement, TextScene,
-        TextSelectionMode,
+        TextSelectionMode, Vec2,
     };
     use underwood::{Language, Script};
 
@@ -2035,10 +2041,90 @@ mod tests {
     const ARABIC_FONT: &[u8] =
         include_bytes!("../../examples/headless/fonts/NotoKufiArabic-Regular.otf");
 
+    #[derive(Debug)]
+    struct AnalysisCursorProof;
+
+    impl ParagraphFormation for AnalysisCursorProof {
+        fn form(
+            &mut self,
+            input: underwood::adapter::ParagraphInput<'_>,
+            _constraints: ParagraphConstraints,
+        ) -> Result<ParagraphFormationOutput, underwood::adapter::PreparationError> {
+            let analysis = analyze_text(&mut parley_core::Analyzer::new(), input.text());
+            let units = collect_analysis_units(input.text(), &analysis)?;
+            let mut prepared_units = Vec::with_capacity(units.len());
+            let mut glyphs = Vec::with_capacity(units.len());
+            for (id, source) in units.into_iter().enumerate() {
+                let source = super::checked_source_range(&source)?;
+                prepared_units.push(PreparedInteractionUnit::try_new(
+                    source.clone(),
+                    [PreparedInteractionSlice::try_new(source.clone(), 1.0)?],
+                    0,
+                    ClusterBoundary::None,
+                    ClusterWhitespace::None,
+                    PreparedClusterSide::new(source.start, TextAffinity::Downstream),
+                    PreparedClusterSide::new(source.end, TextAffinity::Upstream),
+                )?);
+                let slot = input
+                    .paint_runs()
+                    .iter()
+                    .find(|run| {
+                        let bytes = run.bytes();
+                        bytes.start <= source.start && source.end <= bytes.end
+                    })
+                    .ok_or_else(underwood::adapter::PreparationError::invalid_output)?
+                    .slot();
+                let paint = GlyphPaintCoverage::whole(source.clone(), slot)?;
+                glyphs.push(PreparedGlyph::try_new(
+                    u32::try_from(id).unwrap_or(u32::MAX),
+                    source,
+                    Vec2::new(1.0, 0.0),
+                    Vec2::ZERO,
+                    paint,
+                )?);
+            }
+            let source = 0..u32::try_from(input.text().len())
+                .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
+            let unit_count = u32::try_from(prepared_units.len())
+                .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
+            let advance = prepared_units.len() as f64;
+            let run = PreparedRun::try_new(
+                source.clone(),
+                0,
+                *b"Zyyy",
+                FontData::new(Blob::from(vec![0_u8]), 0),
+                16.0,
+                FontSynthesis::default(),
+                [],
+                [],
+                glyphs,
+            )?;
+            let line = PreparedLine::try_new(
+                source.clone(),
+                TestLineBreakReason::End,
+                advance,
+                0.8,
+                1.0,
+                0.8,
+                0.2,
+                prepared_units,
+                [run],
+            )?;
+            let movements =
+                super::prepared_cursor_movements(core::slice::from_ref(&line), source.end)?;
+            let paragraph =
+                PreparedParagraph::try_new(input.paragraph(), source.end, [line], movements)?;
+            Ok(ParagraphFormationOutput::new(
+                paragraph,
+                FormationWork::new(true, false, unit_count, 1, unit_count, 1, 0),
+            ))
+        }
+    }
+
     fn shape_arabic(text: &str) -> (parley_core::Analysis, Shaper, ShapedText) {
         let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
         let font = FontInstance {
-            font: underwood::FontData::new(Blob::from(ARABIC_FONT.to_vec()), 0),
+            font: FontData::new(Blob::from(ARABIC_FONT.to_vec()), 0),
             synthesis: Synthesis::default(),
         };
         let style_indices = vec![0; text.chars().count()];
@@ -2107,6 +2193,92 @@ mod tests {
                     .expect("Parley analysis must expose complete grapheme units"),
                 expected,
                 "{name} must remain one interaction unit"
+            );
+        }
+    }
+
+    #[test]
+    fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
+        for (name, text) in [
+            ("emoji-zwj", "👩\u{200d}💻"),
+            ("regional-indicator", "🇺🇳"),
+            ("spacing-mark", "क\u{93e}"),
+        ] {
+            let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
+            let units = collect_analysis_units(text, &analysis)
+                .expect("Parley analysis must expose complete grapheme units");
+            assert_eq!(units.len(), 1, "{name} must remain one interaction unit");
+            let mut document = Document::new(DocumentId::from_bytes(*b"unbundled-egc-01"));
+            let mut edit = document.edit();
+            let paragraph = edit
+                .append_paragraph(ParagraphRole::BODY)
+                .expect("the proof paragraph is valid");
+            let leaf = edit
+                .append_text(paragraph, InlineRole::TEXT, text)
+                .expect("the proof source is valid");
+            edit.commit().expect("the proof document is valid");
+            let style = ComputedInlineStyle::new(
+                ShapingStyle::new(FontFamily::named("proof"), 16.0)
+                    .expect("the proof style is valid"),
+                InlineFlowStyle::default(),
+                PaintSlot::new(0),
+            );
+            let styles = StyleMap::new(style);
+            let paints = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+            let request = SceneRequest::new(
+                FiniteWidth::new(100.0).expect("the proof width is valid"),
+                &styles,
+                &paints,
+            );
+            let output = LayoutEngine::new(AnalysisCursorProof)
+                .prepare(&document.snapshot(), &request)
+                .expect("Parley analysis boundaries must prepare through the public scene path");
+            let scene = output.scene();
+            let y = scene.lines()[0].bounds().center().y;
+            let start = *scene
+                .hit_test_closest(Point::new(-100.0, y))
+                .expect("the unit start must resolve")
+                .position();
+            let end = *scene
+                .hit_test_closest(Point::new(100.0, y))
+                .expect("the unit end must resolve")
+                .position();
+            let forward = scene
+                .selection_set([scene
+                    .collapsed_selection(&start)
+                    .expect("the unit start must be a caret")])
+                .and_then(|selection| {
+                    scene.move_selections(&selection, TextMovement::NextLogical, true)
+                })
+                .expect("the unit must expose one forward logical selection");
+            let backward = scene
+                .selection_set([scene
+                    .collapsed_selection(&end)
+                    .expect("the unit end must be a caret")])
+                .and_then(|selection| {
+                    scene.move_selections(&selection, TextMovement::PreviousLogical, true)
+                })
+                .expect("the unit must expose one backward logical selection");
+            for selection in [&forward, &backward] {
+                let ranges = selection
+                    .primary()
+                    .expect("the primary selection exists")
+                    .ranges();
+                assert_eq!(ranges.len(), 1, "{name}");
+                assert_eq!(ranges[0].text(), leaf, "{name}");
+                assert_eq!(
+                    ranges[0].bytes(),
+                    0..u32::try_from(text.len()).expect("the focused corpus fits portable offsets"),
+                    "{name}"
+                );
+            }
+            let replaced = document
+                .replace_selections(&forward, "")
+                .expect("one complete unit must delete in one transaction");
+            assert_eq!(
+                replaced.publication().snapshot().text(leaf),
+                Some(""),
+                "{name}"
             );
         }
     }
