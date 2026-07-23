@@ -332,8 +332,9 @@ explicit migration record.
   exact caret placement and optional crossed-source ranges.
 - Parley-backed callers continue to observe source-complete shaping clusters.
   A combining sequence split across authored leaves prepares without erasing
-  either semantic identity. Callers must not yet infer full Unicode
-  extended-grapheme deletion from those cluster transitions.
+  either semantic identity. Accepted Design-0011 defines the public migration
+  from shaping-record transitions to source-complete extended-grapheme
+  interaction units.
 - Native adapters that want platform fallback enable the optional
   `underwood_parley/system-fonts` feature and call
   `FontSet::with_system_fonts` before constructing the paragraph engine.
@@ -384,3 +385,7 @@ The campaign is complete only when:
   no `unsafe`;
 - public rustdoc, migration notes, focused tests, full workspace gates,
   adversarial review, and native visual inspection are green.
+
+Design-0011 adds the remaining completion proof: extended graphemes must move,
+select, and delete atomically even when they span shaping records, authored
+semantic leaves, or committed/generated composition provenance.

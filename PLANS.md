@@ -566,9 +566,9 @@ repository policy, formatting, bare metal, and WebAssembly.
 ## Interactive semantic document campaign
 
 **Status:** Active — native editor and semantic activation landed through PR
-#17; the separately gated extended-grapheme follow-up remains open
+#17; accepted Design-0011 specifies the extended-grapheme completion
 
-**Design:** Design-0009
+**Design:** Design-0009 and accepted Design-0011
 
 ### Goal
 
@@ -627,6 +627,9 @@ retained TextScene -> imaging -> live native proof
 6. Run the mixed-script/ligature/combining/break/empty-text corpus, event-feed
    and host-query IME traces, native visual review, full local/remote gates, and
    land coherent PR slices.
+7. Replace shaping-record deletion with Parley-analysis-derived extended-
+   grapheme interaction units, preserve multi-leaf and generated provenance,
+   and publish same-paragraph multi-leaf selections without structural edits.
 
 ### Risks and controls
 
@@ -657,6 +660,12 @@ retained TextScene -> imaging -> live native proof
   and platform IME event translation stay in the example host.
 - **Durable-position overclaim:** snapshot positions are never serialized or
   presented as surviving unrelated edits; ADR-0001's anchor gate remains.
+- **Shaping record masquerades as grapheme:** consume Parley's stored analysis
+  boundaries once, retain every shaped visual slice, and expose only the two
+  endpoints of the complete interaction unit.
+- **Cross-leaf deletion erases semantics:** apply leaf-local ranges in reverse,
+  retain every leaf identity and role, insert once in the first source leaf,
+  and continue to reject cross-paragraph structural replacement.
 
 ### Completion
 
@@ -666,5 +675,8 @@ selection retain its disjoint logical ranges, type and delete through one
 atomic multi-selection transaction, exercise real IME preedit/commit/cancel,
 serve both event-feed and synchronous host-query IME traces from one state,
 activate semantic content through exact hits, and observe honest retained
-work—while the old interaction approximations are gone and every local, remote,
-portability, API, and proof gate is green.
+work. Precomposed and decomposed extended graphemes—including units crossing
+semantic or generated-source boundaries—must move and delete atomically while
+OpenType ligature components remain independently reachable. The old
+interaction approximations must be gone and every local, remote, portability,
+API, and proof gate must be green.
