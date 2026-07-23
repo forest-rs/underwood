@@ -565,8 +565,9 @@ repository policy, formatting, bare metal, and WebAssembly.
 
 ## Interactive semantic document campaign
 
-**Status:** Active — exact interaction and selection landed; composition epoch
-executable with local gates green and remote proof pending
+**Status:** Active — exact interaction, selection, and composition landed;
+native editor complete with local and remote gates green; semantic activation
+pending
 
 **Design:** Design-0009
 
