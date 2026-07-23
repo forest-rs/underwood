@@ -89,11 +89,11 @@ belong to the interaction benchmark, broader differential corpus, Parley
 upstreaming, and editable-showcase slices.
 
 Logical cluster movement is also a primitive, not a claim about every
-platform's grapheme, word, or deletion policy. In the pinned Parley data,
-backspace over precomposed `é` crosses its two-byte cluster, while the first
-backspace over `e` plus U+0301 crosses the combining-mark cluster and leaves
-`e`. Higher-level deletion policy must be named separately if the product later
-wants different behavior.
+platform's word or deletion policy. It follows source-complete Parley shaping
+records and keeps OpenType ligature components such as those in `ffi`
+independently reachable. Full Unicode extended-grapheme movement and deletion,
+especially when one grapheme crosses authored semantic leaves, requires the
+separately tracked multi-source interaction representation.
 
 The most dangerous remaining gap is host integration: a polished caret painted
 by example-only state would be theater. The next product slice must render the

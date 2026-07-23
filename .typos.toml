@@ -6,6 +6,7 @@ Parley = "Parley"
 Understory = "Understory"
 Underwood = "Underwood"
 wdth = "wdth"
+caf = "caf"
 
 [files]
 extend-exclude = [".beads/**"]

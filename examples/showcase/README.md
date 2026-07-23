@@ -15,9 +15,20 @@ Run it from the repository root:
 cargo run --release -p underwood_showcase
 ```
 
-Controls are shown in the window. Resize to reflow, press Space for a local text
-edit, `P` for a paint-only change, `A` to animate the variable-font weight axis,
-`G` for line and baseline evidence, and `R` to restore the initial document.
+Controls are shown in the window. Click to place an exact caret, drag for a
+visual selection, Shift-click to extend it, and Alt-click to add an independent
+caret. Typing, Enter, Backspace, Delete, and the left/right arrow keys execute
+revision-checked edits and movement. Native Winit IME preedit is projected
+without mutating the document and commits once. `F2` changes paint, `F3`
+animates the variable-font weight axis, `F4` shows line evidence, and `F5`
+restores the complete authored document.
+
+The editor paragraph deliberately mixes Latin, Arabic, an `ffi` ligature, and
+a decomposed combining sequence. Selection geometry follows visual bidi order
+without flattening disjoint logical ranges; independent carets publish one
+atomic replacement transaction. The title keeps the last meaningful work
+observation visible while reporting current preparation and rendering times
+separately.
 
 The crate is deliberately outside the production crates. It does not make
 Underwood depend on a window toolkit or renderer.

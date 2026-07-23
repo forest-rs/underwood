@@ -6,6 +6,7 @@
 mod app;
 mod content;
 mod host;
+mod interaction;
 mod presentation;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

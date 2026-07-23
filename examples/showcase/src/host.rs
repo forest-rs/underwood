@@ -10,18 +10,21 @@ use std::time::{Duration, Instant};
 
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
-use winit::dpi::LogicalSize;
-use winit::event::{ElementState, WindowEvent};
+use winit::dpi::{LogicalPosition, LogicalSize};
+use winit::event::{ElementState, Ime, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowAttributes, WindowId};
+
+use underwood::{Point, Rect};
+
+use crate::interaction::{EditorEvent, EditorKey, ImeInput, InputModifiers, PointerState};
 
 const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 /// User-visible showcase commands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Command {
-    ToggleLocalEdit,
     TogglePaint,
     ToggleAxisAnimation,
     ToggleGuides,
@@ -35,6 +38,7 @@ pub(crate) struct Frame {
     pub(crate) height: u32,
     pub(crate) rgba: Vec<u8>,
     pub(crate) window_title: String,
+    pub(crate) ime_cursor_area: Option<Rect>,
 }
 
 /// Rendering and interaction surface supplied by the showcase proper.
@@ -48,6 +52,8 @@ pub(crate) trait HostApplication {
     ) -> Result<Frame, String>;
 
     fn command(&mut self, command: Command);
+
+    fn editor_event(&mut self, event: EditorEvent);
 
     fn animation_enabled(&self) -> bool;
 }
@@ -73,6 +79,8 @@ struct NativeHost<A> {
     window: Option<Arc<Window>>,
     started: Instant,
     next_frame: Instant,
+    cursor_position: Option<Point>,
+    modifiers: ModifiersState,
     fatal_error: Option<HostError>,
 }
 
@@ -86,6 +94,8 @@ impl<A> NativeHost<A> {
             window: None,
             started: now,
             next_frame: now,
+            cursor_position: None,
+            modifiers: ModifiersState::default(),
             fatal_error: None,
         }
     }
@@ -140,10 +150,24 @@ impl<A: HostApplication> NativeHost<A> {
             return;
         }
         window.set_title(&frame.window_title);
+        if let Some(cursor) = frame.ime_cursor_area {
+            window.set_ime_cursor_area(
+                LogicalPosition::new(cursor.x0, cursor.y0),
+                LogicalSize::new(cursor.width().max(1.0), cursor.height().max(1.0)),
+            );
+        }
     }
 
     fn dispatch(&mut self, command: Command) {
         self.app.command(command);
+        self.next_frame = Instant::now();
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    fn dispatch_editor(&mut self, event: EditorEvent) {
+        self.app.editor_event(event);
         self.next_frame = Instant::now();
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -167,6 +191,7 @@ impl<A: HostApplication> ApplicationHandler for NativeHost<A> {
                 return;
             }
         };
+        window.set_ime_allowed(true);
         let context = match Context::new(Arc::clone(&window)) {
             Ok(context) => context,
             Err(error) => {
@@ -206,14 +231,68 @@ impl<A: HostApplication> ApplicationHandler for NativeHost<A> {
                 window.request_redraw();
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
-            WindowEvent::KeyboardInput { event, .. }
-                if event.state == ElementState::Pressed && !event.repeat =>
-            {
+            WindowEvent::Focused(focused) => {
+                self.dispatch_editor(EditorEvent::Focused(focused));
+            }
+            WindowEvent::ModifiersChanged(modifiers) => {
+                self.modifiers = modifiers.state();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let position = position.to_logical::<f64>(window.scale_factor());
+                let point = Point::new(position.x, position.y);
+                self.cursor_position = Some(point);
+                self.dispatch_editor(EditorEvent::PointerMoved(point));
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: MouseButton::Left,
+                ..
+            } => {
+                if let Some(point) = self.cursor_position {
+                    let modifiers = InputModifiers {
+                        extend: self.modifiers.shift_key(),
+                        add: self.modifiers.alt_key(),
+                    };
+                    let state = match state {
+                        ElementState::Pressed => PointerState::Pressed,
+                        ElementState::Released => PointerState::Released,
+                    };
+                    self.dispatch_editor(EditorEvent::PointerButton {
+                        state,
+                        point,
+                        modifiers,
+                    });
+                }
+            }
+            WindowEvent::Ime(ime) => {
+                let input = match ime {
+                    Ime::Enabled => ImeInput::Enabled,
+                    Ime::Preedit(text, selection) => ImeInput::Preedit { text, selection },
+                    Ime::Commit(text) => ImeInput::Commit(text),
+                    Ime::Disabled => ImeInput::Disabled,
+                };
+                self.dispatch_editor(EditorEvent::Ime(input));
+            }
+            WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                 let key = event.logical_key.as_ref();
                 if key == Key::Named(NamedKey::Escape) {
                     event_loop.exit();
-                } else if let Some(command) = command_for_key(key) {
+                } else if !event.repeat
+                    && let Some(command) = command_for_key(key.clone())
+                {
                     self.dispatch(command);
+                } else if let Some(editor_key) = editor_key_for_key(key) {
+                    self.dispatch_editor(EditorEvent::Key {
+                        key: editor_key,
+                        extend: self.modifiers.shift_key(),
+                    });
+                } else if !self.modifiers.control_key()
+                    && !self.modifiers.super_key()
+                    && !self.modifiers.alt_key()
+                    && let Some(text) = event.text
+                    && text.chars().all(|character| !character.is_control())
+                {
+                    self.dispatch_editor(EditorEvent::Text(text.to_string()));
                 }
             }
             _ => {}
@@ -241,11 +320,21 @@ impl<A: HostApplication> ApplicationHandler for NativeHost<A> {
 
 fn command_for_key(key: Key<&str>) -> Option<Command> {
     match key {
-        Key::Named(NamedKey::Space) => Some(Command::ToggleLocalEdit),
-        Key::Character("p" | "P") => Some(Command::TogglePaint),
-        Key::Character("a" | "A") => Some(Command::ToggleAxisAnimation),
-        Key::Character("g" | "G") => Some(Command::ToggleGuides),
-        Key::Character("r" | "R") => Some(Command::Reset),
+        Key::Named(NamedKey::F2) => Some(Command::TogglePaint),
+        Key::Named(NamedKey::F3) => Some(Command::ToggleAxisAnimation),
+        Key::Named(NamedKey::F4) => Some(Command::ToggleGuides),
+        Key::Named(NamedKey::F5) => Some(Command::Reset),
+        _ => None,
+    }
+}
+
+fn editor_key_for_key(key: Key<&str>) -> Option<EditorKey> {
+    match key {
+        Key::Named(NamedKey::ArrowLeft) => Some(EditorKey::MoveLeft),
+        Key::Named(NamedKey::ArrowRight) => Some(EditorKey::MoveRight),
+        Key::Named(NamedKey::Backspace) => Some(EditorKey::Backspace),
+        Key::Named(NamedKey::Delete) => Some(EditorKey::Delete),
+        Key::Named(NamedKey::Enter) => Some(EditorKey::Enter),
         _ => None,
     }
 }
@@ -314,19 +403,22 @@ impl std::error::Error for HostError {}
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, command_for_key, copy_rgba_to_softbuffer};
+    use super::{Command, command_for_key, copy_rgba_to_softbuffer, editor_key_for_key};
+    use crate::interaction::EditorKey;
     use winit::keyboard::{Key, NamedKey};
 
     #[test]
     fn shortcuts_follow_logical_characters() {
         assert_eq!(
-            command_for_key(Key::Character("P")),
+            command_for_key(Key::Named(NamedKey::F2)),
             Some(Command::TogglePaint)
         );
         assert_eq!(
-            command_for_key(Key::Named(NamedKey::Space)),
-            Some(Command::ToggleLocalEdit)
+            editor_key_for_key(Key::Named(NamedKey::ArrowLeft)),
+            Some(EditorKey::MoveLeft)
         );
+        assert_eq!(command_for_key(Key::Character("P")), None);
+        assert_eq!(command_for_key(Key::Named(NamedKey::Space)), None);
         assert_eq!(command_for_key(Key::Character("?")), None);
     }
 

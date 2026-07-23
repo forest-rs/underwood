@@ -5,10 +5,11 @@
 
 use imaging::peniko::Gradient;
 use underwood::{
-    Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature,
-    FontVariation, FontWeight, InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight,
-    PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap, Tag,
-    TextId, TextScene, WorkReport,
+    Brush, Color, CompositionScene, CompositionSession, ComputedInlineStyle, Document, DocumentId,
+    DocumentSnapshot, FiniteWidth, FontFeature, FontVariation, FontWeight, InlineFlowStyle,
+    InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole,
+    SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap, Tag, TextId, TextScene,
+    WorkReport,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
 
@@ -22,9 +23,9 @@ const GOLD: PaintSlot = PaintSlot::new(3);
 const MUTED: PaintSlot = PaintSlot::new(4);
 const TITLE: PaintSlot = PaintSlot::new(5);
 
-const ORIGINAL_EDIT_TEXT: &str = "Change one sentence and only this paragraph returns to shaping. Nine sibling formations stay ready to reuse.";
-const CHANGED_EDIT_TEXT: &str =
-    "One local edit landed here. This paragraph reshaped; nine sibling formations stayed retained.";
+const ORIGINAL_EDIT_TEXT: &str = "Edit me: office meets مرحبا بالعالم and cafe\u{301}. Drag across both directions; Alt-click adds another caret.";
+#[cfg(test)]
+const CHANGED_EDIT_TEXT: &str = "One local edit landed here: مكتب + office + cafe\u{301}. This paragraph reshaped; nine siblings stayed retained.";
 
 type AnyError = Box<dyn std::error::Error>;
 
@@ -37,13 +38,29 @@ pub(crate) struct PreparedDocumentFrame {
     pub(crate) axis_weight: f32,
 }
 
+/// One transient generated-text frame and its observed work.
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedCompositionFrame {
+    pub(crate) scene: CompositionScene,
+    pub(crate) work: WorkReport,
+    pub(crate) line_count: usize,
+    pub(crate) axis_weight: f32,
+}
+
+/// Result of one showcase-owned committed text transaction.
+#[derive(Clone, Debug)]
+pub(crate) struct AppliedEdit {
+    pub(crate) selections: SnapshotTextSelectionSet,
+    pub(crate) changed_paragraphs: usize,
+}
+
 /// Retained document, paragraph engine, and interaction state.
 pub(crate) struct ShowcaseContent {
     document: Document,
     layout: LayoutEngine,
     leaves: Leaves,
-    edited: bool,
     alternate_paint: bool,
+    load_system_fonts: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -68,19 +85,36 @@ struct Leaves {
 }
 
 impl ShowcaseContent {
-    /// Builds the deterministic font catalog and publishes the initial document.
+    /// Builds the bundled and platform font catalog and publishes the initial document.
     pub(crate) fn new() -> Result<Self, AnyError> {
+        Self::build(true)
+    }
+
+    /// Builds only the bundled deterministic catalog for host-independent tests.
+    #[cfg(test)]
+    pub(crate) fn new_deterministic() -> Result<Self, AnyError> {
+        Self::build(false)
+    }
+
+    fn build(load_system_fonts: bool) -> Result<Self, AnyError> {
         let arabic = Language::parse("ar")?;
         let fonts = FontSet::try_from_fonts([
             Font::from_bytes("latin", LATIN_FONT_BYTES)?,
             Font::from_bytes("arabic", ARABIC_FONT_BYTES)?,
-        ])?
-        .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?
-        .with_fallbacks(
-            Script::from_bytes(*b"Arab"),
-            Some(arabic),
-            ["Noto Kufi Arabic"],
-        )?;
+        ])?;
+        let fonts = if load_system_fonts {
+            fonts.with_system_fonts()
+        } else {
+            fonts
+        };
+        let fonts = fonts
+            .with_fallbacks(Script::from_bytes(*b"Latn"), None, ["Roboto Flex"])?
+            .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?
+            .with_fallbacks(
+                Script::from_bytes(*b"Arab"),
+                Some(arabic),
+                ["Noto Kufi Arabic"],
+            )?;
         let paragraphs = ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)?;
 
         let mut document = Document::new(DocumentId::from_bytes(*b"underwood-live-1"));
@@ -142,7 +176,7 @@ impl ShowcaseContent {
         let section_three = edit.append_text(
             section_three,
             InlineRole::TEXT,
-            "LOCAL CHANGE / GLOBAL CALM",
+            "LIVE EDITOR / VISUAL SELECTION",
         )?;
 
         let editable = edit.append_paragraph(ParagraphRole::BODY)?;
@@ -152,7 +186,7 @@ impl ShowcaseContent {
         let controls = edit.append_text(
             controls,
             InlineRole::TEXT,
-            "SPACE edit   /   P paint   /   A animate weight   /   G guides   /   R reset   /   drag to reflow",
+            "CLICK caret / DRAG select / SHIFT extend / ALT-click add caret / TYPE + BACKSPACE edit / F2 paint / F3 axis / F4 guides / F5 reset",
         )?;
 
         edit.commit()?;
@@ -179,8 +213,8 @@ impl ShowcaseContent {
                 editable,
                 controls,
             },
-            edited: false,
             alternate_paint: false,
+            load_system_fonts,
         })
     }
 
@@ -203,13 +237,86 @@ impl ShowcaseContent {
         })
     }
 
+    /// Prepares one generated preedit epoch without publishing document text.
+    pub(crate) fn prepare_composition(
+        &mut self,
+        width: f64,
+        axis_phase: f32,
+        composition: &CompositionSession,
+    ) -> Result<PreparedCompositionFrame, AnyError> {
+        let axis_weight = 100.0 + axis_phase.clamp(0.0, 1.0) * 800.0;
+        let styles = self.styles(axis_weight)?;
+        let paints = paint_table(self.alternate_paint);
+        let request = SceneRequest::new(FiniteWidth::new(width)?, &styles, &paints);
+        let output =
+            self.layout
+                .prepare_composition(&self.document.snapshot(), &request, composition)?;
+        Ok(PreparedCompositionFrame {
+            line_count: output.scene().lines().len(),
+            scene: output.scene().clone(),
+            work: output.work().clone(),
+            axis_weight,
+        })
+    }
+
+    /// Returns the current immutable document revision.
+    pub(crate) fn snapshot(&self) -> DocumentSnapshot {
+        self.document.snapshot()
+    }
+
+    /// Returns the authored editor specimen leaf for deterministic interaction tests.
+    #[cfg(test)]
+    pub(crate) const fn editable_text(&self) -> TextId {
+        self.leaves.editable
+    }
+
+    /// Returns the current authored editor specimen text for deterministic tests.
+    #[cfg(test)]
+    pub(crate) fn editable_value(&self) -> String {
+        self.document
+            .snapshot()
+            .text(self.leaves.editable)
+            .expect("showcase editor leaf must remain present")
+            .to_owned()
+    }
+
+    /// Publishes one validated replacement for every independent selection.
+    pub(crate) fn replace_selections(
+        &mut self,
+        selections: &SnapshotTextSelectionSet,
+        replacement: &str,
+    ) -> Result<AppliedEdit, AnyError> {
+        let result = self.document.replace_selections(selections, replacement)?;
+        let changed_paragraphs = result.publication().changes().paragraphs().len();
+        Ok(AppliedEdit {
+            selections: result.selections().clone(),
+            changed_paragraphs,
+        })
+    }
+
+    /// Publishes the final payload of one native composition exactly once.
+    pub(crate) fn commit_composition(
+        &mut self,
+        composition: CompositionSession,
+        committed: &str,
+    ) -> Result<AppliedEdit, AnyError> {
+        let result = composition.commit(&mut self.document, committed)?;
+        let changed_paragraphs = result.publication().changes().paragraphs().len();
+        Ok(AppliedEdit {
+            selections: result.selections().clone(),
+            changed_paragraphs,
+        })
+    }
+
     /// Toggles one real paragraph-local document edit.
+    #[cfg(test)]
     pub(crate) fn toggle_edit(&mut self) {
-        self.edited = !self.edited;
-        self.replace_editable(if self.edited {
-            CHANGED_EDIT_TEXT
-        } else {
+        let edited =
+            self.document.snapshot().text(self.leaves.editable) != Some(ORIGINAL_EDIT_TEXT);
+        self.replace_editable(if edited {
             ORIGINAL_EDIT_TEXT
+        } else {
+            CHANGED_EDIT_TEXT
         });
     }
 
@@ -220,13 +327,11 @@ impl ShowcaseContent {
 
     /// Restores the initial document and paint state.
     pub(crate) fn reset(&mut self) {
-        if self.edited {
-            self.replace_editable(ORIGINAL_EDIT_TEXT);
-            self.edited = false;
-        }
-        self.alternate_paint = false;
+        *self = Self::build(self.load_system_fonts)
+            .expect("embedded showcase fonts and authored document already validated");
     }
 
+    #[cfg(test)]
     fn replace_editable(&mut self, text: &str) {
         let mut edit = self.document.edit();
         edit.replace_text(self.leaves.editable, text)
@@ -314,9 +419,7 @@ impl ShowcaseContent {
             CORAL,
         );
         let editable = ComputedInlineStyle::new(
-            body_shaping
-                .clone()
-                .with_font_weight(FontWeight::new(560.0))?,
+            body_shaping.clone(),
             InlineFlowStyle::new(LineHeight::from_multiplier(1.6)?),
             CORAL,
         );
@@ -387,12 +490,14 @@ fn paint_table(alternate: bool) -> PaintTable {
 
 #[cfg(test)]
 mod tests {
-    use super::{ARABIC_FONT_BYTES, ShowcaseContent, TITLE, TextId};
-    use underwood::{Brush, ParagraphRole};
+    use super::{
+        ARABIC_FONT_BYTES, LATIN_FONT_BYTES, ORIGINAL_EDIT_TEXT, ShowcaseContent, TITLE, TextId,
+    };
+    use underwood::{Brush, ParagraphRole, Point, TextScene};
 
     #[test]
     fn document_exposes_real_heading_and_body_semantics() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(900.0, 0.5).expect("document must prepare");
         let roles: Vec<_> = frame
             .scene
@@ -406,7 +511,7 @@ mod tests {
 
     #[test]
     fn narrower_document_forms_more_visual_lines() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let wide = content.prepare(900.0, 0.5).expect("wide must prepare");
         let narrow = content.prepare(420.0, 0.5).expect("narrow must prepare");
         assert!(narrow.line_count > wide.line_count);
@@ -433,7 +538,7 @@ mod tests {
 
     #[test]
     fn local_edit_reshapes_only_its_paragraph() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let initial = content.prepare(760.0, 0.5).expect("initial must prepare");
         let sibling_ids: Vec<_> = initial
             .scene
@@ -466,7 +571,7 @@ mod tests {
 
     #[test]
     fn paint_toggle_does_not_repeat_text_physics() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         content.prepare(760.0, 0.5).expect("initial must prepare");
         content.toggle_paint();
         let painted = content.prepare(760.0, 0.5).expect("paint must prepare");
@@ -480,7 +585,7 @@ mod tests {
 
     #[test]
     fn heading_uses_a_real_gradient_brush() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
         assert!(matches!(
             frame.scene.paint().brush(TITLE),
@@ -503,7 +608,7 @@ mod tests {
 
     #[test]
     fn axis_motion_is_isolated_to_the_heading_paragraph() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let first = content.prepare(760.0, 0.1).expect("initial must prepare");
         let title = title_fragment_coords(&first.scene, content.leaves.title);
         let moved = content.prepare(760.0, 0.9).expect("axis must prepare");
@@ -517,16 +622,13 @@ mod tests {
         content.toggle_paint();
         content.reset();
         let reset = content.prepare(760.0, 0.9).expect("reset must prepare");
-        assert_eq!(
-            reset.work.shape().paragraphs(),
-            0,
-            "restoring the cached authored content may reuse its retained shape"
-        );
+        assert_eq!(reset.work.shape().paragraphs(), 10);
+        assert_eq!(content.editable_value(), ORIGINAL_EDIT_TEXT);
     }
 
     #[test]
     fn feature_specimen_executes_distinct_ligature_results() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
         assert_eq!(glyph_count(&frame.scene, content.leaves.ligatures_on), 4);
         assert_eq!(glyph_count(&frame.scene, content.leaves.ligatures_off), 6);
@@ -534,7 +636,7 @@ mod tests {
 
     #[test]
     fn width_specimen_executes_three_variable_axis_instances() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
         let narrow = title_fragment_coords(&frame.scene, content.leaves.width_narrow);
         let regular = title_fragment_coords(&frame.scene, content.leaves.width_regular);
@@ -546,7 +648,7 @@ mod tests {
 
     #[test]
     fn arabic_specimen_uses_real_rtl_fallback_with_unclipped_mark_glyph() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
         let arabic: Vec<_> = frame
             .scene
@@ -583,7 +685,40 @@ mod tests {
         );
     }
 
-    fn title_fragment_coords(scene: &underwood::TextScene, title: TextId) -> Vec<i16> {
+    #[test]
+    fn latin_inserted_inside_arabic_retains_a_real_font_fallback() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let initial = content.prepare(760.0, 0.5).expect("document must prepare");
+        let point = point_in_text(&initial.scene, content.leaves.arabic);
+        let position = *initial
+            .scene
+            .hit_test_closest(point)
+            .expect("Arabic glyph must expose a caret")
+            .position();
+        let caret = initial
+            .scene
+            .collapsed_selection(&position)
+            .expect("Arabic caret must validate");
+        let selections = initial
+            .scene
+            .selection_set([caret])
+            .expect("Arabic selection must validate");
+        content
+            .replace_selections(&selections, "Latin ")
+            .expect("mixed-script insertion must publish");
+        let mixed = content
+            .prepare(760.0, 0.5)
+            .expect("the Arabic-styled leaf must accept inserted Latin");
+        assert!(mixed.scene.fragments().iter().any(|fragment| {
+            fragment
+                .source()
+                .is_some_and(|source| source.text() == content.leaves.arabic)
+                && fragment.script() == *b"Latn"
+                && fragment.font().data.as_ref() == LATIN_FONT_BYTES
+        }));
+    }
+
+    fn title_fragment_coords(scene: &TextScene, title: TextId) -> Vec<i16> {
         scene
             .fragments()
             .iter()
@@ -597,7 +732,7 @@ mod tests {
             .to_vec()
     }
 
-    fn glyph_count(scene: &underwood::TextScene, text: TextId) -> usize {
+    fn glyph_count(scene: &TextScene, text: TextId) -> usize {
         scene
             .fragments()
             .iter()
@@ -610,7 +745,7 @@ mod tests {
             .sum()
     }
 
-    fn line_count_for_any(scene: &underwood::TextScene, texts: &[TextId]) -> usize {
+    fn line_count_for_any(scene: &TextScene, texts: &[TextId]) -> usize {
         scene
             .lines()
             .iter()
@@ -620,5 +755,40 @@ mod tests {
                     .any(|source| texts.contains(&source.text()))
             })
             .count()
+    }
+
+    fn point_in_text(scene: &TextScene, text: TextId) -> Point {
+        let semantic = scene
+            .semantics()
+            .find(|semantic| {
+                semantic
+                    .source()
+                    .is_some_and(|source| source.text() == text)
+            })
+            .expect("semantic text leaf must expose layout geometry");
+        let source = semantic
+            .source()
+            .expect("the requested semantic node must be authored text")
+            .bytes();
+        let bounds = semantic.bounds();
+        for line in scene.lines() {
+            if line.bounds().y1 <= bounds.y0 || line.bounds().y0 >= bounds.y1 {
+                continue;
+            }
+            let y = line.bounds().center().y;
+            let mut x = bounds.x0;
+            while x <= bounds.x1 {
+                let point = Point::new(x, y);
+                if scene.hit_test(point).is_some_and(|hit| {
+                    hit.position().text() == text
+                        && hit.position().byte() > source.start
+                        && hit.position().byte() < source.end
+                }) {
+                    return point;
+                }
+                x += 0.5;
+            }
+        }
+        panic!("semantic text leaf must contain one exact cluster hit");
     }
 }

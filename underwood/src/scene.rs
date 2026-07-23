@@ -2253,6 +2253,32 @@ impl CompositionScene {
         &self,
         session: &CompositionSession,
     ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
+        self.validate_composition_session(session)?;
+        let Some(selection) = session.selection() else {
+            return Ok(Vec::new());
+        };
+        Ok(self.composition_range_geometry(selection))
+    }
+
+    /// Resolves visual rectangles covering the complete generated preedit.
+    ///
+    /// This is the renderer-neutral marked-text geometry. Native hosts can use
+    /// it for underlines or backgrounds without approximating the preedit from
+    /// glyph ink. The supplied session must name this exact composition epoch.
+    pub fn composition_geometry(
+        &self,
+        session: &CompositionSession,
+    ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
+        self.validate_composition_session(session)?;
+        let end = u32::try_from(session.text().len())
+            .map_err(|_| CompositionError::new(CompositionErrorKind::InvalidPreeditRange))?;
+        Ok(self.composition_range_geometry(0..end))
+    }
+
+    fn validate_composition_session(
+        &self,
+        session: &CompositionSession,
+    ) -> Result<(), CompositionError> {
         if session.document() != self.document
             || session.base_revision() != self.revision
             || session.id() != self.composition
@@ -2260,17 +2286,18 @@ impl CompositionScene {
         {
             return Err(CompositionError::new(CompositionErrorKind::WrongSnapshot));
         }
-        let Some(selection) = session.selection() else {
-            return Ok(Vec::new());
-        };
+        Ok(())
+    }
+
+    fn composition_range_geometry(&self, bytes: Range<u32>) -> Vec<SceneCompositionRect> {
         let mut geometry: Vec<SceneCompositionRect> = Vec::new();
         for cluster in &self.clusters {
             if !cluster.source.sources().iter().any(|source| {
-                matches!(source, ProjectedTextSource::Composition(range)
-                    if range.id() == self.composition
-                        && range.epoch() == self.epoch
-                        && range.bytes().start < selection.end
-                        && selection.start < range.bytes().end)
+                matches!(source, ProjectedTextSource::Composition(source_range)
+                    if source_range.id() == self.composition
+                        && source_range.epoch() == self.epoch
+                        && source_range.bytes().start < bytes.end
+                        && bytes.start < source_range.bytes().end)
             }) {
                 continue;
             }
@@ -2288,7 +2315,7 @@ impl CompositionScene {
                 });
             }
         }
-        Ok(geometry)
+        geometry
     }
 
     pub(crate) fn range_geometry(&self, range: &ProjectedTextRange) -> Vec<(usize, Rect)> {
@@ -4089,6 +4116,20 @@ mod tests {
                 .composition_selection_geometry(&session)
                 .expect("preedit selection geometry must resolve")
                 .is_empty()
+        );
+        let marked_geometry = first
+            .scene()
+            .composition_geometry(&session)
+            .expect("complete marked-text geometry must resolve");
+        assert!(
+            !marked_geometry.is_empty(),
+            "the complete generated preedit must expose renderer-neutral geometry"
+        );
+        assert!(
+            marked_geometry
+                .iter()
+                .all(|rect| rect.bounds().width() > 0.0),
+            "combining preedit geometry must be cluster based rather than ink based"
         );
 
         let repeated = layout

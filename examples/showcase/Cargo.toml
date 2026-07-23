@@ -15,7 +15,7 @@ imaging.workspace = true
 imaging_vello_cpu.workspace = true
 softbuffer.workspace = true
 underwood.workspace = true
-underwood_parley.workspace = true
+underwood_parley = { workspace = true, features = ["system-fonts"] }
 winit.workspace = true
 
 [lints]

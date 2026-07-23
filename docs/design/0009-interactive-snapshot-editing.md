@@ -104,7 +104,10 @@ The replacement contract has these invariants:
    it never uses the original pointer x-coordinate as caret geometry.
 4. Visual left/right movement walks adapter-produced cursor transitions.
    Logical movement and deletion walk adapter-produced source-cluster
-   transitions, not UTF-8 bytes.
+   transitions, not UTF-8 bytes. Full extended-grapheme movement across
+   shaping records or semantic leaves requires a multi-source interaction unit
+   and remains a separately gated follow-up; it must not be approximated by
+   merging away semantic ownership.
 5. The scene creates and moves whole selection sets. Moving without extension
    collapses each nonempty selection toward the requested direction; extending
    preserves each selection's anchor and recomputes its logical ranges from the
@@ -265,13 +268,23 @@ gates pass.
 | --- | --- | --- |
 | A. Exact interaction map | Landed | `underwood_parley` cluster/caret corpus and `docs/proof/exact-interaction-review-2026-07-22.md` |
 | B. Snapshot transaction and selection | Landed | multi-range visual bidi and independent multi-selection transaction corpus; `docs/proof/selection-transaction-review-2026-07-22.md` |
-| C. Composition epoch | Executable; local gates green, remote proof pending | `CompositionSession`, `CompositionScene`, `EditableSurface`, real-Parley feed/host tests, and `underwood_ime_compat_experiment` |
-| D. Product proof and review | Pending | editable native showcase and semantic activation |
+| C. Composition epoch | Landed | `CompositionSession`, `CompositionScene`, `EditableSurface`, real-Parley feed/host tests, `underwood_ime_compat_experiment`, and PR #14 |
+| D. Product proof and review | Editor executable; semantic activation pending | native pointer/keyboard/Winit IME integration, deterministic editor trace, and `docs/proof/native-editor-review-2026-07-22.md` |
 
 Slice C preserves the general scene model from Slice B. Committed scenes and
 editable surfaces expose every independent selection and every logical range.
 Only entry into a singular native marked-text session normalizes that state,
 and `CompositionStart` makes the change observable before any preedit update.
+
+The editor half of Slice D routes actual Winit events through the public scene,
+selection, transaction, composition, and editable-surface paths. Its authored
+specimen registers explicit Arabic and Latin fallbacks because editing may
+introduce either script into a leaf whose original contents used only one.
+The native showcase also opts into a fixed Fontique platform-font snapshot so
+IME commits can introduce scripts such as Han without rebuilding font fallback
+inside Underwood; deterministic proof callers keep system discovery disabled.
+Semantic hover, press cancellation, and activation remain the final Slice D
+work; the editor proof does not manufacture an action registry in advance.
 
 ## Migration
 
@@ -295,9 +308,22 @@ explicit migration record.
 - Host-driven adapters map explicit authored ranges through
   `EditableSurfaceSnapshot::replacement_selection`; they do not construct a
   `SnapshotTextPosition` from a platform byte offset.
+- Composition presenters use `CompositionScene::composition_geometry` for the
+  complete marked-text projection and
+  `CompositionScene::composition_selection_geometry` for the IME-selected
+  subrange; neither is reconstructed from glyph ink bounds.
 - Paragraph adapters migrate `PreparedParagraph::try_from_lines` calls to
   `PreparedParagraph::try_new` and supply complete cursor movements, including
   exact caret placement and optional crossed-source ranges.
+- Parley-backed callers continue to observe source-complete shaping clusters.
+  A combining sequence split across authored leaves prepares without erasing
+  either semantic identity. Callers must not yet infer full Unicode
+  extended-grapheme deletion from those cluster transitions.
+- Native adapters that want platform fallback enable the optional
+  `underwood_parley/system-fonts` feature and call
+  `FontSet::with_system_fonts` before constructing the paragraph engine.
+  Deterministic callers require no migration and retain the default system-free
+  catalog.
 - No snapshot-local interaction type may be documented or serialized as a
   durable anchor.
 
