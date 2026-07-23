@@ -565,9 +565,8 @@ repository policy, formatting, bare metal, and WebAssembly.
 
 ## Interactive semantic document campaign
 
-**Status:** Active — native editor landed; exact semantic activation and
-direction-independent action-leaf selection have full local gates green;
-GitHub Actions run `29981259791` is green; PR #17 merge pending
+**Status:** Active — native editor and semantic activation landed through PR
+#17; the separately gated extended-grapheme follow-up remains open
 
 **Design:** Design-0009
 
