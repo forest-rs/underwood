@@ -272,7 +272,7 @@ gates pass.
 | A. Exact interaction map | Landed | `underwood_parley` cluster/caret corpus and `docs/proof/exact-interaction-review-2026-07-22.md` |
 | B. Snapshot transaction and selection | Landed | multi-range visual bidi and independent multi-selection transaction corpus; `docs/proof/selection-transaction-review-2026-07-22.md` |
 | C. Composition epoch | Landed | `CompositionSession`, `CompositionScene`, `EditableSurface`, real-Parley feed/host tests, `underwood_ime_compat_experiment`, and PR #14 |
-| D. Product proof and review | Executable; local and remote gates green; PR #17 merge pending | native editor plus exact semantic activation and reciprocal bidi-drag traces; `docs/proof/native-editor-review-2026-07-22.md` and `docs/proof/semantic-activation-review-2026-07-23.md` |
+| D. Product proof and review | Landed in PR #17 | native editor plus exact semantic activation and reciprocal bidi-drag traces; `docs/proof/native-editor-review-2026-07-22.md` and `docs/proof/semantic-activation-review-2026-07-23.md` |
 
 Slice C preserves the general scene model from Slice B. Committed scenes and
 editable surfaces expose every independent selection and every logical range.

@@ -10,7 +10,9 @@
 - **Unsafe watch:** no `unsafe` added
 - **Dependency watch:** no dependency added
 - **Local gate:** complete
-- **Remote gate:** GitHub Actions run `29981259791` passed all eight jobs
+- **Remote gate:** head run `29981440158` and merge-group run `29981766554`
+  passed all eight jobs
+- **Landed:** PR #17, squash commit `7f61221`
 
 ## Overview
 
@@ -140,9 +142,10 @@ showcase value, the registry is rebuilt from one known authored leaf, and no
 general action model or permanent semantic link role exists. Calling this a
 browser-capable link widget would be a mirage.
 
-## Remaining gate
+## Landed result
 
-Merge PR #17 before closing the bead or the interactive-document campaign.
-Local formatting, Taplo, headers, spelling, metadata/policy, workspace clippy
-and tests, rustdoc, Rust 1.92 MSRV, bare-metal, and WebAssembly gates pass; the
-same eight-job matrix passed remotely in run `29981259791`.
+PR #17 landed as `7f61221`. Local formatting, Taplo, headers, spelling,
+metadata/policy, workspace clippy and tests, rustdoc, Rust 1.92 MSRV,
+bare-metal, and WebAssembly gates pass; the same eight-job matrix passed on the
+final head and again in the merge queue. The discovered multi-source extended-
+grapheme work remains separately gated as `und-oh0.10.2.6`.
