@@ -118,8 +118,8 @@ pub enum EditErrorKind {
     RevisionConflict,
     /// A snapshot selection contains an invalid or non-boundary text range.
     InvalidTextRange,
-    /// One selection crosses semantic text leaves unsupported by this slice.
-    CrossLeafSelection,
+    /// One text replacement would cross a paragraph structure boundary.
+    CrossParagraphSelection,
     /// Independent selections overlap or duplicate an insertion point.
     OverlappingSelections,
     /// A replacement was requested for a set with no insertion points.
