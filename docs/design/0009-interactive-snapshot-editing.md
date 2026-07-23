@@ -115,7 +115,10 @@ The replacement contract has these invariants:
 6. Logical selection records one contiguous document interval, projected into
    its leaf-local ranges. Visual selection follows the visual caret path and
    records the logically ordered, nonoverlapping ranges covered by that path.
-   It never replaces those ranges with their logical union.
+   It never replaces those ranges with their logical union. Selection is
+   direction-independent: when bidi affinity aliases expose the complete path
+   only from the reciprocal endpoint, the scene uses that traversal while
+   retaining the caller's original anchor and extent.
 7. Selection geometry accepts a whole selection set. It includes every visual
    cluster covered by every member range, splits at selection, range, bidi, and
    line boundaries, and tags every rectangle with its selection and range
@@ -269,7 +272,7 @@ gates pass.
 | A. Exact interaction map | Landed | `underwood_parley` cluster/caret corpus and `docs/proof/exact-interaction-review-2026-07-22.md` |
 | B. Snapshot transaction and selection | Landed | multi-range visual bidi and independent multi-selection transaction corpus; `docs/proof/selection-transaction-review-2026-07-22.md` |
 | C. Composition epoch | Landed | `CompositionSession`, `CompositionScene`, `EditableSurface`, real-Parley feed/host tests, `underwood_ime_compat_experiment`, and PR #14 |
-| D. Product proof and review | Editor complete; semantic activation pending | native pointer/keyboard/Winit IME integration, deterministic editor trace, and `docs/proof/native-editor-review-2026-07-22.md` |
+| D. Product proof and review | Executable; local and remote gates green; PR #17 merge pending | native editor plus exact semantic activation and reciprocal bidi-drag traces; `docs/proof/native-editor-review-2026-07-22.md` and `docs/proof/semantic-activation-review-2026-07-23.md` |
 
 Slice C preserves the general scene model from Slice B. Committed scenes and
 editable surfaces expose every independent selection and every logical range.
@@ -283,8 +286,16 @@ introduce either script into a leaf whose original contents used only one.
 The native showcase also opts into a fixed Fontique platform-font snapshot so
 IME commits can introduce scripts such as Han without rebuilding font fallback
 inside Underwood; deterministic proof callers keep system discovery disabled.
-Semantic hover, press cancellation, and activation remain the final Slice D
-work; the editor proof does not manufacture an action registry in advance.
+The final Slice D adapter binds one authored mixed-script text leaf to a
+showcase-owned URL-shaped action after each committed scene preparation. Hover,
+press, release, and cancellation use only exact `TextScene::hit_test` results
+and their `SemanticId`; broad semantic bounds and closest-hit fallback never
+activate. Paint state and pointer policy remain in the showcase, while the
+native host records the activation receipt. It intentionally does not launch a
+browser, and Underwood gains no action or URL schema. Pointer movement beyond
+the showcase's click threshold transfers an action press into visual selection
+at its original shaped-cluster position, including across wrapped LTR/RTL
+boundaries.
 
 ## Migration
 
@@ -293,6 +304,10 @@ explicit migration record.
 
 - `TextHit` changes from a whole-fragment source observation to an exact
   cluster hit with a collapsed revision-bound position.
+- `TextScene::selection` now resolves a visual range through the reciprocal
+  endpoint when bidi affinity aliases make only that traversal complete. The
+  returned selection still preserves the caller's anchor and extent; callers
+  should remove any direction-specific retry or failure policy.
 - `TextScene::caret(&hit)` becomes
   `TextScene::caret(hit.position()) -> Option<SceneCaret>`; callers handle
   `None` when a position does not belong to the scene's revision/source map.
@@ -352,6 +367,8 @@ The campaign is complete only when:
 - selection-only changes perform zero document publication, analysis,
   shaping, line formation, and text geometry work;
 - visual mixed-bidi selection produces the expected disjoint logical ranges;
+  reciprocal drags across wrapped bidi affinity boundaries select the same
+  source instead of failing in one direction;
   multiple selections keep distinct insertion points and geometry ownership;
 - one committed multi-selection edit reshapes only its affected paragraphs,
   and one IME commit reshapes only its affected paragraph;

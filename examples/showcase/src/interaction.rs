@@ -6,13 +6,117 @@
 use std::fmt::Write as _;
 
 use underwood::{
-    CompositionId, CompositionScene, CompositionSession, CompositionUpdate, EditableSurface,
-    EditableSurfaceElement, Point, Rect, SnapshotTextPosition, SnapshotTextSelectionSet,
-    TextMovement, TextScene, TextSelectionMode,
+    CompositionId, CompositionScene, CompositionSession, CompositionUpdate, DocumentRevision,
+    EditableSurface, EditableSurfaceElement, Point, Rect, SemanticId, SnapshotTextPosition,
+    SnapshotTextSelectionSet, TextId, TextMovement, TextScene, TextSelectionMode,
 };
 
-use crate::content::ShowcaseContent;
+use crate::content::{ActionVisual, ShowcaseContent};
 use crate::presentation::{EditorOverlay, SelectionOverlay};
+
+/// Example-owned action associated with one semantic document node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShowcaseAction {
+    VisitUrl {
+        label: &'static str,
+        url: &'static str,
+    },
+}
+
+impl ShowcaseAction {
+    /// Creates one URL-shaped host action without adding URL semantics to core.
+    pub(crate) const fn visit_url(label: &'static str, url: &'static str) -> Self {
+        Self::VisitUrl { label, url }
+    }
+
+    /// Returns the user-visible action label.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::VisitUrl { label, .. } => label,
+        }
+    }
+
+    /// Returns the example-owned URL target.
+    pub(crate) const fn url(self) -> &'static str {
+        match self {
+            Self::VisitUrl { url, .. } => url,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActionEntry {
+    semantic: SemanticId,
+    action: ShowcaseAction,
+}
+
+/// Scene-bound mapping from semantic identities to application actions.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ActionRegistry {
+    revision: Option<DocumentRevision>,
+    entries: Vec<ActionEntry>,
+}
+
+impl ActionRegistry {
+    /// Resolves authored text leaves to semantic identities in one exact scene.
+    pub(crate) fn bind(
+        scene: &TextScene,
+        bindings: impl IntoIterator<Item = (TextId, ShowcaseAction)>,
+    ) -> Result<Self, String> {
+        let mut entries = Vec::new();
+        for (text, action) in bindings {
+            let semantic = scene
+                .semantics()
+                .find(|semantic| {
+                    semantic
+                        .source()
+                        .is_some_and(|source| source.text() == text)
+                })
+                .map(underwood::SemanticFragment::semantic_id)
+                .ok_or_else(|| String::from("action text is absent from the prepared scene"))?;
+            if entries
+                .iter()
+                .any(|entry: &ActionEntry| entry.semantic == semantic)
+            {
+                return Err(String::from(
+                    "more than one action targets the same semantic node",
+                ));
+            }
+            entries.push(ActionEntry { semantic, action });
+        }
+        Ok(Self {
+            revision: Some(scene.revision()),
+            entries,
+        })
+    }
+
+    fn action(&self, revision: DocumentRevision, semantic: SemanticId) -> Option<ShowcaseAction> {
+        (self.revision == Some(revision))
+            .then(|| {
+                self.entries
+                    .iter()
+                    .find(|entry| entry.semantic == semantic)
+                    .map(|entry| entry.action)
+            })
+            .flatten()
+    }
+}
+
+/// Pointer icon requested by showcase interaction policy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PointerAffordance {
+    #[default]
+    Arrow,
+    Text,
+    Action,
+}
+
+/// Host-directed effects produced by one editor event.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct EditorResponse {
+    pub(crate) activation: Option<ShowcaseAction>,
+    pub(crate) pointer: PointerAffordance,
+}
 
 /// Modifier state attached to one pointer or keyboard gesture.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -73,6 +177,229 @@ struct DragSelection {
     anchor: SnapshotTextPosition,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ActionHit {
+    semantic: SemanticId,
+    action: ShowcaseAction,
+    position: SnapshotTextPosition,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PressedAction {
+    hit: ActionHit,
+    revision: DocumentRevision,
+    origin: Point,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ActionHandling {
+    response: EditorResponse,
+    visual: ActionVisual,
+    consumed: bool,
+    selection_anchor: Option<SnapshotTextPosition>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct SemanticActionState {
+    hovered: Option<ActionHit>,
+    pressed: Option<PressedAction>,
+    selecting: bool,
+    status: Option<String>,
+}
+
+const ACTION_DRAG_THRESHOLD: f64 = 4.0;
+
+impl SemanticActionState {
+    fn handle(
+        &mut self,
+        event: &EditorEvent,
+        scene: Option<&TextScene>,
+        registry: &ActionRegistry,
+    ) -> ActionHandling {
+        match event {
+            EditorEvent::Focused(false) => {
+                self.hovered = None;
+                self.pressed = None;
+                self.selecting = false;
+                self.status = None;
+                self.handling(false, None, PointerAffordance::Arrow)
+            }
+            EditorEvent::PointerMoved(point) => {
+                if self.selecting {
+                    self.hovered = None;
+                    return self.handling(false, None, PointerAffordance::Text);
+                }
+                self.hovered = exact_action(scene, registry, *point);
+                if let Some(pressed) = self.pressed {
+                    if point.distance(pressed.origin) >= ACTION_DRAG_THRESHOLD {
+                        self.hovered = None;
+                        self.pressed = None;
+                        self.selecting = true;
+                        self.status = None;
+                        let mut handling = self.handling(false, None, PointerAffordance::Text);
+                        handling.selection_anchor = Some(pressed.hit.position);
+                        return handling;
+                    }
+                    if self
+                        .hovered
+                        .is_some_and(|hovered| hovered.semantic == pressed.hit.semantic)
+                    {
+                        self.status = Some(format!(
+                            "pressed semantic action: {}",
+                            pressed.hit.action.label()
+                        ));
+                    } else {
+                        self.status = Some(format!(
+                            "release away to cancel: {}",
+                            pressed.hit.action.label()
+                        ));
+                    }
+                } else {
+                    self.status = self
+                        .hovered
+                        .map(|hovered| format!("semantic action: {}", hovered.action.label()));
+                }
+                self.handling(false, None, pointer_affordance(scene, registry, *point))
+            }
+            EditorEvent::PointerButton {
+                state: PointerState::Pressed,
+                point,
+                modifiers,
+            } if *modifiers == InputModifiers::default() => {
+                let Some(hit) = exact_action(scene, registry, *point) else {
+                    self.hovered = None;
+                    self.pressed = None;
+                    self.status = None;
+                    return self.handling(false, None, pointer_affordance(scene, registry, *point));
+                };
+                let revision = scene
+                    .expect("an exact action hit requires a committed scene")
+                    .revision();
+                self.hovered = Some(hit);
+                self.pressed = Some(PressedAction {
+                    hit,
+                    revision,
+                    origin: *point,
+                });
+                self.status = Some(format!("pressed semantic action: {}", hit.action.label()));
+                self.handling(true, None, PointerAffordance::Action)
+            }
+            EditorEvent::PointerButton {
+                state: PointerState::Released,
+                point,
+                ..
+            } => {
+                if self.selecting {
+                    self.selecting = false;
+                    self.hovered = exact_action(scene, registry, *point);
+                    self.status = None;
+                    return self.handling(false, None, pointer_affordance(scene, registry, *point));
+                }
+                let Some(pressed) = self.pressed.take() else {
+                    return self.handling(false, None, pointer_affordance(scene, registry, *point));
+                };
+                self.hovered = exact_action(scene, registry, *point);
+                let activation = self.hovered.and_then(|hovered| {
+                    let scene = scene?;
+                    (point.distance(pressed.origin) < ACTION_DRAG_THRESHOLD
+                        && scene.revision() == pressed.revision
+                        && hovered.semantic == pressed.hit.semantic
+                        && hovered.action == pressed.hit.action)
+                        .then_some(pressed.hit.action)
+                });
+                if let Some(action) = activation {
+                    self.status = Some(format!("activation requested: {}", action.label()));
+                } else {
+                    self.status = Some(format!(
+                        "semantic action cancelled: {}",
+                        pressed.hit.action.label()
+                    ));
+                }
+                self.handling(
+                    true,
+                    activation,
+                    pointer_affordance(scene, registry, *point),
+                )
+            }
+            _ => {
+                let pointer = self
+                    .hovered
+                    .map_or(PointerAffordance::Arrow, |_| PointerAffordance::Action);
+                self.handling(false, None, pointer)
+            }
+        }
+    }
+
+    fn handling(
+        &self,
+        consumed: bool,
+        activation: Option<ShowcaseAction>,
+        pointer: PointerAffordance,
+    ) -> ActionHandling {
+        let visual = if self.pressed.is_some()
+            && self.hovered.is_some_and(|hovered| {
+                self.pressed
+                    .is_some_and(|pressed| pressed.hit.semantic == hovered.semantic)
+            }) {
+            ActionVisual::Pressed
+        } else if self.hovered.is_some() {
+            ActionVisual::Hovered
+        } else {
+            ActionVisual::Idle
+        };
+        ActionHandling {
+            response: EditorResponse {
+                activation,
+                pointer,
+            },
+            visual,
+            consumed,
+            selection_anchor: None,
+        }
+    }
+
+    fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+}
+
+fn exact_action(
+    scene: Option<&TextScene>,
+    registry: &ActionRegistry,
+    point: Point,
+) -> Option<ActionHit> {
+    let scene = scene?;
+    let hit = scene.hit_test(point)?;
+    registry
+        .action(scene.revision(), hit.semantic_id())
+        .map(|action| ActionHit {
+            semantic: hit.semantic_id(),
+            action,
+            position: *hit.position(),
+        })
+}
+
+fn pointer_affordance(
+    scene: Option<&TextScene>,
+    registry: &ActionRegistry,
+    point: Point,
+) -> PointerAffordance {
+    let Some(scene) = scene else {
+        return PointerAffordance::Arrow;
+    };
+    let Some(hit) = scene.hit_test(point) else {
+        return PointerAffordance::Arrow;
+    };
+    if registry
+        .action(scene.revision(), hit.semantic_id())
+        .is_some()
+    {
+        PointerAffordance::Action
+    } else {
+        PointerAffordance::Text
+    }
+}
+
 /// Showcase-owned focus, gesture, selection, and native composition state.
 #[derive(Clone, Debug)]
 pub(crate) struct EditorState {
@@ -83,6 +410,7 @@ pub(crate) struct EditorState {
     ime_enabled: bool,
     next_composition: u128,
     status: String,
+    actions: SemanticActionState,
 }
 
 impl Default for EditorState {
@@ -95,18 +423,46 @@ impl Default for EditorState {
             ime_enabled: false,
             next_composition: 1,
             status: String::from("click text to place an exact caret"),
+            actions: SemanticActionState::default(),
         }
     }
 }
 
 impl EditorState {
     /// Applies one host event against the latest committed scene.
+    #[cfg(test)]
     pub(crate) fn handle(
         &mut self,
         event: EditorEvent,
         content: &mut ShowcaseContent,
         scene: Option<&TextScene>,
-    ) {
+    ) -> EditorResponse {
+        self.handle_with_actions(event, content, scene, &ActionRegistry::default())
+    }
+
+    /// Applies one host event with an exact scene-bound semantic action registry.
+    pub(crate) fn handle_with_actions(
+        &mut self,
+        event: EditorEvent,
+        content: &mut ShowcaseContent,
+        scene: Option<&TextScene>,
+        registry: &ActionRegistry,
+    ) -> EditorResponse {
+        let action = self.actions.handle(&event, scene, registry);
+        content.set_action_visual(action.visual);
+        if let Some(anchor) = action.selection_anchor {
+            let result = scene.map_or_else(
+                || Err(String::from("action drag lost its committed scene")),
+                |scene| self.begin_drag_at_position(scene, anchor),
+            );
+            if let Err(error) = result {
+                self.status = error;
+                return action.response;
+            }
+        }
+        if action.consumed {
+            return action.response;
+        }
         let result = match event {
             EditorEvent::Focused(focused) => {
                 self.focused = focused;
@@ -138,6 +494,7 @@ impl EditorState {
         if let Err(error) = result {
             self.status = error;
         }
+        action.response
     }
 
     /// Returns whether focus policy requires caret animation frames.
@@ -147,7 +504,7 @@ impl EditorState {
 
     /// Returns terse, live interaction evidence for the window title.
     pub(crate) fn status(&self) -> &str {
-        &self.status
+        self.actions.status().unwrap_or(&self.status)
     }
 
     /// Records a host-side preparation failure without panicking the event loop.
@@ -310,6 +667,24 @@ impl EditorState {
             anchor: *primary.anchor(),
         });
         self.describe_selection("pointer");
+        Ok(())
+    }
+
+    fn begin_drag_at_position(
+        &mut self,
+        scene: &TextScene,
+        anchor: SnapshotTextPosition,
+    ) -> Result<(), String> {
+        self.cancel_composition();
+        let selection = scene
+            .collapsed_selection(&anchor)
+            .map_err(|error| format!("action drag anchor rejected: {error}"))?;
+        self.selections = Some(
+            scene
+                .selection_set([selection])
+                .map_err(|error| format!("action drag selection rejected: {error}"))?,
+        );
+        self.drag = Some(DragSelection { anchor });
         Ok(())
     }
 
@@ -595,9 +970,225 @@ fn composition_caret(
 
 #[cfg(test)]
 mod tests {
-    use super::{EditorEvent, EditorKey, EditorState, ImeInput, InputModifiers, PointerState};
+    use super::{
+        ACTION_DRAG_THRESHOLD, ActionRegistry, EditorEvent, EditorKey, EditorState, ImeInput,
+        InputModifiers, PointerAffordance, PointerState, ShowcaseAction,
+    };
     use crate::content::ShowcaseContent;
     use underwood::Point;
+
+    const TEST_ACTION: ShowcaseAction = ShowcaseAction::visit_url(
+        "forest-rs/underwood on GitHub",
+        "https://github.com/forest-rs/underwood",
+    );
+
+    #[test]
+    fn wrapped_bidi_semantic_action_activates_from_exact_hits() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let initial = content.prepare(300.0, 0.5).expect("scene must prepare");
+        let action_text = content.action_text();
+        let registry = ActionRegistry::bind(&initial.scene, [(action_text, TEST_ACTION)])
+            .expect("authored action must bind to one semantic node");
+        let points = exact_text_hits(&initial.scene, action_text);
+        let lines: std::collections::BTreeSet<_> =
+            points.iter().map(|(line, _, _)| *line).collect();
+        let levels: std::collections::BTreeSet<_> =
+            points.iter().map(|(_, level, _)| level & 1).collect();
+        assert!(lines.len() > 1, "actionable semantic leaf must wrap");
+        assert_eq!(levels, [0, 1].into_iter().collect());
+
+        for point in [
+            points.first().expect("action must expose an exact hit").2,
+            points.last().expect("action must expose an exact hit").2,
+        ] {
+            let mut editor = EditorState::default();
+            let hover = editor.handle_with_actions(
+                EditorEvent::PointerMoved(point),
+                &mut content,
+                Some(&initial.scene),
+                &registry,
+            );
+            assert_eq!(hover.pointer, PointerAffordance::Action);
+            let pressed = editor.handle_with_actions(
+                EditorEvent::PointerButton {
+                    state: PointerState::Pressed,
+                    point,
+                    modifiers: InputModifiers::default(),
+                },
+                &mut content,
+                Some(&initial.scene),
+                &registry,
+            );
+            assert_eq!(pressed.activation, None);
+            let released = editor.handle_with_actions(
+                EditorEvent::PointerButton {
+                    state: PointerState::Released,
+                    point,
+                    modifiers: InputModifiers::default(),
+                },
+                &mut content,
+                Some(&initial.scene),
+                &registry,
+            );
+            assert_eq!(released.activation, Some(TEST_ACTION));
+            assert!(
+                editor.selections().is_none(),
+                "action press must not place a caret"
+            );
+        }
+
+        let hovered = content
+            .prepare(300.0, 0.5)
+            .expect("hover paint must prepare without changing text physics");
+        assert_eq!(hovered.work.shape().paragraphs(), 0);
+        assert_eq!(hovered.work.flow().paragraphs(), 0);
+        assert!(hovered.work.paint().paragraphs() > 0);
+    }
+
+    #[test]
+    fn semantic_action_cancels_outside_and_non_action_text_still_edits() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let initial = content.prepare(420.0, 0.5).expect("scene must prepare");
+        let registry = ActionRegistry::bind(&initial.scene, [(content.action_text(), TEST_ACTION)])
+            .expect("authored action must bind to one semantic node");
+        let action = exact_text_hits(&initial.scene, content.action_text())[0].2;
+        let editable = two_points_in_text_leaf(&initial.scene, content.editable_text()).0;
+        let mut editor = EditorState::default();
+        editor.handle_with_actions(
+            EditorEvent::PointerButton {
+                state: PointerState::Pressed,
+                point: action,
+                modifiers: InputModifiers::default(),
+            },
+            &mut content,
+            Some(&initial.scene),
+            &registry,
+        );
+        let cancelled = editor.handle_with_actions(
+            EditorEvent::PointerButton {
+                state: PointerState::Released,
+                point: editable,
+                modifiers: InputModifiers::default(),
+            },
+            &mut content,
+            Some(&initial.scene),
+            &registry,
+        );
+        assert_eq!(cancelled.activation, None);
+        assert_eq!(cancelled.pointer, PointerAffordance::Text);
+        assert!(editor.status().contains("cancelled"));
+        assert!(editor.selections().is_none());
+
+        editor.handle_with_actions(
+            EditorEvent::PointerButton {
+                state: PointerState::Pressed,
+                point: editable,
+                modifiers: InputModifiers::default(),
+            },
+            &mut content,
+            Some(&initial.scene),
+            &registry,
+        );
+        editor.handle_with_actions(
+            EditorEvent::PointerButton {
+                state: PointerState::Released,
+                point: editable,
+                modifiers: InputModifiers::default(),
+            },
+            &mut content,
+            Some(&initial.scene),
+            &registry,
+        );
+        assert!(
+            editor.selections().is_some(),
+            "a non-action exact hit must continue through editor policy"
+        );
+    }
+
+    #[test]
+    fn dragging_from_action_text_selects_instead_of_activating() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let initial = content.prepare(300.0, 0.5).expect("scene must prepare");
+        let registry = ActionRegistry::bind(&initial.scene, [(content.action_text(), TEST_ACTION)])
+            .expect("authored action must bind to one semantic node");
+        let points = caret_points(&initial.scene, content.action_text());
+        let (start, start_position) = points
+            .iter()
+            .find(|(point, position)| {
+                position.byte() == 0
+                    && initial
+                        .scene
+                        .hit_test(*point)
+                        .is_some_and(|hit| hit.bidi_level() & 1 == 0)
+            })
+            .copied()
+            .expect("action must expose its leading Latin caret");
+        let end = points
+            .iter()
+            .find(|(point, position)| {
+                if initial
+                    .scene
+                    .hit_test(*point)
+                    .is_none_or(|hit| hit.bidi_level() & 1 != 1)
+                {
+                    return false;
+                }
+                initial
+                    .scene
+                    .selection(
+                        position,
+                        &start_position,
+                        underwood::TextSelectionMode::Visual,
+                    )
+                    .and_then(|selection| initial.scene.selection_set([selection]))
+                    .and_then(|selections| initial.scene.selection_geometry(&selections))
+                    .is_ok_and(|geometry| geometry.iter().any(|rect| rect.bidi_level() & 1 == 1))
+            })
+            .map(|(point, _)| *point)
+            .expect("action must expose an Arabic selection interior");
+        assert!(start.distance(end) >= ACTION_DRAG_THRESHOLD);
+        let mut editor = EditorState::default();
+        editor.handle_with_actions(
+            EditorEvent::PointerButton {
+                state: PointerState::Pressed,
+                point: start,
+                modifiers: InputModifiers::default(),
+            },
+            &mut content,
+            Some(&initial.scene),
+            &registry,
+        );
+        editor.handle_with_actions(
+            EditorEvent::PointerMoved(end),
+            &mut content,
+            Some(&initial.scene),
+            &registry,
+        );
+        let released = editor.handle_with_actions(
+            EditorEvent::PointerButton {
+                state: PointerState::Released,
+                point: end,
+                modifiers: InputModifiers::default(),
+            },
+            &mut content,
+            Some(&initial.scene),
+            &registry,
+        );
+
+        assert_eq!(released.activation, None, "a drag must not follow the link");
+        let selections = editor
+            .selections()
+            .expect("dragging from a link must become a text selection");
+        let geometry = initial
+            .scene
+            .selection_geometry(selections)
+            .expect("selection geometry must resolve");
+        assert!(
+            geometry.iter().any(|rect| rect.bidi_level() & 1 == 1),
+            "the drag must highlight the Arabic run: {geometry:?}; selection={selections:?}; status={}",
+            editor.status()
+        );
+    }
 
     #[test]
     fn two_pointer_carets_publish_one_atomic_insertion() {
@@ -868,6 +1459,30 @@ mod tests {
             return (first.0, second.0);
         }
         panic!("showcase must contain two fragments in one semantic text leaf");
+    }
+
+    fn exact_text_hits(
+        scene: &underwood::TextScene,
+        text: underwood::TextId,
+    ) -> Vec<(usize, u8, Point)> {
+        let mut hits = Vec::new();
+        for (line_index, line) in scene.lines().iter().enumerate() {
+            let y = line.bounds().center().y;
+            let mut x = line.bounds().x0;
+            while x <= line.bounds().x1 {
+                let point = Point::new(x, y);
+                if let Some(hit) = scene.hit_test(point)
+                    && hit.position().text() == text
+                    && !hits.iter().any(|(existing_line, level, _)| {
+                        *existing_line == line_index && *level == hit.bidi_level()
+                    })
+                {
+                    hits.push((line_index, hit.bidi_level(), point));
+                }
+                x += 0.5;
+            }
+        }
+        hits
     }
 
     fn disjoint_visual_points(

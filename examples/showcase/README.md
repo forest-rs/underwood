@@ -23,6 +23,14 @@ without mutating the document and commits once. `F2` changes paint, `F3`
 animates the variable-font weight axis, `F4` shows line evidence, and `F5`
 restores the complete authored document.
 
+The mixed English/Arabic “Explore the source” leaf is also actionable. Hover
+uses exact shaped-cluster hits to change its paint and request the native link
+pointer; press and release on the same semantic node sends a URL-shaped action
+to the host. The proof host acknowledges that request in the title bar but does
+not launch a browser. Moving beyond the click threshold transfers the original
+cluster position into visual-selection policy, so dragging from the link selects
+its wrapped Latin and Arabic text instead of activating it.
+
 The editor paragraph deliberately mixes Latin, Arabic, an `ffi` ligature, and
 a decomposed combining sequence. Selection geometry follows visual bidi order
 without flattening disjoint logical ranges; independent carets publish one

@@ -36,7 +36,7 @@ text.
 
 ## Interaction laws
 
-The default specimen contains ten paragraphs and twenty semantic text leaves.
+The default specimen contains ten paragraphs and twenty-one semantic text leaves.
 Tests require the following work, rather than relying on window pixels alone:
 
 | Interaction | Required retained observation |
@@ -47,6 +47,8 @@ Tests require the following work, rather than relying on window pixels alone:
 | `wght` motion | changed normalized coordinates, exactly one paragraph shaped, nine reused |
 | `wdth` specimen | three distinct normalized-coordinate instances |
 | `liga` specimen | `office` has four glyphs on and six glyphs off |
+| semantic hover / press | exact mixed-bidi hits change only action-leaf paint; release elsewhere cancels |
+| action-leaf drag | crossing the click threshold selects wrapped Latin/Arabic text and never activates |
 
 The paint toggle changes brush values without changing any leaf's paint slot.
 The H1 gradient is itself an Underwood `PaintTable` brush, not an
@@ -72,12 +74,17 @@ Design-0007, exercised again in the live corpus.
   deliberately outside both numbers.
 - A viewport too short for the complete document says `CLIPPED`. The showcase
   does not imply that scrolling already exists.
+- The native host maps exact action hover to a link pointer and records a
+  receipt for a URL-shaped activation. It deliberately does not open a browser.
+- A pointer drag that begins on the action leaf transfers to visual selection;
+  actionable text is not made unselectable by host policy.
 
 ## Non-claims
 
 This slice is not a general document application. It does not provide
 role-driven block styling, authored style cascade, scrolling, pagination,
-lists, region flow, native accessibility projection, or editable caret UI.
+lists, region flow, native accessibility projection, clipboard, undo, or
+browser navigation.
 Authored U+0640 tatweel is ordinary source text and can be shaped; automatic
 Arabic kashida justification is separate formation work tracked by
 `und-oh0.5.2`.

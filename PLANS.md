@@ -565,9 +565,9 @@ repository policy, formatting, bare metal, and WebAssembly.
 
 ## Interactive semantic document campaign
 
-**Status:** Active — exact interaction, selection, and composition landed;
-native editor complete with local and remote gates green; semantic activation
-pending
+**Status:** Active — native editor landed; exact semantic activation and
+direction-independent action-leaf selection have full local gates green;
+GitHub Actions run `29981259791` is green; PR #17 merge pending
 
 **Design:** Design-0009
 
@@ -623,8 +623,8 @@ retained TextScene -> imaging -> live native proof
    render selection, caret, and composition overlays without changing text
    physics or moving host policy into core.
 5. Add exact semantic hover, press cancellation, and activation through a
-   showcase-owned `SemanticId` action registry; keep URL execution in the host
-   and avoid stabilizing a permanent core link schema.
+   showcase-owned `SemanticId` action registry; hand a URL-shaped request to the
+   host without stabilizing a permanent core link schema or launching a browser.
 6. Run the mixed-script/ligature/combining/break/empty-text corpus, event-feed
    and host-query IME traces, native visual review, full local/remote gates, and
    land coherent PR slices.
@@ -638,6 +638,9 @@ retained TextScene -> imaging -> live native proof
 - **One range masquerades as bidi selection:** one selection may retain several
   logically ordered source ranges, while the scene separately owns a set of
   independent selections/insertion points. Geometry preserves both indices.
+- **Action content becomes unselectable:** movement beyond the click threshold
+  transfers the exact pressed cluster position into visual-selection policy;
+  reciprocal bidi caret paths must yield direction-independent ranges.
 - **Multi-caret edits become order-dependent:** validate the whole selection
   set, reject overlap and duplicate insertion points, then apply source edits
   in reverse order and publish exactly once.
