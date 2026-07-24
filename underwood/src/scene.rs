@@ -18,9 +18,9 @@ use crate::document::Paragraph;
 use crate::{
     Affine, BlockRequest, CompositionError, CompositionErrorKind, CompositionId,
     CompositionSession, CompositionStart, DocumentRevision, DocumentSnapshot, FontData,
-    InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole, Point, Rect,
-    SceneError, SceneErrorKind, SceneRequest, SelectionError, SelectionErrorKind, SemanticId,
-    ShapingStyle, Size, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+    InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole, ParagraphStyle,
+    Point, Rect, SceneError, SceneErrorKind, SceneRequest, SelectionError, SelectionErrorKind,
+    SemanticId, ShapingStyle, Size, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
     SnapshotTextSelectionSet, SnapshotTextUnit, StyleMap, TextBlockSnapshot, TextConstraint,
     TextId, TextMovement, TextSelectionMode, Vec2,
 };

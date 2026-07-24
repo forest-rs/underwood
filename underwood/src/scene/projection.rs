@@ -20,6 +20,7 @@ pub(super) struct Projection<'a> {
     pub(super) paint_runs: Vec<PaintRun>,
     pub(super) default_font_size: f32,
     pub(super) default_inline_flow: InlineFlowStyle,
+    pub(super) paragraph_style: ParagraphStyle,
     pub(super) paragraph_semantic: SemanticId,
     pub(super) paragraph_role: ParagraphRole,
 }
@@ -83,6 +84,7 @@ impl<'a> Projection<'a> {
             paint_runs,
             default_font_size: request.styles.default_style().shaping().font_size(),
             default_inline_flow: request.styles.default_style().inline_flow(),
+            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -252,6 +254,7 @@ impl<'a> Projection<'a> {
             paint_runs,
             default_font_size: request.styles.default_style().shaping().font_size(),
             default_inline_flow: request.styles.default_style().inline_flow(),
+            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -632,6 +635,17 @@ pub(super) fn validate_styles(
             snapshot.id(),
         ));
     }
+    if request.styles.paragraph_overrides().iter().any(|(id, _)| {
+        !snapshot
+            .paragraphs()
+            .iter()
+            .any(|paragraph| paragraph.id == *id)
+    }) {
+        return Err(SceneError::for_document(
+            SceneErrorKind::InvalidStyle,
+            snapshot.id(),
+        ));
+    }
     for paragraph in snapshot.paragraphs() {
         for leaf in &paragraph.leaves {
             if request
@@ -795,9 +809,17 @@ pub(super) fn record_formation_work(report: &mut WorkReport, work: FormationWork
         report.shape.paragraphs += 1;
         report.shape.records += work.shaped_glyphs() as usize;
     }
+    if work.line_resolved_clusters() > 0 {
+        report.line_font_resolution.paragraphs += 1;
+        report.line_font_resolution.records += work.line_resolved_clusters() as usize;
+    }
+    if work.line_shaped_runs() > 0 {
+        report.line_shape.paragraphs += 1;
+        report.line_shape.records += work.line_shaped_glyphs() as usize;
+    }
     if work.formed_lines() > 0 {
         report.flow.paragraphs += 1;
         report.flow.records += work.formed_lines() as usize;
     }
-    report.break_reshapes += work.break_reshapes() as usize;
+    report.line_reshapes += work.line_reshapes() as usize;
 }

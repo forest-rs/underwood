@@ -26,6 +26,12 @@ struct DocumentFixture {
     light: PaintTable,
 }
 
+struct LineFixture {
+    document: Document,
+    styles: StyleMap,
+    paint: PaintTable,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fonts = fonts()?;
     let fixture = document_fixture()?;
@@ -121,12 +127,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let request = SceneRequest::new(TextConstraint::Wrap(wide), &fixture.styles, &fixture.dark);
     layout.prepare(&snapshot, &request)?;
     let mut width_iteration = 0_usize;
+    let mut width_line_reshapes = 0_usize;
     let width_only = measure(MUTATION_ITERATIONS, || {
-        let width = if width_iteration & 1 == 0 {
-            narrow
-        } else {
-            wide
-        };
+        let narrow_iteration = width_iteration & 1 == 0;
+        let width = if narrow_iteration { narrow } else { wide };
         width_iteration += 1;
         let request =
             SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
@@ -143,12 +147,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             PARAGRAPHS,
             "an alternating width must reflow every paragraph"
         );
+        if narrow_iteration {
+            assert!(
+                output.work().line_shape().paragraphs() > 0,
+                "wrapped paragraphs must expose line-final shaping"
+            );
+        }
+        width_line_reshapes = width_line_reshapes.saturating_add(output.work().line_reshapes());
         black_box(output.scene().lines().len());
     });
 
     let mut fixture = document_fixture()?;
     let mut layout = LayoutEngine::new(
-        ParleyParagraphEngine::new(fonts),
+        ParleyParagraphEngine::new(fonts.clone()),
         CacheBudget::new(PARAGRAPHS),
     );
     let request = SceneRequest::new(TextConstraint::Wrap(wide), &fixture.styles, &fixture.dark);
@@ -182,14 +193,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         black_box(output.scene().fragments().len());
     });
 
+    let visible_space = line_fixture(
+        *b"bench-visible-01",
+        "alpha beta gamma delta epsilon zeta",
+        "Roboto Flex",
+    )?;
+    let (visible_space_churn, visible_space_reshapes) =
+        measure_line_churn(&fonts, &visible_space, 1_000.0, 88.0)?;
+    let cursive_zwsp = line_fixture(
+        *b"bench-cursive-01",
+        "سل\u{200b}ام سل\u{200b}ام سل\u{200b}ام",
+        "Noto Kufi Arabic",
+    )?;
+    let (cursive_zwsp_churn, cursive_zwsp_reshapes) =
+        measure_line_churn(&fonts, &cursive_zwsp, 1_000.0, 72.0)?;
+
     report("cold_scene", COLD_ITERATIONS, cold);
     report("retained_unchanged", RETAINED_ITERATIONS, retained);
     report("paint_only", RETAINED_ITERATIONS, paint_only);
-    report("width_only", MUTATION_ITERATIONS, width_only);
+    report_with_line_work(
+        "width_only",
+        MUTATION_ITERATIONS,
+        width_only,
+        width_line_reshapes,
+    );
     report(
         "one_paragraph_edit",
         MUTATION_ITERATIONS,
         one_paragraph_edit,
+    );
+    report_with_line_work(
+        "visible_space_width_churn",
+        MUTATION_ITERATIONS,
+        visible_space_churn,
+        visible_space_reshapes,
+    );
+    report_with_line_work(
+        "cursive_zwsp_width_churn",
+        MUTATION_ITERATIONS,
+        cursive_zwsp_churn,
+        cursive_zwsp_reshapes,
     );
     Ok(())
 }
@@ -254,6 +297,91 @@ fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {
     )?)
 }
 
+fn line_fixture(
+    id: [u8; 16],
+    text: &str,
+    family: &str,
+) -> Result<LineFixture, Box<dyn std::error::Error>> {
+    let mut document = Document::new(DocumentId::from_bytes(id));
+    let mut edit = document.edit();
+    for _ in 0..PARAGRAPHS {
+        let paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
+        edit.append_text(paragraph, InlineRole::TEXT, text)?;
+    }
+    edit.commit()?;
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(underwood::FontFamily::named(family), 16.0)?,
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    Ok(LineFixture {
+        document,
+        styles: StyleMap::new(style),
+        paint: PaintTable::from_brushes([Brush::Solid(Color::BLACK)]),
+    })
+}
+
+fn measure_line_churn(
+    fonts: &FontSet,
+    fixture: &LineFixture,
+    wide: f64,
+    narrow: f64,
+) -> Result<(Duration, usize), Box<dyn std::error::Error>> {
+    let wide = FiniteWidth::new(wide)?;
+    let narrow = FiniteWidth::new(narrow)?;
+    let snapshot = fixture.document.snapshot();
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts.clone()),
+        CacheBudget::new(PARAGRAPHS),
+    );
+    layout.prepare(
+        &snapshot,
+        &SceneRequest::new(TextConstraint::Wrap(wide), &fixture.styles, &fixture.paint),
+    )?;
+    let mut iteration = 0_usize;
+    let mut line_reshapes = 0_usize;
+    let elapsed = measure(MUTATION_ITERATIONS, || {
+        let narrow_iteration = iteration & 1 == 0;
+        let width = if narrow_iteration { narrow } else { wide };
+        iteration += 1;
+        let output = layout
+            .prepare(
+                &snapshot,
+                &SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.paint),
+            )
+            .expect("line-formation churn must prepare");
+        assert_eq!(
+            output.work().analysis().paragraphs(),
+            0,
+            "width churn must retain canonical analysis"
+        );
+        assert_eq!(
+            output.work().shape().paragraphs(),
+            0,
+            "width churn must retain canonical shaping"
+        );
+        assert_eq!(
+            output.work().flow().paragraphs(),
+            PARAGRAPHS,
+            "width churn must reform every paragraph"
+        );
+        if narrow_iteration {
+            assert_eq!(
+                output.work().line_shape().paragraphs(),
+                PARAGRAPHS,
+                "wrapped paragraphs must expose their line-final shaping"
+            );
+            assert!(
+                output.work().line_reshapes() >= PARAGRAPHS,
+                "each wrapped paragraph must attempt at least one line shape"
+            );
+        }
+        line_reshapes = line_reshapes.saturating_add(output.work().line_reshapes());
+        black_box(output.scene().lines().len());
+    });
+    Ok((elapsed, line_reshapes))
+}
+
 fn measure(iterations: usize, mut operation: impl FnMut()) -> Duration {
     let start = Instant::now();
     for _ in 0..iterations {
@@ -266,6 +394,14 @@ fn report(name: &str, iterations: usize, elapsed: Duration) {
     let per_iteration = elapsed.as_nanos() / iterations as u128;
     println!(
         "{name}\titerations={iterations}\ttotal_ns={}\tns_per_iteration={per_iteration}",
+        elapsed.as_nanos()
+    );
+}
+
+fn report_with_line_work(name: &str, iterations: usize, elapsed: Duration, line_reshapes: usize) {
+    let per_iteration = elapsed.as_nanos() / iterations as u128;
+    println!(
+        "{name}\titerations={iterations}\ttotal_ns={}\tns_per_iteration={per_iteration}\tline_reshapes={line_reshapes}",
         elapsed.as_nanos()
     );
 }

@@ -38,6 +38,7 @@ pub trait ParagraphFormation {
 #[derive(Clone, Copy, Debug)]
 pub struct ParagraphInput<'a> {
     paragraph: ParagraphId,
+    paragraph_style: ParagraphStyle,
     text: &'a str,
     shaping_styles: &'a [ShapingStyle],
     shaping_runs: &'a [ShapingRun],
@@ -49,6 +50,7 @@ pub struct ParagraphInput<'a> {
 impl<'a> ParagraphInput<'a> {
     pub(crate) const fn new(
         paragraph: ParagraphId,
+        paragraph_style: ParagraphStyle,
         text: &'a str,
         shaping_styles: &'a [ShapingStyle],
         shaping_runs: &'a [ShapingRun],
@@ -58,6 +60,7 @@ impl<'a> ParagraphInput<'a> {
     ) -> Self {
         Self {
             paragraph,
+            paragraph_style,
             text,
             shaping_styles,
             shaping_runs,
@@ -77,6 +80,12 @@ impl<'a> ParagraphInput<'a> {
     #[must_use]
     pub const fn paragraph(&self) -> ParagraphId {
         self.paragraph
+    }
+
+    /// Returns the complete computed paragraph-level values.
+    #[must_use]
+    pub const fn paragraph_style(&self) -> ParagraphStyle {
+        self.paragraph_style
     }
 
     /// Returns the complete projected UTF-8 paragraph.
@@ -271,7 +280,59 @@ pub struct FormationWork {
     shaped_runs: u32,
     shaped_glyphs: u32,
     formed_lines: u32,
-    break_reshapes: u32,
+    line_shaping: LineShapingWork,
+}
+
+/// Exact work performed while shaping committed or rejected line candidates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LineShapingWork {
+    attempts: u32,
+    resolved_clusters: u32,
+    shaped_runs: u32,
+    shaped_glyphs: u32,
+}
+
+impl LineShapingWork {
+    /// Creates line-final work from backend observations.
+    #[must_use]
+    pub const fn new(
+        attempts: u32,
+        resolved_clusters: u32,
+        shaped_runs: u32,
+        shaped_glyphs: u32,
+    ) -> Self {
+        Self {
+            attempts,
+            resolved_clusters,
+            shaped_runs,
+            shaped_glyphs,
+        }
+    }
+
+    /// Returns the number of line-final shaping attempts, including rejected
+    /// candidates whose shaped advance did not fit.
+    #[must_use]
+    pub const fn attempts(self) -> u32 {
+        self.attempts
+    }
+
+    /// Returns clusters mapped back to their retained canonical font.
+    #[must_use]
+    pub const fn resolved_clusters(self) -> u32 {
+        self.resolved_clusters
+    }
+
+    /// Returns shaped runs produced across all line-final shaping attempts.
+    #[must_use]
+    pub const fn shaped_runs(self) -> u32 {
+        self.shaped_runs
+    }
+
+    /// Returns glyphs produced across all line-final shaping attempts.
+    #[must_use]
+    pub const fn shaped_glyphs(self) -> u32 {
+        self.shaped_glyphs
+    }
 }
 
 impl FormationWork {
@@ -284,7 +345,7 @@ impl FormationWork {
         shaped_runs: u32,
         shaped_glyphs: u32,
         formed_lines: u32,
-        break_reshapes: u32,
+        line_shaping: LineShapingWork,
     ) -> Self {
         Self {
             analyzed,
@@ -293,7 +354,7 @@ impl FormationWork {
             shaped_runs,
             shaped_glyphs,
             formed_lines,
-            break_reshapes,
+            line_shaping,
         }
     }
 
@@ -333,9 +394,34 @@ impl FormationWork {
         self.formed_lines
     }
 
-    /// Returns the number of committed boundaries that required bounded reshaping.
+    /// Returns the number of line-final shaping attempts, including rejected
+    /// candidates whose shaped advance did not fit.
     #[must_use]
-    pub const fn break_reshapes(self) -> u32 {
-        self.break_reshapes
+    pub const fn line_reshapes(self) -> u32 {
+        self.line_shaping.attempts()
+    }
+
+    /// Returns clusters mapped back to their retained canonical font.
+    #[must_use]
+    pub const fn line_resolved_clusters(self) -> u32 {
+        self.line_shaping.resolved_clusters()
+    }
+
+    /// Returns shaped runs produced across all line-final shaping attempts.
+    #[must_use]
+    pub const fn line_shaped_runs(self) -> u32 {
+        self.line_shaping.shaped_runs()
+    }
+
+    /// Returns glyphs produced across all line-final shaping attempts.
+    #[must_use]
+    pub const fn line_shaped_glyphs(self) -> u32 {
+        self.line_shaping.shaped_glyphs()
+    }
+
+    /// Returns the complete line-final shaping work record.
+    #[must_use]
+    pub const fn line_shaping(self) -> LineShapingWork {
+        self.line_shaping
     }
 }

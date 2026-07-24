@@ -445,7 +445,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=44d155e17a6dbf455c8b9133c2ae40955c9f2af2#44d155e17a6dbf455c8b9133c2ae40955c9f2af2"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
 dependencies = [
  "hashbrown",
  "linebender_resource_handle",
@@ -1331,25 +1331,38 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=44d155e17a6dbf455c8b9133c2ae40955c9f2af2#44d155e17a6dbf455c8b9133c2ae40955c9f2af2"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
 
 [[package]]
 name = "parley"
 version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=44d155e17a6dbf455c8b9133c2ae40955c9f2af2#44d155e17a6dbf455c8b9133c2ae40955c9f2af2"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
 dependencies = [
  "fontique",
  "hashbrown",
  "linebender_resource_handle",
  "parlance",
- "parley_core",
+ "parley_engine",
  "skrifa 0.43.2",
 ]
 
 [[package]]
-name = "parley_core"
+name = "parley_data"
 version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=44d155e17a6dbf455c8b9133c2ae40955c9f2af2#44d155e17a6dbf455c8b9133c2ae40955c9f2af2"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+dependencies = [
+ "icu_properties",
+]
+
+[[package]]
+name = "parley_dev"
+version = "0.0.0"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+
+[[package]]
+name = "parley_engine"
+version = "0.11.0"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
 dependencies = [
  "fontique",
  "harfrust",
@@ -1362,19 +1375,6 @@ dependencies = [
  "parley_data",
  "skrifa 0.43.2",
 ]
-
-[[package]]
-name = "parley_data"
-version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=44d155e17a6dbf455c8b9133c2ae40955c9f2af2#44d155e17a6dbf455c8b9133c2ae40955c9f2af2"
-dependencies = [
- "icu_properties",
-]
-
-[[package]]
-name = "parley_dev"
-version = "0.0.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=44d155e17a6dbf455c8b9133c2ae40955c9f2af2#44d155e17a6dbf455c8b9133c2ae40955c9f2af2"
 
 [[package]]
 name = "pdf-writer"
@@ -2063,7 +2063,7 @@ version = "0.0.1"
 dependencies = [
  "fontique",
  "parlance",
- "parley_core",
+ "parley_engine",
  "underwood",
 ]
 
@@ -2074,8 +2074,8 @@ dependencies = [
  "fontique",
  "parlance",
  "parley",
- "parley_core",
  "parley_dev",
+ "parley_engine",
 ]
 
 [[package]]
@@ -2123,7 +2123,7 @@ dependencies = [
 name = "underwood_text_data_experiment"
 version = "0.0.1"
 dependencies = [
- "parley_core",
+ "parley_engine",
 ]
 
 [[package]]

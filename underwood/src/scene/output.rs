@@ -162,10 +162,12 @@ pub struct WorkReport {
     pub(super) itemization: StageWork,
     pub(super) font_selection: StageWork,
     pub(super) shape: StageWork,
+    pub(super) line_font_resolution: StageWork,
+    pub(super) line_shape: StageWork,
     pub(super) flow: StageWork,
     pub(super) geometry: StageWork,
     pub(super) paint: StageWork,
-    pub(super) break_reshapes: usize,
+    pub(super) line_reshapes: usize,
     pub(super) reused_paragraphs: usize,
 }
 
@@ -182,16 +184,28 @@ impl WorkReport {
         self.itemization
     }
 
-    /// Returns font-selection work.
+    /// Returns canonical paragraph font-selection work.
     #[must_use]
     pub const fn font_selection(&self) -> StageWork {
         self.font_selection
     }
 
-    /// Returns shaping work.
+    /// Returns canonical paragraph shaping work.
     #[must_use]
     pub const fn shape(&self) -> StageWork {
         self.shape
+    }
+
+    /// Returns retained-font resolution performed for line-final shaping.
+    #[must_use]
+    pub const fn line_font_resolution(&self) -> StageWork {
+        self.line_font_resolution
+    }
+
+    /// Returns shaping of committed and rejected line candidates.
+    #[must_use]
+    pub const fn line_shape(&self) -> StageWork {
+        self.line_shape
     }
 
     /// Returns finite-width flow work.
@@ -212,10 +226,10 @@ impl WorkReport {
         self.paint
     }
 
-    /// Returns committed line boundaries that required bounded reshaping.
+    /// Returns line-final shaping attempts, including rejected candidates.
     #[must_use]
-    pub const fn break_reshapes(&self) -> usize {
-        self.break_reshapes
+    pub const fn line_reshapes(&self) -> usize {
+        self.line_reshapes
     }
 
     /// Returns paragraphs reused without calling the adapter.

@@ -1,12 +1,13 @@
 # Underwood retained-Parley seam experiment
 
-This research crate consumes current `parley_core::ShapedText` and lowers it
+This research crate consumes current `parley_engine::ShapedText` and lowers it
 into deterministic observation records. It proves the retained analysis,
 itemization, font-selection, source-cluster, and horizontal-shaping seams
 without turning Parley types into Underwood's public adapter contract. The
-pinned candidate also exposes bounded break/concat; Parley Core and the
-production adapter corpus exercise that seam, so it is no longer listed as an
-absent capability here.
+production adapter separately proves private line formation through public
+Engine itemization and shaping APIs; the retired bounded break/concat fork is
+not part of this experiment.
+
 It also drives the same pinned revision's high-level `parley::Layout` as a
 private line-breaking oracle. That oracle checks policy and metric expectations;
 it is deliberately not a production dependency or an alternate adapter.
@@ -15,7 +16,7 @@ it is deliberately not a production dependency or an alternate adapter.
 corpus + licensed Parley test fonts
                 |
                 v
-       pinned parley_core
+       pinned parley_engine
                 |
                 v
 retained ShapedText + observations + explicit gap matrix

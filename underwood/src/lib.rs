@@ -38,8 +38,8 @@ pub use error::{
 };
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
 pub use parlance::{
-    FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight, FontWidth,
-    GenericFamily, Language, Script, Tag,
+    BaseDirection, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
+    FontWidth, GenericFamily, Language, Script, Tag,
 };
 pub use peniko::{Brush, Color, FontData};
 pub use scene::{
@@ -55,5 +55,5 @@ pub use selection::{
 };
 pub use style::{
     ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, PaintSlot, PaintTable,
-    SceneRequest, ShapingStyle, StyleMap, TextConstraint,
+    ParagraphStyle, SceneRequest, ShapingStyle, StyleMap, TextConstraint,
 };

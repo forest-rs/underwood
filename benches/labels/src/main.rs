@@ -61,6 +61,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let mut constrained_line_reshapes = 0_usize;
+    let mut constrained_line_paragraphs = 0_usize;
     let constrained_unique = measure(|| {
         for label in &labels {
             let output = layout
@@ -87,13 +89,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(
                 output.work().shape().paragraphs(),
                 0,
-                "constraint changes must reuse shaping"
+                "constraint changes must reuse canonical shaping"
             );
             assert_eq!(
                 output.work().flow().paragraphs(),
                 1,
                 "constraint changes must reform exactly one paragraph"
             );
+            constrained_line_reshapes =
+                constrained_line_reshapes.saturating_add(output.work().line_reshapes());
+            constrained_line_paragraphs =
+                constrained_line_paragraphs.saturating_add(output.work().line_shape().paragraphs());
             black_box(output.scene().lines().len());
         }
     });
@@ -263,6 +269,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     report("text_block_cold_unique", LABELS, cold_unique);
     report("text_block_retained_unique", LABELS, retained_unique);
     report("text_block_constrained_unique", LABELS, constrained_unique);
+    println!(
+        "text_block_constrained_line_work\tparagraphs={constrained_line_paragraphs}\tline_reshapes={constrained_line_reshapes}"
+    );
     report("text_block_localized_edit", 1, localized_edit);
     report("text_block_explicit_release", LABELS, release);
     report("text_block_cold_identical", LABELS, cold_identical);
@@ -342,7 +351,12 @@ fn assert_no_physics(output: &SceneOutput) {
     assert_eq!(
         output.work().shape().paragraphs(),
         0,
-        "retained text must reuse shaping"
+        "retained text must reuse canonical shaping"
+    );
+    assert_eq!(
+        output.work().line_shape().paragraphs(),
+        0,
+        "retained text must reuse accepted line shaping"
     );
     assert_eq!(
         output.work().flow().paragraphs(),

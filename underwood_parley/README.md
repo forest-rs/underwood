@@ -3,7 +3,7 @@
 
 # `underwood_parley`
 
-`underwood_parley` is the pinned, `no_std + alloc` Parley Core adapter for
+`underwood_parley` is the pinned, `no_std + alloc` Parley Engine adapter for
 Underwood's pre-stable paragraph-formation contract. Its default feature set
 accepts only caller-supplied font bytes and never enables system discovery. A
 native host can explicitly enable `system-fonts` and call
@@ -18,7 +18,7 @@ Implementation ownership is deliberately private and narrow:
 - `engine` coordinates paragraph identities, invalidation, and retained physics;
 - `font` owns immutable Fontique catalog construction and validation;
 - `shaping` projects Underwood styles into Parley analysis, itemization, font
-  selection, and initial shaping;
+  selection, initial shaping, and line-final shaping with retained fonts;
 - `line_break` owns intrinsic/constrained line-formation policy, metrics, and
   line-local bidi ordering;
 - `lowering` produces portable glyph, source, synthesis, and paint records;
@@ -28,20 +28,23 @@ Implementation ownership is deliberately private and narrow:
 The crate root contains only documentation, private module declarations, and
 the stable public re-exports.
 
-The adapter owns analysis and shaping scratch, retains Parley Core's native
+The adapter owns analysis and shaping scratch, retains Parley Engine's native
 `ShapedText` across reusable formations, and lowers it into Underwood's
 portable formed-line records without maintaining a second shaped-run model.
 `ParleyParagraphEngine::new(fonts)` is infallible; Unicode analysis data comes
-from the pinned Parley Core implementation rather than an empty configuration
+from the pinned Parley Engine implementation rather than an empty configuration
 placeholder. Paragraph physics are indexed by stable paragraph identity, and
 Underwood's cache release and budget eviction propagate into this adapter so
 dead blocks do not leave shaped text retained here.
-Parley Core boundary classes select legal and mandatory breaks. Explicit
+Parley Engine boundary classes select legal and mandatory breaks. Explicit
 max-content formation ignores soft opportunities, min-content formation
-commits each legal opportunity through Parley's break-sensitive reshaping,
-and constrained formation greedily fits a validated finite width. Line boxes
-use the selected fonts' scaled metrics, and each line's runs are reordered
-visually only after its logical source range is fixed. Paint
+commits each legal opportunity through line-final re-itemization and shaping,
+and constrained formation greedily fits a validated finite width. If a
+line-final shape no longer fits, Underwood backs up to the preceding legal
+opportunity and reports every attempted line shape. A single unwrapped line
+reuses the retained canonical shape. Line boxes use the selected fonts' scaled
+metrics, and each line's runs are reordered visually only after its logical
+source range is fixed. Paint
 boundaries remain source and clip metadata rather than shaping inputs. Complete
 Underwood shaping runs supply family, weight, width, style, font size,
 language, OpenType features, and variable-font coordinates.
@@ -53,7 +56,7 @@ fallbacks. The optional native-host builder adds platform fonts without making
 them part of deterministic proof. For every itemized run, Fontique owns
 attribute matching, coverage, fallback, and synthesis. The adapter performs
 only the cluster callback needed to pass the selected `FontInstance` to Parley
-Core, then retains exact resource, synthesis, final normalized-coordinate, and
+Engine, then retains exact resource, synthesis, final normalized-coordinate, and
 work evidence in Underwood values.
 
 Parley stores shaped clusters in logical order. The adapter lowers LTR clusters
@@ -85,7 +88,7 @@ Advances and character counts are never substituted for component geometry.
 Hit testing, carets, and selections use the separate interaction-unit stream.
 
 Fontique synthesis variations precede explicit `ShapingStyle` variations at
-the Parley Core seam. An explicit coordinate therefore wins for the same axis.
+the Parley Engine seam. An explicit coordinate therefore wins for the same axis.
 Synthetic skew is retained for capable renderers and does not alter
 Underwood's layout advances. Synthetic emboldening is likewise retained and no
 longer fails preparation merely because outline-derived extent is unavailable.

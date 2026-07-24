@@ -244,7 +244,8 @@ impl LayoutEngine {
         snapshot: &TextBlockSnapshot,
         request: &BlockRequest<'_>,
     ) -> Result<SceneOutput, SceneError> {
-        let styles = StyleMap::new(request.style.clone());
+        let styles = StyleMap::new(request.style.clone())
+            .with_default_paragraph_style(request.paragraph_style);
         self.prepare(
             snapshot.document(),
             &SceneRequest::new(request.constraint, &styles, request.paint),
@@ -515,6 +516,7 @@ fn prepare_paragraph_geometry(
     let output = match paragraphs.form(
         ParagraphInput::new(
             paragraph.id,
+            projection.paragraph_style,
             &projection.text,
             &shaping_styles,
             &projection.shaping_runs,
@@ -560,6 +562,7 @@ fn prepare_paragraph_geometry(
         projection.shaping_runs.clone(),
         projection.inline_flow_styles.clone(),
         projection.inline_flow_runs.clone(),
+        projection.paragraph_style,
         constraint,
         projection.empty_line_height_key(),
         projection,
@@ -609,6 +612,7 @@ struct FormationKey {
     shaping_runs: Vec<ShapingRun>,
     inline_flow_styles: Vec<InlineFlowStyle>,
     inline_flow_runs: Vec<InlineFlowRun>,
+    paragraph_style: ParagraphStyle,
     constraint: ConstraintKey,
     empty_line_height: u64,
 }
@@ -621,6 +625,7 @@ impl FormationKey {
         shaping_runs: Vec<ShapingRun>,
         inline_flow_styles: Vec<InlineFlowStyle>,
         inline_flow_runs: Vec<InlineFlowRun>,
+        paragraph_style: ParagraphStyle,
         constraint: TextConstraint,
         empty_line_height: u64,
         projection: &Projection<'_>,
@@ -633,6 +638,7 @@ impl FormationKey {
             shaping_runs,
             inline_flow_styles,
             inline_flow_runs,
+            paragraph_style,
             constraint: ConstraintKey::from(constraint),
             empty_line_height,
         }
@@ -656,6 +662,7 @@ impl FormationKey {
             && self.shaping_runs == projection.shaping_runs
             && self.inline_flow_styles == projection.inline_flow_styles
             && self.inline_flow_runs == projection.inline_flow_runs
+            && self.paragraph_style == projection.paragraph_style
             && self.constraint == ConstraintKey::from(constraint)
             && self.empty_line_height == projection.empty_line_height_key()
     }

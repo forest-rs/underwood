@@ -6,30 +6,31 @@
 use alloc::{vec, vec::Vec};
 
 use fontique::{Blob, Synthesis};
-use parley_core::{FontInstance, ShapeOptions, ShapedText, Shaper};
+use parley_engine::{FontInstance, ShapeOptions, ShapedText, Shaper};
 
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
-    LineBreakReason as TestLineBreakReason, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationOutput, PreparationErrorKind, PreparedClusterSide, PreparedGlyph,
-    PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
-    PreparedRun,
+    LineBreakReason as TestLineBreakReason, LineShapingWork, ParagraphConstraints,
+    ParagraphFormation, ParagraphFormationOutput, PreparationErrorKind, PreparedClusterSide,
+    PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
+    PreparedParagraph, PreparedRun,
 };
 use underwood::{
-    BlockRequest, Brush, CacheBudget, Color, CompositionId, CompositionUpdate, ComputedInlineStyle,
-    Document, DocumentId, EditErrorKind, EditableSurface, EditableSurfaceElement, FiniteWidth,
-    FontData, FontFamily, FontWeight, GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine,
-    LineHeight, PaintSlot, PaintTable, ParagraphRole, Point, ProjectedTextPosition,
-    ProjectedTextSource, SceneRequest, SelectionErrorKind, ShapingStyle, SnapshotTextUnit,
-    StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint,
-    TextMovement, TextScene, TextSelectionMode, Vec2,
+    BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId, CompositionUpdate,
+    ComputedInlineStyle, Document, DocumentId, EditErrorKind, EditableSurface,
+    EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
+    InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole,
+    ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
+    SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
+    SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
+    TextSelectionMode, Vec2,
 };
 use underwood::{Language, Script};
 
 use super::{AdapterErrorKind, Font, FontSet, ParleyParagraphEngine};
 use crate::font::{read_u16, read_u32};
 use crate::interaction::{collect_analysis_units, prepared_cursor_movements};
-use crate::line_break::{choose_line, collect_logical_clusters, commit_regular_break};
+use crate::line_break::{choose_line, collect_logical_clusters};
 use crate::lowering::checked_source_range;
 use crate::shaping::{analyze_text, split_item_after};
 
@@ -54,7 +55,11 @@ impl ParagraphFormation for AnalysisCursorProof {
         input: underwood::adapter::ParagraphInput<'_>,
         _constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, underwood::adapter::PreparationError> {
-        let analysis = analyze_text(&mut parley_core::Analyzer::new(), input.text());
+        let analysis = analyze_text(
+            &mut parley_engine::Analyzer::new(),
+            input.text(),
+            input.paragraph_style().base_direction(),
+        );
         let units = collect_analysis_units(input.text(), &analysis)?;
         let mut prepared_units = Vec::with_capacity(units.len());
         let mut glyphs = Vec::with_capacity(units.len());
@@ -119,13 +124,34 @@ impl ParagraphFormation for AnalysisCursorProof {
             PreparedParagraph::try_new(input.paragraph(), source.end, [line], movements)?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
-            FormationWork::new(true, false, unit_count, 1, unit_count, 1, 0),
+            FormationWork::new(
+                true,
+                false,
+                unit_count,
+                1,
+                unit_count,
+                1,
+                LineShapingWork::default(),
+            ),
         ))
     }
 }
 
-fn shape_arabic(text: &str) -> (parley_core::Analysis, Shaper, ShapedText) {
-    let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
+fn shape_arabic(text: &str) -> (parley_engine::Analysis, ShapedText) {
+    let analysis = analyze_text(
+        &mut parley_engine::Analyzer::new(),
+        text,
+        BaseDirection::Auto,
+    );
+    let shaped = shape_arabic_range(text, &analysis, 0..text.len());
+    (analysis, shaped)
+}
+
+fn shape_arabic_range(
+    text: &str,
+    analysis: &parley_engine::Analysis,
+    source: core::ops::Range<usize>,
+) -> ShapedText {
     let font = FontInstance {
         font: FontData::new(Blob::from(ARABIC_FONT.to_vec()), 0),
         synthesis: Synthesis::default(),
@@ -133,10 +159,15 @@ fn shape_arabic(text: &str) -> (parley_core::Analysis, Shaper, ShapedText) {
     let style_indices = vec![0; text.chars().count()];
     let mut shaper = Shaper::default();
     let mut shaped = ShapedText::new();
-    for item in analysis.itemize(text, |_| false) {
+    for item in analysis.itemize(text, |range| {
+        range.byte_range.end == source.start || range.byte_range.end == source.end
+    }) {
+        if item.range.byte_range.start < source.start || item.range.byte_range.end > source.end {
+            continue;
+        }
         shaper.shape_item(
             text,
-            &analysis,
+            analysis,
             &item,
             &ShapeOptions {
                 font_size: 20.0,
@@ -149,7 +180,7 @@ fn shape_arabic(text: &str) -> (parley_core::Analysis, Shaper, ShapedText) {
             &mut shaped,
         );
     }
-    (analysis, shaper, shaped)
+    shaped
 }
 
 #[derive(Clone, Debug)]

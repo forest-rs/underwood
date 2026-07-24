@@ -8,19 +8,19 @@ use peniko::Blob;
 use super::{CacheBudget, LayoutEngine, append_inline_flow_run, append_shaping_run};
 use crate::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
-    GlyphPaintSegment, LineBreakReason, ParagraphConstraints, ParagraphFormation,
+    GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationOutput, ParagraphInput, PreparationError, PreparationErrorKind,
     PreparedCaret, PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph,
     PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
     PreparedRun, TextAffinity,
 };
 use crate::{
-    Brush, Color, CompositionClause, CompositionClauseKind, CompositionErrorKind, CompositionId,
-    CompositionSession, CompositionUpdate, ComputedInlineStyle, Document, DocumentId,
-    EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily, InlineFlowStyle,
-    InlineRole, PaintSlot, PaintTable, ParagraphRole, Point, ProjectedTextSource, Rect,
-    SceneErrorKind, SceneRequest, ShapingStyle, SnapshotTextPosition, SnapshotTextRange,
-    SnapshotTextSelection, SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind,
+    BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind, CompositionErrorKind,
+    CompositionId, CompositionSession, CompositionUpdate, ComputedInlineStyle, Document,
+    DocumentId, EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily,
+    InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, Point,
+    ProjectedTextSource, Rect, SceneErrorKind, SceneRequest, ShapingStyle, SnapshotTextPosition,
+    SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind,
     SurfaceTextEncoding, TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2,
 };
 
@@ -54,7 +54,7 @@ impl ParagraphFormation for EchoAdapter {
             let paragraph = PreparedParagraph::try_new(input.paragraph(), text_len, [], movements)?;
             return Ok(ParagraphFormationOutput::new(
                 paragraph,
-                FormationWork::new(true, true, 0, 0, 0, 0, 0),
+                FormationWork::new(true, true, 0, 0, 0, 0, LineShapingWork::default()),
             ));
         }
         let glyph_source = if self.split_utf8 {
@@ -239,7 +239,7 @@ impl ParagraphFormation for EchoAdapter {
         let paragraph = PreparedParagraph::try_new(input.paragraph(), text_len, [line], movements)?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
-            FormationWork::new(true, true, 1, 1, 1, 1, 2),
+            FormationWork::new(true, true, 1, 1, 1, 1, LineShapingWork::new(2, 3, 4, 5)),
         ))
     }
 }
@@ -465,9 +465,19 @@ fn fragment_identity_is_distinct_across_documents() {
         .prepare(&first.snapshot(), &first_request)
         .expect("first scene must prepare");
     assert_eq!(
-        first_scene.work().break_reshapes(),
+        first_scene.work().line_reshapes(),
         2,
-        "adapter break-reshape work must survive scene reporting"
+        "adapter line-reshape work must survive scene reporting"
+    );
+    assert_eq!(
+        first_scene.work().line_font_resolution().records(),
+        3,
+        "line-final retained-font resolution must survive scene reporting"
+    );
+    assert_eq!(
+        first_scene.work().line_shape().records(),
+        5,
+        "line-final shaped glyph work must survive scene reporting"
     );
     let second_request =
         SceneRequest::new(TextConstraint::Wrap(width), &second_styles, &second_paint);
@@ -484,6 +494,29 @@ fn fragment_identity_is_distinct_across_documents() {
         None,
         "ordinary whole-glyph paint must not create a renderer clip"
     );
+}
+
+#[test]
+fn paragraph_style_override_from_another_document_is_rejected() {
+    let (first, mut styles, paint) = one_leaf_document(*b"scene-style-doc1", "a");
+    let (second, _, _) = one_leaf_document(*b"scene-style-doc2", "b");
+    let foreign = second.snapshot().paragraphs()[0].id;
+    styles.set_paragraph_style(foreign, ParagraphStyle::new(BaseDirection::Rtl));
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let error = layout
+        .prepare(&first.snapshot(), &request)
+        .expect_err("a foreign paragraph style must not be silently ignored");
+    assert_eq!(error.kind(), SceneErrorKind::InvalidStyle);
 }
 
 #[test]

@@ -1,11 +1,11 @@
 # Underwood text-data experiment
 
-This unpublished research crate measures the compiled Parley Core dependency
+This unpublished research crate measures the compiled Parley Engine dependency
 audited by ADR-0003. It produces separate size artifacts for:
 
 - an empty Rust WebAssembly harness;
 - the `minimal` compiled-data path;
-- the `complex-segmentation` path enabled by Parley Core's
+- the `complex-segmentation` path enabled by Parley Engine's
   `complex-scripts` feature.
 
 The executable exercises grapheme, word, line, normalization, bidi, emoji,

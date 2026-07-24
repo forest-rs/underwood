@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use parley_core::{Analysis, Boundary, ShapedText, shape::Whitespace};
+use parley_engine::{Analysis, Boundary, ShapedText, shape::Whitespace};
 use underwood::TextAffinity;
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparationError, PreparedCaret,
@@ -141,7 +141,7 @@ pub(crate) fn lower_visual_units(
 
 fn lower_visual_slice(
     shaped_text: &ShapedText,
-    run: &parley_core::ShapedRun,
+    run: &parley_engine::ShapedRun,
     index: usize,
 ) -> Result<VisualInteractionSlice, PreparationError> {
     let cluster = shaped_text

@@ -14,8 +14,8 @@ physics. Overstory is the flagship experience layer.
 ## Current status
 
 Underwood has completed its executable constitution, first semantic-to-scene
-slice, computed inline-style spine, Fontique-backed font requests, retained
-Parley Core `ShapedText`, Parley-backed paragraph formation, renderer-owned
+slice, computed style spine, Fontique-backed font requests, retained Parley
+Engine `ShapedText`, Parley-backed paragraph formation, renderer-owned
 glyph paint with explicit source ownership, CPU visual proof, exact cluster
 interaction, and revision-bound
 multi-selection transactions. A generated-source IME composition epoch and
@@ -28,7 +28,7 @@ physics caches bounded. The complete architecture is
 [specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
 first pre-stable public slice and its exact dependency fence: `underwood` owns
 the `no_std + alloc` document, flow, and scene path, while `underwood_parley`
-owns adaptation to pinned Parley Core.
+owns adaptation to pinned Parley Engine.
 
 The five mandatory foundation records are accepted:
 

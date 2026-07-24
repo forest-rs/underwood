@@ -10,12 +10,12 @@ use std::path::PathBuf;
 
 use fontique::{Blob, Synthesis};
 use parlance::{FontFeature, FontVariation};
-use parley_core::{
+use parley_engine::{
     Analysis, AnalysisOptions, Analyzer, Boundary, FontInstance, ShapeOptions, ShapedText, Shaper,
     shape::ClusterData,
 };
 
-const PARLEY_REVISION: &str = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2";
+const PARLEY_REVISION: &str = "9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb";
 const CORPUS: &str = "office affinity — مرحبا بالعالم";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,7 +131,7 @@ fn load_font(
         source_name,
         source_digest,
         instance: FontInstance {
-            font: parley_core::FontData::new(Blob::from(bytes), 0),
+            font: parley_engine::FontData::new(Blob::from(bytes), 0),
             synthesis: Synthesis::default(),
         },
     })
@@ -165,14 +165,7 @@ fn prepare(
 
     let mut analyzer = Analyzer::new();
     let mut analysis = Analysis::new();
-    analyzer.analyze(
-        text,
-        &AnalysisOptions {
-            word_break: &[],
-            line_break_override: None,
-        },
-        &mut analysis,
-    );
+    analyzer.analyze(text, &AnalysisOptions::default(), &mut analysis);
     let analysis_digest = digest_analysis(&analysis);
     let mut shaper = Shaper::default();
     let mut shaped_text = ShapedText::new();
@@ -305,7 +298,7 @@ fn copy_run(
 }
 
 fn cluster_source(
-    run: &parley_core::ShapedRun,
+    run: &parley_engine::ShapedRun,
     clusters: &[ClusterData],
     index: usize,
 ) -> (Range<usize>, Range<usize>) {
