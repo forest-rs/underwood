@@ -40,6 +40,12 @@ Acceptance ratifies the decisions and experiment gates stated in each record.
 It does not upgrade a capability's proof status beyond the evidence in the
 proof ledger.
 
+## Accepted campaign decisions
+
+| Record | Status | Authority |
+| --- | --- | --- |
+| [ADR-0005](0005-reusable-text-preparation-pipeline.md) — reusable text-preparation pipeline | Accepted | Human architecture gate, 2026-07-24 |
+
 ## Ownership
 
 A cross-crate decision belongs to the crate that owns the invariant. Before

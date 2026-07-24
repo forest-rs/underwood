@@ -1,5 +1,128 @@
 # Underwood execution plans
 
+## Reusable text preparation and region-aware line layout
+
+**Status:** Active — Design-0014 and ADR-0005 approved 2026-07-24
+
+**Beads:** `und-oh0.13` and its dependency-ordered children
+
+### Goal
+
+Build a source-complete, reusable preparation pipeline over Parley Engine
+facts, then use it to deliver whitespace processing, resumable line
+formation, region filling, paragraph style fidelity, alignment,
+justification, preparation tracing, allocation proof, and the region-aware
+living page without creating another all-owning text layout object.
+
+### Fence
+
+Reusable kernels own explicit projected-text, shaped-fact, line-candidate,
+region-slot, and line-adjustment transformations. Underwood owns their
+composition with immutable documents, retained invalidation, semantic
+identity, editing, portable scenes, and product proof. Neither layer owns
+toolkit behavior or pixel production.
+
+### Non-goals
+
+- No high-level Parley production dependency in foundational crates.
+- No CSS parser, cascade, browser formatting context, or universal
+  script-justification claim. CSS Text computed semantics remain a positive
+  conformance source.
+- No Overstory widget or prepared-output retention policy.
+- No production dependency, `unsafe`, or foundational API choice without its
+  human gate.
+- No placeholder transformation or benchmark-only substitute for the public
+  path.
+
+### Steps
+
+1. Use Underwood `faa19ead16054d52d4d921de469a8f28993b6767` and Overstory
+   `75e22e5d0c4141767d131d237e781bc5ee1ac16f` as executable consumer
+   checkpoints, ratify Design-0014 and ADR-0005, and freeze only the stage
+   ownership and evidence requirements. Treat companion patches as evidence
+   rather than an API to copy.
+2. Extend the existing public-path wind tunnels with isolated release CPU
+   profiles, allocation counts and bytes, retained-capacity reporting, and
+   region churn, plus identical/distinct label and creation/destruction
+   workloads before optimizing.
+3. Implement and prove compact projected text with composed authored-source
+   mappings, real preserved/collapsed whitespace, and one-to-many replacement
+   coverage across semantic style boundaries.
+4. Replace the current private formation loop with an extraction-ready,
+   resumable line-candidate kernel over public Parley Engine facts while
+   preserving line-final shaping and fit-changing retry.
+5. Carry `LineHeight::{MetricsRelative, FontSizeRelative, Absolute}`, letter
+   spacing, word spacing, `WordBreak`, `OverflowWrap`, and wrap policy through
+   their owning stages with exact invalidation.
+6. Design and prove explicitly budgeted cross-identity reuse for immutable
+   preparation facts. Rebind document, revision, semantic, interaction, paint,
+   and placement identity for every consumer.
+7. Add empty and system-only font-catalog construction, stable family-name
+   observation, and shared-backing clone proof without creating another
+   application font universe.
+8. Introduce the concrete line-slot and region-cursor protocol; prove
+   rectangles, exclusions, floats, columns, height retry, and deterministic
+   replay.
+9. Implement direction-aware start/end plus left/right/center alignment and
+   explicit Western justification adjustments within accepted slots. Prove
+   that glyphs, carets, hits, selections, semantics, and line bounds move
+   together.
+10. Add calm editable-block scene endpoints, represented-caret resolution,
+   logical word movement from retained analysis, and revision-rebound
+   replacement. Gate a single-line editor façade on remaining call-site
+   ceremony.
+11. Prove CJK line breaking and document the exact boundary between current
+   Unicode support, dictionary data, word-break policy, and future CJK
+   justification.
+12. Publish the first-class preparation trace, integrate measured scratch and
+   cache counters, and decide separately whether Spoor earns a production
+   dependency.
+13. Product-prove the complete path through a compelling region-aware living
+   page and guided diagnostic modes.
+14. Run adversarial architecture, correctness, performance, accessibility,
+   PDF, portability, and real-vs-mirage review; land coherent protected
+   changes with complete proof records.
+
+### Risks and controls
+
+- **Architecture without product:** whitespace collapse and the living page are
+  required real consumers.
+- **Premature public vocabulary:** schematic records remain private until the
+  representation wind tunnel and human API gate pass.
+- **Second shaping engine:** kernels consume only public Parley Engine facts
+  and never copy HarfRust behavior.
+- **Line-layout regression:** Arabic, ligature, bidi, CRLF, intrinsic,
+  fit-changing, and grapheme traps remain blocking.
+- **Region monolith:** slot providers own geometry and float policy; the former
+  owns candidates and checkpoints only.
+- **Memory optimism:** scratch changes require allocation and wall-time
+  before/after evidence on the same workloads.
+- **Style mismatch:** the final Overstory analysis is an explicit input before
+  paragraph styles freeze.
+- **Prototype anchoring:** Overstory companion code contributes traps and call
+  sites, not a representation to copy.
+- **Identity-poisoned reuse:** shared cache entries contain only immutable
+  identity-free facts; churn tests enforce an explicit memory budget.
+- **Partial alignment:** every spatial record and interaction path is compared
+  after offsets and adjustment.
+- **Duplicate navigation:** word movement consumes retained Parley Engine
+  analysis facts rather than another Unicode segmenter.
+- **Duplicate font discovery:** catalog construction and cloning prove shared
+  backing and one discovery pass.
+- **Conformance overclaim:** CJK, Western justification, and Arabic
+  justification keep separate proof status.
+
+### Completion
+
+The campaign is complete when one real public path demonstrates every stage,
+source mappings remain exact under real collapse, line formation is reusable
+and reversible, regions and alignment consume accepted slots, known style gaps
+are closed, identical labels reuse eligible preparation without sharing
+identity, editable blocks and font catalogs satisfy the exact Overstory
+call-site invariants, CPU and memory costs are observable and bounded, CJK
+limits are executable rather than anecdotal, the living page depends on the
+work, and all local and protected remote gates are green.
+
 ## Module boundaries and Parley Engine convergence
 
 **Status:** Complete — protected implementation and proof landed
