@@ -220,7 +220,7 @@ impl ShowcaseContent {
         let controls = edit.append_text(
             controls,
             InlineRole::TEXT,
-            "CLICK caret / DRAG select / SHIFT extend / ALT-click add caret / TYPE + BACKSPACE edit / F2 paint / F3 axis / F4 guides / F5 reset",
+            "CLICK/DRAG selection / SHIFT extend / ALT-click add caret / TYPE edit / F2 paint / F3 axis / F4 debug: lines > fragments (fill script, edge bidi) > glyphs (gold multi-source) > semantics / F5 reset",
         )?;
 
         edit.commit()?;

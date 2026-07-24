@@ -30,7 +30,7 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(33);
 pub(crate) enum Command {
     TogglePaint,
     ToggleAxisAnimation,
-    ToggleGuides,
+    CycleDiagnostics,
     Reset,
 }
 
@@ -348,7 +348,7 @@ fn command_for_key(key: Key<&str>) -> Option<Command> {
     match key {
         Key::Named(NamedKey::F2) => Some(Command::TogglePaint),
         Key::Named(NamedKey::F3) => Some(Command::ToggleAxisAnimation),
-        Key::Named(NamedKey::F4) => Some(Command::ToggleGuides),
+        Key::Named(NamedKey::F4) => Some(Command::CycleDiagnostics),
         Key::Named(NamedKey::F5) => Some(Command::Reset),
         _ => None,
     }
@@ -441,6 +441,10 @@ mod tests {
         assert_eq!(
             command_for_key(Key::Named(NamedKey::F2)),
             Some(Command::TogglePaint)
+        );
+        assert_eq!(
+            command_for_key(Key::Named(NamedKey::F4)),
+            Some(Command::CycleDiagnostics)
         );
         assert_eq!(
             editor_key_for_key(Key::Named(NamedKey::ArrowLeft)),
