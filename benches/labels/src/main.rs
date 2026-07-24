@@ -17,6 +17,33 @@ const LABELS: usize = 2_048;
 const CHURN_BUDGET: usize = 64;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut arguments = std::env::args().skip(1);
+    let Some(scenario) = arguments.next() else {
+        return run_suite();
+    };
+    if scenario == "--help" || scenario == "-h" {
+        println!(
+            "usage: underwood_label_benchmark [setup-identical|cold-identical|retained-identical|width-churn|identity-churn] [rounds]"
+        );
+        return Ok(());
+    }
+    let rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(100);
+    if rounds == 0 {
+        return Err("rounds must be greater than zero".into());
+    }
+    if arguments.next().is_some() {
+        return Err("expected at most a scenario and round count".into());
+    }
+    let result = run_profile(&scenario, rounds);
+    hold_for_profiler()?;
+    result
+}
+
+fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let style = ComputedInlineStyle::new(
         ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 15.0)?,
         InlineFlowStyle::default(),
@@ -282,6 +309,206 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         churn_cache.evictions(),
         churn_cache.peak_entries()
     );
+    Ok(())
+}
+
+fn run_profile(scenario: &str, rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 15.0)?,
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::from_rgb8(0x20, 0x24, 0x2b))]);
+    match scenario {
+        "setup-identical" => profile_setup_identical(rounds),
+        "cold-identical" => profile_cold_identical(rounds, &style, &paint),
+        "retained-identical" => profile_retained_identical(rounds, &style, &paint),
+        "width-churn" => profile_width_churn(rounds, &style, &paint),
+        "identity-churn" => profile_identity_churn(rounds, &style, &paint),
+        _ => Err(format!("unknown scenario: {scenario}").into()),
+    }
+}
+
+fn profile_setup_identical(rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels()?;
+    let layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(LABELS),
+    );
+    black_box((&labels, &layout));
+    report_profile("setup-identical", rounds, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_cold_identical(
+    rounds: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels()?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(LABELS),
+    );
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            layout.clear_cache();
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("cold identical label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    1,
+                    "cleared identities must shape exactly once"
+                );
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("cold-identical", rounds, elapsed);
+    Ok(())
+}
+
+fn profile_retained_identical(
+    rounds: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels()?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(LABELS),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("retained identical label must prepare");
+                assert_no_physics(&output);
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("retained-identical", rounds, elapsed);
+    Ok(())
+}
+
+fn profile_width_churn(
+    rounds: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels()?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(LABELS),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let widths = [FiniteWidth::new(96.0)?, FiniteWidth::new(132.0)?];
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let constraint = TextConstraint::Wrap(widths[round % widths.len()]);
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(constraint, style, paint),
+                    )
+                    .expect("width-churn label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    0,
+                    "width churn must retain canonical shaping"
+                );
+                black_box(output.scene().lines().len());
+            }
+        }
+    });
+    report_profile("width-churn", rounds, elapsed);
+    Ok(())
+}
+
+fn profile_identity_churn(
+    rounds: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(CHURN_BUDGET),
+    );
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            for index in 0..LABELS {
+                let label = TextBlock::plain(
+                    identity(
+                        u64::try_from(round).unwrap_or(u64::MAX).saturating_add(10),
+                        index,
+                    ),
+                    "Transient identical label",
+                )
+                .expect("identity-churn block must initialize");
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("identity-churn label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    1,
+                    "each new identity must shape once before shared reuse exists"
+                );
+                assert!(
+                    layout.cache_diagnostics().current_entries() <= CHURN_BUDGET,
+                    "identity churn must remain within the retained budget"
+                );
+                black_box(output.scene().fragments().len());
+            }
+        }
+    });
+    report_profile("identity-churn", rounds, elapsed);
+    Ok(())
+}
+
+fn report_profile(name: &str, rounds: usize, elapsed: Duration) {
+    let operations = LABELS.saturating_mul(rounds);
+    println!(
+        "{name}\tprofile=isolated\tmachine=local\trounds={rounds}\toperations={operations}\ttotal_ns={}\tns_per_operation={}",
+        elapsed.as_nanos(),
+        elapsed.as_nanos() / operations as u128
+    );
+}
+
+fn hold_for_profiler() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(seconds) = std::env::var_os("UNDERWOOD_PROFILE_HOLD_SECS") else {
+        return Ok(());
+    };
+    let seconds = seconds
+        .to_str()
+        .ok_or("UNDERWOOD_PROFILE_HOLD_SECS must be valid UTF-8")?
+        .parse::<u64>()?;
+    eprintln!("holding process for profiler: {seconds}s");
+    std::thread::sleep(Duration::from_secs(seconds));
     Ok(())
 }
 
