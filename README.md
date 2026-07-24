@@ -60,6 +60,21 @@ line and baseline evidence. Run the optimized meeting demo with:
 cargo run --release -p underwood_showcase
 ```
 
+The external `underwood_pdf` adapter lowers that same public prepared-scene
+contract through Krilla without moving PDF policy into the foundational
+crates. Its proof writes a deterministic one-page mixed Latin/Arabic specimen:
+
+```sh
+cargo run --release -p underwood_pdf_proof
+```
+
+The PDF preserves prepared visual glyph placement, solid paint, transforms,
+clips, real glyph Unicode, RTL run structure, and single-carrier Unicode for
+partial-painted glyphs. Mixed-direction selection and copy remain
+viewer-dependent—macOS Preview also misorders mixed Arabic in Chrome and
+Apple-native Quartz reference PDFs—so this proof does not claim universal
+logical extraction, tagged PDF, or PDF/UA.
+
 The deterministic IME compatibility proof starts with two independent scene
 selections, reports their explicit normalization to one native marked region,
 shapes Arabic preedit without publishing the document, answers synchronous
@@ -108,8 +123,10 @@ bd dep cycles
 cargo run --profile wind-tunnel -p underwood_semantic_scene_benchmark
 ```
 
-The workspace MSRV is Rust 1.92. The bootstrap CI stable toolchain is Rust
-1.96.
+Underwood's production crates and non-rendering workspace members have an MSRV
+of Rust 1.88. The native showcase, visual proof, and PDF adapter/proof require
+Rust 1.92 because their published renderer dependencies declare that MSRV.
+Stable CI checks the complete workspace with Rust 1.96.
 
 ## License
 

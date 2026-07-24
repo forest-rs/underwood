@@ -64,7 +64,7 @@ fn check_root_policy(root: &Path) -> Vec<String> {
     for required in [
         "[workspace]",
         "resolver = \"2\"",
-        "rust-version = \"1.92\"",
+        "rust-version = \"1.88\"",
         "rust.unsafe_code = \"deny\"",
     ] {
         if !cargo.contains(required) {
@@ -73,9 +73,9 @@ fn check_root_policy(root: &Path) -> Vec<String> {
     }
 
     let clippy = read(root, "clippy.toml", &mut errors);
-    if !clippy.contains("msrv = \"1.92\"") {
+    if clippy.contains("msrv =") {
         errors.push(String::from(
-            "clippy.toml must keep `msrv = \"1.92\"` synchronized",
+            "clippy.toml must let Clippy derive each package MSRV from Cargo metadata",
         ));
     }
 
@@ -104,7 +104,7 @@ fn check_root_policy(root: &Path) -> Vec<String> {
         "cargo xtask check",
         "-D warnings",
         "RUST_STABLE_VER: \"1.96\"",
-        "RUST_MIN_VER: \"1.92\"",
+        "RUST_MIN_VER: \"1.88\"",
         "toolchain: \"1.96.0\"",
     ] {
         if !ci.contains(required) {

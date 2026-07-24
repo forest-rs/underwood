@@ -2,6 +2,7 @@
 path	name	class	no_std	published	fence
 benches/semantic-scene	underwood_semantic_scene_benchmark	benchmark	no	no	This crate owns measurements of the real public semantic-to-scene path; it explicitly does not own product algorithms, private shortcuts, or alternate implementations.
 examples/headless	underwood_headless_example	example	no	no	This crate owns the first external public-path consumer and bundled licensed font fixtures; it explicitly does not own product behavior or private implementation shortcuts.
+examples/pdf-proof	underwood_pdf_proof	example	no	no	This crate owns the deterministic mixed-script public-path PDF specimen; it explicitly does not own PDF lowering, text shaping, product behavior, or accessibility claims.
 examples/showcase	underwood_showcase	host	no	no	This crate owns native showcase events, presentation, and live proof composition; it explicitly does not own document semantics, shaping, line formation, rasterization, or product APIs.
 examples/visual-proof	underwood_visual_proof	example	no	no	This crate owns the external TextScene-to-imaging adapter, poster composition, and deterministic CPU snapshot; it explicitly does not own core text behavior, renderer policy, or product APIs.
 experiments/flow	underwood_flow_experiment	test	no	no	This crate owns private flow-trace-v0 checkpoint and virtual-extent experiments; it explicitly does not own production layout, product benchmarks, or public checkpoint formats.
@@ -11,4 +12,5 @@ experiments/position	underwood_position_experiment	test	no	no	This crate owns pr
 experiments/text-data	underwood_text_data_experiment	test	no	no	This crate owns private text-data tier artifact and replay measurements; it explicitly does not own production providers, product benchmarks, or text-data APIs.
 underwood	underwood	core	yes	no	This crate owns Underwood's semantic-to-scene façade and private foundational modules; it explicitly does not own text shaping physics, host policy, or rendering.
 underwood_parley	underwood_parley	adapter	yes	no	This crate owns conversion between Underwood preparation contracts and pinned Parley; it explicitly does not own documents, flow, scenes, renderers, or public Parley leakage.
+underwood_pdf	underwood_pdf	adapter	no	no	This crate owns replaceable Krilla lowering of supported public prepared-scene observations; it explicitly does not own shaping, layout, core scene policy, pagination, or PDF accessibility semantics.
 xtask	xtask	tooling	no	no	This crate owns repository policy validation; it explicitly does not own product behavior or architectural decisions.

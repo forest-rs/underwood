@@ -1,1 +1,1 @@
-msrv = "1.92"
+# Clippy derives each package's MSRV from its Cargo manifest.
