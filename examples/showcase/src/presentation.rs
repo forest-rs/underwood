@@ -3,12 +3,12 @@
 
 //! Rendering-only bridge from a portable Underwood scene to `imaging`.
 
-use imaging::kurbo::{Affine, Rect, RoundedRect, Stroke};
+use imaging::kurbo::{Affine, Circle, Line, Rect, RoundedRect, Stroke};
 use imaging::peniko::{Color, Fill, Style};
 use imaging::{PaintSink, Painter, record};
 use underwood::{
-    CompositionScene, PaintTable, Point, SceneFragment, SceneLine, TextScene, Vec2,
-    adapter::LineBreakReason,
+    CompositionScene, InlineRole, PaintTable, ParagraphRole, Point, SceneFragment, SceneLine,
+    SemanticFragment, TextScene, Vec2, adapter::LineBreakReason,
 };
 
 const BACKGROUND: Color = Color::from_rgb8(0x08, 0x0d, 0x14);
@@ -20,6 +20,48 @@ const GOLD: Color = Color::from_rgb8(0xf5, 0xc4, 0x51);
 const SELECTION_PRIMARY: Color = Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x58);
 const SELECTION_SECONDARY: Color = Color::from_rgba8(0xff, 0x6b, 0x67, 0x52);
 const PREEDIT_SELECTION: Color = Color::from_rgba8(0xf5, 0xc4, 0x51, 0x62);
+
+/// Presentation-only inspection layer over public scene observations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum DiagnosticsMode {
+    /// Paint only the authored document and editor overlays.
+    #[default]
+    Off,
+    /// Show line boxes, content metrics, baselines, and break kinds.
+    Lines,
+    /// Show fragment advances against exact line content metrics, scripts, and bidi direction.
+    Fragments,
+    /// Show every glyph origin, advance vector, and multi-source glyph.
+    Glyphs,
+    /// Show paragraph and inline semantic geometry.
+    Semantics,
+}
+
+impl DiagnosticsMode {
+    /// Advances through every inspection layer and then returns to the clean view.
+    #[must_use]
+    pub(crate) const fn next(self) -> Self {
+        match self {
+            Self::Off => Self::Lines,
+            Self::Lines => Self::Fragments,
+            Self::Fragments => Self::Glyphs,
+            Self::Glyphs => Self::Semantics,
+            Self::Semantics => Self::Off,
+        }
+    }
+
+    /// Returns the compact host-facing name of this inspection layer.
+    #[must_use]
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::Lines => "LINES",
+            Self::Fragments => "FRAGMENTS",
+            Self::Glyphs => "GLYPHS",
+            Self::Semantics => "SEMANTICS",
+        }
+    }
+}
 
 /// One scene-space selection rectangle and its independent-selection index.
 #[derive(Clone, Copy, Debug)]
@@ -112,15 +154,21 @@ impl FrameLayout {
 pub(crate) fn record_frame(
     document: &TextScene,
     layout: FrameLayout,
-    show_guides: bool,
+    diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
 ) -> Result<record::Scene, record::ValidateError> {
+    let semantics = if diagnostics == DiagnosticsMode::Semantics {
+        document.semantics().collect()
+    } else {
+        Vec::new()
+    };
     record_scene(
         document.lines(),
         document.fragments(),
         document.paint(),
+        &semantics,
         layout,
-        show_guides,
+        diagnostics,
         overlay,
     )
 }
@@ -129,15 +177,21 @@ pub(crate) fn record_frame(
 pub(crate) fn record_composition_frame(
     document: &CompositionScene,
     layout: FrameLayout,
-    show_guides: bool,
+    diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
 ) -> Result<record::Scene, record::ValidateError> {
+    let semantics = if diagnostics == DiagnosticsMode::Semantics {
+        document.semantics().collect()
+    } else {
+        Vec::new()
+    };
     record_scene(
         document.lines(),
         document.fragments(),
         document.paint(),
+        &semantics,
         layout,
-        show_guides,
+        diagnostics,
         overlay,
     )
 }
@@ -146,8 +200,9 @@ fn record_scene<Source>(
     lines: &[SceneLine<Source>],
     fragments: &[SceneFragment<Source>],
     paint: &PaintTable,
+    semantics: &[&SemanticFragment],
     layout: FrameLayout,
-    show_guides: bool,
+    diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
 ) -> Result<record::Scene, record::ValidateError> {
     let mut scene = record::Scene::new();
@@ -186,9 +241,9 @@ fn record_scene<Source>(
             .transform(Affine::scale(layout.scale))
             .draw();
 
-        TextSceneAdapter::new(lines, fragments, paint, layout).paint_into(
+        TextSceneAdapter::new(lines, fragments, paint, semantics, layout).paint_into(
             &mut painter,
-            show_guides,
+            diagnostics,
             overlay,
         );
     }
@@ -200,6 +255,7 @@ struct TextSceneAdapter<'a, Source> {
     lines: &'a [SceneLine<Source>],
     fragments: &'a [SceneFragment<Source>],
     paint: &'a PaintTable,
+    semantics: &'a [&'a SemanticFragment],
     placement: Affine,
 }
 
@@ -208,12 +264,14 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
         lines: &'a [SceneLine<Source>],
         fragments: &'a [SceneFragment<Source>],
         paint: &'a PaintTable,
+        semantics: &'a [&'a SemanticFragment],
         layout: FrameLayout,
     ) -> Self {
         Self {
             lines,
             fragments,
             paint,
+            semantics,
             placement: Affine::scale(layout.scale)
                 * Affine::translate((layout.origin_x, layout.origin_y)),
         }
@@ -222,11 +280,13 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
     fn paint_into<S: PaintSink + ?Sized>(
         &self,
         painter: &mut Painter<'_, S>,
-        show_guides: bool,
+        diagnostics: DiagnosticsMode,
         overlay: &EditorOverlay,
     ) {
-        if show_guides {
-            self.paint_line_guides(painter);
+        match diagnostics {
+            DiagnosticsMode::Lines => self.paint_line_diagnostics(painter),
+            DiagnosticsMode::Fragments => self.paint_fragment_diagnostics(painter),
+            DiagnosticsMode::Off | DiagnosticsMode::Glyphs | DiagnosticsMode::Semantics => {}
         }
 
         self.paint_selection_backgrounds(painter, overlay);
@@ -260,6 +320,12 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
         }
 
         self.paint_editor_marks(painter, overlay);
+
+        match diagnostics {
+            DiagnosticsMode::Glyphs => self.paint_glyph_diagnostics(painter),
+            DiagnosticsMode::Semantics => self.paint_semantic_diagnostics(painter),
+            DiagnosticsMode::Off | DiagnosticsMode::Lines | DiagnosticsMode::Fragments => {}
+        }
     }
 
     fn paint_selection_backgrounds<S: PaintSink + ?Sized>(
@@ -318,7 +384,7 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
         }
     }
 
-    fn paint_line_guides<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
+    fn paint_line_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
         let dashed = Stroke::new(1.0).with_dashes(0.0, [5.0, 5.0]);
         for line in self.lines {
             let color = match line.break_reason() {
@@ -326,6 +392,20 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
                 LineBreakReason::Mandatory => CORAL,
                 LineBreakReason::End => GOLD,
             };
+            let content_bounds = Rect::new(
+                line.bounds().x0,
+                line.baseline() - line.content_ascent(),
+                line.bounds().x1,
+                line.baseline() + line.content_descent(),
+            );
+            painter
+                .fill(content_bounds, color.with_alpha(0.055))
+                .transform(self.placement)
+                .draw();
+            painter
+                .stroke(content_bounds, &Stroke::new(0.75), color.with_alpha(0.24))
+                .transform(self.placement)
+                .draw();
             painter
                 .stroke(line.bounds(), &dashed, color.with_alpha(0.42))
                 .transform(self.placement)
@@ -344,6 +424,143 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
                 .draw();
         }
     }
+
+    fn paint_fragment_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
+        for fragment in self.fragments {
+            let Some(bounds) = fragment_advance_envelope(fragment, self.lines) else {
+                continue;
+            };
+            let script = script_color(fragment.script());
+            let direction = bidi_color(fragment.bidi_level());
+            let owns_multiple_sources = fragment.sources().nth(1).is_some();
+            painter
+                .fill(bounds, script.with_alpha(0.075))
+                .transform(self.placement)
+                .draw();
+            painter
+                .stroke(
+                    bounds,
+                    &Stroke::new(if owns_multiple_sources { 2.0 } else { 0.9 }),
+                    if owns_multiple_sources {
+                        GOLD.with_alpha(0.76)
+                    } else {
+                        direction.with_alpha(0.58)
+                    },
+                )
+                .transform(self.placement)
+                .draw();
+            if let Some(clip) = fragment.paint_clip() {
+                painter
+                    .stroke(clip, &Stroke::new(1.4), CORAL.with_alpha(0.9))
+                    .transform(self.placement)
+                    .draw();
+            }
+        }
+    }
+
+    fn paint_glyph_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
+        for fragment in self.fragments {
+            let transform = self.placement * fragment.transform();
+            for glyph in fragment.glyphs() {
+                let origin = glyph.position();
+                let end = origin + glyph.advance();
+                let owns_multiple_sources = glyph.sources().nth(1).is_some();
+                let color = if owns_multiple_sources {
+                    GOLD
+                } else {
+                    bidi_color(fragment.bidi_level())
+                };
+                painter
+                    .stroke(
+                        Line::new(origin, end),
+                        &Stroke::new(if owns_multiple_sources { 1.6 } else { 0.75 }),
+                        color.with_alpha(0.72),
+                    )
+                    .transform(transform)
+                    .draw();
+                painter
+                    .fill(
+                        Circle::new(origin, if owns_multiple_sources { 2.8 } else { 1.7 }),
+                        color.with_alpha(0.92),
+                    )
+                    .transform(transform)
+                    .draw();
+                painter
+                    .fill(Circle::new(end, 0.9), color.with_alpha(0.52))
+                    .transform(transform)
+                    .draw();
+            }
+        }
+    }
+
+    fn paint_semantic_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
+        let paragraph_stroke = Stroke::new(1.0).with_dashes(0.0, [7.0, 4.0]);
+        let inline_stroke = Stroke::new(0.8);
+        for semantic in self.semantics {
+            let (color, stroke) = if let Some(role) = semantic.paragraph_role() {
+                let color = if role == ParagraphRole::HEADING_1 {
+                    GOLD
+                } else if role == ParagraphRole::HEADING_2 {
+                    CYAN
+                } else {
+                    PAGE_EDGE.with_alpha(0.9)
+                };
+                (color, &paragraph_stroke)
+            } else {
+                let color = if semantic.inline_role() == Some(InlineRole::EMPHASIS) {
+                    CORAL
+                } else {
+                    CYAN
+                };
+                (color, &inline_stroke)
+            };
+            painter
+                .stroke(semantic.bounds(), stroke, color.with_alpha(0.64))
+                .transform(self.placement)
+                .draw();
+        }
+    }
+}
+
+fn fragment_advance_envelope<Source>(
+    fragment: &SceneFragment<Source>,
+    lines: &[SceneLine<Source>],
+) -> Option<Rect> {
+    let first = fragment.glyphs().first()?;
+    let transform = fragment.transform();
+    let first_origin = transform * first.position();
+    let first_end = transform * (first.position() + first.advance());
+    let mut x0 = first_origin.x.min(first_end.x);
+    let mut x1 = first_origin.x.max(first_end.x);
+    for glyph in fragment.glyphs().iter().skip(1) {
+        let origin = transform * glyph.position();
+        let end = transform * (glyph.position() + glyph.advance());
+        x0 = x0.min(origin.x.min(end.x));
+        x1 = x1.max(origin.x.max(end.x));
+    }
+    let line = lines.iter().min_by(|left, right| {
+        (left.baseline() - first_origin.y)
+            .abs()
+            .total_cmp(&(right.baseline() - first_origin.y).abs())
+    })?;
+    Some(Rect::new(
+        x0,
+        line.baseline() - line.content_ascent(),
+        x1.max(x0 + 1.0),
+        line.baseline() + line.content_descent(),
+    ))
+}
+
+const fn bidi_color(level: u8) -> Color {
+    if level.is_multiple_of(2) { CYAN } else { CORAL }
+}
+
+const fn script_color(script: [u8; 4]) -> Color {
+    match script {
+        [b'L', b'a', b't', b'n'] => CYAN,
+        [b'A', b'r', b'a', b'b'] => GOLD,
+        _ => CORAL,
+    }
 }
 
 #[expect(
@@ -360,7 +577,7 @@ fn finite_f32(value: f64) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::FrameLayout;
+    use super::{DiagnosticsMode, EditorOverlay, FrameLayout, record_frame};
     use crate::content::ShowcaseContent;
 
     #[test]
@@ -377,5 +594,50 @@ mod tests {
             .prepare(short.content_width, 0.62)
             .expect("short document must prepare");
         assert!(short.document_is_clipped(&short_document.scene));
+    }
+
+    #[test]
+    fn diagnostic_modes_form_one_complete_cycle() {
+        let modes = [
+            DiagnosticsMode::Off,
+            DiagnosticsMode::Lines,
+            DiagnosticsMode::Fragments,
+            DiagnosticsMode::Glyphs,
+            DiagnosticsMode::Semantics,
+        ];
+        let mut mode = DiagnosticsMode::Off;
+        for expected in modes.into_iter().skip(1).chain([DiagnosticsMode::Off]) {
+            mode = mode.next();
+            assert_eq!(mode, expected);
+        }
+        assert_eq!(
+            modes.map(DiagnosticsMode::label),
+            ["OFF", "LINES", "FRAGMENTS", "GLYPHS", "SEMANTICS"]
+        );
+    }
+
+    #[test]
+    fn every_diagnostic_mode_records_real_scene_observations() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let layout = FrameLayout::new(1_100, 800, 1.0);
+        let prepared = content
+            .prepare(layout.content_width, 0.62)
+            .expect("document must prepare");
+        let overlay = EditorOverlay::default();
+        let clean = record_frame(&prepared.scene, layout, DiagnosticsMode::Off, &overlay)
+            .expect("clean frame must record");
+        for mode in [
+            DiagnosticsMode::Lines,
+            DiagnosticsMode::Fragments,
+            DiagnosticsMode::Glyphs,
+            DiagnosticsMode::Semantics,
+        ] {
+            let debug = record_frame(&prepared.scene, layout, mode, &overlay)
+                .expect("diagnostic frame must record");
+            assert!(
+                debug.commands().len() > clean.commands().len(),
+                "{mode:?} must add visible diagnostic commands"
+            );
+        }
     }
 }

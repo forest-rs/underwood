@@ -10,7 +10,7 @@ use crate::host::{self, Command, Frame, HostApplication};
 use crate::interaction::{
     ActionRegistry, EditorEvent, EditorResponse, EditorState, ShowcaseAction,
 };
-use crate::presentation::{self, FrameLayout};
+use crate::presentation::{self, DiagnosticsMode, FrameLayout};
 use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{TextScene, WorkReport};
 
@@ -37,7 +37,7 @@ struct ShowcaseApp {
     axis_animation: AxisAnimation,
     editor: EditorState,
     action_registry: ActionRegistry,
-    show_guides: bool,
+    diagnostics: DiagnosticsMode,
     last_elapsed: Duration,
     last_layout: Option<FrameLayout>,
     last_committed_scene: Option<TextScene>,
@@ -53,7 +53,7 @@ impl ShowcaseApp {
             axis_animation: AxisAnimation::new(),
             editor: EditorState::default(),
             action_registry: ActionRegistry::default(),
-            show_guides: false,
+            diagnostics: DiagnosticsMode::Off,
             last_elapsed: Duration::ZERO,
             last_layout: None,
             last_committed_scene: None,
@@ -139,7 +139,7 @@ impl HostApplication for ShowcaseApp {
                 let scene = presentation::record_composition_frame(
                     &prepared.scene,
                     layout,
-                    self.show_guides,
+                    self.diagnostics,
                     &overlay,
                 )
                 .map_err(|error| error.to_string())?;
@@ -163,7 +163,7 @@ impl HostApplication for ShowcaseApp {
                     .editor
                     .committed_overlay(&prepared.scene, caret_visible);
                 let scene =
-                    presentation::record_frame(&prepared.scene, layout, self.show_guides, &overlay)
+                    presentation::record_frame(&prepared.scene, layout, self.diagnostics, &overlay)
                         .map_err(|error| error.to_string())?;
                 let ime_cursor =
                     self.editor
@@ -195,8 +195,13 @@ impl HostApplication for ShowcaseApp {
             self.capture_next_work = false;
         }
         let evidence = self.evidence_work.as_ref().unwrap_or(&work);
+        let diagnostics = if self.diagnostics == DiagnosticsMode::Off {
+            String::new()
+        } else {
+            format!(" · DEBUG {}", self.diagnostics.label())
+        };
         let window_title = format!(
-            "Underwood — {mode} · {} · {} lines · wght {:.0} · shape {} · flow {} · paint {} · reused {} · prep {:.1} ms · render {:.1} ms{}{}",
+            "Underwood — {mode}{diagnostics} · {} · {} lines · wght {:.0} · shape {} · flow {} · paint {} · reused {} · prep {:.1} ms · render {:.1} ms{}{}",
             self.editor.status(),
             line_count,
             axis_weight,
@@ -230,16 +235,16 @@ impl HostApplication for ShowcaseApp {
                 self.capture_next_work = true;
             }
             Command::ToggleAxisAnimation => self.axis_animation.toggle(self.last_elapsed),
-            Command::ToggleGuides => {
+            Command::CycleDiagnostics => {
                 self.axis_animation.pause(self.last_elapsed);
-                self.show_guides = !self.show_guides;
+                self.diagnostics = self.diagnostics.next();
             }
             Command::Reset => {
                 self.content.reset();
                 self.editor.reset();
                 self.action_registry = ActionRegistry::default();
                 self.axis_animation.reset();
-                self.show_guides = false;
+                self.diagnostics = DiagnosticsMode::Off;
                 self.last_committed_scene = None;
                 self.capture_next_work = true;
             }
