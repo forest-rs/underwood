@@ -2,7 +2,7 @@
 
 ## Module boundaries and Parley Engine convergence
 
-**Status:** Active — behavior-neutral adapter decomposition in progress
+**Status:** Active — adapter decomposition complete; Parley Engine convergence in progress
 
 **Beads:** `und-oh0.5.5`, `und-oh0.5.5.1`, `und-oh0.5.5.2`,
 `und-oh0.5.5.3`
