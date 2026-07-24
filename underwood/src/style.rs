@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use crate::{
     BaseDirection, Brush, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation,
     FontWeight, FontWidth, Language, ParagraphId, StyleError, StyleErrorKind, TextId,
+    WhitespaceCollapse,
 };
 
 /// Dense caller-defined index into a [`PaintTable`].
@@ -348,6 +349,7 @@ impl ComputedInlineStyle {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParagraphStyle {
     base_direction: BaseDirection,
+    whitespace_collapse: WhitespaceCollapse,
 }
 
 impl ParagraphStyle {
@@ -355,19 +357,38 @@ impl ParagraphStyle {
     /// paragraph behavior.
     pub const DEFAULT: Self = Self {
         base_direction: BaseDirection::Auto,
+        whitespace_collapse: WhitespaceCollapse::Preserve,
     };
 
     /// Creates paragraph values with an explicit or automatically inferred
     /// base direction.
     #[must_use]
     pub const fn new(base_direction: BaseDirection) -> Self {
-        Self { base_direction }
+        Self {
+            base_direction,
+            whitespace_collapse: WhitespaceCollapse::Preserve,
+        }
     }
 
     /// Returns the paragraph base direction used during Unicode analysis.
     #[must_use]
     pub const fn base_direction(self) -> BaseDirection {
         self.base_direction
+    }
+
+    /// Returns a copy with paragraph-stream whitespace processing.
+    ///
+    /// Collapse state crosses inline style and semantic boundaries.
+    #[must_use]
+    pub const fn with_whitespace_collapse(mut self, policy: WhitespaceCollapse) -> Self {
+        self.whitespace_collapse = policy;
+        self
+    }
+
+    /// Returns paragraph-stream whitespace processing.
+    #[must_use]
+    pub const fn whitespace_collapse(self) -> WhitespaceCollapse {
+        self.whitespace_collapse
     }
 }
 

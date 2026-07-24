@@ -8,10 +8,14 @@
 
 use super::*;
 
+mod styles;
+
+use styles::project_style_runs;
+
 #[derive(Clone, Debug)]
 pub(super) struct Projection<'a> {
     pub(super) paragraph: ParagraphId,
-    pub(super) text: alloc::string::String,
+    pub(super) mapping: TextProjection,
     pub(super) spans: Vec<LeafSpan>,
     pub(super) shaping_styles: Vec<&'a ShapingStyle>,
     pub(super) shaping_runs: Vec<ShapingRun>,
@@ -73,9 +77,19 @@ impl<'a> Projection<'a> {
             }
             start = end;
         }
+        let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
+        let mapping = TextProjection::from_whitespace(text, paragraph_style.whitespace_collapse())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        project_style_runs(
+            paragraph.id,
+            &mapping,
+            &mut shaping_runs,
+            &mut inline_flow_runs,
+            &mut paint_runs,
+        )?;
         Ok(Self {
             paragraph: paragraph.id,
-            text,
+            mapping,
             spans,
             shaping_styles,
             shaping_runs,
@@ -84,7 +98,7 @@ impl<'a> Projection<'a> {
             paint_runs,
             default_font_size: request.styles.default_style().shaping().font_size(),
             default_inline_flow: request.styles.default_style().inline_flow(),
-            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
+            paragraph_style,
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -243,9 +257,19 @@ impl<'a> Projection<'a> {
             ));
         }
 
+        let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
+        let mapping = TextProjection::from_whitespace(text, paragraph_style.whitespace_collapse())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        project_style_runs(
+            paragraph.id,
+            &mapping,
+            &mut shaping_runs,
+            &mut inline_flow_runs,
+            &mut paint_runs,
+        )?;
         Ok(Self {
             paragraph: paragraph.id,
-            text,
+            mapping,
             spans,
             shaping_styles,
             shaping_runs,
@@ -254,7 +278,7 @@ impl<'a> Projection<'a> {
             paint_runs,
             default_font_size: request.styles.default_style().shaping().font_size(),
             default_inline_flow: request.styles.default_style().inline_flow(),
-            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
+            paragraph_style,
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -264,19 +288,15 @@ impl<'a> Projection<'a> {
         &self,
         paragraph: Range<u32>,
     ) -> Result<Vec<LocalRange>, SceneError> {
-        if self
-            .text
-            .get(paragraph.start as usize..paragraph.end as usize)
-            .is_none()
-        {
-            return Err(SceneError::for_source(
+        let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
+            SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
-                paragraph,
-            ));
-        }
-        if paragraph.is_empty() {
-            let span = span_for_position(&self.spans, paragraph.start, TextAffinity::Upstream)
+                paragraph.clone(),
+            )
+        })?;
+        if source.is_empty() {
+            let span = span_for_position(&self.spans, source.start, TextAffinity::Upstream)
                 .ok_or_else(|| {
                     SceneError::for_source(
                         SceneErrorKind::SourceCoverage,
@@ -284,16 +304,14 @@ impl<'a> Projection<'a> {
                         paragraph.clone(),
                     )
                 })?;
-            return Ok(alloc::vec![
-                span.local_range(paragraph.start, paragraph.end)
-            ]);
+            return Ok(alloc::vec![span.local_range(source.start, source.end)]);
         }
 
-        let mut covered = paragraph.start;
+        let mut covered = source.start;
         let mut ranges = Vec::new();
         for span in &self.spans {
-            let start = paragraph.start.max(span.paragraph.start);
-            let end = paragraph.end.min(span.paragraph.end);
+            let start = source.start.max(span.paragraph.start);
+            let end = source.end.min(span.paragraph.end);
             if start >= end {
                 continue;
             }
@@ -301,13 +319,13 @@ impl<'a> Projection<'a> {
                 return Err(SceneError::for_source(
                     SceneErrorKind::SourceCoverage,
                     self.paragraph,
-                    paragraph,
+                    paragraph.clone(),
                 ));
             }
             ranges.push(span.local_range(start, end));
             covered = end;
         }
-        if covered != paragraph.end {
+        if covered != source.end {
             return Err(SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
@@ -321,16 +339,44 @@ impl<'a> Projection<'a> {
         &self,
         paragraph: Range<u32>,
     ) -> Result<SemanticId, SceneError> {
+        let owner = self.mapping.source_owner(paragraph.clone()).map_err(|_| {
+            SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph.clone(),
+            )
+        })?;
+        let transformed_unit = !paragraph.is_empty()
+            && self.mapping.segments().any(|segment| {
+                segment.kind() != ProjectionKind::Identity
+                    && !segment.projected().is_empty()
+                    && segment.projected().start <= paragraph.start
+                    && paragraph.end <= segment.projected().end
+            });
+        if paragraph.is_empty() || transformed_unit {
+            return span_for_position(&self.spans, owner, TextAffinity::Downstream)
+                .or_else(|| span_for_position(&self.spans, owner, TextAffinity::Upstream))
+                .map(|span| span.semantic)
+                .ok_or_else(|| {
+                    SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        self.paragraph,
+                        paragraph,
+                    )
+                });
+        }
+
+        let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
+            SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph.clone(),
+            )
+        })?;
         let mut semantics = self
             .spans
             .iter()
-            .filter(|span| {
-                if paragraph.is_empty() {
-                    span.paragraph.start <= paragraph.start && paragraph.start <= span.paragraph.end
-                } else {
-                    span.paragraph.start < paragraph.end && paragraph.start < span.paragraph.end
-                }
-            })
+            .filter(|span| span.paragraph.start < source.end && source.start < span.paragraph.end)
             .map(|span| span.semantic);
         let Some(first) = semantics.next() else {
             return Err(SceneError::for_source(
@@ -354,25 +400,28 @@ impl<'a> Projection<'a> {
         paragraph_offset: u32,
         affinity: TextAffinity,
     ) -> Result<LocalPosition, SceneError> {
-        if !self.text.is_char_boundary(paragraph_offset as usize) {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph_offset..paragraph_offset,
-            ));
-        }
-        let span = span_for_position(&self.spans, paragraph_offset, affinity).ok_or_else(|| {
+        let source = self
+            .mapping
+            .source_position(paragraph_offset, affinity)
+            .map_err(|_| {
+                SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    self.paragraph,
+                    paragraph_offset..paragraph_offset,
+                )
+            })?;
+        let span = span_for_position(&self.spans, source, affinity).ok_or_else(|| {
             SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
                 paragraph_offset..paragraph_offset,
             )
         })?;
-        Ok(span.local_position(paragraph_offset, affinity))
+        Ok(span.local_position(source, affinity))
     }
 
     pub(super) fn empty_line_height_key(&self) -> u64 {
-        if self.text.is_empty() {
+        if self.mapping.text().is_empty() {
             (f64::from(self.default_font_size)
                 * f64::from(self.default_inline_flow.line_height().multiplier()))
             .to_bits()
@@ -481,35 +530,46 @@ pub(super) enum LeafSpanSource {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ProjectionSourceKey {
-    pub(super) paragraph: Range<u32>,
-    pub(super) text: TextId,
-    pub(super) source: ProjectionSourceKind,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ProjectionSourceKind {
     Snapshot { start: u32 },
     Composition { start: u32 },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ProjectionSourceKey {
+    Relation(ProjectionSegment),
+    Text {
+        paragraph: Range<u32>,
+        text: TextId,
+        source: ProjectionSourceKind,
+    },
+}
+
 impl ProjectionSourceKey {
     pub(super) fn from_projection(projection: &Projection<'_>) -> Vec<Self> {
-        projection
-            .spans
-            .iter()
-            .map(|span| Self {
-                paragraph: span.paragraph.clone(),
-                text: span.text,
-                source: match span.source {
-                    LeafSpanSource::Snapshot { start } => ProjectionSourceKind::Snapshot { start },
-                    LeafSpanSource::Composition { start, .. } => {
-                        ProjectionSourceKind::Composition { start }
-                    }
+        let mut keys = Vec::with_capacity(
+            projection.spans.len()
+                + if projection.mapping.is_identity() {
+                    0
+                } else {
+                    projection.mapping.segments().len()
                 },
-            })
-            .collect()
+        );
+        if !projection.mapping.is_identity() {
+            keys.extend(projection.mapping.segments().map(Self::Relation));
+        }
+        keys.extend(projection.spans.iter().map(|span| Self::Text {
+            paragraph: span.paragraph.clone(),
+            text: span.text,
+            source: match span.source {
+                LeafSpanSource::Snapshot { start } => ProjectionSourceKind::Snapshot { start },
+                LeafSpanSource::Composition { start, .. } => {
+                    ProjectionSourceKind::Composition { start }
+                }
+            },
+        }));
+        keys
     }
 }
 
@@ -670,7 +730,8 @@ pub(super) fn validate_prepared(
     for line in prepared.lines() {
         let line_source = line.source();
         if projection
-            .text
+            .mapping
+            .text()
             .get(line_source.start as usize..line_source.end as usize)
             .is_none()
         {
@@ -683,7 +744,8 @@ pub(super) fn validate_prepared(
         for run in line.runs() {
             let source = run.source();
             let Some(source_text) = projection
-                .text
+                .mapping
+                .text()
                 .get(source.start as usize..source.end as usize)
             else {
                 return Err(SceneError::for_source(
@@ -695,7 +757,8 @@ pub(super) fn validate_prepared(
             for glyph in run.glyphs() {
                 let source = glyph.source();
                 if projection
-                    .text
+                    .mapping
+                    .text()
                     .get(source.start as usize..source.end as usize)
                     .is_none()
                 {
@@ -708,7 +771,8 @@ pub(super) fn validate_prepared(
                 for segment in glyph.paint().segments() {
                     let source = segment.source();
                     if projection
-                        .text
+                        .mapping
+                        .text()
                         .get(source.start as usize..source.end as usize)
                         .is_none()
                     {
@@ -745,7 +809,8 @@ pub(super) fn validate_prepared(
             }
             for range in run.unrendered_source() {
                 if projection
-                    .text
+                    .mapping
+                    .text()
                     .get(range.start as usize..range.end as usize)
                     .is_none()
                 {

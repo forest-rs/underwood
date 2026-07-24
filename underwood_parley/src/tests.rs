@@ -23,7 +23,7 @@ use underwood::{
     ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
     SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
     SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
-    TextSelectionMode, Vec2,
+    TextSelectionMode, Vec2, WhitespaceCollapse,
 };
 use underwood::{Language, Script};
 

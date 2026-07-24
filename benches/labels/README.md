@@ -14,6 +14,8 @@ diagnostics. It covers:
 - one localized text change among stable siblings;
 - max-content and constrained-width changes;
 - explicit destruction and budget-driven cache churn.
+- compact projection identity, dense whitespace collapse, and one-to-many
+  expansion without per-byte maps.
 
 Deterministic `WorkReport`, intrinsic-metric, and cache assertions are the
 correctness proof. Machine-local elapsed time is supporting evidence only. A

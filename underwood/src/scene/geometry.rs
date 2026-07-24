@@ -350,7 +350,10 @@ pub(super) fn build_geometry(
         line_top += line.height();
     }
 
-    if prepared.lines().is_empty() && projection.text.is_empty() && !projection.spans.is_empty() {
+    if prepared.lines().is_empty()
+        && projection.mapping.text().is_empty()
+        && !projection.spans.is_empty()
+    {
         let position = projection.position_at(0, TextAffinity::Downstream)?;
         let sources = projection.local_ranges(0..0)?;
         clusters.push(CachedCluster {

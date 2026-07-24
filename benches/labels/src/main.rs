@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use underwood::{
     BlockRequest, Brush, CacheBudget, Color, ComputedInlineStyle, DocumentId, FiniteWidth,
-    InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, SceneOutput, ShapingStyle, TextBlock,
-    TextConstraint,
+    InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ProjectedText, ProjectionBuilder,
+    SceneOutput, ShapingStyle, TextBlock, TextConstraint, WhitespaceCollapse,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|cold-identical|retained-identical|paint-change|localized-edit|interaction-materialization|width-churn|region-ready|identity-churn] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|cold-identical|retained-identical|paint-change|localized-edit|interaction-materialization|width-churn|region-ready|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -359,8 +359,123 @@ fn run_profile(
             profile_width_churn("region-ready", rounds, labels, &style, &paint)
         }
         "identity-churn" | "h0" => profile_identity_churn(rounds, labels, &style, &paint),
+        "projection-identity-setup" | "q0" => {
+            profile_projection_setup("projection-identity-setup", rounds, labels, "stable label")
+        }
+        "projection-identity" | "q1" => profile_projection_identity(rounds, labels),
+        "projection-collapse-setup" | "q2" => {
+            profile_projection_setup("projection-collapse-setup", rounds, labels, " \t\r\n")
+        }
+        "projection-collapse" | "q3" => profile_projection_collapse(rounds, labels),
+        "projection-expansion-setup" | "q4" => {
+            profile_projection_setup("projection-expansion-setup", rounds, labels, "İ")
+        }
+        "projection-expansion" | "q5" => profile_projection_expansion(rounds, labels),
         _ => Err(format!("unknown scenario: {scenario}").into()),
     }
+}
+
+fn profile_projection_setup(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    source: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec![source.to_string(); operations];
+    black_box(sources);
+    report_profile(name, rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_projection_identity(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec!["stable label".to_string(); operations];
+    let elapsed = measure(|| {
+        for source in sources {
+            let projection = ProjectedText::identity(source).expect("identity source is valid");
+            assert!(
+                projection.is_identity(),
+                "identity scenario must not materialize presentation text"
+            );
+            assert_eq!(
+                projection.segments().len(),
+                1,
+                "identity scenario must store one relation run"
+            );
+            black_box(projection);
+        }
+    });
+    report_profile("projection-identity", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_projection_collapse(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec![" \t\r\n".to_string(); operations];
+    let elapsed = measure(|| {
+        for source in sources {
+            let projection = ProjectedText::from_whitespace(source, WhitespaceCollapse::Collapse)
+                .expect("collapse source is valid");
+            assert_eq!(
+                projection.text(),
+                " ",
+                "dense whitespace must collapse to one space"
+            );
+            assert_eq!(
+                projection.segments().len(),
+                1,
+                "dense whitespace must store one collapsed run"
+            );
+            black_box(projection);
+        }
+    });
+    report_profile("projection-collapse", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_projection_expansion(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec!["İ".to_string(); operations];
+    let elapsed = measure(|| {
+        for source in sources {
+            let mut builder = ProjectionBuilder::new(source).expect("expansion source is valid");
+            builder
+                .push_replacement(2, "i\u{307}")
+                .expect("one-to-many expansion is valid");
+            let projection = builder.finish().expect("expansion source is covered");
+            assert_eq!(
+                projection.text(),
+                "i\u{307}",
+                "expansion must retain the requested presentation scalars"
+            );
+            assert_eq!(
+                projection.segments().len(),
+                1,
+                "one expansion must store one replacement run"
+            );
+            black_box(projection);
+        }
+    });
+    report_profile("projection-expansion", rounds, label_count, elapsed);
+    Ok(())
 }
 
 fn profile_setup_identical(

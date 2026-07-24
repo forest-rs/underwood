@@ -510,14 +510,14 @@ fn prepare_paragraph_geometry(
         .iter()
         .map(|style| (*style).clone())
         .collect();
-    let text_len = u32::try_from(projection.text.len())
+    let text_len = u32::try_from(projection.mapping.text().len())
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
     let constraints = ParagraphConstraints::new(constraint);
     let output = match paragraphs.form(
         ParagraphInput::new(
             paragraph.id,
             projection.paragraph_style,
-            &projection.text,
+            projection.mapping.text(),
             &shaping_styles,
             &projection.shaping_runs,
             &projection.inline_flow_styles,
@@ -544,7 +544,7 @@ fn prepare_paragraph_geometry(
         return Err(error);
     }
     record_formation_work(work, output.work());
-    if projection.text.is_empty() && !formation_matches {
+    if projection.mapping.text().is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
     let geometry = match build_geometry(output.paragraph(), projection) {
@@ -557,7 +557,7 @@ fn prepare_paragraph_geometry(
     work.geometry.add_paragraph(geometry.fragments.len());
     let formation_key = FormationKey::new(
         paragraph.version,
-        projection.text.clone(),
+        alloc::string::String::from(projection.mapping.text()),
         shaping_styles,
         projection.shaping_runs.clone(),
         projection.inline_flow_styles.clone(),
@@ -651,7 +651,7 @@ impl FormationKey {
         constraint: TextConstraint,
     ) -> bool {
         self.version == version
-            && self.text == projection.text
+            && self.text == projection.mapping.text()
             && self.source_map == ProjectionSourceKey::from_projection(projection)
             && self.shaping_styles.len() == projection.shaping_styles.len()
             && self

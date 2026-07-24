@@ -65,6 +65,12 @@ interaction-materialization i0
 width-churn w0
 region-ready g0
 identity-churn h0
+projection-identity-setup q0
+projection-identity q1
+projection-collapse-setup q2
+projection-collapse q3
+projection-expansion-setup q4
+projection-expansion q5
 SCENARIOS
 
 awk '
@@ -101,5 +107,14 @@ awk '
         print "identity-churn", \
             calls["identity-churn"] - calls["setup-identity"], \
             bytes["identity-churn"] - bytes["setup-identity"]
+        print "projection-identity", \
+            calls["projection-identity"] - calls["projection-identity-setup"], \
+            bytes["projection-identity"] - bytes["projection-identity-setup"]
+        print "projection-collapse", \
+            calls["projection-collapse"] - calls["projection-collapse-setup"], \
+            bytes["projection-collapse"] - bytes["projection-collapse-setup"]
+        print "projection-expansion", \
+            calls["projection-expansion"] - calls["projection-expansion-setup"], \
+            bytes["projection-expansion"] - bytes["projection-expansion-setup"]
     }
 ' "$results"

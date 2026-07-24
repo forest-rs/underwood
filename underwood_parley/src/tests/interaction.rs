@@ -133,6 +133,94 @@ fn interaction_map_groups_combining_source_and_keeps_whitespace() {
 }
 
 #[test]
+fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_owner() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"collapse-leaves1"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    let first = edit
+        .append_text(paragraph, InlineRole::TEXT, "a ")
+        .expect("first leaf is valid");
+    let second = edit
+        .append_text(paragraph, InlineRole::EMPHASIS, "\t\r\n b")
+        .expect("second leaf is valid");
+    edit.commit().expect("fixture edit is valid");
+
+    let first_style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let mut styles = StyleMap::new(first_style.clone()).with_default_paragraph_style(
+        ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
+    );
+    styles.set(first, first_style.clone());
+    styles.set(second, first_style.with_paint(PaintSlot::new(1)));
+    let paint = PaintTable::from_brushes([
+        Brush::Solid(Color::BLACK),
+        Brush::Solid(Color::from_rgb8(0xff, 0x00, 0x00)),
+    ]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let output = fixture_engine()
+        .prepare(&document.snapshot(), &request)
+        .expect("cross-leaf whitespace collapse must prepare");
+    let scene = output.scene();
+    let line = &scene.lines()[0];
+    let y = line.bounds().center().y;
+
+    let mut collapsed_hits = Vec::new();
+    let mut x = line.bounds().x0;
+    while x <= line.bounds().x1 {
+        if let Some(hit) = scene.hit_test(Point::new(x, y))
+            && hit.source().sources().len() == 2
+        {
+            if collapsed_hits
+                .last()
+                .is_none_or(|position| position != hit.position())
+            {
+                collapsed_hits.push(*hit.position());
+            }
+            assert_eq!(hit.source().sources()[0].text(), first);
+            assert_eq!(hit.source().sources()[0].bytes(), 1..2);
+            assert_eq!(hit.source().sources()[1].text(), second);
+            assert_eq!(hit.source().sources()[1].bytes(), 0..4);
+        }
+        x += 0.05;
+    }
+    assert_eq!(
+        collapsed_hits.len(),
+        2,
+        "one collapsed presentation space must expose its two authored sides"
+    );
+
+    let selection = scene
+        .selection(
+            &collapsed_hits[0],
+            &collapsed_hits[1],
+            TextSelectionMode::Logical,
+        )
+        .expect("the collapsed unit must be selectable");
+    assert_eq!(selection.ranges().len(), 2);
+    assert_eq!(selection.ranges()[0].text(), first);
+    assert_eq!(selection.ranges()[0].bytes(), 1..2);
+    assert_eq!(selection.ranges()[1].text(), second);
+    assert_eq!(selection.ranges()[1].bytes(), 0..4);
+
+    let collapsed_fragment = scene
+        .fragments()
+        .iter()
+        .find(|fragment| fragment.sources().count() == 2)
+        .expect("the collapsed space must retain both source leaves");
+    assert_eq!(
+        collapsed_fragment.paint(),
+        PaintSlot::new(0),
+        "the first authored contributor owns transformed style and paint"
+    );
+}
+
+#[test]
 fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
     let mut document = Document::new(DocumentId::from_bytes(*b"split-grapheme-1"));
     let mut edit = document.edit();

@@ -22,6 +22,7 @@ use crate::{
     ProjectedTextSource, Rect, SceneErrorKind, SceneRequest, ShapingStyle, SnapshotTextPosition,
     SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind,
     SurfaceTextEncoding, TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2,
+    WhitespaceCollapse,
 };
 
 #[derive(Debug)]
@@ -517,6 +518,79 @@ fn paragraph_style_override_from_another_document_is_rejected() {
         .prepare(&first.snapshot(), &request)
         .expect_err("a foreign paragraph style must not be silently ignored");
     assert_eq!(error.kind(), SceneErrorKind::InvalidStyle);
+}
+
+#[test]
+fn composition_whitespace_collapse_retains_complete_generated_provenance() {
+    let (document, mut styles, paint) = one_leaf_document(*b"collapse-preedt1", "x");
+    let snapshot = document.snapshot();
+    let paragraph = snapshot.paragraphs()[0].id;
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
+    );
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed collapse fixture must prepare");
+    let left = committed
+        .scene()
+        .hit_test(Point::new(0.1, 1.0))
+        .expect("left side must hit");
+    let right = committed
+        .scene()
+        .hit_test(Point::new(9.9, 1.0))
+        .expect("right side must hit");
+    let selection = committed
+        .scene()
+        .selection(
+            left.position(),
+            right.position(),
+            TextSelectionMode::Logical,
+        )
+        .expect("fixture source must select");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("fixture selection must validate");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"collapse-preedt1"))
+        .expect("composition must begin")
+        .into_session();
+    session
+        .update(
+            session.epoch(),
+            CompositionUpdate::new("\t\r\n").with_selection(3..3),
+        )
+        .expect("whitespace preedit must update");
+
+    let transient = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("collapsed whitespace preedit must prepare");
+    let source = transient.scene().fragments()[0]
+        .source()
+        .expect("generated glyph must retain provenance");
+    let [ProjectedTextSource::Composition(range)] = source.sources() else {
+        panic!("collapsed preedit must have one generated source range");
+    };
+    assert_eq!(
+        range.bytes(),
+        0..3,
+        "one display space must retain every generated whitespace byte"
+    );
+    assert_eq!(range.id(), session.id());
+    assert_eq!(range.epoch(), session.epoch());
 }
 
 #[test]

@@ -15,6 +15,7 @@ mod composition;
 mod document;
 mod editable;
 mod error;
+mod projection;
 mod scene;
 mod selection;
 mod style;
@@ -42,6 +43,10 @@ pub use parlance::{
     FontWidth, GenericFamily, Language, Script, Tag,
 };
 pub use peniko::{Brush, Color, FontData};
+pub use projection::{
+    ProjectedText, ProjectionBuilder, ProjectionError, ProjectionErrorKind, ProjectionKind,
+    ProjectionSegment, ProjectionSegments, WhitespaceCollapse,
+};
 pub use scene::{
     CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
     ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,

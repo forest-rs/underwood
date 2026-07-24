@@ -174,6 +174,51 @@ styles.set_paragraph_style(
 Changing paragraph direction invalidates Unicode analysis for that paragraph.
 Changing only line height reuses accepted line glyphs and recomputes metrics.
 
+## Source-complete text projection
+
+[`ProjectedText`] is a small `no_std + alloc` transformation kernel independent
+of documents, scenes, paint, and paragraph engines. It retains authored UTF-8,
+presentation UTF-8, and compact monotonic relation runs for identity,
+replacement, collapse, omission, and insertion. Position lookup uses explicit
+[`TextAffinity`] at ambiguous transformed boundaries.
+
+Identity projection keeps one string allocation rather than cloning it.
+Custom transformations use [`ProjectionBuilder`], which rejects incomplete
+source coverage and invalid UTF-8 boundaries:
+
+```rust
+use underwood::{ProjectedText, ProjectionBuilder, TextAffinity};
+
+let mut builder = ProjectionBuilder::new("İ")?;
+builder.push_replacement(2, "i\u{307}")?;
+let projected = builder.finish()?;
+
+assert_eq!(projected.text(), "i\u{307}");
+assert_eq!(projected.source_range(0..1)?, 0..2);
+assert_eq!(
+    projected.source_position(1, TextAffinity::Downstream)?,
+    0,
+);
+# Ok::<(), underwood::ProjectionError>(())
+```
+
+The document preparation path uses this same kernel. Whitespace preservation
+remains the default. A host opts into paragraph-stream collapse with:
+
+```rust
+use underwood::{ParagraphStyle, WhitespaceCollapse};
+
+let paragraph_style = ParagraphStyle::DEFAULT
+    .with_whitespace_collapse(WhitespaceCollapse::Collapse);
+```
+
+Collapse recognizes space, tab, carriage return, line feed, and form feed,
+turning each maximal run into one ASCII space without trimming line edges.
+State crosses inline leaf boundaries. The first authored contributor owns the
+collapsed unit's style and semantic identity, while hits, selections, edits,
+accessibility records, and renderer/export provenance retain every
+contributing leaf-local range.
+
 ## Composition epochs and editable surfaces
 
 [`TextScene::begin_composition`] creates a transient [`CompositionSession`]
