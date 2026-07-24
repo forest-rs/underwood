@@ -23,6 +23,7 @@ ime-composition	active	executable	project	docs/design/0009-interactive-snapshot-
 source-complete-grapheme-interaction	active	executable	project	docs/design/0011-source-complete-grapheme-interaction.md	underwood/src/adapter.rs;underwood/src/document.rs;underwood/src/scene.rs;underwood_parley/src/lib.rs;examples/showcase/src/content.rs;examples/showcase/src/interaction.rs;docs/proof/source-complete-grapheme-interaction-review-2026-07-24.md	living-agent-document
 retained-text-block-intrinsics	active	executable	project	docs/design/0012-retained-text-block-and-intrinsic-layout.md	underwood/src/block.rs;underwood/src/style.rs;underwood/src/scene.rs;underwood_parley/src/lib.rs;benches/labels/src/main.rs;docs/proof/text-block-wind-tunnel-2026-07-24.md;docs/proof/text-block-review-2026-07-24.md;docs/proof/text-block-real-vs-mirage-2026-07-24.md	-
 reusable-text-tools	gated	specified	project	docs/design/0014-reusable-text-preparation-and-line-layout.md	docs/adr/0005-reusable-text-preparation-pipeline.md	-
+css-text-semantic-profile	dormant	specified	project	docs/design/0015-css-text-semantic-profile.md	-	-
 projected-text	gated	specified	project	docs/design/0014-reusable-text-preparation-and-line-layout.md#projected-text	-	-
 cross-identity-text-reuse	gated	specified	project	docs/design/0014-reusable-text-preparation-and-line-layout.md#cross-identity-preparation-reuse	-	-
 reusable-line-formation	gated	specified	project	docs/design/0014-reusable-text-preparation-and-line-layout.md#reusable-line-formation	-	-

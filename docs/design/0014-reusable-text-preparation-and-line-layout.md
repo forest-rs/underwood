@@ -4,6 +4,7 @@
 - **Date:** 2026-07-24
 - **Bead:** `und-oh0.13`
 - **Extends:** Design-0013, ADR-0002, ADR-0004
+- **CSS profile:** Design-0015
 
 ## Overview
 
