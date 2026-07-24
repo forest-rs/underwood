@@ -10,7 +10,9 @@
 - **Bead:** `und-oh0.10.2.6`
 - **Dependency watch:** no dependency added
 - **Local gate:** complete
-- **Remote gate:** pending pull-request and merge-group matrices
+- **Remote gate:** head run `30030655809` and merge-group run `30060216305`
+  passed all eight jobs
+- **Landed:** PR #20, squash commit `23b94c6`
 
 ## Overview
 
@@ -255,3 +257,10 @@ The native application also builds and runs with
 `cargo run --release -p underwood_showcase`. Visual inspection confirms that
 the semantic-leaf split does not change the rendered specimen, Arabic marks
 remain present, and the document retains its prior layout.
+
+GitHub Actions repeated the eight-job matrix on the final pull-request head
+across Linux, macOS, Windows, Rust 1.92, denied-warning rustdoc, repository
+policy, bare metal, and WebAssembly in run `30030655809`. Merge-group run
+`30060216305` repeated the same matrix against the synthesized queue head.
+PR #20 then landed through the protected merge queue as squash commit
+`23b94c6`.

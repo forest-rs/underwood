@@ -369,3 +369,5 @@ emoji/complex-script interaction corpus is `4c527d3`. The requirement-by-
 requirement review, honest font-proof boundary, public migration handoff, and
 gate record live in
 `docs/proof/source-complete-grapheme-interaction-review-2026-07-24.md`.
+The complete branch landed through protected PR and merge-group matrices as
+PR #20, squash commit `23b94c6`.
