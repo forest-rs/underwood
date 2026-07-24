@@ -14,12 +14,12 @@ use imaging::peniko::{Color, Fill, Style};
 use imaging::{PaintSink, Painter, RgbaImage, record};
 use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{
-    Brush, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature, FontStyle,
-    FontVariation, FontWeight, FontWidth, InlineFlowStyle, InlineRole, Language, LayoutEngine,
-    LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap,
-    Tag, TextId, TextScene, adapter::LineBreakReason,
+    Brush, CacheBudget, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature,
+    FontStyle, FontVariation, FontWeight, FontWidth, InlineFlowStyle, InlineRole, Language,
+    LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script,
+    ShapingStyle, StyleMap, Tag, TextConstraint, TextId, TextScene, adapter::LineBreakReason,
 };
-use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
+use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 const WIDTH: u16 = 1_600;
 const HEIGHT: u16 = 1_000;
@@ -440,8 +440,8 @@ fn layout_engine() -> Result<LayoutEngine, AnyError> {
         Some(arabic),
         ["Noto Kufi Arabic"],
     )?;
-    let paragraphs = ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)?;
-    Ok(LayoutEngine::new(paragraphs))
+    let paragraphs = ParleyParagraphEngine::new(fonts);
+    Ok(LayoutEngine::new(paragraphs, CacheBudget::new(256)))
 }
 
 fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> {
@@ -463,7 +463,11 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     styles.set(prefix, base.clone().with_paint(CORAL));
     styles.set(suffix, base.with_paint(CYAN));
     let paint = poster_paints();
-    let request = SceneRequest::new(FiniteWidth::new(700.0)?, &styles, &paint);
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(700.0)?),
+        &styles,
+        &paint,
+    );
     let initial = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
         glyph_count(initial.scene(), suffix),
@@ -495,7 +499,11 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     );
 
     let recolored = paint.with_brush(CYAN, Brush::Solid(GOLD_COLOR))?;
-    let paint_request = SceneRequest::new(FiniteWidth::new(700.0)?, &styles, &recolored);
+    let paint_request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(700.0)?),
+        &styles,
+        &recolored,
+    );
     let paint_only = layout.prepare(changed.snapshot(), &paint_request)?;
     assert_eq!(
         paint_only.work().analysis().paragraphs(),
@@ -613,7 +621,11 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
     styles.set(arabic_text, arabic_style);
 
     let paints = poster_paints();
-    let request = SceneRequest::new(FiniteWidth::new(1_350.0)?, &styles, &paints);
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(1_350.0)?),
+        &styles,
+        &paints,
+    );
     let output = layout.prepare(published.snapshot(), &request)?;
     let scene = output.scene();
 
@@ -772,7 +784,11 @@ fn layout_scene(
         styles.set(text, base.clone().with_paint(paint));
     }
     let paints = poster_paints();
-    let request = SceneRequest::new(FiniteWidth::new(width)?, &styles, &paints);
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(width)?),
+        &styles,
+        &paints,
+    );
     let output = layout.prepare(published.snapshot(), &request)?;
     Ok(output.scene().clone())
 }

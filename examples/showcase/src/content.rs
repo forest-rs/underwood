@@ -5,13 +5,13 @@
 
 use imaging::peniko::Gradient;
 use underwood::{
-    Brush, Color, CompositionScene, CompositionSession, ComputedInlineStyle, Document, DocumentId,
-    DocumentSnapshot, FiniteWidth, FontFeature, FontVariation, FontWeight, InlineFlowStyle,
-    InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole,
-    SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap, Tag, TextId, TextScene,
-    WorkReport,
+    Brush, CacheBudget, Color, CompositionScene, CompositionSession, ComputedInlineStyle, Document,
+    DocumentId, DocumentSnapshot, FiniteWidth, FontFeature, FontVariation, FontWeight,
+    InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable,
+    ParagraphRole, SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap, Tag,
+    TextConstraint, TextId, TextScene, WorkReport,
 };
-use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
+use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 const LATIN_FONT_BYTES: &[u8] = include_bytes!("../../headless/fonts/RobotoFlex-VariableFont.ttf");
 const ARABIC_FONT_BYTES: &[u8] = include_bytes!("../../headless/fonts/NotoKufiArabic-Regular.otf");
@@ -132,7 +132,7 @@ impl ShowcaseContent {
                 Some(arabic),
                 ["Noto Kufi Arabic"],
             )?;
-        let paragraphs = ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)?;
+        let paragraphs = ParleyParagraphEngine::new(fonts);
 
         let mut document = Document::new(DocumentId::from_bytes(*b"underwood-live-1"));
         let mut edit = document.edit();
@@ -227,7 +227,7 @@ impl ShowcaseContent {
 
         Ok(Self {
             document,
-            layout: LayoutEngine::new(paragraphs),
+            layout: LayoutEngine::new(paragraphs, CacheBudget::new(4_096)),
             leaves: Leaves {
                 title,
                 deck,
@@ -265,7 +265,11 @@ impl ShowcaseContent {
         let axis_weight = 100.0 + axis_phase.clamp(0.0, 1.0) * 800.0;
         let styles = self.styles(axis_weight)?;
         let paints = paint_table(self.alternate_paint);
-        let request = SceneRequest::new(FiniteWidth::new(width)?, &styles, &paints);
+        let request = SceneRequest::new(
+            TextConstraint::Wrap(FiniteWidth::new(width)?),
+            &styles,
+            &paints,
+        );
         let output = self.layout.prepare(&self.document.snapshot(), &request)?;
         Ok(PreparedDocumentFrame {
             line_count: output.scene().lines().len(),
@@ -285,7 +289,11 @@ impl ShowcaseContent {
         let axis_weight = 100.0 + axis_phase.clamp(0.0, 1.0) * 800.0;
         let styles = self.styles(axis_weight)?;
         let paints = paint_table(self.alternate_paint);
-        let request = SceneRequest::new(FiniteWidth::new(width)?, &styles, &paints);
+        let request = SceneRequest::new(
+            TextConstraint::Wrap(FiniteWidth::new(width)?),
+            &styles,
+            &paints,
+        );
         let output =
             self.layout
                 .prepare_composition(&self.document.snapshot(), &request, composition)?;

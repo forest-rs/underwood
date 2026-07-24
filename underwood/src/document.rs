@@ -12,7 +12,11 @@ use crate::{
 };
 
 /// Opaque identity of one document.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+///
+/// Independent live documents used with the same layout engine must have
+/// distinct identities. Revisions and retained paragraph caches are scoped by
+/// this value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DocumentId([u8; 16]);
 
 impl DocumentId {
@@ -32,7 +36,7 @@ impl DocumentId {
 pub struct DocumentRevision(pub(crate) u64);
 
 /// Opaque identity of a paragraph within one document.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ParagraphId {
     pub(crate) document: DocumentId,
     pub(crate) index: u32,

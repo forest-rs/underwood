@@ -6,6 +6,7 @@
 
 extern crate alloc;
 
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cell::Cell;
@@ -31,7 +32,7 @@ use underwood::adapter::{
 };
 use underwood::{
     FontData, FontFamilyName, FontVariation, GenericFamily, InlineFlowStyle, Language, ParagraphId,
-    Script, ShapingStyle, Tag, Vec2,
+    Script, ShapingStyle, Tag, TextConstraint, Vec2,
 };
 
 /// Owned validated font bytes and a face within them.
@@ -191,40 +192,25 @@ fn resolve_family_ids(
         .collect()
 }
 
-/// Immutable Unicode-data configuration for the compiled minimal path.
-#[derive(Clone, Debug, Default)]
-pub struct TextData {
-    _private: (),
-}
-
-impl TextData {
-    /// Returns the first-slice compiled minimal configuration.
-    #[must_use]
-    pub fn compiled_minimal() -> Self {
-        Self::default()
-    }
-}
-
 /// Retained Parley Core paragraph adapter.
 #[derive(Debug)]
 pub struct ParleyParagraphEngine {
-    _data: TextData,
     fonts: FontSet,
     analyzer: Analyzer,
     shaper: Shaper,
-    cache: Vec<PhysicsCache>,
+    cache: BTreeMap<ParagraphId, PhysicsCache>,
 }
 
 impl ParleyParagraphEngine {
-    /// Creates a retained adapter from immutable text data and fonts.
-    pub fn new(data: TextData, fonts: FontSet) -> Result<Self, AdapterError> {
-        Ok(Self {
-            _data: data,
+    /// Creates a retained adapter from an immutable font snapshot.
+    #[must_use]
+    pub fn new(fonts: FontSet) -> Self {
+        Self {
             fonts,
             analyzer: Analyzer::new(),
             shaper: Shaper::default(),
-            cache: Vec::new(),
-        })
+            cache: BTreeMap::new(),
+        }
     }
 }
 
@@ -235,60 +221,68 @@ impl ParagraphFormation for ParleyParagraphEngine {
         constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, PreparationError> {
         validate_input_runs(&input)?;
-        let existing_index = self
+        let paragraph = input.paragraph();
+        let analyzed = self
             .cache
-            .iter()
-            .position(|entry| entry.paragraph == input.paragraph());
-        let (cache_index, analyzed) = if let Some(index) = existing_index {
-            if self.cache[index].text.as_ref() == input.text() {
-                (index, false)
-            } else {
-                let analysis = analyze_text(&mut self.analyzer, input.text());
-                let interaction_units = collect_analysis_units(input.text(), &analysis)?;
-                self.cache[index].text = Arc::from(input.text());
-                self.cache[index].analysis = analysis;
-                self.cache[index].interaction_units = interaction_units;
-                self.cache[index].shaping_styles.clear();
-                self.cache[index].shaping_runs.clear();
-                self.cache[index].shaped_text.clear();
-                self.cache[index].formed_text.clear();
-                self.cache[index].scripts.clear();
-                self.cache[index].logical_clusters.clear();
-                self.cache[index].formed_clusters.clear();
-                self.cache[index].line_plans.clear();
-                (index, true)
-            }
-        } else {
+            .get(&paragraph)
+            .is_none_or(|entry| entry.text.as_ref() != input.text());
+        if analyzed {
             let analysis = analyze_text(&mut self.analyzer, input.text());
             let interaction_units = collect_analysis_units(input.text(), &analysis)?;
-            self.cache.push(PhysicsCache {
-                paragraph: input.paragraph(),
-                text: Arc::from(input.text()),
-                analysis,
-                interaction_units,
-                shaping_styles: Vec::new(),
-                shaping_runs: Vec::new(),
-                shaped_text: ShapedText::new(),
-                formed_text: ShapedText::new(),
-                scripts: Vec::new(),
-                logical_clusters: Vec::new(),
-                formed_clusters: Vec::new(),
-                selected_clusters: 0,
-                inline_flow_styles: Vec::new(),
-                inline_flow_runs: Vec::new(),
-                max_inline_advance: 0,
-                line_plans: Vec::new(),
-                break_reshapes: 0,
-            });
-            (self.cache.len() - 1, true)
-        };
+            if let Some(cache) = self.cache.get_mut(&paragraph) {
+                cache.text = Arc::from(input.text());
+                cache.analysis = analysis;
+                cache.interaction_units = interaction_units;
+                cache.shaping_styles.clear();
+                cache.shaping_runs.clear();
+                cache.shaped_text.clear();
+                cache.formed_text.clear();
+                cache.scripts.clear();
+                cache.logical_clusters.clear();
+                cache.formed_clusters.clear();
+                cache.inline_flow_styles.clear();
+                cache.inline_flow_runs.clear();
+                cache.constraints = None;
+                cache.line_plans.clear();
+                cache.break_reshapes = 0;
+            } else {
+                self.cache.insert(
+                    paragraph,
+                    PhysicsCache {
+                        text: Arc::from(input.text()),
+                        analysis,
+                        interaction_units,
+                        shaping_styles: Vec::new(),
+                        shaping_runs: Vec::new(),
+                        shaped_text: ShapedText::new(),
+                        formed_text: ShapedText::new(),
+                        scripts: Vec::new(),
+                        logical_clusters: Vec::new(),
+                        formed_clusters: Vec::new(),
+                        selected_clusters: 0,
+                        inline_flow_styles: Vec::new(),
+                        inline_flow_runs: Vec::new(),
+                        constraints: None,
+                        line_plans: Vec::new(),
+                        break_reshapes: 0,
+                    },
+                );
+            }
+        }
 
-        let shaped = self.cache[cache_index].shaping_styles != input.shaping_styles()
-            || self.cache[cache_index].shaping_runs != input.shaping_runs();
+        let physics = self
+            .cache
+            .get(&paragraph)
+            .ok_or_else(PreparationError::invalid_output)?;
+        let shaped = physics.shaping_styles != input.shaping_styles()
+            || physics.shaping_runs != input.shaping_runs();
         if shaped {
-            self.cache[cache_index].shaping_styles.clear();
-            self.cache[cache_index].shaping_runs.clear();
-            let cache = &mut self.cache[cache_index];
+            let cache = self
+                .cache
+                .get_mut(&paragraph)
+                .ok_or_else(PreparationError::invalid_output)?;
+            cache.shaping_styles.clear();
+            cache.shaping_runs.clear();
             let selected_clusters = shape_paragraph(
                 &mut self.shaper,
                 &cache.analysis,
@@ -308,13 +302,19 @@ impl ParagraphFormation for ParleyParagraphEngine {
             cache.line_plans.clear();
         }
 
+        let physics = self
+            .cache
+            .get(&paragraph)
+            .ok_or_else(PreparationError::invalid_output)?;
         let needs_formation = shaped
-            || self.cache[cache_index].inline_flow_styles != input.inline_flow_styles()
-            || self.cache[cache_index].inline_flow_runs != input.inline_flow_runs()
-            || self.cache[cache_index].max_inline_advance
-                != constraints.max_inline_advance().to_bits();
+            || physics.inline_flow_styles != input.inline_flow_styles()
+            || physics.inline_flow_runs != input.inline_flow_runs()
+            || physics.constraints != Some(constraints);
         if needs_formation {
-            let cache = &mut self.cache[cache_index];
+            let cache = self
+                .cache
+                .get_mut(&paragraph)
+                .ok_or_else(PreparationError::invalid_output)?;
             cache.formed_text.clone_from(&cache.shaped_text);
             cache.formed_clusters.clone_from(&cache.logical_clusters);
             cache.break_reshapes = form_lines(
@@ -325,15 +325,18 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 &mut cache.formed_clusters,
                 input.inline_flow_styles(),
                 input.inline_flow_runs(),
-                constraints.max_inline_advance(),
+                constraints,
                 &mut cache.line_plans,
             )?;
             cache.inline_flow_styles = input.inline_flow_styles().to_vec();
             cache.inline_flow_runs = input.inline_flow_runs().to_vec();
-            cache.max_inline_advance = constraints.max_inline_advance().to_bits();
+            cache.constraints = Some(constraints);
         }
 
-        let physics = &self.cache[cache_index];
+        let physics = self
+            .cache
+            .get(&paragraph)
+            .ok_or_else(PreparationError::invalid_output)?;
         if physics.formed_text.runs().len() != physics.scripts.len() {
             return Err(PreparationError::invalid_output());
         }
@@ -455,11 +458,22 @@ impl ParagraphFormation for ParleyParagraphEngine {
         );
         Ok(ParagraphFormationOutput::new(paragraph, work))
     }
+
+    fn release(&mut self, paragraph: ParagraphId) {
+        self.cache.remove(&paragraph);
+    }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+    }
+
+    fn retained_entries(&self) -> Option<usize> {
+        Some(self.cache.len())
+    }
 }
 
 #[derive(Debug)]
 struct PhysicsCache {
-    paragraph: ParagraphId,
     text: Arc<str>,
     analysis: Analysis,
     interaction_units: Vec<Range<usize>>,
@@ -473,7 +487,7 @@ struct PhysicsCache {
     selected_clusters: u32,
     inline_flow_styles: Vec<InlineFlowStyle>,
     inline_flow_runs: Vec<InlineFlowRun>,
-    max_inline_advance: u64,
+    constraints: Option<ParagraphConstraints>,
     line_plans: Vec<LinePlan>,
     break_reshapes: u32,
 }
@@ -516,7 +530,7 @@ fn form_lines(
     clusters: &mut Vec<LogicalCluster>,
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
-    max_inline_advance: f64,
+    constraints: ParagraphConstraints,
     plans: &mut Vec<LinePlan>,
 ) -> Result<u32, PreparationError> {
     plans.clear();
@@ -530,7 +544,7 @@ fn form_lines(
     let mut break_reshapes = 0_u32;
     let mut start = 0_usize;
     while start < clusters.len() {
-        let choice = choose_line(clusters, start, max_inline_advance)?;
+        let choice = choose_line(clusters, start, constraints.text())?;
         let (end, advance, reshaped) = if choice.reason == LineBreakReason::Regular {
             commit_regular_break(
                 shaper,
@@ -540,7 +554,7 @@ fn form_lines(
                 clusters,
                 start,
                 choice.end,
-                max_inline_advance,
+                constraints.text(),
             )?
         } else {
             (choice.end, choice.advance, false)
@@ -593,7 +607,7 @@ struct LineChoice {
 fn choose_line(
     clusters: &[LogicalCluster],
     start: usize,
-    max_inline_advance: f64,
+    constraint: TextConstraint,
 ) -> Result<LineChoice, PreparationError> {
     let mut index = start;
     let mut advance = 0.0_f64;
@@ -601,7 +615,16 @@ fn choose_line(
     while index < clusters.len() {
         let cluster = &clusters[index];
         if cluster.boundary == Boundary::Line && !cluster.ligature_component && index > start {
-            last_opportunity = Some((index, advance));
+            if constraint == TextConstraint::MinContent {
+                return Ok(LineChoice {
+                    end: index,
+                    reason: LineBreakReason::Regular,
+                    advance,
+                });
+            }
+            if matches!(constraint, TextConstraint::Wrap(_)) {
+                last_opportunity = Some((index, advance));
+            }
         }
 
         let next_advance = advance + cluster.advance;
@@ -622,7 +645,7 @@ fn choose_line(
             });
         }
 
-        if next_advance > max_inline_advance
+        if matches!(constraint, TextConstraint::Wrap(width) if next_advance > width.get())
             && let Some((end, opportunity_advance)) = last_opportunity
         {
             return Ok(LineChoice {
@@ -649,7 +672,7 @@ fn commit_regular_break(
     clusters: &mut Vec<LogicalCluster>,
     start: usize,
     mut end: usize,
-    max_inline_advance: f64,
+    constraint: TextConstraint,
 ) -> Result<(usize, f64, bool), PreparationError> {
     loop {
         let pos = clusters
@@ -666,7 +689,11 @@ fn commit_regular_break(
             .iter()
             .map(|cluster| cluster.advance)
             .sum();
-        if advance <= max_inline_advance {
+        if match constraint {
+            TextConstraint::MinContent => true,
+            TextConstraint::MaxContent => false,
+            TextConstraint::Wrap(width) => advance <= width.get(),
+        } {
             return Ok((end, advance, reshaped));
         }
 
@@ -2020,20 +2047,21 @@ mod tests {
         PreparedRun,
     };
     use underwood::{
-        Brush, Color, CompositionId, CompositionUpdate, ComputedInlineStyle, Document, DocumentId,
-        EditErrorKind, EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily,
-        FontWeight, GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight,
-        PaintSlot, PaintTable, ParagraphRole, Point, ProjectedTextPosition, ProjectedTextSource,
-        SceneRequest, SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap,
-        SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextMovement, TextScene,
+        BlockRequest, Brush, CacheBudget, Color, CompositionId, CompositionUpdate,
+        ComputedInlineStyle, Document, DocumentId, EditErrorKind, EditableSurface,
+        EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
+        InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot, PaintTable,
+        ParagraphRole, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
+        SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
+        SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
         TextSelectionMode, Vec2,
     };
     use underwood::{Language, Script};
 
     use super::{
-        AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, TextData, analyze_text,
-        choose_line, collect_analysis_units, collect_logical_clusters, commit_regular_break,
-        read_u16, read_u32, split_item_after,
+        AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, analyze_text, choose_line,
+        collect_analysis_units, collect_logical_clusters, commit_regular_break, read_u16, read_u32,
+        split_item_after,
     };
 
     const LATIN_FONT: &[u8] =
@@ -2226,11 +2254,11 @@ mod tests {
             let styles = StyleMap::new(style);
             let paints = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
             let request = SceneRequest::new(
-                FiniteWidth::new(100.0).expect("the proof width is valid"),
+                TextConstraint::Wrap(FiniteWidth::new(100.0).expect("the proof width is valid")),
                 &styles,
                 &paints,
             );
-            let output = LayoutEngine::new(AnalysisCursorProof)
+            let output = LayoutEngine::new(AnalysisCursorProof, CacheBudget::new(32))
                 .prepare(&document.snapshot(), &request)
                 .expect("Parley analysis boundaries must prepare through the public scene path");
             let scene = output.scene();
@@ -2333,11 +2361,10 @@ mod tests {
             Font::from_bytes("latin", LATIN_FONT).expect("fixture font is valid")
         ])
         .expect("fixture catalog is valid");
-        let paragraphs = ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
-            .expect("test adapter is valid");
-        let mut layout = LayoutEngine::new(paragraphs);
+        let paragraphs = ParleyParagraphEngine::new(fonts);
+        let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(32));
         let request = SceneRequest::new(
-            FiniteWidth::new(100.0).expect("test width is finite"),
+            TextConstraint::Wrap(FiniteWidth::new(100.0).expect("test width is finite")),
             &styles,
             &paint,
         );
@@ -2374,7 +2401,7 @@ mod tests {
         let (document, styles, paint) = fixture_document(text, 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(72.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -2413,7 +2440,7 @@ mod tests {
         let (document, styles, paint) = fixture_document(text, 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -2450,7 +2477,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("Ag", 1.5);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -2508,7 +2535,7 @@ mod tests {
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -2544,7 +2571,7 @@ mod tests {
             let (document, styles, paint) = fixture_document(text, 1.2);
             let mut engine = fixture_engine();
             let request = SceneRequest::new(
-                FiniteWidth::new(10.0).expect("test width is valid"),
+                TextConstraint::Wrap(FiniteWidth::new(10.0).expect("test width is valid")),
                 &styles,
                 &paint,
             );
@@ -2574,7 +2601,7 @@ mod tests {
         let (_, spacious_styles, _) = fixture_document(text, 1.8);
         let mut engine = fixture_engine();
         let wide = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &compact_styles,
             &paint,
         );
@@ -2583,7 +2610,7 @@ mod tests {
             .expect("initial formation succeeds");
 
         let narrow = SceneRequest::new(
-            FiniteWidth::new(72.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
             &compact_styles,
             &paint,
         );
@@ -2597,7 +2624,7 @@ mod tests {
         assert_eq!(narrowed.work().flow().paragraphs(), 1);
 
         let spacious = SceneRequest::new(
-            FiniteWidth::new(72.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
             &spacious_styles,
             &paint,
         );
@@ -2625,12 +2652,9 @@ mod tests {
         .expect("fixture catalog is valid")
         .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
         .expect("Arabic fallback is valid");
-        let mut engine = LayoutEngine::new(
-            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
-                .expect("fixture adapter is valid"),
-        );
+        let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
         let wide = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -2645,11 +2669,7 @@ mod tests {
             .map(|glyph| (glyph.id(), glyph.source().bytes()))
             .collect();
 
-        let narrow = SceneRequest::new(
-            FiniteWidth::new(25.0).expect("test width is valid"),
-            &styles,
-            &paint,
-        );
+        let narrow = SceneRequest::new(TextConstraint::MinContent, &styles, &paint);
         let output = engine
             .prepare(&document.snapshot(), &narrow)
             .expect("the legal break reshapes its bounded cursive context");
@@ -2719,7 +2739,10 @@ mod tests {
         clusters = collect_logical_clusters(text, &formed).expect("restored clusters are valid");
 
         let width = (unbroken_advance + broken_advance) * 0.5;
-        let initial = choose_line(&clusters, 0, width).expect("initial selection succeeds");
+        let constraint = TextConstraint::Wrap(
+            FiniteWidth::new(width).expect("derived test width is finite and positive"),
+        );
+        let initial = choose_line(&clusters, 0, constraint).expect("initial selection succeeds");
         assert_eq!(initial.reason, TestLineBreakReason::Regular);
         assert_eq!(initial.end, unsafe_end, "clusters: {clusters:#?}");
         let (committed_end, committed_advance, committed_reshape) = commit_regular_break(
@@ -2730,7 +2753,7 @@ mod tests {
             &mut clusters,
             0,
             unsafe_end,
-            width,
+            constraint,
         )
         .expect("overflowing reshaped break backs up");
         assert_eq!(committed_end, prior_safe);
@@ -2747,7 +2770,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("office مرحبا world", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -2783,7 +2806,7 @@ mod tests {
         let (mut document, styles, paint) = fixture_document(text, 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -2953,7 +2976,7 @@ mod tests {
             let (mut document, styles, paint) = fixture_document(source, 1.2);
             let mut engine = fixture_engine();
             let request = SceneRequest::new(
-                FiniteWidth::new(1_000.0).expect("test width is valid"),
+                TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
                 &styles,
                 &paint,
             );
@@ -3028,7 +3051,7 @@ mod tests {
         let styles = StyleMap::new(style);
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3112,7 +3135,7 @@ mod tests {
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let snapshot = document.snapshot();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3216,7 +3239,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("Aé office", 1.2);
         let snapshot = document.snapshot();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3330,7 +3353,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("eX", 1.2);
         let snapshot = document.snapshot();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3376,7 +3399,7 @@ mod tests {
 
         let (authored, authored_styles, authored_paint) = fixture_document("e\u{301}X", 1.2);
         let authored_request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &authored_styles,
             &authored_paint,
         );
@@ -3489,7 +3512,7 @@ mod tests {
         let styles = StyleMap::new(style);
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3523,7 +3546,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("office", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3574,7 +3597,7 @@ mod tests {
             let (document, styles, paint) = fixture_document(text, 1.2);
             let mut engine = fixture_engine();
             let request = SceneRequest::new(
-                FiniteWidth::new(1_000.0).expect("test width is valid"),
+                TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
                 &styles,
                 &paint,
             );
@@ -3615,7 +3638,7 @@ mod tests {
         let styles = StyleMap::new(style);
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3706,7 +3729,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("مرحبا", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3736,7 +3759,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("alpha beta gamma", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(72.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3786,7 +3809,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3824,7 +3847,7 @@ mod tests {
         let styles = StyleMap::new(style);
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3863,7 +3886,7 @@ mod tests {
         let styles = StyleMap::new(style);
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3911,7 +3934,7 @@ mod tests {
         let (mut document, styles, paint) = fixture_document("abc", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3945,7 +3968,7 @@ mod tests {
         let (document, styles, paint) = fixture_document(text, 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3971,7 +3994,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("a\n", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4057,7 +4080,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("ب", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4083,7 +4106,7 @@ mod tests {
         let (document, styles, paint) = fixture_document("j office ب", 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4129,12 +4152,9 @@ mod tests {
             Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid")
         ])
         .expect("fixture catalog is valid");
-        let mut engine = LayoutEngine::new(
-            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
-                .expect("fixture adapter is valid"),
-        );
+        let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4172,12 +4192,9 @@ mod tests {
         ])
         .expect("fixture catalog is valid")
         .with_system_fonts();
-        let mut engine = LayoutEngine::new(
-            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
-                .expect("system-font adapter is valid"),
-        );
+        let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4220,7 +4237,7 @@ mod tests {
             Brush::Solid(Color::from_rgba8(0xff, 0x00, 0x00, 0xff)),
         ]);
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4239,7 +4256,7 @@ mod tests {
         let (document, styles, paint) = fixture_document(text, 1.2);
         let mut engine = fixture_engine();
         let request = SceneRequest::new(
-            FiniteWidth::new(1_000.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4264,7 +4281,260 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
+        let (document, styles, paint) = fixture_document("alpha beta\ngamma delta", 1.2);
+        let mut engine = fixture_engine();
+
+        let max = engine
+            .prepare(
+                &document.snapshot(),
+                &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            )
+            .expect("max-content formation succeeds");
+        assert_eq!(max.scene().lines().len(), 2);
+        assert_eq!(
+            max.scene().lines()[0].break_reason(),
+            TestLineBreakReason::Mandatory
+        );
+        assert_eq!(
+            max.scene().lines()[1].break_reason(),
+            TestLineBreakReason::End
+        );
+        assert_eq!(
+            max.scene().metrics().size().width,
+            max.scene()
+                .lines()
+                .iter()
+                .map(|line| line.advance())
+                .fold(0.0_f64, f64::max)
+        );
+        assert_eq!(
+            max.scene().metrics().size().height,
+            max.scene().lines().last().expect("line exists").bounds().y1
+        );
+        assert_eq!(
+            max.scene().metrics().first_baseline(),
+            Some(max.scene().lines()[0].baseline())
+        );
+        assert_eq!(
+            max.scene().metrics().last_baseline(),
+            Some(max.scene().lines()[1].baseline())
+        );
+
+        let min = engine
+            .prepare(
+                &document.snapshot(),
+                &SceneRequest::new(TextConstraint::MinContent, &styles, &paint),
+            )
+            .expect("min-content formation succeeds");
+        assert_eq!(min.work().analysis().paragraphs(), 0);
+        assert_eq!(min.work().shape().paragraphs(), 0);
+        assert_eq!(min.work().flow().paragraphs(), 1);
+        assert!(min.scene().lines().len() > max.scene().lines().len());
+        assert!(min.scene().metrics().size().width <= max.scene().metrics().size().width);
+        assert!(min.scene().metrics().size().height >= max.scene().metrics().size().height);
+
+        let wrapped = engine
+            .prepare(
+                &document.snapshot(),
+                &SceneRequest::new(
+                    TextConstraint::Wrap(
+                        FiniteWidth::new(90.0).expect("test width is finite and positive"),
+                    ),
+                    &styles,
+                    &paint,
+                ),
+            )
+            .expect("constrained formation succeeds");
+        assert_eq!(wrapped.work().shape().paragraphs(), 0);
+        assert!(
+            wrapped
+                .scene()
+                .lines()
+                .iter()
+                .all(|line| line.advance() <= 90.0)
+        );
+    }
+
+    #[test]
+    fn text_block_matches_document_path_and_empty_metrics_are_explicit() {
+        let text = "office مرحبا";
+        let (document, styles, paint) = fixture_document(text, 1.2);
+        let style = styles.default_style().clone();
+        let block = TextBlock::plain(DocumentId::from_bytes(*b"text-block-proof"), text)
+            .expect("block initializes");
+        let mut engine = fixture_engine();
+        let document_output = engine
+            .prepare(
+                &document.snapshot(),
+                &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            )
+            .expect("document prepares");
+        let block_output = engine
+            .prepare_block(
+                &block.snapshot(),
+                &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            )
+            .expect("block prepares");
+        assert_eq!(
+            block_output.scene().metrics(),
+            document_output.scene().metrics()
+        );
+        assert_eq!(
+            block_output
+                .scene()
+                .lines()
+                .iter()
+                .map(|line| (line.advance(), line.break_reason(), line.baseline()))
+                .collect::<Vec<_>>(),
+            document_output
+                .scene()
+                .lines()
+                .iter()
+                .map(|line| (line.advance(), line.break_reason(), line.baseline()))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            block_output
+                .scene()
+                .fragments()
+                .iter()
+                .flat_map(|fragment| fragment.glyphs())
+                .map(|glyph| (glyph.id(), glyph.position(), glyph.advance()))
+                .collect::<Vec<_>>(),
+            document_output
+                .scene()
+                .fragments()
+                .iter()
+                .flat_map(|fragment| fragment.glyphs())
+                .map(|glyph| (glyph.id(), glyph.position(), glyph.advance()))
+                .collect::<Vec<_>>()
+        );
+
+        let empty = TextBlock::plain(DocumentId::from_bytes(*b"empty-block-test"), "")
+            .expect("empty block initializes");
+        let empty_output = engine
+            .prepare_block(
+                &empty.snapshot(),
+                &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            )
+            .expect("empty block prepares");
+        assert_eq!(empty_output.scene().metrics().size().width, 0.0);
+        assert!(
+            (empty_output.scene().metrics().size().height - 24.0).abs() < 0.001,
+            "empty height must be the resolved 20px × 1.2 line height"
+        );
+        assert_eq!(empty_output.scene().metrics().first_baseline(), None);
+        assert_eq!(empty_output.scene().metrics().last_baseline(), None);
+        assert!(empty_output.scene().lines().is_empty());
+    }
+
+    #[test]
+    fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
+        let (_, styles, paint) = fixture_document("cache", 1.2);
+        let style = styles.default_style().clone();
+        let blocks = [
+            TextBlock::plain(DocumentId::from_bytes(*b"cache-block-0001"), "one")
+                .expect("block initializes"),
+            TextBlock::plain(DocumentId::from_bytes(*b"cache-block-0002"), "two")
+                .expect("block initializes"),
+            TextBlock::plain(DocumentId::from_bytes(*b"cache-block-0003"), "three")
+                .expect("block initializes"),
+        ];
+        let mut engine = fixture_engine_with_budget(2);
+        for block in &blocks {
+            let output = engine
+                .prepare_block(
+                    &block.snapshot(),
+                    &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+                )
+                .expect("block prepares");
+            assert_eq!(output.work().shape().paragraphs(), 1);
+        }
+        let after_churn = engine.cache_diagnostics();
+        assert_eq!(after_churn.current_entries(), 2);
+        assert_eq!(after_churn.backend_entries(), Some(2));
+        assert_eq!(after_churn.evictions(), 1);
+        assert_eq!(after_churn.peak_entries(), 3);
+        assert_eq!(after_churn.budget(), 2);
+        assert_eq!(after_churn.misses(), 3);
+        assert_eq!(after_churn.hits(), 0);
+
+        let retained = engine
+            .prepare_block(
+                &blocks[1].snapshot(),
+                &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            )
+            .expect("resident block prepares");
+        assert_eq!(retained.work().analysis().paragraphs(), 0);
+        assert_eq!(retained.work().shape().paragraphs(), 0);
+        assert_eq!(retained.work().flow().paragraphs(), 0);
+        assert_eq!(engine.cache_diagnostics().hits(), 1);
+
+        engine.release_document(blocks[1].id());
+        let after_release = engine.cache_diagnostics();
+        assert_eq!(after_release.current_entries(), 1);
+        assert_eq!(after_release.backend_entries(), Some(1));
+        assert_eq!(after_release.releases(), 1);
+
+        let reloaded = engine
+            .prepare_block(
+                &blocks[0].snapshot(),
+                &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            )
+            .expect("evicted block prepares again");
+        assert_eq!(reloaded.work().shape().paragraphs(), 1);
+        engine.clear_cache();
+        assert_eq!(engine.cache_diagnostics().current_entries(), 0);
+        assert_eq!(engine.cache_diagnostics().backend_entries(), Some(0));
+
+        let mut zero = fixture_engine_with_budget(0);
+        let owned = zero
+            .prepare_block(
+                &blocks[0].snapshot(),
+                &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            )
+            .expect("zero-budget output still materializes");
+        assert!(!owned.scene().fragments().is_empty());
+        assert_eq!(zero.cache_diagnostics().current_entries(), 0);
+        assert_eq!(zero.cache_diagnostics().backend_entries(), Some(0));
+        assert_eq!(zero.cache_diagnostics().evictions(), 1);
+    }
+
+    #[test]
+    fn failed_first_preparation_releases_untracked_backend_physics() {
+        let (document, styles, paint) = fixture_document("中文", 1.2);
+        let fonts = FontSet::try_from_fonts([
+            Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        ])
+        .expect("fixture catalog is valid");
+        let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
+        engine
+            .prepare(
+                &document.snapshot(),
+                &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            )
+            .expect_err("a catalog without Han coverage must fail");
+
+        let cache = engine.cache_diagnostics();
+        assert_eq!(
+            cache.current_entries(),
+            0,
+            "failed preparation must not create geometry residency"
+        );
+        assert_eq!(
+            cache.backend_entries(),
+            Some(0),
+            "failed preparation must not strand untracked Parley physics"
+        );
+    }
+
     fn fixture_engine() -> LayoutEngine {
+        fixture_engine_with_budget(32)
+    }
+
+    fn fixture_engine_with_budget(budget: usize) -> LayoutEngine {
         let fonts = FontSet::try_from_fonts([
             Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
             Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
@@ -4272,10 +4542,7 @@ mod tests {
         .expect("fixture catalog is valid")
         .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
         .expect("Arabic fallback is valid");
-        LayoutEngine::new(
-            ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)
-                .expect("fixture adapter is valid"),
-        )
+        LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(budget))
     }
 
     fn fixture_document(text: &str, line_height: f32) -> (Document, StyleMap, PaintTable) {

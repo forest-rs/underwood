@@ -7,11 +7,11 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use underwood::{
-    Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, InlineFlowStyle,
-    InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole, SceneRequest, ShapingStyle,
-    StyleMap, TextId,
+    Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth,
+    InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole, SceneRequest,
+    ShapingStyle, StyleMap, TextConstraint, TextId,
 };
-use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
+use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 const PARAGRAPHS: usize = 64;
 const COLD_ITERATIONS: usize = 20;
@@ -28,16 +28,14 @@ struct DocumentFixture {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let fonts = fonts()?;
-    let data = TextData::compiled_minimal();
-
     let fixture = document_fixture()?;
     let snapshot = fixture.document.snapshot();
     let width = FiniteWidth::new(420.0)?;
     let cold = measure(COLD_ITERATIONS, || {
-        let paragraphs = ParleyParagraphEngine::new(data.clone(), fonts.clone())
-            .expect("validated immutable adapter inputs must remain valid");
-        let mut layout = LayoutEngine::new(paragraphs);
-        let request = SceneRequest::new(width, &fixture.styles, &fixture.dark);
+        let paragraphs = ParleyParagraphEngine::new(fonts.clone());
+        let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(PARAGRAPHS));
+        let request =
+            SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
         let output = layout
             .prepare(&snapshot, &request)
             .expect("cold public-path preparation must succeed");
@@ -50,9 +48,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let fixture = document_fixture()?;
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(data.clone(), fonts.clone())?);
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts.clone()),
+        CacheBudget::new(PARAGRAPHS),
+    );
     let snapshot = fixture.document.snapshot();
-    let request = SceneRequest::new(width, &fixture.styles, &fixture.dark);
+    let request = SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
     layout.prepare(&snapshot, &request)?;
     let retained = measure(RETAINED_ITERATIONS, || {
         let output = layout
@@ -77,9 +78,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let fixture = document_fixture()?;
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(data.clone(), fonts.clone())?);
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts.clone()),
+        CacheBudget::new(PARAGRAPHS),
+    );
     let snapshot = fixture.document.snapshot();
-    let request = SceneRequest::new(width, &fixture.styles, &fixture.dark);
+    let request = SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
     layout.prepare(&snapshot, &request)?;
     let mut paint_iteration = 0_usize;
     let paint_only = measure(RETAINED_ITERATIONS, || {
@@ -89,7 +93,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &fixture.dark
         };
         paint_iteration += 1;
-        let request = SceneRequest::new(width, &fixture.styles, paint);
+        let request = SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, paint);
         let output = layout
             .prepare(&snapshot, &request)
             .expect("paint-only public-path preparation must succeed");
@@ -107,11 +111,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let fixture = document_fixture()?;
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(data.clone(), fonts.clone())?);
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts.clone()),
+        CacheBudget::new(PARAGRAPHS),
+    );
     let snapshot = fixture.document.snapshot();
     let wide = FiniteWidth::new(420.0)?;
     let narrow = FiniteWidth::new(180.0)?;
-    let request = SceneRequest::new(wide, &fixture.styles, &fixture.dark);
+    let request = SceneRequest::new(TextConstraint::Wrap(wide), &fixture.styles, &fixture.dark);
     layout.prepare(&snapshot, &request)?;
     let mut width_iteration = 0_usize;
     let width_only = measure(MUTATION_ITERATIONS, || {
@@ -121,7 +128,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wide
         };
         width_iteration += 1;
-        let request = SceneRequest::new(width, &fixture.styles, &fixture.dark);
+        let request =
+            SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
         let output = layout
             .prepare(&snapshot, &request)
             .expect("width-only public-path preparation must succeed");
@@ -139,8 +147,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let mut fixture = document_fixture()?;
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(data, fonts)?);
-    let request = SceneRequest::new(wide, &fixture.styles, &fixture.dark);
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(PARAGRAPHS),
+    );
+    let request = SceneRequest::new(TextConstraint::Wrap(wide), &fixture.styles, &fixture.dark);
     layout.prepare(&fixture.document.snapshot(), &request)?;
     let mut edit_iteration = 0_usize;
     let one_paragraph_edit = measure(MUTATION_ITERATIONS, || {
@@ -154,7 +165,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         edit.replace_text(fixture.edited_text, replacement)
             .expect("the stable text identity must remain editable");
         let publication = edit.commit().expect("benchmark edit must commit");
-        let request = SceneRequest::new(wide, &fixture.styles, &fixture.dark);
+        let request = SceneRequest::new(TextConstraint::Wrap(wide), &fixture.styles, &fixture.dark);
         let output = layout
             .prepare(publication.snapshot(), &request)
             .expect("edited public-path preparation must succeed");

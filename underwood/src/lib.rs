@@ -10,6 +10,7 @@ pub mod adapter;
 
 pub use adapter::TextAffinity;
 
+mod block;
 mod composition;
 mod document;
 mod editable;
@@ -18,6 +19,7 @@ mod scene;
 mod selection;
 mod style;
 
+pub use block::{BlockRequest, TextBlock, TextBlockSnapshot};
 pub use composition::{
     CompositionClause, CompositionClauseKind, CompositionEpoch, CompositionId, CompositionSession,
     CompositionStart, CompositionTextPosition, CompositionTextRange, CompositionUpdate,
@@ -41,10 +43,11 @@ pub use parlance::{
 };
 pub use peniko::{Brush, Color, FontData};
 pub use scene::{
-    CompositionScene, CompositionSceneOutput, LayoutEngine, ProjectedTextPosition,
-    ProjectedTextRange, ProjectedTextSource, SceneCaret, SceneCompositionRect, SceneFragment,
-    SceneFragmentId, SceneGlyph, SceneGlyphInstanceId, SceneLine, SceneOutput, SceneSelectionRect,
-    SemanticFragment, StageWork, TextHit, TextScene, WorkReport,
+    CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
+    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,
+    SceneCompositionRect, SceneFragment, SceneFragmentId, SceneGlyph, SceneGlyphInstanceId,
+    SceneLine, SceneOutput, SceneSelectionRect, SemanticFragment, StageWork, TextHit, TextMetrics,
+    TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
@@ -52,5 +55,5 @@ pub use selection::{
 };
 pub use style::{
     ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, PaintSlot, PaintTable,
-    SceneRequest, ShapingStyle, StyleMap,
+    SceneRequest, ShapingStyle, StyleMap, TextConstraint,
 };

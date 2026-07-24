@@ -497,6 +497,26 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[test]
+    fn shaping_style_clones_share_owned_variable_sized_inputs() {
+        let style = ShapingStyle::new(FontFamily::from("Roboto Flex, sans-serif"), 16.0)
+            .expect("family request is valid")
+            .with_features([FontFeature::new(Tag::new(b"liga"), 1)])
+            .with_variations([FontVariation::new(Tag::new(b"wght"), 650.0)])
+            .expect("variation is valid");
+        let clone = style.clone();
+
+        assert!(alloc::sync::Arc::ptr_eq(
+            &style.font_families,
+            &clone.font_families
+        ));
+        assert!(alloc::sync::Arc::ptr_eq(&style.features, &clone.features));
+        assert!(alloc::sync::Arc::ptr_eq(
+            &style.variations,
+            &clone.variations
+        ));
+    }
 }
 
 impl PaintTable {
@@ -539,7 +559,7 @@ impl PaintTable {
     }
 }
 
-/// A finite, strictly positive first-slice layout width.
+/// A finite, strictly positive constrained inline size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FiniteWidth(pub(crate) f64);
 
@@ -551,22 +571,45 @@ impl FiniteWidth {
         }
         Ok(Self(width))
     }
+
+    /// Returns the validated finite, strictly positive width.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+/// Inline-size constraint used for paragraph formation and intrinsic measurement.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextConstraint {
+    /// Form the narrowest width obtained by taking every legal soft break.
+    MinContent,
+    /// Form without soft wrapping while still honoring mandatory breaks.
+    MaxContent,
+    /// Greedily wrap to a finite, strictly positive maximum inline size.
+    Wrap(FiniteWidth),
+}
+
+impl From<FiniteWidth> for TextConstraint {
+    fn from(width: FiniteWidth) -> Self {
+        Self::Wrap(width)
+    }
 }
 
 /// Borrowed inputs for one scene preparation.
 #[derive(Clone, Copy, Debug)]
 pub struct SceneRequest<'a> {
-    pub(crate) width: FiniteWidth,
+    pub(crate) constraint: TextConstraint,
     pub(crate) styles: &'a StyleMap,
     pub(crate) paint: &'a PaintTable,
 }
 
 impl<'a> SceneRequest<'a> {
-    /// Creates a request from validated width, style, and paint values.
+    /// Creates a request from a text constraint, style map, and paint table.
     #[must_use]
-    pub fn new(width: FiniteWidth, styles: &'a StyleMap, paint: &'a PaintTable) -> Self {
+    pub fn new(constraint: TextConstraint, styles: &'a StyleMap, paint: &'a PaintTable) -> Self {
         Self {
-            width,
+            constraint,
             styles,
             paint,
         }
