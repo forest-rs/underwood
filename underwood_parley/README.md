@@ -41,14 +41,17 @@ continuation clusters. Parley's `contributes_to_shaping` analysis identifies
 controls and format characters which intentionally produce no glyphs; their
 source remains explicit while shaping-only sentinel glyphs are discarded.
 
-Formed lines also retain a separate visual cluster stream. Every Parley cluster
-keeps its own source slice and advance, including ligature components,
-whitespace, combining source, and controls, while its left and right sides map
-to explicit paragraph-local boundaries and upstream/downstream affinities.
-Underwood can therefore project exact semantic hits and caret stops without
-reconstructing bidi direction from glyphs or using ink clips as interaction
-geometry. Soft wraps retain both affinities for their shared logical boundary,
-and mandatory breaks keep the visible caret before the control.
+Formed lines also retain a separate visual interaction stream. The adapter
+consumes Parley's `Analysis::is_grapheme_start` facts once, groups every shaped
+record into its owning extended grapheme, and retains those records as ordered
+visual slices. Ligature components remain separate interaction units, while
+combining source, style-split marks, CRLF, whitespace, and controls stay
+source-complete without internal caret stops. Unit sides map to explicit
+paragraph-local boundaries and upstream/downstream affinities. Underwood can
+therefore project exact semantic hits and caret stops without reconstructing
+bidi direction from glyphs or using ink clips as interaction geometry. Soft
+wraps retain both affinities for their shared logical boundary, and mandatory
+break endpoints can occupy distinct lines.
 
 Paint coverage records source-to-paint ownership, not universal glyph ink. A
 glyph wholly owned by one paint run lowers without a per-glyph clip, leaving
@@ -56,7 +59,7 @@ outline, bitmap, color-graph, and synthesis extent to the renderer. A glyph
 crossing paint runs returns `UnsupportedPaintCoverage` until a
 conformance-backed component rule can provide explicit source-complete clips.
 Advances and character counts are never substituted for component geometry.
-Hit testing, carets, and selections use the separate shaped-cluster stream.
+Hit testing, carets, and selections use the separate interaction-unit stream.
 
 Fontique synthesis variations precede explicit `ShapingStyle` variations at
 the Parley Core seam. An explicit coordinate therefore wins for the same axis.

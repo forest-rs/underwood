@@ -48,7 +48,7 @@ pub use scene::{
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
-    TextMovement, TextSelectionMode,
+    SnapshotTextUnit, TextMovement, TextSelectionMode,
 };
 pub use style::{
     ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, PaintSlot, PaintTable,

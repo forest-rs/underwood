@@ -18,7 +18,7 @@ use crate::{
     PaintSlot, PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError, SceneErrorKind,
     SceneRequest, SelectionError, SelectionErrorKind, SemanticId, ShapingStyle,
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
-    TextId, TextMovement, TextSelectionMode, Vec2,
+    SnapshotTextUnit, TextId, TextMovement, TextSelectionMode, Vec2,
 };
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
@@ -1195,11 +1195,19 @@ struct CachedGlyph {
 struct CachedCluster {
     sources: Vec<LocalRange>,
     semantic_id: SemanticId,
+    hit_slices: Vec<CachedHitSlice>,
     bounds: Rect,
     line: usize,
     left: LocalPosition,
     right: LocalPosition,
     bidi_level: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CachedHitSlice {
+    semantic_id: SemanticId,
+    x0: f64,
+    x1: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -1352,29 +1360,44 @@ fn build_geometry(
     for line in prepared.lines() {
         let line_index = lines.len();
         let baseline = line_top + line.baseline();
-        let mut cluster_x = 0.0_f64;
-        for cluster in line.clusters() {
-            let paragraph_source = cluster.source();
+        let mut unit_x = 0.0_f64;
+        for unit in line.units() {
+            let paragraph_source = unit.source();
             let sources = projection.local_ranges(paragraph_source.clone())?;
-            let semantic_id = projection.semantic_for_range(paragraph_source.clone())?;
-            let left =
-                projection.position_at(cluster.left().offset(), cluster.left().affinity())?;
-            let right =
-                projection.position_at(cluster.right().offset(), cluster.right().affinity())?;
-            let next_x = cluster_x + cluster.advance();
-            let bounds = Rect::new(cluster_x, line_top, next_x, line_top + line.height());
+            let left = projection.position_at(unit.left().offset(), unit.left().affinity())?;
+            let right = projection.position_at(unit.right().offset(), unit.right().affinity())?;
+            let mut slice_x = unit_x;
+            let mut hit_slices = Vec::with_capacity(unit.slices().len());
+            for slice in unit.slices() {
+                let next_x = slice_x + slice.advance();
+                let source = slice.source();
+                projection.local_ranges(source.clone())?;
+                hit_slices.push(CachedHitSlice {
+                    semantic_id: projection.semantic_for_range(source)?,
+                    x0: slice_x,
+                    x1: next_x,
+                });
+                slice_x = next_x;
+            }
+            let semantic_id = hit_slices.first().map_or_else(
+                || projection.semantic_for_range(paragraph_source),
+                |slice| Ok(slice.semantic_id),
+            )?;
+            let next_x = unit_x + unit.advance();
+            let bounds = Rect::new(unit_x, line_top, next_x, line_top + line.height());
             clusters.push(CachedCluster {
                 sources,
                 semantic_id,
+                hit_slices,
                 bounds,
                 line: line_index,
                 left,
                 right,
-                bidi_level: cluster.bidi_level(),
+                bidi_level: unit.bidi_level(),
             });
-            cluster_x = next_x;
+            unit_x = next_x;
         }
-        if line.clusters().is_empty() && !projection.spans.is_empty() {
+        if line.units().is_empty() && !projection.spans.is_empty() {
             let source = line.source();
             let affinity = if source.start == 0 {
                 TextAffinity::Downstream
@@ -1386,6 +1409,7 @@ fn build_geometry(
             clusters.push(CachedCluster {
                 semantic_id: projection.semantic_for_range(source)?,
                 sources: local_source,
+                hit_slices: Vec::new(),
                 bounds: Rect::new(0.0, line_top, 0.0, line_top + line.height()),
                 line: line_index,
                 left: position,
@@ -1455,6 +1479,7 @@ fn build_geometry(
         clusters.push(CachedCluster {
             semantic_id: projection.semantic_for_range(0..0)?,
             sources,
+            hit_slices: Vec::new(),
             bounds: Rect::new(0.0, 0.0, 0.0, empty_line_height),
             line: 0,
             left: position,
@@ -1667,14 +1692,25 @@ fn materialize_geometry(
             script: fragment.script,
         }
     }));
-    clusters.extend(geometry.clusters.iter().map(|cluster| SceneCluster {
-        source: materialize_snapshot_range(&cluster.sources, revision),
-        semantic_id: cluster.semantic_id,
-        bounds: cluster.bounds + translate,
-        line: line_base + cluster.line,
-        left: materialize_position(cluster.left, revision),
-        right: materialize_position(cluster.right, revision),
-        bidi_level: cluster.bidi_level,
+    clusters.extend(geometry.clusters.iter().map(|cluster| {
+        SceneCluster {
+            source: materialize_snapshot_unit(&cluster.sources, revision),
+            semantic_id: cluster.semantic_id,
+            hit_slices: cluster
+                .hit_slices
+                .iter()
+                .map(|slice| SceneHitSlice {
+                    semantic_id: slice.semantic_id,
+                    x0: slice.x0,
+                    x1: slice.x1,
+                })
+                .collect(),
+            bounds: cluster.bounds + translate,
+            line: line_base + cluster.line,
+            left: materialize_position(cluster.left, revision),
+            right: materialize_position(cluster.right, revision),
+            bidi_level: cluster.bidi_level,
+        }
     }));
     carets.extend(geometry.carets.iter().map(|caret| SceneCaretStop {
         position: materialize_position(caret.position, revision),
@@ -1772,14 +1808,25 @@ fn materialize_projected_geometry(
             script: fragment.script,
         }
     }));
-    clusters.extend(geometry.clusters.iter().map(|cluster| SceneCluster {
-        source: projected_range(&cluster.sources, revision),
-        semantic_id: cluster.semantic_id,
-        bounds: cluster.bounds + translate,
-        line: line_base + cluster.line,
-        left: projected_position(cluster.left, revision),
-        right: projected_position(cluster.right, revision),
-        bidi_level: cluster.bidi_level,
+    clusters.extend(geometry.clusters.iter().map(|cluster| {
+        SceneCluster {
+            source: projected_range(&cluster.sources, revision),
+            semantic_id: cluster.semantic_id,
+            hit_slices: cluster
+                .hit_slices
+                .iter()
+                .map(|slice| SceneHitSlice {
+                    semantic_id: slice.semantic_id,
+                    x0: slice.x0,
+                    x1: slice.x1,
+                })
+                .collect(),
+            bounds: cluster.bounds + translate,
+            line: line_base + cluster.line,
+            left: projected_position(cluster.left, revision),
+            right: projected_position(cluster.right, revision),
+            bidi_level: cluster.bidi_level,
+        }
     }));
     carets.extend(geometry.carets.iter().map(|caret| SceneCaretStop {
         position: projected_position(caret.position, revision),
@@ -1885,7 +1932,7 @@ fn materialize_cursor_step(
         source: step
             .source
             .as_ref()
-            .map(|source| materialize_snapshot_range(source, revision)),
+            .map(|source| materialize_snapshot_unit(source, revision)),
     })
 }
 
@@ -1904,6 +1951,18 @@ fn materialize_snapshot_range(
         unreachable!("committed geometry source must remain within one semantic text leaf")
     };
     materialize_range(range, revision)
+}
+
+fn materialize_snapshot_unit(
+    ranges: &[LocalRange],
+    revision: DocumentRevision,
+) -> SnapshotTextUnit {
+    SnapshotTextUnit::new(
+        ranges
+            .iter()
+            .map(|range| materialize_range(range, revision))
+            .collect(),
+    )
 }
 
 fn materialize_sources(
@@ -1945,7 +2004,7 @@ pub enum ProjectedTextSource {
 
 /// Source-complete range covered by one transient scene observation.
 ///
-/// A shaped cluster or glyph can cover more than one segment when a generated
+/// An interaction unit or glyph can cover more than one segment when a generated
 /// combining mark joins an authored base character. Keeping the ordered list
 /// prevents either provenance from being fabricated or discarded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2178,7 +2237,7 @@ impl CompositionScene {
         self.semantics.iter()
     }
 
-    /// Returns the exact projected cluster under a point.
+    /// Returns the exact projected interaction unit under a point.
     #[must_use]
     pub fn hit_test(
         &self,
@@ -2190,7 +2249,7 @@ impl CompositionScene {
             .map(|cluster| cluster.hit(point))
     }
 
-    /// Returns the closest projected cluster side for native point queries.
+    /// Returns the closest projected interaction-unit side for native point queries.
     #[must_use]
     pub fn hit_test_closest(
         &self,
@@ -2228,7 +2287,7 @@ impl CompositionScene {
             })
     }
 
-    /// Moves one position through the adapter-produced cluster map.
+    /// Moves one position through the adapter-produced interaction map.
     #[must_use]
     pub fn move_position(
         &self,
@@ -2459,7 +2518,7 @@ impl TextScene {
     ///
     /// When `extend` is true, each anchor is retained and the extent is moved.
     /// Otherwise a noncollapsed selection first collapses toward the requested
-    /// direction and a collapsed selection advances by one cluster step.
+    /// direction and a collapsed selection advances by one interaction unit.
     pub fn move_selections(
         &self,
         selections: &SnapshotTextSelectionSet,
@@ -2500,11 +2559,14 @@ impl TextScene {
         let mut geometry: Vec<SceneSelectionRect> = Vec::new();
         for (selection_index, selection) in selections.selections().iter().enumerate() {
             for cluster in &self.clusters {
-                let Some((range_index, _)) = selection
-                    .ranges()
-                    .iter()
-                    .enumerate()
-                    .find(|(_, range)| ranges_overlap(range, &cluster.source))
+                let Some((range_index, _)) =
+                    selection.ranges().iter().enumerate().find(|(_, range)| {
+                        cluster
+                            .source
+                            .sources()
+                            .iter()
+                            .any(|source| ranges_overlap(range, source))
+                    })
                 else {
                     continue;
                 };
@@ -2553,9 +2615,9 @@ impl TextScene {
         self.semantics.iter()
     }
 
-    /// Returns an exact shaped-cluster hit under a scene-space point.
+    /// Returns an exact interaction-unit hit under a scene-space point.
     ///
-    /// Unlike selection hit testing, this does not clamp points outside cluster
+    /// Unlike selection hit testing, this does not clamp points outside unit
     /// geometry to the nearest line edge.
     #[must_use]
     pub fn hit_test(&self, point: Point) -> Option<TextHit> {
@@ -2565,7 +2627,7 @@ impl TextScene {
             .map(|cluster| cluster.hit(point))
     }
 
-    /// Returns the closest shaped-cluster side for pointer selection.
+    /// Returns the closest interaction-unit side for pointer selection.
     ///
     /// This includes whitespace and empty editable text which may have no
     /// painted glyph fragment.
@@ -2716,7 +2778,7 @@ impl TextScene {
                 return Ok(None);
             };
             if let Some(source) = step.source {
-                ranges.push(source);
+                ranges.extend(source.sources().iter().cloned());
             }
             position = step.target;
         }
@@ -2873,7 +2935,13 @@ impl TextScene {
     pub(crate) fn range_geometry(&self, range: &SnapshotTextRange) -> Vec<(usize, Rect)> {
         self.clusters
             .iter()
-            .filter(|cluster| ranges_overlap(range, &cluster.source))
+            .filter(|cluster| {
+                cluster
+                    .source
+                    .sources()
+                    .iter()
+                    .any(|source| ranges_overlap(range, source))
+            })
             .map(|cluster| (cluster.line, cluster.bounds))
             .collect()
     }
@@ -2980,9 +3048,10 @@ fn nearly_equal(first: f64, second: f64) -> bool {
 }
 
 #[derive(Clone, Debug)]
-struct SceneCluster<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+struct SceneCluster<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
     source: Source,
     semantic_id: SemanticId,
+    hit_slices: Vec<SceneHitSlice>,
     bounds: Rect,
     line: usize,
     left: Position,
@@ -2990,9 +3059,25 @@ struct SceneCluster<Source = SnapshotTextRange, Position = SnapshotTextPosition>
     bidi_level: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SceneHitSlice {
+    semantic_id: SemanticId,
+    x0: f64,
+    x1: f64,
+}
+
 impl<Source: Clone, Position: Copy> SceneCluster<Source, Position> {
     fn hit(&self, point: Point) -> TextHit<Source, Position> {
         let midpoint = self.bounds.x0 + self.bounds.width() * 0.5;
+        let semantic_id = self
+            .hit_slices
+            .iter()
+            .filter(|slice| slice.x0 < slice.x1)
+            .min_by(|first, second| {
+                distance_to_interval(point.x, first.x0, first.x1)
+                    .total_cmp(&distance_to_interval(point.x, second.x0, second.x1))
+            })
+            .map_or(self.semantic_id, |slice| slice.semantic_id);
         TextHit {
             source: self.source.clone(),
             position: if point.x <= midpoint {
@@ -3000,7 +3085,7 @@ impl<Source: Clone, Position: Copy> SceneCluster<Source, Position> {
             } else {
                 self.right
             },
-            semantic_id: self.semantic_id,
+            semantic_id,
             bidi_level: self.bidi_level,
         }
     }
@@ -3013,7 +3098,7 @@ struct SceneCaretStop<Position = SnapshotTextPosition> {
 }
 
 #[derive(Clone, Debug)]
-struct SceneCursorMovement<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+struct SceneCursorMovement<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
     position: Position,
     previous_visual: Option<SceneCursorStep<Source, Position>>,
     next_visual: Option<SceneCursorStep<Source, Position>>,
@@ -3022,7 +3107,7 @@ struct SceneCursorMovement<Source = SnapshotTextRange, Position = SnapshotTextPo
 }
 
 #[derive(Clone, Debug)]
-struct SceneCursorStep<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+struct SceneCursorStep<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
     target: Position,
     source: Option<Source>,
 }
@@ -3043,6 +3128,16 @@ fn distance_to_rect_axes(point: Point, bounds: Rect) -> (f64, f64) {
         0.0
     };
     (block, inline)
+}
+
+fn distance_to_interval(value: f64, start: f64, end: f64) -> f64 {
+    if value < start {
+        start - value
+    } else if value > end {
+        value - end
+    } else {
+        0.0
+    }
 }
 
 /// One visual line.
@@ -3292,7 +3387,7 @@ impl SemanticFragment {
 
 /// Result of scene-space hit testing.
 #[derive(Clone, Debug)]
-pub struct TextHit<Source = SnapshotTextRange, Position = SnapshotTextPosition> {
+pub struct TextHit<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
     source: Source,
     position: Position,
     semantic_id: SemanticId,
@@ -3300,13 +3395,13 @@ pub struct TextHit<Source = SnapshotTextRange, Position = SnapshotTextPosition> 
 }
 
 impl<Source, Position> TextHit<Source, Position> {
-    /// Returns the exact source-complete cluster under the point.
+    /// Returns the exact source-complete interaction unit under the point.
     #[must_use]
     pub const fn source(&self) -> &Source {
         &self.source
     }
 
-    /// Returns the collapsed position selected by the cluster side.
+    /// Returns the collapsed position selected by the interaction-unit side.
     #[must_use]
     pub const fn position(&self) -> &Position {
         &self.position
@@ -3318,7 +3413,7 @@ impl<Source, Position> TextHit<Source, Position> {
         self.semantic_id
     }
 
-    /// Returns the resolved bidi level of the hit cluster.
+    /// Returns the resolved bidi level of the hit interaction unit.
     #[must_use]
     pub const fn bidi_level(&self) -> u8 {
         self.bidi_level
@@ -3427,9 +3522,9 @@ mod tests {
         ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
         GlyphPaintSegment, LineBreakReason, ParagraphConstraints, ParagraphFormation,
         ParagraphFormationOutput, ParagraphInput, PreparationError, PreparationErrorKind,
-        PreparedCaret, PreparedCluster, PreparedClusterSide, PreparedCursorMovement,
-        PreparedCursorStep, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
-        TextAffinity,
+        PreparedCaret, PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep,
+        PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
+        PreparedParagraph, PreparedRun, TextAffinity,
     };
     use crate::{
         Brush, Color, CompositionClause, CompositionClauseKind, CompositionErrorKind,
@@ -3547,21 +3642,21 @@ mod tests {
                 );
             let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
             let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
-            let clusters = if self.split_paint {
+            let units = if self.split_paint {
                 let middle = input.paint_runs()[0].bytes().end;
                 vec![
-                    PreparedCluster::try_new(
+                    PreparedInteractionUnit::try_new(
                         0..middle,
-                        5.0,
+                        [PreparedInteractionSlice::try_new(0..middle, 5.0)?],
                         0,
                         ClusterBoundary::None,
                         ClusterWhitespace::None,
                         start,
                         PreparedClusterSide::new(middle, TextAffinity::Upstream),
                     )?,
-                    PreparedCluster::try_new(
+                    PreparedInteractionUnit::try_new(
                         middle..text_len,
-                        5.0,
+                        [PreparedInteractionSlice::try_new(middle..text_len, 5.0)?],
                         0,
                         ClusterBoundary::None,
                         ClusterWhitespace::None,
@@ -3570,9 +3665,9 @@ mod tests {
                     )?,
                 ]
             } else {
-                vec![PreparedCluster::try_new(
+                vec![PreparedInteractionUnit::try_new(
                     0..text_len,
-                    10.0,
+                    [PreparedInteractionSlice::try_new(0..text_len, 10.0)?],
                     0,
                     ClusterBoundary::None,
                     ClusterWhitespace::None,
@@ -3588,7 +3683,7 @@ mod tests {
                 line_height,
                 f64::from(font_size) * 0.75,
                 f64::from(font_size) * 0.25,
-                clusters,
+                units,
                 [run],
             )?;
             let mut movements = if self.split_paint {
@@ -4312,7 +4407,7 @@ mod tests {
                     position: end,
                     previous_visual: Some(super::SceneCursorStep {
                         target: start,
-                        source: Some(source.clone()),
+                        source: Some(crate::SnapshotTextUnit::new(vec![source.clone()])),
                     }),
                     next_visual: None,
                     previous_logical: None,

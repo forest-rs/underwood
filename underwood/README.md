@@ -44,10 +44,14 @@ persistence format, renderer, or compatibility promise. See the external
 
 ## Exact scene interaction
 
-Paragraph adapters provide source-complete visual clusters separately from
-painted glyphs. Exact hits therefore cover glyph interiors, ligature
-components, and whitespace without pretending that ink bounds are cursor
-geometry. Closest hits also clamp to an empty editable leaf:
+Paragraph adapters provide analysis-derived extended-grapheme interaction
+units separately from painted glyphs. Each unit retains every shaping slice,
+including zero-advance marks and controls, while exposing only its two endpoint
+carets. Exact hits therefore cover ligature components and whitespace without
+pretending that ink bounds are cursor geometry. A committed hit returns a
+[`SnapshotTextUnit`] whose ordered source ranges can cross semantic leaves;
+`semantic_id()` still identifies the exact visual slice under the pointer.
+Closest hits also clamp to an empty editable leaf:
 
 ```rust,ignore
 let hit = scene.hit_test(point).or_else(|| scene.hit_test_closest(point));
@@ -95,8 +99,10 @@ let (publication, selections) = replacement.into_parts();
 Selection geometry preserves both selection and logical-range indices.
 Replacement validates the complete set, deletes every range in one selection,
 inserts once for that insertion point, repeats once per independent selection,
-and publishes one revision. Snapshot selections remain dense revision-local
-values, not durable anchors.
+and publishes one revision. Canonical ranges may span semantic leaves within
+one paragraph without removing, merging, or restyling those leaves.
+Cross-paragraph replacement remains a structural operation and is rejected.
+Snapshot selections remain dense revision-local values, not durable anchors.
 
 ## Composition epochs and editable surfaces
 

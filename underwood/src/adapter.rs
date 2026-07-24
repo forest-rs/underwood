@@ -448,35 +448,35 @@ pub enum LineBreakReason {
     Mandatory,
 }
 
-/// Unicode boundary fact attached to one prepared cluster.
+/// Unicode boundary fact attached to one prepared interaction unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClusterBoundary {
-    /// The cluster does not begin a word or line-break opportunity.
+    /// The unit does not begin a word or line-break opportunity.
     None,
-    /// The cluster begins a word.
+    /// The unit begins a word.
     Word,
-    /// The cluster begins a possible line break.
+    /// The unit begins a possible line break.
     Line,
-    /// The cluster carries a mandatory line break.
+    /// The unit carries a mandatory line break.
     Mandatory,
 }
 
-/// Whitespace classification attached to one prepared cluster.
+/// Whitespace classification attached to one prepared interaction unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClusterWhitespace {
-    /// The cluster is not whitespace with special cursor behavior.
+    /// The unit is not whitespace with special cursor behavior.
     None,
-    /// The cluster represents U+0020 SPACE.
+    /// The unit represents U+0020 SPACE.
     Space,
-    /// The cluster represents U+00A0 NO-BREAK SPACE.
+    /// The unit represents U+00A0 NO-BREAK SPACE.
     NoBreakSpace,
-    /// The cluster represents a horizontal tab.
+    /// The unit represents a horizontal tab.
     Tab,
-    /// The cluster represents a mandatory line-break scalar.
+    /// The unit represents a mandatory line break.
     Newline,
 }
 
-/// One logical position reached from a visual side of a prepared cluster.
+/// One logical position reached from a visual side of an interaction unit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PreparedClusterSide {
     offset: u32,
@@ -484,7 +484,7 @@ pub struct PreparedClusterSide {
 }
 
 impl PreparedClusterSide {
-    /// Creates a paragraph-local cluster-side position.
+    /// Creates a paragraph-local interaction-side position.
     #[must_use]
     pub const fn new(offset: u32, affinity: TextAffinity) -> Self {
         Self { offset, affinity }
@@ -511,7 +511,7 @@ pub struct PreparedCursorStep {
 }
 
 impl PreparedCursorStep {
-    /// Creates a step and the source cluster crossed by it, when any.
+    /// Creates a step and the complete interaction unit crossed by it, when any.
     #[must_use]
     pub const fn new(target: PreparedClusterSide, source: Option<Range<u32>>) -> Self {
         Self { target, source }
@@ -523,9 +523,9 @@ impl PreparedCursorStep {
         self.target
     }
 
-    /// Returns the source cluster crossed by this step.
+    /// Returns the complete interaction unit crossed by this step.
     ///
-    /// A transition across a soft wrap carries no source cluster.
+    /// A transition across a soft wrap carries no source unit.
     #[must_use]
     pub fn source(&self) -> Option<Range<u32>> {
         self.source.clone()
@@ -620,26 +620,62 @@ impl PreparedCursorMovement {
         self.next_visual.as_ref()
     }
 
-    /// Returns the preceding source-cluster boundary in logical order.
+    /// Returns the preceding interaction-unit boundary in logical order.
     #[must_use]
     pub const fn previous_logical(&self) -> Option<&PreparedCursorStep> {
         self.previous_logical.as_ref()
     }
 
-    /// Returns the following source-cluster boundary in logical order.
+    /// Returns the following interaction-unit boundary in logical order.
     #[must_use]
     pub const fn next_logical(&self) -> Option<&PreparedCursorStep> {
         self.next_logical.as_ref()
     }
 }
 
-/// One source cluster in line-local visual order.
+/// One shaping-record contribution within a prepared interaction unit.
 ///
-/// The paragraph adapter supplies both visual sides so the scene layer never
-/// reconstructs cursor direction from glyph order.
+/// Slices remain in line-local visual order. Their canonical source union is
+/// validated by [`PreparedInteractionUnit`], so zero-advance marks and
+/// unrendered controls remain source-complete without becoming caret stops.
 #[derive(Clone, Debug)]
-pub struct PreparedCluster {
+pub struct PreparedInteractionSlice {
     source: Range<u32>,
+    advance: f64,
+}
+
+impl PreparedInteractionSlice {
+    /// Validates one nonempty shaping-record source and its visual advance.
+    pub fn try_new(source: Range<u32>, advance: f64) -> Result<Self, PreparationError> {
+        if source.start >= source.end || !advance.is_finite() || advance < 0.0 {
+            return Err(PreparationError::invalid_output());
+        }
+        Ok(Self { source, advance })
+    }
+
+    /// Returns the paragraph-local UTF-8 source range.
+    #[must_use]
+    pub fn source(&self) -> Range<u32> {
+        self.source.clone()
+    }
+
+    /// Returns this slice's contribution to the unit's inline advance.
+    #[must_use]
+    pub const fn advance(&self) -> f64 {
+        self.advance
+    }
+}
+
+/// One analysis-derived extended grapheme in line-local visual order.
+///
+/// The paragraph adapter supplies every shaping slice and both endpoint sides
+/// so the scene layer never reconstructs Unicode or bidi behavior from glyph
+/// order. Internal shaping-record and semantic-leaf boundaries are not caret
+/// positions.
+#[derive(Clone, Debug)]
+pub struct PreparedInteractionUnit {
+    source: Range<u32>,
+    slices: Vec<PreparedInteractionSlice>,
     advance: f64,
     bidi_level: u8,
     boundary: ClusterBoundary,
@@ -648,27 +684,47 @@ pub struct PreparedCluster {
     right: PreparedClusterSide,
 }
 
-impl PreparedCluster {
-    /// Validates one portable cluster and its two visual sides.
+impl PreparedInteractionUnit {
+    /// Validates one source-complete interaction unit and its visual slices.
     pub fn try_new(
         source: Range<u32>,
-        advance: f64,
+        slices: impl IntoIterator<Item = PreparedInteractionSlice>,
         bidi_level: u8,
         boundary: ClusterBoundary,
         whitespace: ClusterWhitespace,
         left: PreparedClusterSide,
         right: PreparedClusterSide,
     ) -> Result<Self, PreparationError> {
+        let slices: Vec<_> = slices.into_iter().collect();
         if source.start >= source.end
-            || !advance.is_finite()
-            || advance < 0.0
             || !matches!(left.offset, offset if offset == source.start || offset == source.end)
             || !matches!(right.offset, offset if offset == source.start || offset == source.end)
+            || left.offset == right.offset
         {
             return Err(PreparationError::invalid_output());
         }
+        let mut coverage: Vec<_> = slices.iter().map(|slice| slice.source.clone()).collect();
+        coverage.sort_unstable_by_key(|range| range.start);
+        let mut covered = source.start;
+        for range in &coverage {
+            if range.start != covered || range.end > source.end {
+                return Err(PreparationError::invalid_output());
+            }
+            covered = range.end;
+        }
+        if covered != source.end {
+            return Err(PreparationError::invalid_output());
+        }
+        let advance = slices.iter().try_fold(0.0, |total, slice| {
+            let total = total + slice.advance;
+            total.is_finite().then_some(total)
+        });
+        let Some(advance) = advance else {
+            return Err(PreparationError::invalid_output());
+        };
         Ok(Self {
             source,
+            slices,
             advance,
             bidi_level,
             boundary,
@@ -682,6 +738,12 @@ impl PreparedCluster {
     #[must_use]
     pub fn source(&self) -> Range<u32> {
         self.source.clone()
+    }
+
+    /// Returns every shaping-record contribution in visual order.
+    #[must_use]
+    pub fn slices(&self) -> &[PreparedInteractionSlice] {
+        &self.slices
     }
 
     /// Returns the visual inline advance.
@@ -731,7 +793,7 @@ pub struct PreparedLine {
     height: f64,
     content_ascent: f64,
     content_descent: f64,
-    clusters: Vec<PreparedCluster>,
+    units: Vec<PreparedInteractionUnit>,
     runs: Vec<PreparedRun>,
 }
 
@@ -745,7 +807,7 @@ impl PreparedLine {
         height: f64,
         content_ascent: f64,
         content_descent: f64,
-        clusters: impl IntoIterator<Item = PreparedCluster>,
+        units: impl IntoIterator<Item = PreparedInteractionUnit>,
         runs: impl IntoIterator<Item = PreparedRun>,
     ) -> Result<Self, PreparationError> {
         if source.start > source.end
@@ -763,20 +825,17 @@ impl PreparedLine {
         {
             return Err(PreparationError::invalid_output());
         }
-        let clusters: Vec<_> = clusters.into_iter().collect();
+        let units: Vec<_> = units.into_iter().collect();
         let runs: Vec<_> = runs.into_iter().collect();
         let mut coverage: Vec<_> = runs.iter().map(|run| run.source.clone()).collect();
         coverage.sort_unstable_by_key(|range| range.start);
-        let mut cluster_coverage: Vec<_> = clusters
-            .iter()
-            .map(|cluster| cluster.source.clone())
-            .collect();
-        cluster_coverage.sort_unstable_by_key(|range| range.start);
+        let mut unit_coverage: Vec<_> = units.iter().map(|unit| unit.source.clone()).collect();
+        unit_coverage.sort_unstable_by_key(|range| range.start);
         let source_is_valid = if source.is_empty() {
             break_reason == LineBreakReason::End
                 && advance == 0.0
                 && runs.is_empty()
-                && clusters.is_empty()
+                && units.is_empty()
         } else {
             let mut covered = source.start;
             for range in &coverage {
@@ -789,7 +848,7 @@ impl PreparedLine {
                 return Err(PreparationError::invalid_output());
             }
             covered = source.start;
-            for range in &cluster_coverage {
+            for range in &unit_coverage {
                 if range.start != covered || range.end > source.end {
                     return Err(PreparationError::invalid_output());
                 }
@@ -800,9 +859,12 @@ impl PreparedLine {
         if !source_is_valid {
             return Err(PreparationError::invalid_output());
         }
-        let cluster_advance = clusters.iter().map(PreparedCluster::advance).sum::<f64>();
+        let unit_advance = units
+            .iter()
+            .map(PreparedInteractionUnit::advance)
+            .sum::<f64>();
         let tolerance = f64::max(1.0, advance.abs()) * 1.0e-6;
-        if (cluster_advance - advance).abs() > tolerance {
+        if (unit_advance - advance).abs() > tolerance {
             return Err(PreparationError::invalid_output());
         }
         Ok(Self {
@@ -813,7 +875,7 @@ impl PreparedLine {
             height,
             content_ascent,
             content_descent,
-            clusters,
+            units,
             runs,
         })
     }
@@ -860,10 +922,10 @@ impl PreparedLine {
         self.content_descent
     }
 
-    /// Returns source clusters in line-local visual order.
+    /// Returns extended-grapheme interaction units in line-local visual order.
     #[must_use]
-    pub fn clusters(&self) -> &[PreparedCluster] {
-        &self.clusters
+    pub fn units(&self) -> &[PreparedInteractionUnit] {
+        &self.units
     }
 
     /// Returns shaped runs in line-local visual order.
@@ -903,7 +965,7 @@ impl PreparedParagraph {
         }
         let mut positions = Vec::new();
         for line in &lines {
-            if line.clusters.is_empty() {
+            if line.units.is_empty() {
                 let affinity = if line.source.start == 0 {
                     TextAffinity::Downstream
                 } else {
@@ -914,9 +976,9 @@ impl PreparedParagraph {
                     PreparedClusterSide::new(line.source.start, affinity),
                 );
             } else {
-                for cluster in &line.clusters {
-                    push_unique_position(&mut positions, cluster.left);
-                    push_unique_position(&mut positions, cluster.right);
+                for unit in &line.units {
+                    push_unique_position(&mut positions, unit.left);
+                    push_unique_position(&mut positions, unit.right);
                 }
             }
         }
@@ -928,9 +990,9 @@ impl PreparedParagraph {
             .iter()
             .map(PreparedCursorMovement::position)
             .collect();
-        let cluster_sources: Vec<_> = lines
+        let unit_sources: Vec<_> = lines
             .iter()
-            .flat_map(|line| line.clusters.iter().map(|cluster| cluster.source.clone()))
+            .flat_map(|line| line.units.iter().map(|unit| unit.source.clone()))
             .collect();
         if positions
             .iter()
@@ -951,19 +1013,19 @@ impl PreparedParagraph {
                     })
                     || movement.previous_visual.as_ref().is_some_and(|step| {
                         !movement_positions.contains(&step.target)
-                            || !valid_step_source(step, &cluster_sources)
+                            || !valid_step_source(step, &unit_sources)
                     })
                     || movement.next_visual.as_ref().is_some_and(|step| {
                         !movement_positions.contains(&step.target)
-                            || !valid_step_source(step, &cluster_sources)
+                            || !valid_step_source(step, &unit_sources)
                     })
                     || movement.previous_logical.as_ref().is_some_and(|step| {
                         !movement_positions.contains(&step.target)
-                            || !valid_step_source(step, &cluster_sources)
+                            || !valid_step_source(step, &unit_sources)
                     })
                     || movement.next_logical.as_ref().is_some_and(|step| {
                         !movement_positions.contains(&step.target)
-                            || !valid_step_source(step, &cluster_sources)
+                            || !valid_step_source(step, &unit_sources)
                     })
             })
         {
@@ -1002,10 +1064,10 @@ impl PreparedParagraph {
     }
 }
 
-fn valid_step_source(step: &PreparedCursorStep, cluster_sources: &[Range<u32>]) -> bool {
+fn valid_step_source(step: &PreparedCursorStep, unit_sources: &[Range<u32>]) -> bool {
     step.source
         .as_ref()
-        .is_none_or(|source| cluster_sources.contains(source))
+        .is_none_or(|source| unit_sources.contains(source))
 }
 
 fn push_unique_position(positions: &mut Vec<PreparedClusterSide>, position: PreparedClusterSide) {
@@ -1411,9 +1473,9 @@ mod tests {
 
     use super::{
         ClusterBoundary, ClusterWhitespace, FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment,
-        LineBreakReason, PreparationErrorKind, PreparedCaret, PreparedCluster, PreparedClusterSide,
-        PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedLine, PreparedParagraph,
-        PreparedRun, TextAffinity,
+        LineBreakReason, PreparationErrorKind, PreparedCaret, PreparedClusterSide,
+        PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedInteractionSlice,
+        PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
     };
     use crate::{DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, Tag, Vec2};
 
@@ -1607,7 +1669,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_paragraph_rejects_a_step_source_that_is_not_a_cluster() {
+    fn prepared_paragraph_rejects_a_step_source_that_is_not_an_interaction_unit() {
         let paragraph = ParagraphId {
             document: DocumentId::from_bytes(*b"adapter-test-004"),
             index: 0,
@@ -1632,7 +1694,7 @@ mod tests {
         );
         let error =
             PreparedParagraph::try_new(paragraph, 2, [line(0..2)], [start_movement, end_movement])
-                .expect_err("a cursor step must cross one actual prepared cluster");
+                .expect_err("a cursor step must cross one actual prepared interaction unit");
         assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
     }
 
@@ -1646,7 +1708,7 @@ mod tests {
             1.0,
             0.8,
             0.2,
-            [cluster(0..2, 1.0)],
+            [unit(0..2, 1.0)],
             [run(0..1)],
         )
         .expect_err("visual runs must cover the complete non-empty line source");
@@ -1654,7 +1716,7 @@ mod tests {
     }
 
     #[test]
-    fn prepared_line_rejects_missing_cluster_source() {
+    fn prepared_line_rejects_missing_interaction_unit_source() {
         let error = PreparedLine::try_new(
             0..2,
             LineBreakReason::End,
@@ -1663,25 +1725,63 @@ mod tests {
             1.0,
             0.8,
             0.2,
-            [cluster(0..1, 1.0)],
+            [unit(0..1, 1.0)],
             [run(0..2)],
         )
-        .expect_err("visual clusters must cover the complete line source");
+        .expect_err("interaction units must cover the complete line source");
         assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
     }
 
     #[test]
-    fn prepared_cluster_rejects_a_side_outside_its_source() {
-        let error = PreparedCluster::try_new(
-            1..2,
-            1.0,
-            0,
+    fn prepared_interaction_unit_rejects_a_side_outside_its_source() {
+        let error =
+            PreparedInteractionUnit::try_new(
+                1..2,
+                [PreparedInteractionSlice::try_new(1..2, 1.0)
+                    .expect("the interaction slice is valid")],
+                0,
+                ClusterBoundary::None,
+                ClusterWhitespace::None,
+                PreparedClusterSide::new(0, TextAffinity::Downstream),
+                PreparedClusterSide::new(2, TextAffinity::Upstream),
+            )
+            .expect_err("interaction-unit sides must name one of the source boundaries");
+        assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
+    }
+
+    #[test]
+    fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage() {
+        let unit = PreparedInteractionUnit::try_new(
+            0..3,
+            [
+                PreparedInteractionSlice::try_new(1..3, 0.0)
+                    .expect("zero-advance mark slice is valid"),
+                PreparedInteractionSlice::try_new(0..1, 5.0).expect("base slice is valid"),
+            ],
+            1,
             ClusterBoundary::None,
             ClusterWhitespace::None,
+            PreparedClusterSide::new(3, TextAffinity::Upstream),
             PreparedClusterSide::new(0, TextAffinity::Downstream),
-            PreparedClusterSide::new(2, TextAffinity::Upstream),
         )
-        .expect_err("cluster sides must name one of the cluster boundaries");
+        .expect("visual slice order may differ from canonical source order");
+        assert_eq!(unit.source(), 0..3);
+        assert_eq!(unit.advance(), 5.0);
+        assert_eq!(unit.slices()[0].source(), 1..3);
+        assert_eq!(unit.slices()[1].source(), 0..1);
+
+        let error =
+            PreparedInteractionUnit::try_new(
+                0..3,
+                [PreparedInteractionSlice::try_new(0..1, 5.0)
+                    .expect("the individual slice is valid")],
+                0,
+                ClusterBoundary::None,
+                ClusterWhitespace::None,
+                PreparedClusterSide::new(0, TextAffinity::Downstream),
+                PreparedClusterSide::new(3, TextAffinity::Upstream),
+            )
+            .expect_err("missing mark source must fail at the adapter boundary");
         assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
     }
 
@@ -1694,23 +1794,24 @@ mod tests {
             1.0,
             0.8,
             0.2,
-            [cluster(source.clone(), 1.0)],
+            [unit(source.clone(), 1.0)],
             [run(source)],
         )
         .expect("test line is valid")
     }
 
-    fn cluster(source: core::ops::Range<u32>, advance: f64) -> PreparedCluster {
-        PreparedCluster::try_new(
+    fn unit(source: core::ops::Range<u32>, advance: f64) -> PreparedInteractionUnit {
+        PreparedInteractionUnit::try_new(
             source.clone(),
-            advance,
+            [PreparedInteractionSlice::try_new(source.clone(), advance)
+                .expect("test interaction slice is valid")],
             0,
             ClusterBoundary::None,
             ClusterWhitespace::None,
             PreparedClusterSide::new(source.start, TextAffinity::Downstream),
             PreparedClusterSide::new(source.end, TextAffinity::Upstream),
         )
-        .expect("test cluster is valid")
+        .expect("test interaction unit is valid")
     }
 
     #[test]

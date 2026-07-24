@@ -24,9 +24,10 @@ use parley_core::{
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     InlineFlowRun, LineBreakReason, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCaret, PreparedCluster,
-    PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedLine,
-    PreparedParagraph, PreparedRun, ShapingRun, TextAffinity,
+    ParagraphFormationOutput, ParagraphInput, PreparationError, PreparedCaret, PreparedClusterSide,
+    PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedInteractionSlice,
+    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedRun, ShapingRun,
+    TextAffinity,
 };
 use underwood::{
     FontData, FontFamilyName, FontVariation, GenericFamily, InlineFlowStyle, Language, ParagraphId,
@@ -242,8 +243,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
             if self.cache[index].text.as_ref() == input.text() {
                 (index, false)
             } else {
+                let analysis = analyze_text(&mut self.analyzer, input.text());
+                let interaction_units = collect_analysis_units(input.text(), &analysis)?;
                 self.cache[index].text = Arc::from(input.text());
-                self.cache[index].analysis = analyze_text(&mut self.analyzer, input.text());
+                self.cache[index].analysis = analysis;
+                self.cache[index].interaction_units = interaction_units;
                 self.cache[index].shaping_styles.clear();
                 self.cache[index].shaping_runs.clear();
                 self.cache[index].shaped_text.clear();
@@ -255,10 +259,13 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 (index, true)
             }
         } else {
+            let analysis = analyze_text(&mut self.analyzer, input.text());
+            let interaction_units = collect_analysis_units(input.text(), &analysis)?;
             self.cache.push(PhysicsCache {
                 paragraph: input.paragraph(),
                 text: Arc::from(input.text()),
-                analysis: analyze_text(&mut self.analyzer, input.text()),
+                analysis,
+                interaction_units,
                 shaping_styles: Vec::new(),
                 shaping_runs: Vec::new(),
                 shaped_text: ShapedText::new(),
@@ -335,9 +342,12 @@ impl ParagraphFormation for ParleyParagraphEngine {
         for plan in &physics.line_plans {
             let mut pieces = line_run_pieces(&physics.formed_text, plan.clusters.clone())?;
             reorder_visual_pieces(&physics.formed_text, &mut pieces);
-            let prepared_clusters = lower_visual_clusters(
+            let prepared_units = lower_visual_units(
+                input.text(),
                 &physics.formed_text,
                 &pieces,
+                &physics.interaction_units,
+                &plan.source,
                 plan.reason == LineBreakReason::Mandatory,
             )?;
             let mut prepared_runs = Vec::with_capacity(pieces.len());
@@ -362,7 +372,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     .get(run.normalized_coords_range.clone())
                     .ok_or_else(PreparationError::invalid_output)?;
                 let clusters = physics
-                    .shaped_text
+                    .formed_text
                     .clusters()
                     .get(piece.clusters.clone())
                     .ok_or_else(PreparationError::invalid_output)?;
@@ -413,7 +423,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 plan.height,
                 plan.content_ascent,
                 plan.content_descent,
-                prepared_clusters,
+                prepared_units,
                 prepared_runs,
             )?);
         }
@@ -452,6 +462,7 @@ struct PhysicsCache {
     paragraph: ParagraphId,
     text: Arc<str>,
     analysis: Analysis,
+    interaction_units: Vec<Range<usize>>,
     shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
     shaped_text: ShapedText,
@@ -715,6 +726,35 @@ fn collect_logical_clusters(
     Ok(clusters)
 }
 
+fn collect_analysis_units(
+    text: &str,
+    analysis: &Analysis,
+) -> Result<Vec<Range<usize>>, PreparationError> {
+    let mut starts = Vec::new();
+    let mut characters = 0_usize;
+    for ((byte, _), info) in text.char_indices().zip(analysis.char_info()) {
+        characters += 1;
+        if info.is_grapheme_start() {
+            starts.push(byte);
+        }
+    }
+    if characters != text.chars().count()
+        || characters != analysis.char_info().len()
+        || (!text.is_empty() && starts.first() != Some(&0))
+    {
+        return Err(PreparationError::invalid_output());
+    }
+    let mut units = Vec::with_capacity(starts.len());
+    for (index, start) in starts.iter().copied().enumerate() {
+        let end = starts.get(index + 1).copied().unwrap_or(text.len());
+        if start >= end || text.get(start..end).is_none() {
+            return Err(PreparationError::invalid_output());
+        }
+        units.push(start..end);
+    }
+    Ok(units)
+}
+
 fn make_line_plan(
     shaped_text: &ShapedText,
     clusters: &[LogicalCluster],
@@ -858,13 +898,25 @@ fn reorder_visual_pieces(shaped_text: &ShapedText, pieces: &mut [RunPiece]) {
     }
 }
 
-fn lower_visual_clusters(
+#[derive(Clone, Debug)]
+struct VisualInteractionSlice {
+    source: Range<usize>,
+    advance: f64,
+    bidi_level: u8,
+    boundary: Boundary,
+    whitespace: Whitespace,
+}
+
+fn lower_visual_units(
+    text: &str,
     shaped_text: &ShapedText,
     pieces: &[RunPiece],
+    interaction_units: &[Range<usize>],
+    line_source: &Range<usize>,
     mandatory_line_end: bool,
-) -> Result<Vec<PreparedCluster>, PreparationError> {
-    let cluster_count = pieces.iter().map(|piece| piece.clusters.len()).sum();
-    let mut prepared = Vec::with_capacity(cluster_count);
+) -> Result<Vec<PreparedInteractionUnit>, PreparationError> {
+    let slice_count = pieces.iter().map(|piece| piece.clusters.len()).sum();
+    let mut visual_slices = Vec::with_capacity(slice_count);
     for piece in pieces {
         let run = shaped_text
             .runs()
@@ -872,29 +924,75 @@ fn lower_visual_clusters(
             .ok_or_else(PreparationError::invalid_output)?;
         if run.bidi_level & 1 == 1 {
             for index in piece.clusters.clone().rev() {
-                prepared.push(lower_prepared_cluster(shaped_text, run, index, false)?);
+                visual_slices.push(lower_visual_slice(shaped_text, run, index)?);
             }
         } else {
             for index in piece.clusters.clone() {
-                let is_last = prepared.len() + 1 == cluster_count;
-                prepared.push(lower_prepared_cluster(
-                    shaped_text,
-                    run,
-                    index,
-                    mandatory_line_end && is_last,
-                )?);
+                visual_slices.push(lower_visual_slice(shaped_text, run, index)?);
             }
         }
+    }
+
+    let expected_start = interaction_units.partition_point(|unit| unit.end <= line_source.start);
+    let expected_end = interaction_units.partition_point(|unit| unit.start < line_source.end);
+    let expected = expected_start..expected_end;
+    if interaction_units[expected.clone()]
+        .iter()
+        .any(|source| line_source.start > source.start || source.end > line_source.end)
+    {
+        return Err(PreparationError::invalid_output());
+    }
+    let mut seen = alloc::vec![false; expected.len()];
+    let mut prepared = Vec::with_capacity(expected.len());
+    let mut current_owner = None;
+    let mut current_slices = Vec::new();
+    for slice in visual_slices {
+        let owner = interaction_units
+            .partition_point(|unit| unit.start <= slice.source.start)
+            .checked_sub(1)
+            .filter(|&index| slice.source.end <= interaction_units[index].end)
+            .ok_or_else(PreparationError::invalid_output)?;
+        if !expected.contains(&owner) {
+            return Err(PreparationError::invalid_output());
+        }
+        if current_owner == Some(owner) {
+            current_slices.push(slice);
+            continue;
+        }
+        if let Some(previous) = current_owner {
+            prepared.push(lower_prepared_unit(
+                text,
+                &interaction_units[previous],
+                core::mem::take(&mut current_slices),
+                mandatory_line_end && interaction_units[previous].end == line_source.end,
+            )?);
+        }
+        if seen[owner - expected.start] {
+            return Err(PreparationError::invalid_output());
+        }
+        seen[owner - expected.start] = true;
+        current_owner = Some(owner);
+        current_slices.push(slice);
+    }
+    if let Some(owner) = current_owner {
+        prepared.push(lower_prepared_unit(
+            text,
+            &interaction_units[owner],
+            current_slices,
+            mandatory_line_end && interaction_units[owner].end == line_source.end,
+        )?);
+    }
+    if seen.iter().any(|seen| !seen) {
+        return Err(PreparationError::invalid_output());
     }
     Ok(prepared)
 }
 
-fn lower_prepared_cluster(
+fn lower_visual_slice(
     shaped_text: &ShapedText,
     run: &parley_core::ShapedRun,
     index: usize,
-    force_before_hard_break: bool,
-) -> Result<PreparedCluster, PreparationError> {
+) -> Result<VisualInteractionSlice, PreparationError> {
     let cluster = shaped_text
         .clusters()
         .get(index)
@@ -908,32 +1006,80 @@ fn lower_prepared_cluster(
     let end = start
         .checked_add(usize::from(cluster.text_len))
         .ok_or_else(PreparationError::invalid_output)?;
-    let source = checked_source_range(&(start..end))?;
-    let (left, right) = if run.bidi_level & 1 == 1 {
+    Ok(VisualInteractionSlice {
+        source: start..end,
+        advance: f64::from(cluster.advance),
+        bidi_level: run.bidi_level,
+        boundary: cluster.info.boundary(),
+        whitespace: cluster.info.whitespace(),
+    })
+}
+
+fn lower_prepared_unit(
+    text: &str,
+    source: &Range<usize>,
+    slices: Vec<VisualInteractionSlice>,
+    mandatory_line_end: bool,
+) -> Result<PreparedInteractionUnit, PreparationError> {
+    let first = slices
+        .iter()
+        .min_by_key(|slice| slice.source.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    if first.source.start != source.start
+        || slices
+            .iter()
+            .any(|slice| slice.bidi_level != first.bidi_level)
+    {
+        return Err(PreparationError::invalid_output());
+    }
+    let bidi_level = first.bidi_level;
+    let boundary = first.boundary;
+    let mut whitespace = Whitespace::None;
+    for slice in &slices {
+        if slice.whitespace == Whitespace::None {
+            continue;
+        }
+        if whitespace != Whitespace::None && whitespace != slice.whitespace {
+            return Err(PreparationError::invalid_output());
+        }
+        whitespace = slice.whitespace;
+    }
+    if mandatory_line_end
+        && text
+            .get(source.clone())
+            .is_some_and(|unit| unit == "\r" || unit == "\n" || unit == "\r\n")
+    {
+        whitespace = Whitespace::Newline;
+    }
+    let source = checked_source_range(source)?;
+    let (left, right) = if bidi_level & 1 == 1 {
         (
             PreparedClusterSide::new(source.end, TextAffinity::Upstream),
             PreparedClusterSide::new(source.start, TextAffinity::Downstream),
         )
-    } else if force_before_hard_break {
-        let before = PreparedClusterSide::new(source.start, TextAffinity::Downstream);
-        (before, before)
     } else {
         (
             PreparedClusterSide::new(source.start, TextAffinity::Downstream),
             PreparedClusterSide::new(source.end, TextAffinity::Upstream),
         )
     };
-    PreparedCluster::try_new(
+    let slices = slices
+        .into_iter()
+        .map(|slice| {
+            PreparedInteractionSlice::try_new(checked_source_range(&slice.source)?, slice.advance)
+        })
+        .collect::<Result<Vec<_>, PreparationError>>()?;
+    PreparedInteractionUnit::try_new(
         source,
-        f64::from(cluster.advance),
-        run.bidi_level,
-        match cluster.info.boundary() {
+        slices,
+        bidi_level,
+        match boundary {
             Boundary::None => ClusterBoundary::None,
             Boundary::Word => ClusterBoundary::Word,
             Boundary::Line => ClusterBoundary::Line,
             Boundary::Mandatory => ClusterBoundary::Mandatory,
         },
-        match cluster.info.whitespace() {
+        match whitespace {
             Whitespace::None => ClusterWhitespace::None,
             Whitespace::Space => ClusterWhitespace::Space,
             Whitespace::NoBreakSpace => ClusterWhitespace::NoBreakSpace,
@@ -966,21 +1112,21 @@ fn prepared_cursor_movements(
     for (line_index, line) in lines.iter().enumerate() {
         let first = clusters.len();
         let mut visual_offset = 0.0;
-        for (cluster_index, cluster) in line.clusters().iter().enumerate() {
-            push_cursor_position(&mut positions, cluster.left());
-            push_cursor_position(&mut positions, cluster.right());
+        for (unit_index, unit) in line.units().iter().enumerate() {
+            push_cursor_position(&mut positions, unit.left());
+            push_cursor_position(&mut positions, unit.right());
             clusters.push(CursorCluster {
-                source: cluster.source(),
-                rtl: cluster.bidi_level() & 1 == 1,
+                source: unit.source(),
+                rtl: unit.bidi_level() & 1 == 1,
                 line: line_index,
                 visual_offset,
-                advance: cluster.advance(),
-                end_of_line: cluster_index + 1 == line.clusters().len(),
-                hard_line_end: cluster_index + 1 == line.clusters().len()
+                advance: unit.advance(),
+                end_of_line: unit_index + 1 == line.units().len(),
+                hard_line_end: unit_index + 1 == line.units().len()
                     && line.break_reason() == LineBreakReason::Mandatory,
                 soft_line_end: false,
             });
-            visual_offset += cluster.advance();
+            visual_offset += unit.advance();
         }
         if clusters.len() > first
             && line.break_reason() == LineBreakReason::Regular
@@ -988,7 +1134,7 @@ fn prepared_cursor_movements(
         {
             last.soft_line_end = true;
         }
-        if line.clusters().is_empty() {
+        if line.units().is_empty() {
             let source = line.source();
             push_cursor_position(
                 &mut positions,
@@ -1866,21 +2012,28 @@ mod tests {
     use fontique::{Blob, Synthesis};
     use parley_core::{FontInstance, ShapeOptions, ShapedText, Shaper};
 
-    use underwood::adapter::{LineBreakReason as TestLineBreakReason, PreparationErrorKind};
+    use underwood::adapter::{
+        ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
+        LineBreakReason as TestLineBreakReason, ParagraphConstraints, ParagraphFormation,
+        ParagraphFormationOutput, PreparationErrorKind, PreparedClusterSide, PreparedGlyph,
+        PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
+        PreparedRun,
+    };
     use underwood::{
         Brush, Color, CompositionId, CompositionUpdate, ComputedInlineStyle, Document, DocumentId,
-        EditErrorKind, EditableSurface, EditableSurfaceElement, FiniteWidth, FontFamily,
+        EditErrorKind, EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily,
         FontWeight, GenericFamily, InlineFlowStyle, InlineRole, LayoutEngine, LineHeight,
         PaintSlot, PaintTable, ParagraphRole, Point, ProjectedTextPosition, ProjectedTextSource,
-        SceneRequest, SelectionErrorKind, ShapingStyle, StyleMap, SurfaceErrorKind,
-        SurfaceTextEncoding, TextAffinity, TextMovement, TextScene, TextSelectionMode,
+        SceneRequest, SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap,
+        SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextMovement, TextScene,
+        TextSelectionMode, Vec2,
     };
     use underwood::{Language, Script};
 
     use super::{
         AdapterErrorKind, Font, FontSet, ParleyParagraphEngine, TextData, analyze_text,
-        choose_line, collect_logical_clusters, commit_regular_break, read_u16, read_u32,
-        split_item_after,
+        choose_line, collect_analysis_units, collect_logical_clusters, commit_regular_break,
+        read_u16, read_u32, split_item_after,
     };
 
     const LATIN_FONT: &[u8] =
@@ -1888,10 +2041,90 @@ mod tests {
     const ARABIC_FONT: &[u8] =
         include_bytes!("../../examples/headless/fonts/NotoKufiArabic-Regular.otf");
 
+    #[derive(Debug)]
+    struct AnalysisCursorProof;
+
+    impl ParagraphFormation for AnalysisCursorProof {
+        fn form(
+            &mut self,
+            input: underwood::adapter::ParagraphInput<'_>,
+            _constraints: ParagraphConstraints,
+        ) -> Result<ParagraphFormationOutput, underwood::adapter::PreparationError> {
+            let analysis = analyze_text(&mut parley_core::Analyzer::new(), input.text());
+            let units = collect_analysis_units(input.text(), &analysis)?;
+            let mut prepared_units = Vec::with_capacity(units.len());
+            let mut glyphs = Vec::with_capacity(units.len());
+            for (id, source) in units.into_iter().enumerate() {
+                let source = super::checked_source_range(&source)?;
+                prepared_units.push(PreparedInteractionUnit::try_new(
+                    source.clone(),
+                    [PreparedInteractionSlice::try_new(source.clone(), 1.0)?],
+                    0,
+                    ClusterBoundary::None,
+                    ClusterWhitespace::None,
+                    PreparedClusterSide::new(source.start, TextAffinity::Downstream),
+                    PreparedClusterSide::new(source.end, TextAffinity::Upstream),
+                )?);
+                let slot = input
+                    .paint_runs()
+                    .iter()
+                    .find(|run| {
+                        let bytes = run.bytes();
+                        bytes.start <= source.start && source.end <= bytes.end
+                    })
+                    .ok_or_else(underwood::adapter::PreparationError::invalid_output)?
+                    .slot();
+                let paint = GlyphPaintCoverage::whole(source.clone(), slot)?;
+                glyphs.push(PreparedGlyph::try_new(
+                    u32::try_from(id).unwrap_or(u32::MAX),
+                    source,
+                    Vec2::new(1.0, 0.0),
+                    Vec2::ZERO,
+                    paint,
+                )?);
+            }
+            let source = 0..u32::try_from(input.text().len())
+                .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
+            let unit_count = u32::try_from(prepared_units.len())
+                .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
+            let advance = prepared_units.len() as f64;
+            let run = PreparedRun::try_new(
+                source.clone(),
+                0,
+                *b"Zyyy",
+                FontData::new(Blob::from(vec![0_u8]), 0),
+                16.0,
+                FontSynthesis::default(),
+                [],
+                [],
+                glyphs,
+            )?;
+            let line = PreparedLine::try_new(
+                source.clone(),
+                TestLineBreakReason::End,
+                advance,
+                0.8,
+                1.0,
+                0.8,
+                0.2,
+                prepared_units,
+                [run],
+            )?;
+            let movements =
+                super::prepared_cursor_movements(core::slice::from_ref(&line), source.end)?;
+            let paragraph =
+                PreparedParagraph::try_new(input.paragraph(), source.end, [line], movements)?;
+            Ok(ParagraphFormationOutput::new(
+                paragraph,
+                FormationWork::new(true, false, unit_count, 1, unit_count, 1, 0),
+            ))
+        }
+    }
+
     fn shape_arabic(text: &str) -> (parley_core::Analysis, Shaper, ShapedText) {
         let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
         let font = FontInstance {
-            font: underwood::FontData::new(Blob::from(ARABIC_FONT.to_vec()), 0),
+            font: FontData::new(Blob::from(ARABIC_FONT.to_vec()), 0),
             synthesis: Synthesis::default(),
         };
         let style_indices = vec![0; text.chars().count()];
@@ -1922,6 +2155,132 @@ mod tests {
         assert_eq!(read_u16(&[0x12], 0), None);
         assert_eq!(read_u32(&[0x12, 0x34, 0x56, 0x78], 0), Some(0x1234_5678));
         assert_eq!(read_u32(&[0x12, 0x34], 0), None);
+    }
+
+    #[test]
+    fn analysis_units_lock_extended_grapheme_trap_corpus() {
+        for (name, text, expected) in [
+            (
+                "decomposed",
+                "e\u{301}",
+                core::iter::once(0..3).collect::<Vec<_>>(),
+            ),
+            (
+                "precomposed",
+                "é",
+                core::iter::once(0..2).collect::<Vec<_>>(),
+            ),
+            ("crlf", "\r\n", core::iter::once(0..2).collect::<Vec<_>>()),
+            (
+                "emoji-zwj",
+                "👩\u{200d}💻",
+                core::iter::once(0..11).collect::<Vec<_>>(),
+            ),
+            (
+                "regional-indicator",
+                "🇺🇳",
+                core::iter::once(0..8).collect::<Vec<_>>(),
+            ),
+            (
+                "spacing-mark",
+                "क\u{93e}",
+                core::iter::once(0..6).collect::<Vec<_>>(),
+            ),
+        ] {
+            let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
+            assert_eq!(
+                collect_analysis_units(text, &analysis)
+                    .expect("Parley analysis must expose complete grapheme units"),
+                expected,
+                "{name} must remain one interaction unit"
+            );
+        }
+    }
+
+    #[test]
+    fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
+        for (name, text) in [
+            ("emoji-zwj", "👩\u{200d}💻"),
+            ("regional-indicator", "🇺🇳"),
+            ("spacing-mark", "क\u{93e}"),
+        ] {
+            let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
+            let units = collect_analysis_units(text, &analysis)
+                .expect("Parley analysis must expose complete grapheme units");
+            assert_eq!(units.len(), 1, "{name} must remain one interaction unit");
+            let mut document = Document::new(DocumentId::from_bytes(*b"unbundled-egc-01"));
+            let mut edit = document.edit();
+            let paragraph = edit
+                .append_paragraph(ParagraphRole::BODY)
+                .expect("the proof paragraph is valid");
+            let leaf = edit
+                .append_text(paragraph, InlineRole::TEXT, text)
+                .expect("the proof source is valid");
+            edit.commit().expect("the proof document is valid");
+            let style = ComputedInlineStyle::new(
+                ShapingStyle::new(FontFamily::named("proof"), 16.0)
+                    .expect("the proof style is valid"),
+                InlineFlowStyle::default(),
+                PaintSlot::new(0),
+            );
+            let styles = StyleMap::new(style);
+            let paints = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+            let request = SceneRequest::new(
+                FiniteWidth::new(100.0).expect("the proof width is valid"),
+                &styles,
+                &paints,
+            );
+            let output = LayoutEngine::new(AnalysisCursorProof)
+                .prepare(&document.snapshot(), &request)
+                .expect("Parley analysis boundaries must prepare through the public scene path");
+            let scene = output.scene();
+            let y = scene.lines()[0].bounds().center().y;
+            let start = *scene
+                .hit_test_closest(Point::new(-100.0, y))
+                .expect("the unit start must resolve")
+                .position();
+            let end = *scene
+                .hit_test_closest(Point::new(100.0, y))
+                .expect("the unit end must resolve")
+                .position();
+            let forward = scene
+                .selection_set([scene
+                    .collapsed_selection(&start)
+                    .expect("the unit start must be a caret")])
+                .and_then(|selection| {
+                    scene.move_selections(&selection, TextMovement::NextLogical, true)
+                })
+                .expect("the unit must expose one forward logical selection");
+            let backward = scene
+                .selection_set([scene
+                    .collapsed_selection(&end)
+                    .expect("the unit end must be a caret")])
+                .and_then(|selection| {
+                    scene.move_selections(&selection, TextMovement::PreviousLogical, true)
+                })
+                .expect("the unit must expose one backward logical selection");
+            for selection in [&forward, &backward] {
+                let ranges = selection
+                    .primary()
+                    .expect("the primary selection exists")
+                    .ranges();
+                assert_eq!(ranges.len(), 1, "{name}");
+                assert_eq!(ranges[0].text(), leaf, "{name}");
+                assert_eq!(
+                    ranges[0].bytes(),
+                    0..u32::try_from(text.len()).expect("the focused corpus fits portable offsets"),
+                    "{name}"
+                );
+            }
+            let replaced = document
+                .replace_selections(&forward, "")
+                .expect("one complete unit must delete in one transaction");
+            assert_eq!(
+                replaced.publication().snapshot().text(leaf),
+                Some(""),
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -2583,11 +2942,13 @@ mod tests {
     }
 
     #[test]
-    fn logical_delete_and_backspace_remove_one_adapter_cluster() {
+    fn logical_delete_and_backspace_remove_one_extended_grapheme() {
         for (source, movement, at_end, expected_range, expected_text) in [
             ("aé", TextMovement::PreviousLogical, true, 1..3, "a"),
-            ("ae\u{301}", TextMovement::PreviousLogical, true, 2..4, "ae"),
+            ("ae\u{301}", TextMovement::PreviousLogical, true, 1..4, "a"),
             ("éa", TextMovement::NextLogical, false, 0..2, "a"),
+            ("a\r\n", TextMovement::PreviousLogical, true, 1..3, "a"),
+            ("ب\u{64e}", TextMovement::NextLogical, true, 0..4, ""),
         ] {
             let (mut document, styles, paint) = fixture_document(source, 1.2);
             let mut engine = fixture_engine();
@@ -2598,12 +2959,18 @@ mod tests {
             );
             let output = engine
                 .prepare(&document.snapshot(), &request)
-                .expect("cluster interaction must prepare");
+                .expect("grapheme interaction must prepare");
             let scene = output.scene();
+            let line = if at_end {
+                scene.lines().last()
+            } else {
+                scene.lines().first()
+            }
+            .expect("the fixture must expose a line");
             let position = *scene
                 .hit_test_closest(Point::new(
                     if at_end { 10_000.0 } else { -10_000.0 },
-                    scene.lines()[0].bounds().center().y,
+                    line.bounds().center().y,
                 ))
                 .expect("line edge must resolve")
                 .position();
@@ -2614,16 +2981,16 @@ mod tests {
                 .expect("one caret forms a set");
             let deletion = scene
                 .move_selections(&carets, movement, true)
-                .expect("deletion range follows the adapter cluster transition");
+                .expect("deletion range follows the adapter grapheme transition");
             assert_eq!(
                 deletion.primary().expect("primary survives").ranges()[0].bytes(),
                 expected_range,
-                "deletion must select the complete adapter cluster for {source:?}"
+                "deletion must select the complete extended grapheme for {source:?}"
             );
             let text = position.text();
             let replacement = document
                 .replace_selections(&deletion, "")
-                .expect("cluster deletion must publish once");
+                .expect("grapheme deletion must publish once");
             assert_eq!(
                 replacement.publication().snapshot().text(text),
                 Some(expected_text)
@@ -3041,6 +3408,58 @@ mod tests {
                     .any(|segment| matches!(segment, ProjectedTextSource::Composition(_)))
             })
         }));
+        let line = transient.scene().lines()[0].bounds();
+        let mut unit_source = None;
+        let mut unit_positions = Vec::new();
+        let mut x = line.x0;
+        while x <= line.x1 {
+            if let Some(hit) = transient.scene().hit_test(Point::new(x, line.center().y)) {
+                let has_snapshot = hit
+                    .source()
+                    .sources()
+                    .iter()
+                    .any(|source| matches!(source, ProjectedTextSource::Snapshot(_)));
+                let has_generated = hit
+                    .source()
+                    .sources()
+                    .iter()
+                    .any(|source| matches!(source, ProjectedTextSource::Composition(_)));
+                if has_snapshot && has_generated {
+                    unit_source.get_or_insert_with(|| hit.source().clone());
+                    if !unit_positions.contains(hit.position()) {
+                        unit_positions.push(*hit.position());
+                    }
+                }
+            }
+            x += 0.05;
+        }
+        let unit_source = unit_source.expect("the composed grapheme must expose one mixed source");
+        assert_eq!(
+            unit_source.sources().len(),
+            2,
+            "authored base and generated mark must both remain in the hit unit"
+        );
+        assert_eq!(
+            unit_positions.len(),
+            2,
+            "the provenance boundary inside one grapheme must not become a caret stop"
+        );
+        assert!(unit_positions.iter().enumerate().any(|(index, position)| {
+            unit_positions
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| *other != index)
+                .any(|(_, other)| {
+                    transient
+                        .scene()
+                        .move_position(position, TextMovement::PreviousLogical)
+                        .is_some_and(|moved| moved == *other)
+                        || transient
+                            .scene()
+                            .move_position(position, TextMovement::NextLogical)
+                            .is_some_and(|moved| moved == *other)
+                })
+        }));
         assert_eq!(snapshot.text(start.text()), Some("eX"));
     }
 
@@ -3147,9 +3566,9 @@ mod tests {
     }
 
     #[test]
-    fn interaction_map_keeps_combining_and_whitespace_source() {
+    fn interaction_map_groups_combining_source_and_keeps_whitespace() {
         for (text, expected) in [
-            ("e\u{301}", vec![0..1, 1..3]),
+            ("e\u{301}", core::iter::once(0..3).collect::<Vec<_>>()),
             ("a b", vec![0..1, 1..2, 2..3]),
         ] {
             let (document, styles, paint) = fixture_document(text, 1.2);
@@ -3168,13 +3587,13 @@ mod tests {
                     .map(|hit| hit.source.clone())
                     .collect::<Vec<_>>(),
                 expected,
-                "non-ink source must remain independently hittable for {text:?}: {hits:?}"
+                "source-complete graphemes and whitespace must remain hittable for {text:?}: {hits:?}"
             );
         }
     }
 
     #[test]
-    fn combining_sequence_split_across_semantic_leaves_prepares() {
+    fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
         let mut document = Document::new(DocumentId::from_bytes(*b"split-grapheme-1"));
         let mut edit = document.edit();
         let paragraph = edit
@@ -3216,6 +3635,70 @@ mod tests {
             let texts: Vec<_> = fragment.sources().map(|source| source.text()).collect();
             texts.contains(&base) && texts.contains(&mark)
         }));
+        let scene = output.scene();
+        let y = scene.lines()[0].bounds().center().y;
+        let hit = scene
+            .hit_test(Point::new(scene.lines()[0].bounds().x0, y))
+            .expect("the source-complete grapheme must be hittable");
+        assert_eq!(hit.source().sources().len(), 2);
+        assert_eq!(hit.source().sources()[0].text(), base);
+        assert_eq!(hit.source().sources()[0].bytes(), 0..1);
+        assert_eq!(hit.source().sources()[1].text(), mark);
+        assert_eq!(hit.source().sources()[1].bytes(), 0..2);
+        let base_semantic = scene
+            .semantics()
+            .find(|semantic| {
+                semantic
+                    .source()
+                    .is_some_and(|source| source.text() == base)
+            })
+            .expect("base semantics must survive")
+            .semantic_id();
+        assert_eq!(
+            hit.semantic_id(),
+            base_semantic,
+            "a zero-advance mark has no fabricated pointer interior"
+        );
+
+        let end = *scene
+            .hit_test_closest(Point::new(10_000.0, y))
+            .expect("the trailing grapheme side must resolve")
+            .position();
+        let carets = scene
+            .selection_set([scene
+                .collapsed_selection(&end)
+                .expect("the trailing position is valid")])
+            .expect("one caret forms a selection set");
+        let deletion = scene
+            .move_selections(&carets, TextMovement::PreviousLogical, true)
+            .expect("backspace must cross the complete grapheme");
+        let ranges = deletion
+            .primary()
+            .expect("the primary selection survives")
+            .ranges();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].text(), base);
+        assert_eq!(ranges[0].bytes(), 0..1);
+        assert_eq!(ranges[1].text(), mark);
+        assert_eq!(ranges[1].bytes(), 0..2);
+        let geometry = scene
+            .selection_geometry(&deletion)
+            .expect("source-complete selection geometry must resolve");
+        assert_eq!(
+            geometry.len(),
+            1,
+            "one grapheme crossing two leaves must paint one selection rectangle"
+        );
+
+        let replacement = document
+            .replace_selections(&deletion, "")
+            .expect("one multi-leaf grapheme must publish atomically");
+        assert_eq!(replacement.publication().snapshot().text(base), Some(""));
+        assert_eq!(replacement.publication().snapshot().text(mark), Some(""));
+        assert_eq!(
+            replacement.publication().changes().paragraphs(),
+            [paragraph]
+        );
     }
 
     #[test]
@@ -3314,7 +3797,7 @@ mod tests {
             .scene()
             .hit_test_closest(Point::new(200.0, 80.0))
             .expect("empty semantic text must expose a clamped position");
-        assert_eq!(hit.source().bytes(), 0..0);
+        assert_eq!(sole_unit_source(hit.source()).bytes(), 0..0);
         assert_eq!(hit.position().byte(), 0);
         assert_eq!(hit.position().affinity(), TextAffinity::Downstream);
         let caret = output
@@ -3395,9 +3878,10 @@ mod tests {
         let mut x = scene.lines()[0].bounds().x0;
         while x <= scene.lines()[0].bounds().x1 {
             if let Some(hit) = scene.hit_test(Point::new(x, y)) {
-                if hit.source().text() == first_text {
+                let source = sole_unit_source(hit.source());
+                if source.text() == first_text {
                     first_right = Some((x, hit.semantic_id()));
-                } else if hit.source().text() == second_text && second_left.is_none() {
+                } else if source.text() == second_text && second_left.is_none() {
                     second_left = Some((x, hit.semantic_id()));
                 }
             }
@@ -3477,7 +3961,7 @@ mod tests {
             ))
             .expect("first line must clamp despite a much wider later line");
         assert!(
-            hit.source().bytes().end <= 2,
+            sole_unit_source(hit.source()).bytes().end <= 2,
             "block-axis selection must happen before inline clamping: {hit:?}"
         );
     }
@@ -3543,7 +4027,7 @@ mod tests {
         let mut x = bounds.x0;
         while x <= bounds.x1 {
             if let Some(hit) = scene.hit_test(Point::new(x, y)) {
-                let source = hit.source().bytes();
+                let source = sole_unit_source(hit.source()).bytes();
                 if let Some(existing) = hits.iter_mut().find(|existing| existing.source == source) {
                     existing.max_x = x;
                 } else {
@@ -3559,6 +4043,13 @@ mod tests {
             x += 0.05;
         }
         hits
+    }
+
+    fn sole_unit_source(unit: &SnapshotTextUnit) -> &underwood::SnapshotTextRange {
+        let [source] = unit.sources() else {
+            panic!("fixture interaction unit must remain within one semantic leaf");
+        };
+        source
     }
 
     #[test]
