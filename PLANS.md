@@ -2,7 +2,7 @@
 
 ## Retained TextBlock and intrinsic-layout campaign
 
-**Status:** Active — local implementation complete; protected remote gate pending
+**Status:** Complete — implementation and protected remote proof complete
 
 **Beads:** `und-oh0.5.3`, `und-oh0.5.3.1`, `und-oh0.5.3.2`,
 `und-oh0.5.3.3`, `und-oh0.5.3.4`, `und-oh0.5.3.5`
