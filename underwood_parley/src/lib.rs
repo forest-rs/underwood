@@ -5,6 +5,8 @@
 #![doc = include_str!("../README.md")]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 mod engine;
 mod font;

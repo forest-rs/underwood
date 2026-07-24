@@ -6,7 +6,7 @@
 //! This module owns Fontique catalog construction and validation; it explicitly
 //! does not own paragraph shaping or fallback-selection policy during shaping.
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use core::fmt;
 
 use fontique::{
@@ -57,12 +57,19 @@ impl Font {
     }
 }
 
-/// Deterministic caller-supplied Fontique catalog for the headless adapter.
+/// Immutable Fontique catalog snapshot for one application's text engines.
+///
+/// Registered font bytes always use shared [`Arc`] backing. With this crate's
+/// `std` feature, the Fontique collection and source cache also use synchronized
+/// shared backing, so cloning a set for another paragraph engine does not copy
+/// the catalog or reload file-backed font data. Without `std`, Fontique clones
+/// the small catalog structures locally while continuing to share font blobs.
 #[derive(Clone)]
 pub struct FontSet {
     collection: Collection,
     source_cache: SourceCache,
     font_count: usize,
+    registered_family_names: Arc<[String]>,
 }
 
 impl fmt::Debug for FontSet {
@@ -70,6 +77,7 @@ impl fmt::Debug for FontSet {
         formatter
             .debug_struct("FontSet")
             .field("font_count", &self.font_count)
+            .field("registered_family_names", &self.registered_family_names)
             .finish_non_exhaustive()
     }
 }
@@ -79,20 +87,35 @@ impl FontSet {
         (&mut self.collection, &mut self.source_cache)
     }
 
+    /// Creates a deterministic catalog without registered or platform fonts.
+    ///
+    /// This is the starting point for a system-font-only catalog when the
+    /// `system-fonts` feature is enabled. It is also useful for testing
+    /// missing-font behavior without consulting the host platform.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            collection: Collection::new(CollectionOptions {
+                shared: cfg!(feature = "std"),
+                system_fonts: false,
+            }),
+            source_cache: new_source_cache(),
+            font_count: 0,
+            registered_family_names: Arc::from([]),
+        }
+    }
+
     /// Registers a non-empty set of memory fonts with system discovery disabled.
     pub fn try_from_fonts(fonts: impl IntoIterator<Item = Font>) -> Result<Self, AdapterError> {
         let fonts: Vec<_> = fonts.into_iter().collect();
         if fonts.is_empty() {
             return Err(AdapterError::new(AdapterErrorKind::EmptyFontSet));
         }
-        let mut collection = Collection::new(CollectionOptions {
-            shared: false,
-            system_fonts: false,
-        });
-        let mut font_count = 0_usize;
+        let mut set = Self::empty();
+        let mut registered_family_names = Vec::new();
         for font in fonts {
             let blob = font.blob;
-            let registered = collection.register_fonts(blob.clone(), None);
+            let registered = set.collection.register_fonts(blob.clone(), None);
             if registered.is_empty()
                 || registered.iter().any(|(_, fonts)| {
                     fonts
@@ -102,18 +125,34 @@ impl FontSet {
             {
                 return Err(AdapterError::new(AdapterErrorKind::InvalidFont));
             }
-            font_count = font_count.saturating_add(
+            set.font_count = set.font_count.saturating_add(
                 registered
                     .iter()
                     .map(|(_, fonts)| fonts.len())
                     .sum::<usize>(),
             );
+            registered_family_names.extend(
+                registered
+                    .iter()
+                    .filter(|(_, fonts)| !fonts.is_empty())
+                    .filter_map(|(family, _)| {
+                        set.collection.family_name(*family).map(String::from)
+                    }),
+            );
         }
-        Ok(Self {
-            collection,
-            source_cache: SourceCache::default(),
-            font_count,
-        })
+        registered_family_names.sort_unstable();
+        registered_family_names.dedup();
+        set.registered_family_names = registered_family_names.into();
+        Ok(set)
+    }
+
+    /// Returns sorted, deduplicated family names found in registered fonts.
+    ///
+    /// Platform-discovered families are intentionally excluded so the result
+    /// remains stable across hosts and repeated system-font discovery.
+    #[must_use]
+    pub fn registered_family_names(&self) -> &[String] {
+        &self.registered_family_names
     }
 
     /// Returns a catalog with a fixed snapshot of platform fonts available for fallback.
@@ -159,6 +198,17 @@ impl FontSet {
             return Err(AdapterError::new(AdapterErrorKind::UnsupportedFallback));
         }
         Ok(self)
+    }
+}
+
+fn new_source_cache() -> SourceCache {
+    #[cfg(feature = "std")]
+    {
+        SourceCache::new_shared()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        SourceCache::default()
     }
 }
 

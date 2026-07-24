@@ -251,6 +251,105 @@ fn catalog_configuration_rejects_unknown_and_untracked_families() {
 }
 
 #[test]
+fn font_sets_support_empty_catalogs_and_report_registered_families() {
+    let empty = FontSet::empty();
+    assert!(empty.registered_family_names().is_empty());
+
+    let registered = FontSet::try_from_fonts([
+        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
+        Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
+    ])
+    .expect("fixture catalog is valid");
+    assert_eq!(
+        registered.registered_family_names(),
+        ["Noto Kufi Arabic", "Roboto Flex"]
+    );
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn font_set_clones_share_catalog_updates() {
+    let mut first = FontSet::try_from_fonts([
+        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+    ])
+    .expect("fixture catalog is valid");
+    let mut clone = first.clone();
+
+    let (collection, _) = first.resources_mut();
+    let first_blob_id = memory_font_blob_id(collection, "Roboto Flex");
+    let (collection, _) = clone.resources_mut();
+    let clone_blob_id = memory_font_blob_id(collection, "Roboto Flex");
+    assert_eq!(
+        first_blob_id, clone_blob_id,
+        "cloning a catalog must preserve the registered font blob identity"
+    );
+
+    let (collection, _) = first.resources_mut();
+    let registered = collection.register_fonts(Blob::from(ARABIC_FONT.to_vec()), None);
+    assert!(!registered.is_empty());
+
+    let (collection, _) = clone.resources_mut();
+    assert!(
+        collection.family_id("Noto Kufi Arabic").is_some(),
+        "a clone must observe registrations through Fontique's shared backing"
+    );
+}
+
+#[cfg(feature = "std")]
+#[test]
+fn font_set_clones_share_file_source_cache() {
+    use alloc::{format, sync::Arc};
+    use fontique::{SourceId, SourceInfo, SourceKind};
+
+    let source_id = SourceId::new();
+    let path = std::env::temp_dir().join(format!(
+        "underwood-font-cache-{}-{}.ttf",
+        std::process::id(),
+        source_id.to_u64()
+    ));
+    std::fs::write(&path, LATIN_FONT).expect("temporary font fixture must be writable");
+    let source = SourceInfo::new(source_id, SourceKind::Path(Arc::from(path.as_path())));
+
+    let mut first = FontSet::empty();
+    let mut clone = first.clone();
+    let (_, first_cache) = first.resources_mut();
+    let first_blob = first_cache
+        .get(&source)
+        .expect("first cache must load the temporary font");
+    std::fs::remove_file(&path).expect("temporary font fixture must be removable");
+
+    let (_, clone_cache) = clone.resources_mut();
+    let clone_blob = clone_cache
+        .get(&source)
+        .expect("clone must reuse shared data after the source is removed");
+    assert_eq!(first_blob.id(), clone_blob.id());
+}
+
+#[cfg(feature = "std")]
+fn memory_font_blob_id(collection: &mut fontique::Collection, family_name: &str) -> u64 {
+    let family = collection
+        .family_by_name(family_name)
+        .expect("registered fixture family must be present");
+    let font = family
+        .default_font()
+        .expect("registered fixture family must contain a font");
+    let fontique::SourceKind::Memory(blob) = font.source().kind() else {
+        panic!("registered fixture must remain a memory font");
+    };
+    blob.id()
+}
+
+#[cfg(feature = "system-fonts")]
+#[test]
+fn system_only_font_sets_are_constructible() {
+    let system = FontSet::empty().with_system_fonts();
+    assert!(
+        system.registered_family_names().is_empty(),
+        "platform families must not leak into stable registered-family reporting"
+    );
+}
+
+#[test]
 fn control_only_paragraph_emits_no_phantom_glyph() {
     let mut document = Document::new(DocumentId::from_bytes(*b"shaped-control-1"));
     let mut edit = document.edit();

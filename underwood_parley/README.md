@@ -13,6 +13,22 @@ Fontconfig loading so compiling the optional feature does not require
 Fontconfig development headers; if the runtime library is absent, no system
 fallback is added.
 
+`FontSet::empty` supports missing-font proofs and system-font-only hosts.
+`FontSet::registered_family_names` reports only sorted, deduplicated embedded
+families, so the result is stable across machines. Registered bytes always use
+shared blob backing. Enabling the explicit `std` feature additionally gives
+Fontique's collection and source cache synchronized shared backing; the
+`system-fonts` feature implies it. This makes clones suitable for constructing
+many UI-local paragraph engines without catalog copies, font re-registration,
+or repeated file loads. Default `no_std + alloc` builds retain shared font bytes
+but clone Fontique's catalog records locally because Fontique's synchronized
+stores require `std`.
+
+All generic-family and fallback configuration must be completed before a
+`FontSet` is cloned into paragraph engines. The set is then an application
+resource snapshot: per-engine analyzers, shapers, query state, and paragraph
+caches remain local, while the font universe stays coherent.
+
 Implementation ownership is deliberately private and narrow:
 
 - `engine` coordinates paragraph identities, invalidation, and retained physics;
