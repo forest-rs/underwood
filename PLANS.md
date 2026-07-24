@@ -2,7 +2,7 @@
 
 ## Module boundaries and Parley Engine convergence
 
-**Status:** Active — adapter and core decomposition complete; protected landing in progress
+**Status:** Active — implementation and local proof complete; protected landing in progress
 
 **Beads:** `und-oh0.5.5`, `und-oh0.5.5.1`, `und-oh0.5.5.2`,
 `und-oh0.5.5.3`
@@ -31,15 +31,20 @@ not own implementation algorithms.
 3. Split oversized Underwood scene and adapter implementation files by cache,
    projection, geometry, interaction, prepared-record, transaction, and host
    mapping ownership while preserving the 59-line public crate facade.
-4. Stop at the human gate before changing dependency pins, then move to current
-   `parley_engine`, Fontique, and Parlance from one immutable source revision.
+4. Stop at the human gate before changing dependency pins, then move
+   `parley_engine`, Fontique, and Parlance together to approved immutable
+   revision `9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb`.
 5. Replace fork-only in-place break mutation with a private line former that
    re-itemizes retained paragraph analysis at committed line boundaries and
    shapes final line ranges through public Parley Engine APIs.
-6. Prove Arabic joins, ligatures, fit-changing backtracking, intrinsic modes,
-   mixed bidi, source-complete interaction, and cache behavior; measure and
-   report line-reshape work rather than hiding it inside width-only formation.
-7. Run adversarial review, every local gate, and protected remote landing for
+6. Add a paragraph-level explicit base-direction value, keep it out of inline
+   shaping style, and pass it to Parley Engine analysis with exact cache
+   invalidation.
+7. Prove Arabic joins, ligatures, fit-changing backtracking, intrinsic modes,
+   auto and explicit paragraph direction, mixed bidi, source-complete
+   interaction, and cache behavior; measure and report line-reshape work rather
+   than hiding it inside width-only formation.
+8. Run adversarial review, every local gate, and protected remote landing for
    each independently coherent slice.
 
 ### Risks and controls
@@ -51,6 +56,9 @@ not own implementation algorithms.
 - **Private second shaper:** the local line former may call only public Parley
   Engine analysis, itemization, and shaping APIs; it may not copy HarfRust
   internals or add a direct shaping dependency.
+- **Style-layer confusion:** paragraph base direction is an analysis input, not
+  an inline shaping value; it receives its own computed paragraph-style
+  partition and invalidates analysis for only the affected paragraph.
 - **Correctness lost for convenience:** the existing Arabic, ligature,
   backtracking, bidi, interaction, PDF, and visual traps remain blocking.
 - **Hidden performance regression:** a multiline formation wind tunnel records

@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use fontique::Synthesis;
-use parley_core::{Analysis, ShapedText, shape::ClusterData};
+use parley_engine::{Analysis, ShapedText, shape::ClusterData};
 use underwood::adapter::{FontSynthesis, GlyphPaintCoverage, PreparationError, PreparedGlyph};
 use underwood::{FontVariation, Tag, Vec2};
 
@@ -19,7 +19,7 @@ pub(crate) fn lower_glyphs(
     text: &str,
     analysis: &Analysis,
     shaped_text: &ShapedText,
-    run: &parley_core::ShapedRun,
+    run: &parley_engine::ShapedRun,
     cluster_range: Range<usize>,
     paint_runs: &[underwood::adapter::PaintRun],
 ) -> Result<Vec<PreparedGlyph>, PreparationError> {
@@ -154,7 +154,7 @@ pub(crate) fn unrendered_source(
 }
 
 fn cluster_source(
-    run: &parley_core::ShapedRun,
+    run: &parley_engine::ShapedRun,
     clusters: &[ClusterData],
     index: usize,
 ) -> Result<Range<u32>, PreparationError> {
@@ -207,12 +207,12 @@ fn cluster_source(
 
 fn lower_cluster_glyphs(
     shaped_text: &ShapedText,
-    run: &parley_core::ShapedRun,
+    run: &parley_engine::ShapedRun,
     cluster: &ClusterData,
-    mut lower: impl FnMut(parley_core::Glyph) -> Result<(), PreparationError>,
+    mut lower: impl FnMut(parley_engine::Glyph) -> Result<(), PreparationError>,
 ) -> Result<(), PreparationError> {
     if cluster.glyph_len == u8::MAX {
-        return lower(parley_core::Glyph {
+        return lower(parley_engine::Glyph {
             id: cluster.glyph_offset,
             x: 0.0,
             y: 0.0,

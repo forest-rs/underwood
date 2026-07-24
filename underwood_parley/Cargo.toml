@@ -17,7 +17,7 @@ system-fonts = ["fontique/fontconfig-dlopen", "fontique/system"]
 [dependencies]
 fontique.workspace = true
 parlance.workspace = true
-parley_core.workspace = true
+parley_engine.workspace = true
 underwood.workspace = true
 
 [lints]

@@ -12,8 +12,8 @@ use core::fmt;
 use core::ops::Range;
 
 use crate::{
-    Affine, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId, Rect, ShapingStyle,
-    TextConstraint, Vec2,
+    Affine, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId, ParagraphStyle, Rect,
+    ShapingStyle, TextConstraint, Vec2,
 };
 
 mod error;
@@ -24,8 +24,9 @@ mod prepared;
 
 pub use error::{PreparationError, PreparationErrorKind};
 pub use formation::{
-    FormationWork, InlineFlowRun, InlineFlowStyleId, PaintRun, ParagraphConstraints,
-    ParagraphFormation, ParagraphFormationOutput, ParagraphInput, ShapingRun, ShapingStyleId,
+    FormationWork, InlineFlowRun, InlineFlowStyleId, LineShapingWork, PaintRun,
+    ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput, ShapingRun,
+    ShapingStyleId,
 };
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedCaret, PreparedClusterSide,

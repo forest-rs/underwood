@@ -198,7 +198,7 @@ fn non_breaking_space_and_unbreakable_words_overflow_honestly() {
 }
 
 #[test]
-fn width_and_line_height_reform_without_reshaping() {
+fn width_reshapes_committed_lines_while_line_height_reuses_them() {
     let text = "alpha beta gamma";
     let (document, compact_styles, paint) = fixture_document(text, 1.2);
     let (_, spacious_styles, _) = fixture_document(text, 1.8);
@@ -224,6 +224,9 @@ fn width_and_line_height_reform_without_reshaping() {
     assert_eq!(narrowed.work().itemization().paragraphs(), 0);
     assert_eq!(narrowed.work().font_selection().paragraphs(), 0);
     assert_eq!(narrowed.work().shape().paragraphs(), 0);
+    assert_eq!(narrowed.work().line_font_resolution().paragraphs(), 1);
+    assert_eq!(narrowed.work().line_shape().paragraphs(), 1);
+    assert!(narrowed.work().line_reshapes() > 0);
     assert_eq!(narrowed.work().flow().paragraphs(), 1);
 
     let spacious = SceneRequest::new(
@@ -236,6 +239,8 @@ fn width_and_line_height_reform_without_reshaping() {
         .expect("line-height-only formation succeeds");
     assert_eq!(respaced.work().analysis().paragraphs(), 0);
     assert_eq!(respaced.work().shape().paragraphs(), 0);
+    assert_eq!(respaced.work().line_shape().paragraphs(), 0);
+    assert_eq!(respaced.work().line_reshapes(), 0);
     assert_eq!(respaced.work().flow().paragraphs(), 1);
     assert!(
         respaced.scene().lines()[0].bounds().height()
@@ -277,8 +282,11 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         .prepare(&document.snapshot(), &narrow)
         .expect("the legal break reshapes its bounded cursive context");
     assert_eq!(output.work().analysis().paragraphs(), 0);
+    assert_eq!(output.work().font_selection().paragraphs(), 0);
     assert_eq!(output.work().shape().paragraphs(), 0);
-    assert_eq!(output.work().break_reshapes(), 1);
+    assert_eq!(output.work().line_font_resolution().paragraphs(), 1);
+    assert_eq!(output.work().line_shape().paragraphs(), 1);
+    assert_eq!(output.work().line_reshapes(), 2);
     let broken_glyphs: Vec<_> = output
         .scene()
         .fragments()
@@ -308,10 +316,9 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
 fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
     let text = "س سل\u{200b}ام";
     let pos = text.find("ام").expect("unsafe suffix exists");
-    let (analysis, mut shaper, canonical) = shape_arabic(text);
-    let mut formed = canonical.clone();
-    let mut clusters =
-        collect_logical_clusters(text, &formed).expect("canonical clusters are valid");
+    let (analysis, canonical) = shape_arabic(text);
+    let clusters =
+        collect_logical_clusters(text, &canonical).expect("canonical clusters are valid");
     let unsafe_end = clusters
         .iter()
         .position(|cluster| cluster.source.start == pos)
@@ -320,27 +327,21 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
         .rev()
         .find(|&index| {
             let cluster = &clusters[index];
-            cluster.boundary == parley_core::Boundary::Line && !cluster.ligature_component
+            cluster.boundary == parley_engine::Boundary::Line && !cluster.ligature_component
         })
         .expect("fixture has an earlier legal break");
     let unbroken_advance: f64 = clusters[..unsafe_end]
         .iter()
         .map(|cluster| cluster.advance)
         .sum();
-    shaper.apply_break(text, &analysis, &mut formed, pos);
+    let formed = shape_arabic_range(text, &analysis, 0..pos);
     let broken_clusters =
         collect_logical_clusters(text, &formed).expect("broken clusters are valid");
-    let broken_advance: f64 = broken_clusters[..unsafe_end]
-        .iter()
-        .map(|cluster| cluster.advance)
-        .sum();
+    let broken_advance: f64 = broken_clusters.iter().map(|cluster| cluster.advance).sum();
     assert!(
         broken_advance > unbroken_advance,
         "the fixture must make break shaping change fit"
     );
-    shaper.apply_concat(text, &analysis, &mut formed, pos);
-    clusters = collect_logical_clusters(text, &formed).expect("restored clusters are valid");
-
     let width = (unbroken_advance + broken_advance) * 0.5;
     let constraint = TextConstraint::Wrap(
         FiniteWidth::new(width).expect("derived test width is finite and positive"),
@@ -348,23 +349,37 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
     let initial = choose_line(&clusters, 0, constraint).expect("initial selection succeeds");
     assert_eq!(initial.reason, TestLineBreakReason::Regular);
     assert_eq!(initial.end, unsafe_end, "clusters: {clusters:#?}");
-    let (committed_end, committed_advance, committed_reshape) = commit_regular_break(
-        &mut shaper,
-        &analysis,
-        text,
-        &mut formed,
-        &mut clusters,
-        0,
-        unsafe_end,
-        constraint,
-    )
-    .expect("overflowing reshaped break backs up");
-    assert_eq!(committed_end, prior_safe);
-    assert!(committed_advance <= width);
-    assert!(!committed_reshape, "the committed earlier seam is safe");
+    let mut document = Document::new(DocumentId::from_bytes(*b"reshape-overflow"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    edit.append_text(paragraph, InlineRole::TEXT, text)
+        .expect("fixture text is valid");
+    edit.commit().expect("fixture document is valid");
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Noto Kufi Arabic"), 20.0)
+            .expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let output = fixture_engine()
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &styles, &paint),
+        )
+        .expect("overflowing line-final shaping backs up");
+    let prior_source =
+        u32::try_from(clusters[prior_safe].source.start).expect("fixture source range fits");
     assert_eq!(
-        formed, canonical,
-        "rejecting the unsafe seam must concat it before backing up"
+        output.scene().lines()[0].sources()[0].bytes().end,
+        prior_source
+    );
+    assert!(
+        output.work().line_reshapes() >= 3,
+        "rejected candidate, accepted candidate, and remainder must be visible work"
     );
 }
 

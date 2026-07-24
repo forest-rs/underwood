@@ -10,7 +10,7 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use parley_core::{Analysis, Boundary, ShapedText, Shaper, shape::Whitespace};
+use parley_engine::{Boundary, ShapedText, shape::Whitespace};
 use underwood::adapter::{InlineFlowRun, LineBreakReason, ParagraphConstraints, PreparationError};
 use underwood::{InlineFlowStyle, TextConstraint};
 
@@ -24,6 +24,29 @@ pub(crate) struct LinePlan {
     pub(crate) height: f64,
     pub(crate) content_ascent: f64,
     pub(crate) content_descent: f64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FormedLine {
+    pub(crate) plan: LinePlan,
+    pub(crate) shaped_text: ShapedText,
+    pub(crate) scripts: Vec<[u8; 4]>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LineShapeOutput {
+    pub(crate) shaped_text: ShapedText,
+    pub(crate) scripts: Vec<[u8; 4]>,
+    pub(crate) resolved_clusters: u32,
+    pub(crate) shaped_glyphs: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LineFormationWork {
+    pub(crate) reshapes: u32,
+    pub(crate) resolved_clusters: u32,
+    pub(crate) shaped_runs: u32,
+    pub(crate) shaped_glyphs: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -45,78 +68,173 @@ pub(crate) struct RunPiece {
 }
 
 pub(crate) fn form_lines(
-    shaper: &mut Shaper,
-    analysis: &Analysis,
     text: &str,
-    shaped_text: &mut ShapedText,
-    clusters: &mut Vec<LogicalCluster>,
+    canonical_text: &ShapedText,
+    canonical_scripts: &[[u8; 4]],
+    clusters: &[LogicalCluster],
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
     constraints: ParagraphConstraints,
-    plans: &mut Vec<LinePlan>,
-) -> Result<u32, PreparationError> {
-    plans.clear();
+    lines: &mut Vec<FormedLine>,
+    mut shape_line: impl FnMut(Range<usize>) -> Result<LineShapeOutput, PreparationError>,
+) -> Result<LineFormationWork, PreparationError> {
+    lines.clear();
     if text.is_empty() {
-        return Ok(0);
+        return Ok(LineFormationWork::default());
     }
     if clusters.is_empty() {
         return Err(PreparationError::invalid_output());
     }
 
-    let mut break_reshapes = 0_u32;
+    let first_choice = choose_line(clusters, 0, constraints.text())?;
+    if first_choice.reason == LineBreakReason::End && first_choice.end == clusters.len() {
+        lines.push(FormedLine {
+            plan: make_line_plan(
+                canonical_text,
+                clusters,
+                inline_flow_styles,
+                inline_flow_runs,
+                0..clusters.len(),
+                first_choice.reason,
+                first_choice.advance,
+                None,
+            )?,
+            shaped_text: canonical_text.clone(),
+            scripts: canonical_scripts.to_vec(),
+        });
+        return Ok(LineFormationWork::default());
+    }
+
+    let mut work = LineFormationWork::default();
     let mut start = 0_usize;
     while start < clusters.len() {
         let choice = choose_line(clusters, start, constraints.text())?;
-        let (end, advance, reshaped) = if choice.reason == LineBreakReason::Regular {
-            commit_regular_break(
-                shaper,
-                analysis,
-                text,
+        let mut end = choice.end;
+        let formed = loop {
+            let source = line_source(clusters, start..end)?;
+            let output = shape_line(source.clone())?;
+            let LineShapeOutput {
                 shaped_text,
-                clusters,
-                start,
-                choice.end,
-                constraints.text(),
-            )?
-        } else {
-            (choice.end, choice.advance, false)
+                scripts,
+                resolved_clusters,
+                shaped_glyphs,
+            } = output;
+            work.reshapes = work.reshapes.saturating_add(1);
+            work.resolved_clusters = work.resolved_clusters.saturating_add(resolved_clusters);
+            work.shaped_runs = work
+                .shaped_runs
+                .saturating_add(u32::try_from(shaped_text.runs().len()).unwrap_or(u32::MAX));
+            work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
+            let formed_clusters = collect_logical_clusters(text, &shaped_text)?;
+            if formed_clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
+                || formed_clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
+            {
+                return Err(PreparationError::invalid_output());
+            }
+            let advance = formed_clusters.iter().map(|cluster| cluster.advance).sum();
+            let fits = choice.reason != LineBreakReason::Regular
+                || match constraints.text() {
+                    TextConstraint::MinContent => true,
+                    TextConstraint::MaxContent => true,
+                    TextConstraint::Wrap(width) => advance <= width.get(),
+                };
+            if fits {
+                let plan = make_line_plan(
+                    &shaped_text,
+                    &formed_clusters,
+                    inline_flow_styles,
+                    inline_flow_runs,
+                    0..formed_clusters.len(),
+                    choice.reason,
+                    advance,
+                    None,
+                )?;
+                break FormedLine {
+                    plan,
+                    shaped_text,
+                    scripts,
+                };
+            }
+            let previous = (start + 1..end).rev().find(|&index| {
+                let cluster = &clusters[index];
+                cluster.boundary == Boundary::Line && !cluster.ligature_component
+            });
+            let Some(previous) = previous else {
+                let plan = make_line_plan(
+                    &shaped_text,
+                    &formed_clusters,
+                    inline_flow_styles,
+                    inline_flow_runs,
+                    0..formed_clusters.len(),
+                    choice.reason,
+                    advance,
+                    None,
+                )?;
+                break FormedLine {
+                    plan,
+                    shaped_text,
+                    scripts,
+                };
+            };
+            end = previous;
         };
-        if reshaped {
-            break_reshapes = break_reshapes.saturating_add(1);
+        if formed.scripts.len() != formed.shaped_text.runs().len() {
+            return Err(PreparationError::invalid_output());
         }
-        plans.push(make_line_plan(
-            shaped_text,
-            clusters,
-            inline_flow_styles,
-            inline_flow_runs,
-            start..end,
-            choice.reason,
-            advance,
-            None,
-        )?);
+        lines.push(formed);
         start = end;
     }
 
-    if plans
+    if lines
         .last()
-        .is_some_and(|plan| plan.reason == LineBreakReason::Mandatory)
+        .is_some_and(|line| line.plan.reason == LineBreakReason::Mandatory)
     {
-        let previous = plans
+        let previous = lines
             .last()
-            .cloned()
+            .map(|line| line.plan.clone())
             .ok_or_else(PreparationError::invalid_output)?;
-        plans.push(make_line_plan(
-            shaped_text,
-            clusters,
+        lines.push(FormedLine {
+            plan: make_line_plan(
+                canonical_text,
+                clusters,
+                inline_flow_styles,
+                inline_flow_runs,
+                clusters.len()..clusters.len(),
+                LineBreakReason::End,
+                0.0,
+                Some(&previous),
+            )?,
+            shaped_text: ShapedText::new(),
+            scripts: Vec::new(),
+        });
+    }
+    Ok(work)
+}
+
+pub(crate) fn update_line_metrics(
+    text: &str,
+    lines: &mut [FormedLine],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_runs: &[InlineFlowRun],
+) -> Result<(), PreparationError> {
+    let mut previous = None;
+    for line in lines {
+        let reason = line.plan.reason;
+        let advance = line.plan.advance;
+        let clusters = collect_logical_clusters(text, &line.shaped_text)?;
+        line.plan = make_line_plan(
+            &line.shaped_text,
+            &clusters,
             inline_flow_styles,
             inline_flow_runs,
-            clusters.len()..clusters.len(),
-            LineBreakReason::End,
-            0.0,
-            Some(&previous),
-        )?);
+            0..clusters.len(),
+            reason,
+            advance,
+            previous.as_ref(),
+        )?;
+        previous = Some(line.plan.clone());
     }
-    Ok(break_reshapes)
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -186,52 +304,17 @@ pub(crate) fn choose_line(
     })
 }
 
-pub(crate) fn commit_regular_break(
-    shaper: &mut Shaper,
-    analysis: &Analysis,
-    text: &str,
-    shaped_text: &mut ShapedText,
-    clusters: &mut Vec<LogicalCluster>,
-    start: usize,
-    mut end: usize,
-    constraint: TextConstraint,
-) -> Result<(usize, f64, bool), PreparationError> {
-    loop {
-        let pos = clusters
-            .get(end)
-            .ok_or_else(PreparationError::invalid_output)?
-            .source
-            .start;
-        let reshaped = !shaped_text.unsafe_break_region(pos).is_empty();
-        if reshaped {
-            shaper.apply_break(text, analysis, shaped_text, pos);
-            *clusters = collect_logical_clusters(text, shaped_text)?;
-        }
-        let advance = clusters[start..end]
-            .iter()
-            .map(|cluster| cluster.advance)
-            .sum();
-        if match constraint {
-            TextConstraint::MinContent => true,
-            TextConstraint::MaxContent => false,
-            TextConstraint::Wrap(width) => advance <= width.get(),
-        } {
-            return Ok((end, advance, reshaped));
-        }
-
-        let previous = (start + 1..end).rev().find(|&index| {
-            let cluster = &clusters[index];
-            cluster.boundary == Boundary::Line && !cluster.ligature_component
-        });
-        let Some(previous) = previous else {
-            return Ok((end, advance, reshaped));
-        };
-        if reshaped {
-            shaper.apply_concat(text, analysis, shaped_text, pos);
-            *clusters = collect_logical_clusters(text, shaped_text)?;
-        }
-        end = previous;
-    }
+fn line_source(
+    clusters: &[LogicalCluster],
+    logical_range: Range<usize>,
+) -> Result<Range<usize>, PreparationError> {
+    let first = clusters
+        .get(logical_range.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let last = clusters
+        .get(logical_range.end.saturating_sub(1))
+        .ok_or_else(PreparationError::invalid_output)?;
+    Ok(first.source.start..last.source.end)
 }
 
 pub(crate) fn collect_logical_clusters(

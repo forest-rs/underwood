@@ -17,8 +17,10 @@ The first draft public slice is deliberately complete end to end:
 - [`TextBlock`] hides document-editing ceremony for retained one-paragraph
   text while preserving the same source model, paragraph engine, caches, and
   [`TextScene`] as documents;
-- [`LayoutEngine`] retains formed paragraphs and avoids analysis or shaping
-  for unchanged siblings, paint-value changes, and constraint-only changes;
+- [`LayoutEngine`] retains formed paragraphs and avoids analysis or canonical
+  paragraph shaping for unchanged siblings, paint-value changes, and
+  constraint-only changes; wrapped constraint changes expose their separate
+  line-final shaping work;
   an explicit [`CacheBudget`] bounds retained geometry and coordinated backend
   state, while release operations and [`CacheDiagnostics`] expose lifecycle
   facts to hosts;
@@ -29,7 +31,8 @@ The first draft public slice is deliberately complete end to end:
   intentionally unrendered controls;
 - [`ComputedInlineStyle`] keeps [`ShapingStyle`], [`InlineFlowStyle`], and
   [`PaintSlot`] values in separate invalidation partitions while [`StyleMap`]
-  assigns complete styles to semantic text leaves;
+  assigns complete inline styles to semantic text leaves and
+  [`ParagraphStyle`] values to paragraphs;
 - [`ShapingStyle`] carries backend-neutral family, weight, width, style,
   language, feature, and variation requests; the separate adapter resolves
   them without moving font matching into this crate;
@@ -143,7 +146,7 @@ layout.release_document(label.id());
 
 [`TextConstraint::MaxContent`] suppresses soft wrapping while preserving
 mandatory breaks. [`TextConstraint::MinContent`] commits every legal soft
-break, including break-sensitive reshaping, and
+break through line-final shaping, and
 [`TextConstraint::Wrap`] greedily fits legal breaks to one [`FiniteWidth`].
 [`TextMetrics`] reports maximum actual line advance, total block extent, and
 optional first/last baselines. Empty blocks have zero width, their resolved
@@ -153,6 +156,23 @@ line height, and no text baseline.
 arrays. `BlockRequest` goes further and borrows one caller-owned style, so any
 number of labels can reuse the same style and paint table without rebuilding
 authored font requests.
+
+`ParagraphStyle` keeps paragraph base direction out of inline font style.
+Automatic direction remains the default; explicit LTR and RTL values are
+available for markup, host, and authoring semantics which cannot be inferred
+from first-strong text:
+
+```rust,ignore
+use underwood::{BaseDirection, ParagraphStyle};
+
+styles.set_paragraph_style(
+    paragraph,
+    ParagraphStyle::new(BaseDirection::Rtl),
+);
+```
+
+Changing paragraph direction invalidates Unicode analysis for that paragraph.
+Changing only line height reuses accepted line glyphs and recomputes metrics.
 
 ## Composition epochs and editable surfaces
 

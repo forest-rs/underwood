@@ -138,17 +138,41 @@ superseded outline-bounds commit. The public fork branch
 `bounded-break-reshape` points to this clean commit. All Underwood workspace
 members use the same immutable revision.
 
+### Implementation update — current Engine convergence, 2026-07-24
+
+Underwood now pins Parley Engine, Fontique, Parlance, high-level Parley, and
+the private experiment crates to one exact source revision:
+[`9c41a4d0`](https://github.com/waywardmonkeys/parley/commit/9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb).
+This revision includes the `parley_core` to `parley_engine` rename and explicit
+`BaseDirection` analysis input.
+
+The temporary bounded-reshape fork is retired. Underwood's private line former
+chooses legal boundaries from retained canonical clusters, re-itemizes each
+committed line range, and shapes it through public Parley Engine APIs. A
+fit-changing result backs up and retries the preceding legal boundary. The
+current public Engine does not expose unsafe-to-break regions, so Underwood
+conservatively shapes each line in a wrapped paragraph, reuses the canonical
+font choice, and reports attempted line shaping, retained-font resolution,
+runs, and glyphs separately from canonical paragraph shaping. A single
+unwrapped line reuses the canonical result.
+
+Explicit base direction is a computed paragraph value, not an inline shaping
+value. Changing it invalidates analysis, while changing font or paint values
+retains the existing stage boundaries.
+
 ## Seam matrix
 
 | Capability | Current upstream seam | Underwood position | Readiness |
 | --- | --- | --- | --- |
 | Whole-paragraph Unicode analysis | Owned `Analysis`, reusable `Analyzer` | Adapt directly; never reimplement | Usable, still evolving |
 | Bidi resolution | Retained levels in `Analysis` | Consume as analysis identity | Usable |
+| Explicit paragraph direction | `AnalysisOptions::base_direction` | Preserve as computed paragraph style and analysis identity | Usable |
 | Itemization | `Analysis::itemize` plus `split_after` predicate | Supply shaping-topology predicate; retain Underwood key | Usable |
 | Font selection | `Shaper::shape_item` callback over clusters | Bridge the Underwood font resolver | Usable |
 | Shaping | Owned `ShapedText` on current Parley `main` | Retain directly; do not maintain a second shaped-run model | Usable |
 | Retained shaped text | Landed PR #679 | Consume the owned immutable output | Usable |
-| Bounded break reshaping | Candidate `44d155e` on current main | Consume exact pin; upstream and retire fork URL | Executable, upstream review pending |
+| Line-final shaping | Public analysis, itemization, and shaping APIs | Private conservative line former; measure and upstream reusable policy when ownership settles | Executable |
+| Bounded break reshaping | No longer required by Underwood | Historical candidate retired; no fork pin remains | Retired |
 | Glyph ink metrics | Superseded candidate `d12c801` | Do not consume; actual paint extent belongs to the renderer under Design-0010 | Retired from Underwood |
 | Greedy line breaking | High-level `BreakLines` and `BreakerState` | Evidence source and possible temporary adapter, not document flow | Usable but wrong ownership |
 | Arbitrary line intervals | Mutable line geometry and custom out-of-flow yield | Drive an Underwood breaker over core-shaped data | Partial |

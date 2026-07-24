@@ -4,6 +4,84 @@
 use super::*;
 
 #[test]
+fn explicit_paragraph_direction_covers_neutral_empty_and_first_strong_traps() {
+    let mut analyzer = parley_engine::Analyzer::new();
+    let numeric_auto = analyze_text(&mut analyzer, "123 / 456", BaseDirection::Auto);
+    let numeric_rtl = analyze_text(&mut analyzer, "123 / 456", BaseDirection::Rtl);
+    assert!(!numeric_auto.is_rtl());
+    assert!(numeric_rtl.is_rtl());
+    assert!(numeric_auto.bidi_levels().is_empty());
+    assert!(
+        numeric_rtl
+            .bidi_levels()
+            .iter()
+            .any(|level| !level.is_multiple_of(2))
+    );
+
+    let empty_rtl = analyze_text(&mut analyzer, "", BaseDirection::Rtl);
+    assert!(empty_rtl.is_rtl());
+    assert!(empty_rtl.bidi_levels().is_empty());
+
+    let arabic_auto = analyze_text(&mut analyzer, "مرحبا hello", BaseDirection::Auto);
+    let arabic_ltr = analyze_text(&mut analyzer, "مرحبا hello", BaseDirection::Ltr);
+    assert!(arabic_auto.is_rtl());
+    assert!(!arabic_ltr.is_rtl());
+    assert_ne!(arabic_auto.bidi_levels(), arabic_ltr.bidi_levels());
+}
+
+#[test]
+fn paragraph_style_direction_invalidates_analysis_and_reaches_the_scene() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"base-direction01"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    edit.append_text(paragraph, InlineRole::TEXT, "123 / 456")
+        .expect("fixture text is valid");
+    edit.commit().expect("fixture document is valid");
+
+    let inline = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let auto_styles = StyleMap::new(inline.clone());
+    let mut rtl_styles = StyleMap::new(inline);
+    rtl_styles.set_paragraph_style(paragraph, ParagraphStyle::new(BaseDirection::Rtl));
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let constraint = TextConstraint::MaxContent;
+    let mut engine = fixture_engine();
+
+    let auto = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &auto_styles, &paint),
+        )
+        .expect("automatic direction prepares");
+    assert!(
+        auto.scene()
+            .fragments()
+            .iter()
+            .all(|fragment| fragment.bidi_level().is_multiple_of(2))
+    );
+
+    let rtl = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &rtl_styles, &paint),
+        )
+        .expect("explicit RTL direction prepares");
+    assert_eq!(rtl.work().analysis().paragraphs(), 1);
+    assert_eq!(rtl.work().shape().paragraphs(), 1);
+    assert!(
+        rtl.scene()
+            .fragments()
+            .iter()
+            .any(|fragment| !fragment.bidi_level().is_multiple_of(2))
+    );
+}
+
+#[test]
 fn big_endian_readers_reject_short_input() {
     assert_eq!(read_u16(&[0x12, 0x34], 0), Some(0x1234));
     assert_eq!(read_u16(&[0x12], 0), None);
@@ -41,7 +119,11 @@ fn analysis_units_lock_extended_grapheme_trap_corpus() {
             core::iter::once(0..6).collect::<Vec<_>>(),
         ),
     ] {
-        let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
+        let analysis = analyze_text(
+            &mut parley_engine::Analyzer::new(),
+            text,
+            BaseDirection::Auto,
+        );
         assert_eq!(
             collect_analysis_units(text, &analysis)
                 .expect("Parley analysis must expose complete grapheme units"),
@@ -58,7 +140,11 @@ fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
         ("regional-indicator", "🇺🇳"),
         ("spacing-mark", "क\u{93e}"),
     ] {
-        let analysis = analyze_text(&mut parley_core::Analyzer::new(), text);
+        let analysis = analyze_text(
+            &mut parley_engine::Analyzer::new(),
+            text,
+            BaseDirection::Auto,
+        );
         let units = collect_analysis_units(text, &analysis)
             .expect("Parley analysis must expose complete grapheme units");
         assert_eq!(units.len(), 1, "{name} must remain one interaction unit");
@@ -210,7 +296,11 @@ fn control_only_paragraph_emits_no_phantom_glyph() {
 #[test]
 fn itemization_bounds_shaped_text_relative_offsets() {
     let text = "a".repeat(usize::from(u16::MAX) + 2);
-    let analysis = analyze_text(&mut parley_core::Analyzer::new(), &text);
+    let analysis = analyze_text(
+        &mut parley_engine::Analyzer::new(),
+        &text,
+        BaseDirection::Auto,
+    );
     let style_indices = vec![0; text.chars().count()];
     let items: Vec<_> = analysis
         .itemize(&text, |range| split_item_after(&range, &style_indices))

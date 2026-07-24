@@ -460,6 +460,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "line height must not invalidate shaping"
     );
     assert_eq!(
+        flow_scene.work().line_shape().paragraphs(),
+        0,
+        "line height must reuse accepted line glyphs"
+    );
+    assert_eq!(
         flow_scene.work().flow().paragraphs(),
         1,
         "line height must rebuild only its paragraph geometry"
@@ -479,7 +484,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(
         narrow_scene.work().shape().paragraphs(),
         0,
-        "width must not invalidate shaping"
+        "width must retain canonical shaping"
+    );
+    assert!(
+        narrow_scene.work().line_shape().paragraphs() > 0,
+        "new wrapped ranges must expose line-final shaping"
     );
     assert_eq!(
         narrow_scene.work().flow().paragraphs(),

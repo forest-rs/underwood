@@ -5,7 +5,7 @@
 
 use crate::{
     ComputedInlineStyle, Document, DocumentId, DocumentSnapshot, EditError, InlineRole, PaintTable,
-    ParagraphRole, TextConstraint, TextId,
+    ParagraphRole, ParagraphStyle, TextConstraint, TextId,
 };
 
 /// Mutable retained single-paragraph text content.
@@ -92,6 +92,7 @@ pub struct BlockRequest<'a> {
     pub(crate) constraint: TextConstraint,
     pub(crate) style: &'a ComputedInlineStyle,
     pub(crate) paint: &'a PaintTable,
+    pub(crate) paragraph_style: ParagraphStyle,
 }
 
 impl<'a> BlockRequest<'a> {
@@ -106,7 +107,15 @@ impl<'a> BlockRequest<'a> {
             constraint,
             style,
             paint,
+            paragraph_style: ParagraphStyle::DEFAULT,
         }
+    }
+
+    /// Returns a copy with paragraph-level analysis and flow values.
+    #[must_use]
+    pub const fn with_paragraph_style(mut self, style: ParagraphStyle) -> Self {
+        self.paragraph_style = style;
+        self
     }
 }
 

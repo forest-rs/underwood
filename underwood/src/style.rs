@@ -5,8 +5,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::{
-    Brush, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
-    FontWidth, Language, StyleError, StyleErrorKind, TextId,
+    BaseDirection, Brush, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation,
+    FontWeight, FontWidth, Language, ParagraphId, StyleError, StyleErrorKind, TextId,
 };
 
 /// Dense caller-defined index into a [`PaintTable`].
@@ -341,11 +341,49 @@ impl ComputedInlineStyle {
     }
 }
 
-/// Complete per-leaf computed styles over one default style.
+/// Complete computed values that apply to one paragraph as a whole.
+///
+/// Paragraph values are kept separate from [`ShapingStyle`] because they
+/// affect analysis and line formation rather than inline font shaping.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ParagraphStyle {
+    base_direction: BaseDirection,
+}
+
+impl ParagraphStyle {
+    /// Automatically inferred paragraph direction and otherwise default
+    /// paragraph behavior.
+    pub const DEFAULT: Self = Self {
+        base_direction: BaseDirection::Auto,
+    };
+
+    /// Creates paragraph values with an explicit or automatically inferred
+    /// base direction.
+    #[must_use]
+    pub const fn new(base_direction: BaseDirection) -> Self {
+        Self { base_direction }
+    }
+
+    /// Returns the paragraph base direction used during Unicode analysis.
+    #[must_use]
+    pub const fn base_direction(self) -> BaseDirection {
+        self.base_direction
+    }
+}
+
+impl Default for ParagraphStyle {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// Complete per-paragraph and per-leaf computed styles over default values.
 #[derive(Clone, Debug)]
 pub struct StyleMap {
     pub(crate) default: ComputedInlineStyle,
     styles: Vec<(TextId, ComputedInlineStyle)>,
+    default_paragraph: ParagraphStyle,
+    paragraph_styles: Vec<(ParagraphId, ParagraphStyle)>,
 }
 
 impl StyleMap {
@@ -355,7 +393,16 @@ impl StyleMap {
         Self {
             default,
             styles: Vec::new(),
+            default_paragraph: ParagraphStyle::default(),
+            paragraph_styles: Vec::new(),
         }
+    }
+
+    /// Returns a style map whose unassigned paragraphs use `style`.
+    #[must_use]
+    pub fn with_default_paragraph_style(mut self, style: ParagraphStyle) -> Self {
+        self.default_paragraph = style;
+        self
     }
 
     /// Assigns one complete style to a text identity.
@@ -364,6 +411,19 @@ impl StyleMap {
             *current = style;
         } else {
             self.styles.push((text, style));
+        }
+    }
+
+    /// Assigns complete paragraph-level values to one paragraph identity.
+    pub fn set_paragraph_style(&mut self, paragraph: ParagraphId, style: ParagraphStyle) {
+        if let Some((_, current)) = self
+            .paragraph_styles
+            .iter_mut()
+            .find(|(id, _)| *id == paragraph)
+        {
+            *current = style;
+        } else {
+            self.paragraph_styles.push((paragraph, style));
         }
     }
 
@@ -382,8 +442,27 @@ impl StyleMap {
         &self.default
     }
 
+    /// Returns the assigned paragraph style or the paragraph default.
+    #[must_use]
+    pub fn paragraph_style_for(&self, paragraph: ParagraphId) -> ParagraphStyle {
+        self.paragraph_styles
+            .iter()
+            .find_map(|(id, style)| (*id == paragraph).then_some(*style))
+            .unwrap_or(self.default_paragraph)
+    }
+
+    /// Returns the paragraph-level default.
+    #[must_use]
+    pub const fn default_paragraph_style(&self) -> ParagraphStyle {
+        self.default_paragraph
+    }
+
     pub(crate) fn overrides(&self) -> &[(TextId, ComputedInlineStyle)] {
         &self.styles
+    }
+
+    pub(crate) fn paragraph_overrides(&self) -> &[(ParagraphId, ParagraphStyle)] {
+        &self.paragraph_styles
     }
 }
 
@@ -402,7 +481,36 @@ mod tests {
         Tag,
     };
 
-    use super::{LineHeight, ShapingStyle};
+    use super::{LineHeight, ParagraphStyle, ShapingStyle, StyleMap};
+    use crate::{
+        BaseDirection, ComputedInlineStyle, Document, DocumentId, InlineFlowStyle, PaintSlot,
+        ParagraphRole,
+    };
+
+    #[test]
+    fn paragraph_styles_are_independent_from_inline_shaping_values() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"paragraph-style0"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        edit.commit().expect("fixture document is valid");
+        let inline = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0).expect("fixture style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let mut styles = StyleMap::new(inline);
+        assert_eq!(
+            styles.paragraph_style_for(paragraph),
+            ParagraphStyle::DEFAULT
+        );
+        styles.set_paragraph_style(paragraph, ParagraphStyle::new(BaseDirection::Rtl));
+        assert_eq!(
+            styles.paragraph_style_for(paragraph).base_direction(),
+            BaseDirection::Rtl
+        );
+    }
 
     #[test]
     fn shaping_numbers_are_validated() {

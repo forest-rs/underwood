@@ -298,6 +298,8 @@ fn has_text_physics_work(work: &WorkReport) -> bool {
     work.analysis().paragraphs() > 0
         || work.font_selection().paragraphs() > 0
         || work.shape().paragraphs() > 0
+        || work.line_font_resolution().paragraphs() > 0
+        || work.line_shape().paragraphs() > 0
         || work.flow().paragraphs() > 0
         || work.geometry().paragraphs() > 0
 }

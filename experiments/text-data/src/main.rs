@@ -3,9 +3,9 @@
 
 //! Private ADR-0003 text-data distribution wind tunnel.
 
-use parley_core::{Analysis, AnalysisOptions, Analyzer, Boundary};
+use parley_engine::{Analysis, AnalysisOptions, Analyzer, Boundary};
 
-const PARLEY_REVISION: &str = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2";
+const PARLEY_REVISION: &str = "9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb";
 const ICU4X_VERSION: &str = "2.2.0";
 const CORPUS: &str = concat!(
     "Latin cafe\u{301} résumé. ",
@@ -100,10 +100,7 @@ struct AnalysisReport {
 fn analyze(text: &str) -> AnalysisReport {
     let mut analyzer = Analyzer::new();
     let mut analysis = Analysis::new();
-    let options = AnalysisOptions {
-        word_break: &[],
-        line_break_override: None,
-    };
+    let options = AnalysisOptions::default();
     analyzer.analyze(text, &options, &mut analysis);
 
     let mut digest = 0xcbf2_9ce4_8422_2325_u64;
