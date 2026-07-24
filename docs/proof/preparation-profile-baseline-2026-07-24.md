@@ -7,10 +7,13 @@ not a cross-machine performance claim. It establishes isolated workloads and
 records the first CPU and residency evidence before source projection,
 cross-identity reuse, or scratch behavior changes.
 
-Allocation call and byte evidence remains open. The host's Instruments
-Allocations template could not acquire `kperf`, and full malloc event export was
-not practical on this macOS build. No allocator wrapper, production dependency,
-or `unsafe` instrumentation was introduced to manufacture a number.
+Allocation call and byte evidence is now executable through macOS full malloc
+stack logging and `malloc_history`. The checked-in benchmark script measures
+one isolated operation against an exactly matched setup process, using
+equal-length scenario codes so process argument storage cancels from the
+difference. Two consecutive complete runs produced byte-for-byte identical
+results. No allocator wrapper, dependency, or Underwood-owned `unsafe`
+instrumentation was introduced.
 
 ## Metric and hypothesis
 
@@ -52,8 +55,23 @@ Isolated scenarios:
 ```sh
 ./target/release/underwood_label_benchmark cold-identical 500
 ./target/release/underwood_label_benchmark retained-identical 500
+./target/release/underwood_label_benchmark paint-change 500
+./target/release/underwood_label_benchmark localized-edit 100
+./target/release/underwood_label_benchmark interaction-materialization 100
 ./target/release/underwood_label_benchmark width-churn 200
+./target/release/underwood_label_benchmark region-ready 200
 ./target/release/underwood_label_benchmark identity-churn 200
+```
+
+The optional third argument limits labels per round. That makes one-operation
+external allocation traces practical without changing the ordinary 2,048-label
+timing workloads.
+
+Allocation calls and allocated bytes on macOS:
+
+```sh
+cargo build --release -p underwood_label_benchmark
+benches/labels/profile-allocations.sh
 ```
 
 The optional `UNDERWOOD_PROFILE_HOLD_SECS` environment variable holds the
@@ -91,7 +109,11 @@ Peak residency:
 | --- | ---: | ---: | ---: |
 | Cold identical | 500 | 1,024,000 | 22,979 |
 | Retained identical | 500 | 1,024,000 | 5,956 |
+| Paint change | 500 | 1,024,000 | 5,929 |
+| Localized edit | 100 | 204,800 | 29,456 |
+| Interaction materialization | 100 | 204,800 | 22,474 |
 | Width churn | 200 | 409,600 | 24,650 |
+| Region-ready width reformation | 200 | 409,600 | 24,435 |
 | Identity churn | 200 | 409,600 | 43,457 |
 
 The cold-identical path is 3.86 times the retained-identical path on this run.
@@ -165,21 +187,38 @@ behavior, code, and profiler-visible runtime state. The bounded-churn result is
 nevertheless useful: coordinated eviction prevents residency from approaching
 the 2,048-entry retained case.
 
-## Allocation evidence status
+## Allocation baseline
 
-Attempted host tools:
+| Workload | Allocation calls | Allocated bytes |
+| --- | ---: | ---: |
+| Cold identical | 542 | 130,464 |
+| Retained identical | 247 | 26,640 |
+| Paint change | 247 | 26,640 |
+| Localized edit | 739 | 158,317 |
+| Interaction materialization | 542 | 130,464 |
+| Width churn | 181 | 25,592 |
+| Region-ready width reformation | 181 | 25,592 |
+| Identity churn including block creation | 1,009 | 225,921 |
 
-1. `xcrun xctrace record --template Allocations` failed because the host could
-   not acquire `kperf` or attach to the launched target.
-2. `MallocStackLogging=1` selected lite mode, which reports current live
-   allocations rather than allocation history.
-3. `MallocStackLogging=full` recorded event logs, but exporting all events was
-   too slow to be a repeatable campaign command on this host.
+The script launches a full-logging setup and workload process for one label,
+aggregates `ALLOC`, `CALLOC`, and `REALLOC` event sizes, then subtracts the
+matched setup. It excludes VM allocation events and does not claim portable
+allocator behavior. `MallocStackLogging=1` alone selected compact/live mode on
+this host and was rejected; `MallocStackLogging=full` is required.
 
-The next allocation measurement must use an available Instruments session,
-another external allocation-capable tool, or separately approved benchmark-only
-instrumentation. Until then, no allocation-count or allocated-byte claim is
-made and `und-oh0.13.2` remains open.
+The `region-ready` workload is deliberately the current finite-width
+reformation path. It establishes the pre-region baseline for the same
+shape/formation/geometry work that region slots will later drive; it does not
+pretend that exclusion or column policy exists already.
+
+The counts expose an important baseline rather than a success: even retained
+and paint-only calls allocate 247 times because they rematerialize an owned
+scene. Cold interaction construction allocates more than twice as often, and
+identity churn crosses one thousand allocation calls per created/prepared
+block. No reusable public scratch-capacity diagnostic exists yet. The repeated
+growth is observable here through allocation events and in the CPU stacks;
+stage-owned scratch capacity and growth reporting remain the explicit
+`und-oh0.13.11` deliverable.
 
 ## Ranked candidate work
 
@@ -197,4 +236,3 @@ made and `und-oh0.13.2` remains open.
 
 No optimization lands from this ranking without a before/after workload and
 unchanged correctness laws.
-

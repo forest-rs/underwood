@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|cold-identical|retained-identical|width-churn|identity-churn] [rounds]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|cold-identical|retained-identical|paint-change|localized-edit|interaction-materialization|width-churn|region-ready|identity-churn] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -35,10 +35,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if rounds == 0 {
         return Err("rounds must be greater than zero".into());
     }
-    if arguments.next().is_some() {
-        return Err("expected at most a scenario and round count".into());
+    let labels = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(LABELS);
+    if labels == 0 {
+        return Err("labels must be greater than zero".into());
     }
-    let result = run_profile(&scenario, rounds);
+    if arguments.next().is_some() {
+        return Err("expected at most a scenario, round count, and label count".into());
+    }
+    let result = run_profile(&scenario, rounds, labels);
     hold_for_profiler()?;
     result
 }
@@ -312,7 +320,11 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_profile(scenario: &str, rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
+fn run_profile(
+    scenario: &str,
+    rounds: usize,
+    labels: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     let style = ComputedInlineStyle::new(
         ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 15.0)?,
         InlineFlowStyle::default(),
@@ -320,35 +332,123 @@ fn run_profile(scenario: &str, rounds: usize) -> Result<(), Box<dyn std::error::
     );
     let paint = PaintTable::from_brushes([Brush::Solid(Color::from_rgb8(0x20, 0x24, 0x2b))]);
     match scenario {
-        "setup-identical" => profile_setup_identical(rounds),
-        "cold-identical" => profile_cold_identical(rounds, &style, &paint),
-        "retained-identical" => profile_retained_identical(rounds, &style, &paint),
-        "width-churn" => profile_width_churn(rounds, &style, &paint),
-        "identity-churn" => profile_identity_churn(rounds, &style, &paint),
+        "setup-identical" | "s0" => profile_setup_identical(rounds, labels),
+        "setup-identity" | "s1" => profile_setup_identity(rounds, labels),
+        "primed-identical" | "p0" => {
+            profile_primed_identical("primed-identical", rounds, labels, &style, &paint, false)
+        }
+        "primed-paint" | "p1" => {
+            profile_primed_identical("primed-paint", rounds, labels, &style, &paint, true)
+        }
+        "primed-unique" | "p2" => profile_primed_unique(rounds, labels, &style, &paint),
+        "cold-identical" | "c0" => {
+            profile_cold_identical("cold-identical", rounds, labels, &style, &paint)
+        }
+        "retained-identical" | "r0" => profile_retained_identical(rounds, labels, &style, &paint),
+        "paint-change" | "a0" => profile_paint_change(rounds, labels, &style, &paint),
+        "localized-edit" | "e0" => profile_localized_edit(rounds, labels, &style, &paint),
+        "interaction-materialization" | "i0" => profile_cold_identical(
+            "interaction-materialization",
+            rounds,
+            labels,
+            &style,
+            &paint,
+        ),
+        "width-churn" | "w0" => profile_width_churn("width-churn", rounds, labels, &style, &paint),
+        "region-ready" | "g0" => {
+            profile_width_churn("region-ready", rounds, labels, &style, &paint)
+        }
+        "identity-churn" | "h0" => profile_identity_churn(rounds, labels, &style, &paint),
         _ => Err(format!("unknown scenario: {scenario}").into()),
     }
 }
 
-fn profile_setup_identical(rounds: usize) -> Result<(), Box<dyn std::error::Error>> {
-    let labels = identical_labels()?;
+fn profile_setup_identical(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
     let layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(LABELS),
+        CacheBudget::new(label_count),
     );
     black_box((&labels, &layout));
-    report_profile("setup-identical", rounds, Duration::ZERO);
+    report_profile("setup-identical", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_setup_identity(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(CHURN_BUDGET),
+    );
+    black_box(&layout);
+    report_profile("setup-identity", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_primed_identical(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    include_alternate_paint: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let alternate_paint = include_alternate_paint
+        .then(|| PaintTable::from_brushes([Brush::Solid(Color::from_rgb8(0x74, 0x48, 0xe8))]));
+    black_box((&labels, &layout, alternate_paint));
+    report_profile(name, rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_primed_unique(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    black_box((&labels, &layout));
+    report_profile("primed-unique", rounds, label_count, Duration::ZERO);
     Ok(())
 }
 
 fn profile_cold_identical(
+    name: &str,
     rounds: usize,
+    label_count: usize,
     style: &ComputedInlineStyle,
     paint: &PaintTable,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let labels = identical_labels()?;
+    let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(LABELS),
+        CacheBudget::new(label_count),
     );
     let elapsed = measure(|| {
         for _ in 0..rounds {
@@ -369,19 +469,20 @@ fn profile_cold_identical(
             }
         }
     });
-    report_profile("cold-identical", rounds, elapsed);
+    report_profile(name, rounds, label_count, elapsed);
     Ok(())
 }
 
 fn profile_retained_identical(
     rounds: usize,
+    label_count: usize,
     style: &ComputedInlineStyle,
     paint: &PaintTable,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let labels = identical_labels()?;
+    let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(LABELS),
+        CacheBudget::new(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -403,19 +504,108 @@ fn profile_retained_identical(
             }
         }
     });
-    report_profile("retained-identical", rounds, elapsed);
+    report_profile("retained-identical", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_paint_change(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    original_paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, original_paint),
+        )?;
+    }
+    let alternate_paint =
+        PaintTable::from_brushes([Brush::Solid(Color::from_rgb8(0x74, 0x48, 0xe8))]);
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let paint = if round.is_multiple_of(2) {
+                &alternate_paint
+            } else {
+                original_paint
+            };
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("paint-only label must prepare");
+                assert_no_physics(&output);
+                black_box(output.scene().fragments().len());
+            }
+        }
+    });
+    report_profile("paint-change", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_localized_edit(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let text = if round.is_multiple_of(2) {
+                "Save edited changes"
+            } else {
+                "Save changes"
+            };
+            for label in &mut labels {
+                label.set_text(text).expect("profile edit must publish");
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("edited label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    1,
+                    "each changed label must reshape exactly once"
+                );
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("localized-edit", rounds, label_count, elapsed);
     Ok(())
 }
 
 fn profile_width_churn(
+    name: &str,
     rounds: usize,
+    label_count: usize,
     style: &ComputedInlineStyle,
     paint: &PaintTable,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let labels = unique_labels()?;
+    let labels = unique_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(LABELS),
+        CacheBudget::new(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -443,12 +633,13 @@ fn profile_width_churn(
             }
         }
     });
-    report_profile("width-churn", rounds, elapsed);
+    report_profile(name, rounds, label_count, elapsed);
     Ok(())
 }
 
 fn profile_identity_churn(
     rounds: usize,
+    label_count: usize,
     style: &ComputedInlineStyle,
     paint: &PaintTable,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -458,7 +649,7 @@ fn profile_identity_churn(
     );
     let elapsed = measure(|| {
         for round in 0..rounds {
-            for index in 0..LABELS {
+            for index in 0..label_count {
                 let label = TextBlock::plain(
                     identity(
                         u64::try_from(round).unwrap_or(u64::MAX).saturating_add(10),
@@ -486,14 +677,17 @@ fn profile_identity_churn(
             }
         }
     });
-    report_profile("identity-churn", rounds, elapsed);
+    report_profile("identity-churn", rounds, label_count, elapsed);
     Ok(())
 }
 
-fn report_profile(name: &str, rounds: usize, elapsed: Duration) {
-    let operations = LABELS.saturating_mul(rounds);
+fn report_profile(name: &str, rounds: usize, labels: usize, elapsed: Duration) {
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_some() {
+        return;
+    }
+    let operations = labels.saturating_mul(rounds);
     println!(
-        "{name}\tprofile=isolated\tmachine=local\trounds={rounds}\toperations={operations}\ttotal_ns={}\tns_per_operation={}",
+        "{name}\tprofile=isolated\tmachine=local\trounds={rounds}\tlabels={labels}\toperations={operations}\ttotal_ns={}\tns_per_operation={}",
         elapsed.as_nanos(),
         elapsed.as_nanos() / operations as u128
     );
@@ -507,13 +701,19 @@ fn hold_for_profiler() -> Result<(), Box<dyn std::error::Error>> {
         .to_str()
         .ok_or("UNDERWOOD_PROFILE_HOLD_SECS must be valid UTF-8")?
         .parse::<u64>()?;
-    eprintln!("holding process for profiler: {seconds}s");
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        eprintln!("holding process for profiler: {seconds}s");
+    }
     std::thread::sleep(Duration::from_secs(seconds));
     Ok(())
 }
 
 fn unique_labels() -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
-    (0..LABELS)
+    unique_labels_with_count(LABELS)
+}
+
+fn unique_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
         .map(|index| {
             TextBlock::plain(
                 identity(1, index),
@@ -529,7 +729,11 @@ fn unique_labels() -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
 }
 
 fn identical_labels() -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
-    (0..LABELS)
+    identical_labels_with_count(LABELS)
+}
+
+fn identical_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
         .map(|index| TextBlock::plain(identity(2, index), "Save changes").map_err(Into::into))
         .collect()
 }
