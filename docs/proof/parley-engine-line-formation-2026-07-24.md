@@ -125,5 +125,7 @@ semantic-scene, and label wind tunnels pass. The complete workspace tests,
 all-target/all-feature Clippy with warnings denied, warning-denied rustdoc,
 Rust 1.88 workspace check, both `no_std` targets, repository policy, Beads
 lint and cycle checks, exact visual snapshot, and deterministic 12,024-byte
-PDF proof all pass. Protected remote checks remain the landing gate for this
-proof.
+PDF proof all pass. Pull-request CI run `30103813177` and merge-queue run
+`30104132838` each passed the complete eight-job Linux, macOS, Windows, MSRV,
+rustdoc, repository/text-policy, and portability matrix. PR #27 landed the
+proof as squashed `main` commit `5ab363e`.
