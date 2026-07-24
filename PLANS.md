@@ -2,7 +2,7 @@
 
 ## Module boundaries and Parley Engine convergence
 
-**Status:** Active — adapter decomposition complete; Parley Engine convergence in progress
+**Status:** Active — adapter and core decomposition complete; protected landing in progress
 
 **Beads:** `und-oh0.5.5`, `und-oh0.5.5.1`, `und-oh0.5.5.2`,
 `und-oh0.5.5.3`
@@ -28,17 +28,17 @@ not own implementation algorithms.
    without changing behavior, dependencies, features, or public paths.
 2. Prove the structural checkpoint through all local, portability, product, and
    protected remote gates before changing text behavior.
-3. Move to current `parley_engine`, Fontique, and Parlance from one immutable
-   source revision.
-4. Replace fork-only in-place break mutation with a private line former that
-   re-itemizes retained paragraph analysis at committed line boundaries and
-   shapes final line ranges through public Parley Engine APIs.
-5. Prove Arabic joins, ligatures, fit-changing backtracking, intrinsic modes,
-   mixed bidi, source-complete interaction, and cache behavior; measure and
-   report line-reshape work rather than hiding it inside width-only formation.
-6. Split oversized Underwood scene and adapter implementation files by cache,
+3. Split oversized Underwood scene and adapter implementation files by cache,
    projection, geometry, interaction, prepared-record, transaction, and host
    mapping ownership while preserving the 59-line public crate facade.
+4. Stop at the human gate before changing dependency pins, then move to current
+   `parley_engine`, Fontique, and Parlance from one immutable source revision.
+5. Replace fork-only in-place break mutation with a private line former that
+   re-itemizes retained paragraph analysis at committed line boundaries and
+   shapes final line ranges through public Parley Engine APIs.
+6. Prove Arabic joins, ligatures, fit-changing backtracking, intrinsic modes,
+   mixed bidi, source-complete interaction, and cache behavior; measure and
+   report line-reshape work rather than hiding it inside width-only formation.
 7. Run adversarial review, every local gate, and protected remote landing for
    each independently coherent slice.
 
