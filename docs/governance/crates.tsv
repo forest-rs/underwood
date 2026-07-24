@@ -1,5 +1,6 @@
 # underwood-crate-registry-v1
 path	name	class	no_std	published	fence
+benches/labels	underwood_label_benchmark	benchmark	no	no	This crate owns label-scale measurements of the real public TextBlock path; it explicitly does not own product caches, private shortcuts, widget behavior, or alternate shaping implementations.
 benches/semantic-scene	underwood_semantic_scene_benchmark	benchmark	no	no	This crate owns measurements of the real public semantic-to-scene path; it explicitly does not own product algorithms, private shortcuts, or alternate implementations.
 examples/headless	underwood_headless_example	example	no	no	This crate owns the first external public-path consumer and bundled licensed font fixtures; it explicitly does not own product behavior or private implementation shortcuts.
 examples/pdf-proof	underwood_pdf_proof	example	no	no	This crate owns the deterministic mixed-script public-path PDF specimen; it explicitly does not own PDF lowering, text shaping, product behavior, or accessibility claims.

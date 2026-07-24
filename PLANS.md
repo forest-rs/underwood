@@ -1,5 +1,81 @@
 # Underwood execution plans
 
+## Retained TextBlock and intrinsic-layout campaign
+
+**Status:** Active — local implementation complete; protected remote gate pending
+
+**Beads:** `und-oh0.5.3`, `und-oh0.5.3.1`, `und-oh0.5.3.2`,
+`und-oh0.5.3.3`, `und-oh0.5.3.4`, `und-oh0.5.3.5`
+
+### Goal
+
+Make small retained text genuinely inexpensive without creating a second text
+engine: add a one-paragraph `TextBlock` façade, real min/max/constrained
+formation, exact metrics, coordinated bounded caches, and a label-scale wind
+tunnel.
+
+### Fence
+
+This campaign owns retained block ergonomics, shared intrinsic constraints and
+metrics, paragraph-cache lifetime, construction cleanup, and public-path
+measurements. It explicitly does not own widgets, host callbacks,
+accessibility policy, a separate label shaper, a global style registry, or
+font-resource integration policy.
+
+### Steps
+
+1. Accept and execute
+   `docs/design/0012-retained-text-block-and-intrinsic-layout.md`.
+2. Add the separate label wind-tunnel crate and its deterministic workload
+   skeleton before optimizing production caches.
+3. Implement `TextBlock`, borrowed shared-style requests, explicit intrinsic
+   constraints, and exact scene metrics through the existing paragraph path.
+4. Replace linear retained lookup and add coordinated release, configurable
+   LRU budgeting, and cache diagnostics across core and Parley adapter layers.
+5. Remove the empty `TextData` placeholder and infallible constructor
+   `Result`; migrate every public caller with recorded guidance.
+6. Run the stable/identical/edit/resize/churn workloads, adversarial review,
+   complete local gates, and protected remote landing.
+
+### Risks and controls
+
+- **Façade-only performance:** deterministic work and cache counters plus
+  same-machine measurements must prove the cost rather than infer it from a
+  shorter call site.
+- **Second text model:** the block remains one internal document paragraph and
+  produces the existing `TextScene`.
+- **Fake intrinsic sizing:** max-content and min-content are explicit adapter
+  modes and execute mandatory-break and break-reshape laws.
+- **Cache split-brain:** `LayoutEngine` coordinates eviction and propagates
+  release into `ParagraphFormation`; resident counts are observable.
+- **Style registry creep:** requests borrow immutable common styles whose
+  variable-sized members are already shared; further interning requires wind-
+  tunnel evidence.
+- **Core contamination:** use only `alloc` collections, add no production
+  dependency, and preserve both no_std targets.
+
+### Completion
+
+The campaign is complete when thousands of blocks execute through the public
+path with exact intrinsic metrics, stable work performs no repeated physics,
+width changes perform only required formation, edit work stays local,
+destroyed/budget-evicted blocks release both cache layers, measured evidence is
+checked in, all callers migrate, and every local and protected remote gate is
+green.
+
+### Result
+
+Implemented locally on 2026-07-24. The public path, intrinsic and multilingual laws,
+failure cleanup, indexed lifecycle, zero/small-budget behavior, MSRV, no-std
+targets, full workspace, rustdoc, and both product wind tunnels pass. The
+checked-in label proof covers 2,048 stable and identical blocks plus edit,
+constraint, explicit-release, and create/destroy churn.
+
+The real-vs-mirage audit records one integration-dependent limit: a toolkit
+should retain unchanged owned outputs rather than rematerialize thousands of
+full scenes each frame. `und-oh0.5.4` carries that Overstory proof and the
+evidence gate for any future selective non-editable materialization.
+
 ## Prepared-scene PDF slice
 
 **Status:** Complete

@@ -5,12 +5,13 @@
 
 use underwood::adapter::PreparationErrorKind;
 use underwood::{
-    Brush, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth, GenericFamily,
-    InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable,
-    ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap, Tag, TextId, TextScene,
+    Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth,
+    GenericFamily, InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot,
+    PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap, Tag, TextConstraint,
+    TextId, TextScene,
 };
 use underwood::{FontFeature, FontStyle, FontVariation, FontWeight, FontWidth};
-use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
+use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::new(DocumentId::from_bytes(*b"underwood-demo-1"));
@@ -112,10 +113,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]);
 
     let fonts = font_catalog()?;
-    let data = TextData::compiled_minimal();
-    let paragraphs = ParleyParagraphEngine::new(data, fonts)?;
-    let mut layout = LayoutEngine::new(paragraphs);
-    let request = SceneRequest::new(FiniteWidth::new(420.0)?, &styles, &paint);
+    let paragraphs = ParleyParagraphEngine::new(fonts);
+    let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(256));
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(420.0)?),
+        &styles,
+        &paint,
+    );
 
     let first_scene = layout.prepare(published.snapshot(), &request)?;
     assert!(
@@ -346,7 +350,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PaintSlot::new(1),
         Brush::Solid(Color::from_rgb8(0xa0, 0x20, 0x20)),
     )?;
-    let paint_request = SceneRequest::new(FiniteWidth::new(420.0)?, &styles, &recolored);
+    let paint_request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(420.0)?),
+        &styles,
+        &recolored,
+    );
     let paint_scene = layout.prepare(changed.snapshot(), &paint_request)?;
     assert_eq!(
         paint_scene.work().analysis().paragraphs(),
@@ -371,8 +379,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut reassigned_paint = styles.clone();
     reassigned_paint.set(first_suffix, base);
-    let reassigned_request =
-        SceneRequest::new(FiniteWidth::new(420.0)?, &reassigned_paint, &recolored);
+    let reassigned_request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(420.0)?),
+        &reassigned_paint,
+        &recolored,
+    );
     let reassigned_scene = layout.prepare(changed.snapshot(), &reassigned_request)?;
     assert_eq!(
         reassigned_scene.work().shape().paragraphs(),
@@ -400,7 +411,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut shaping_styles = reassigned_paint.clone();
     shaping_styles.set(ligatures_off, ligatures_on_style);
-    let shaping_request = SceneRequest::new(FiniteWidth::new(420.0)?, &shaping_styles, &recolored);
+    let shaping_request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(420.0)?),
+        &shaping_styles,
+        &recolored,
+    );
     let shaping_scene = layout.prepare(changed.snapshot(), &shaping_request)?;
     assert_eq!(
         shaping_scene.work().analysis().paragraphs(),
@@ -423,7 +438,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         variable_light,
         light_style.with_inline_flow(InlineFlowStyle::new(LineHeight::from_multiplier(1.8)?)),
     );
-    let flow_request = SceneRequest::new(FiniteWidth::new(420.0)?, &flow_styles, &recolored);
+    let flow_request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(420.0)?),
+        &flow_styles,
+        &recolored,
+    );
     let flow_scene = layout.prepare(changed.snapshot(), &flow_request)?;
     assert_eq!(
         flow_scene.work().analysis().paragraphs(),
@@ -446,7 +465,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "line height must rebuild only its paragraph geometry"
     );
 
-    let narrow_request = SceneRequest::new(FiniteWidth::new(90.0)?, &flow_styles, &recolored);
+    let narrow_request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(90.0)?),
+        &flow_styles,
+        &recolored,
+    );
     let narrow_scene = layout.prepare(changed.snapshot(), &narrow_request)?;
     assert_eq!(
         narrow_scene.work().analysis().paragraphs(),
@@ -517,11 +540,15 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         Brush::Solid(Color::BLACK),
         Brush::Solid(Color::from_rgb8(0x20, 0x50, 0xa0)),
     ]);
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(
-        TextData::compiled_minimal(),
-        font_catalog()?,
-    )?);
-    let request = SceneRequest::new(FiniteWidth::new(400.0)?, &styles, &paint);
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(font_catalog()?),
+        CacheBudget::new(256),
+    );
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(400.0)?),
+        &styles,
+        &paint,
+    );
     layout.prepare(published.snapshot(), &request)?;
 
     let black = ComputedInlineStyle::new(
@@ -531,7 +558,11 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         PaintSlot::new(0),
     );
     styles.set(changed_text, black.clone());
-    let request = SceneRequest::new(FiniteWidth::new(400.0)?, &styles, &paint);
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(400.0)?),
+        &styles,
+        &paint,
+    );
     let changed = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
         changed.work().analysis().paragraphs(),
@@ -569,7 +600,11 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         PaintSlot::new(0),
     );
     styles.set(changed_text, missing);
-    let request = SceneRequest::new(FiniteWidth::new(400.0)?, &styles, &paint);
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(400.0)?),
+        &styles,
+        &paint,
+    );
     let error = layout
         .prepare(published.snapshot(), &request)
         .expect_err("an absent family without a covering fallback must fail");
@@ -579,7 +614,11 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         "missing family failure must retain the stable MissingFont diagnostic"
     );
     styles.set(changed_text, black.with_paint(PaintSlot::new(1)));
-    let request = SceneRequest::new(FiniteWidth::new(400.0)?, &styles, &paint);
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(400.0)?),
+        &styles,
+        &paint,
+    );
     let recovered = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
         recovered.work().shape().paragraphs(),
@@ -608,11 +647,12 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
         "latin",
         include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"),
     )?])?;
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(
-        TextData::compiled_minimal(),
-        fonts,
-    )?);
-    let request = SceneRequest::new(FiniteWidth::new(400.0)?, &styles, &paint);
+    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(256));
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(400.0)?),
+        &styles,
+        &paint,
+    );
     let error = layout
         .prepare(published.snapshot(), &request)
         .expect_err("a non-covering primary without fallback must fail");

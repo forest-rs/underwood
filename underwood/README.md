@@ -1,8 +1,8 @@
 # Underwood
 
 `underwood` is the small, renderer-independent foundation for immutable
-semantic documents, retained paragraph formation, finite-width flow, and
-text scenes.
+semantic documents, retained single-paragraph blocks, intrinsic and
+constrained paragraph formation, and text scenes.
 
 The crate is `no_std + alloc`. It owns no shaping engine, platform host policy,
 graphics backend, renderer, system fonts, or global state. Geometry and paint
@@ -14,8 +14,14 @@ The first draft public slice is deliberately complete end to end:
 - [`Document`] publishes immutable [`DocumentSnapshot`] revisions through
   atomic staged edits and preserves body and heading paragraph roles without
   prescribing their visual styling;
+- [`TextBlock`] hides document-editing ceremony for retained one-paragraph
+  text while preserving the same source model, paragraph engine, caches, and
+  [`TextScene`] as documents;
 - [`LayoutEngine`] retains formed paragraphs and avoids analysis or shaping
-  for unchanged siblings, paint-value changes, and width-only changes;
+  for unchanged siblings, paint-value changes, and constraint-only changes;
+  an explicit [`CacheBudget`] bounds retained geometry and coordinated backend
+  state, while release operations and [`CacheDiagnostics`] expose lifecycle
+  facts to hosts;
 - [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
   and font-derived metrics behind the paragraph-engine boundary instead of
   hiding text physics in scene construction; formed lines retain complete
@@ -103,6 +109,50 @@ and publishes one revision. Canonical ranges may span semantic leaves within
 one paragraph without removing, merging, or restyling those leaves.
 Cross-paragraph replacement remains a structural operation and is rejected.
 Snapshot selections remain dense revision-local values, not durable anchors.
+
+## Retained text blocks and intrinsic metrics
+
+Application call sites for small labels do not need to construct a paragraph,
+text leaf, style map, or edit transaction. `TextBlock` performs the
+one-paragraph document construction once internally. Blocks borrow a reusable
+computed style and paint table, but still execute the document paragraph path:
+
+```rust,ignore
+use underwood::{
+    BlockRequest, CacheBudget, DocumentId, LayoutEngine, TextBlock,
+    TextConstraint,
+};
+use underwood_parley::ParleyParagraphEngine;
+
+let mut layout = LayoutEngine::new(
+    ParleyParagraphEngine::new(fonts),
+    CacheBudget::new(4_096),
+);
+let mut label =
+    TextBlock::plain(DocumentId::from_bytes(*b"save-label-00001"), "Save")?;
+
+let output = layout.prepare_block(
+    &label.snapshot(),
+    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint),
+)?;
+let metrics = output.scene().metrics();
+label.set_text("Open")?;
+
+layout.release_document(label.id());
+```
+
+[`TextConstraint::MaxContent`] suppresses soft wrapping while preserving
+mandatory breaks. [`TextConstraint::MinContent`] commits every legal soft
+break, including break-sensitive reshaping, and
+[`TextConstraint::Wrap`] greedily fits legal breaks to one [`FiniteWidth`].
+[`TextMetrics`] reports maximum actual line advance, total block extent, and
+optional first/last baselines. Empty blocks have zero width, their resolved
+line height, and no text baseline.
+
+`ComputedInlineStyle` clones share the owned family, feature, and variation
+arrays. `BlockRequest` goes further and borrows one caller-owned style, so any
+number of labels can reuse the same style and paint table without rebuilding
+authored font requests.
 
 ## Composition epochs and editable surfaces
 

@@ -13,7 +13,7 @@ use core::ops::Range;
 
 use crate::{
     Affine, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId, Rect, ShapingStyle,
-    Vec2,
+    TextConstraint, Vec2,
 };
 
 /// Logical attachment of a snapshot-local text position.
@@ -36,6 +36,22 @@ pub trait ParagraphFormation {
         input: ParagraphInput<'_>,
         constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, PreparationError>;
+
+    /// Releases retained physics for one paragraph identity.
+    ///
+    /// Stateless implementations may keep the default no-op behavior.
+    fn release(&mut self, _paragraph: ParagraphId) {}
+
+    /// Releases all retained paragraph physics.
+    ///
+    /// Stateless implementations may keep the default no-op behavior.
+    fn clear(&mut self) {}
+
+    /// Returns the number of retained backend paragraph entries, when observable.
+    #[must_use]
+    fn retained_entries(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Borrowed projection of one semantic paragraph.
@@ -117,21 +133,18 @@ impl<'a> ParagraphInput<'a> {
 /// Validated paragraph formation constraints.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ParagraphConstraints {
-    max_inline_advance: f64,
+    text: TextConstraint,
 }
 
 impl ParagraphConstraints {
-    pub(crate) fn try_new(max_inline_advance: f64) -> Result<Self, PreparationError> {
-        if !max_inline_advance.is_finite() || max_inline_advance <= 0.0 {
-            return Err(PreparationError::invalid_output());
-        }
-        Ok(Self { max_inline_advance })
+    pub(crate) const fn new(text: TextConstraint) -> Self {
+        Self { text }
     }
 
-    /// Returns the finite positive maximum inline advance.
+    /// Returns the requested intrinsic or constrained formation mode.
     #[must_use]
-    pub const fn max_inline_advance(self) -> f64 {
-        self.max_inline_advance
+    pub const fn text(self) -> TextConstraint {
+        self.text
     }
 }
 

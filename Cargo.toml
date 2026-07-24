@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "benches/labels",
   "benches/semantic-scene",
   "examples/headless",
   "examples/pdf-proof",

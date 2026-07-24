@@ -7,12 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use underwood::{
-    Brush, Color, ComputedInlineStyle, Document, DocumentId, DocumentSnapshot, FiniteWidth,
-    FontFeature, GenericFamily, InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight,
-    PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap, Tag,
-    TextScene,
+    Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, DocumentSnapshot,
+    FiniteWidth, FontFeature, GenericFamily, InlineFlowStyle, InlineRole, Language, LayoutEngine,
+    LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap,
+    Tag, TextConstraint, TextScene,
 };
-use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
+use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 use underwood_pdf::{PdfPage, to_pdf};
 
 const LATIN_FONT_BYTES: &[u8] = include_bytes!("../../headless/fonts/RobotoFlex-VariableFont.ttf");
@@ -190,9 +190,13 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         Some(arabic),
         ["Noto Kufi Arabic"],
     )?;
-    let paragraphs = ParleyParagraphEngine::new(TextData::compiled_minimal(), fonts)?;
-    let mut layout = LayoutEngine::new(paragraphs);
-    let request = SceneRequest::new(FiniteWidth::new(576.0)?, &styles, &paints);
+    let paragraphs = ParleyParagraphEngine::new(fonts);
+    let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(64));
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(576.0)?),
+        &styles,
+        &paints,
+    );
     let output = layout.prepare(&snapshot, &request)?;
     let scene = output.scene().clone();
 

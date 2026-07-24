@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::boxed::Box;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -13,19 +14,138 @@ use crate::adapter::{
 };
 use crate::document::Paragraph;
 use crate::{
-    Affine, CompositionError, CompositionErrorKind, CompositionId, CompositionSession,
-    CompositionStart, DocumentRevision, DocumentSnapshot, FontData, InlineFlowStyle, InlineRole,
-    PaintSlot, PaintTable, ParagraphId, ParagraphRole, Point, Rect, SceneError, SceneErrorKind,
-    SceneRequest, SelectionError, SelectionErrorKind, SemanticId, ShapingStyle,
-    SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
-    SnapshotTextUnit, TextId, TextMovement, TextSelectionMode, Vec2,
+    Affine, BlockRequest, CompositionError, CompositionErrorKind, CompositionId,
+    CompositionSession, CompositionStart, DocumentRevision, DocumentSnapshot, FontData,
+    InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole, Point, Rect,
+    SceneError, SceneErrorKind, SceneRequest, SelectionError, SelectionErrorKind, SemanticId,
+    ShapingStyle, Size, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+    SnapshotTextSelectionSet, SnapshotTextUnit, StyleMap, TextBlockSnapshot, TextConstraint,
+    TextId, TextMovement, TextSelectionMode, Vec2,
 };
+
+/// Maximum number of retained committed and composition geometry entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheBudget {
+    max_entries: usize,
+}
+
+impl CacheBudget {
+    /// Creates a budget with the given maximum retained geometry entries.
+    ///
+    /// A zero budget materializes owned outputs without retaining cache entries.
+    #[must_use]
+    pub const fn new(max_entries: usize) -> Self {
+        Self { max_entries }
+    }
+
+    /// Returns the maximum number of retained geometry entries.
+    #[must_use]
+    pub const fn max_entries(self) -> usize {
+        self.max_entries
+    }
+}
+
+/// Snapshot of coordinated retained-cache state and cumulative activity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CacheDiagnostics {
+    budget: usize,
+    committed_entries: usize,
+    composition_entries: usize,
+    backend_entries: Option<usize>,
+    peak_entries: usize,
+    hits: usize,
+    misses: usize,
+    evictions: usize,
+    releases: usize,
+}
+
+impl CacheDiagnostics {
+    /// Returns the configured maximum retained geometry entries.
+    #[must_use]
+    pub const fn budget(self) -> usize {
+        self.budget
+    }
+
+    /// Returns resident committed geometry entries.
+    #[must_use]
+    pub const fn committed_entries(self) -> usize {
+        self.committed_entries
+    }
+
+    /// Returns resident transient-composition geometry entries.
+    #[must_use]
+    pub const fn composition_entries(self) -> usize {
+        self.composition_entries
+    }
+
+    /// Returns all resident geometry entries.
+    #[must_use]
+    pub const fn current_entries(self) -> usize {
+        self.committed_entries + self.composition_entries
+    }
+
+    /// Returns retained backend physics entries, when the backend reports them.
+    #[must_use]
+    pub const fn backend_entries(self) -> Option<usize> {
+        self.backend_entries
+    }
+
+    /// Returns the highest observed resident geometry entry count.
+    #[must_use]
+    pub const fn peak_entries(self) -> usize {
+        self.peak_entries
+    }
+
+    /// Returns paragraph-identity lookups that found a resident geometry entry.
+    #[must_use]
+    pub const fn hits(self) -> usize {
+        self.hits
+    }
+
+    /// Returns paragraph-identity lookups that created a geometry entry.
+    #[must_use]
+    pub const fn misses(self) -> usize {
+        self.misses
+    }
+
+    /// Returns entries removed to enforce the configured budget.
+    #[must_use]
+    pub const fn evictions(self) -> usize {
+        self.evictions
+    }
+
+    /// Returns entries removed by explicit document or whole-cache release.
+    #[must_use]
+    pub const fn releases(self) -> usize {
+        self.releases
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct CacheWork {
+    peak_entries: usize,
+    hits: usize,
+    misses: usize,
+    evictions: usize,
+    releases: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum CacheKind {
+    Committed,
+    Composition,
+}
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
 pub struct LayoutEngine {
     paragraphs: Box<dyn ParagraphFormation>,
-    cache: Vec<ParagraphCache>,
-    composition_cache: Vec<ParagraphCache>,
+    cache: BTreeMap<ParagraphId, ParagraphCache>,
+    composition_cache: BTreeMap<ParagraphId, ParagraphCache>,
+    recency: BTreeSet<(u64, CacheKind, ParagraphId)>,
+    documents: BTreeMap<crate::DocumentId, BTreeSet<(CacheKind, ParagraphId)>>,
+    clock: u64,
+    budget: CacheBudget,
+    cache_work: CacheWork,
 }
 
 impl core::fmt::Debug for LayoutEngine {
@@ -42,13 +162,18 @@ impl core::fmt::Debug for LayoutEngine {
 }
 
 impl LayoutEngine {
-    /// Creates an engine owning exactly one configured paragraph adapter.
+    /// Creates an engine owning one configured paragraph adapter and cache budget.
     #[must_use]
-    pub fn new(paragraphs: impl ParagraphFormation + 'static) -> Self {
+    pub fn new(paragraphs: impl ParagraphFormation + 'static, budget: CacheBudget) -> Self {
         Self {
             paragraphs: Box::new(paragraphs),
-            cache: Vec::new(),
-            composition_cache: Vec::new(),
+            cache: BTreeMap::new(),
+            composition_cache: BTreeMap::new(),
+            recency: BTreeSet::new(),
+            documents: BTreeMap::new(),
+            clock: 0,
+            budget,
+            cache_work: CacheWork::default(),
         }
     }
 
@@ -72,16 +197,22 @@ impl LayoutEngine {
 
         for paragraph in snapshot.paragraphs() {
             let projection = Projection::new(paragraph, request)?;
-            let cache_index = prepare_paragraph_geometry(
+            self.clock = self.clock.saturating_add(1);
+            let access = prepare_paragraph_geometry(
                 self.paragraphs.as_mut(),
                 &mut self.cache,
                 paragraph,
                 &projection,
-                request.width.0,
+                request.constraint,
+                self.clock,
                 &mut work,
             )?;
-
-            let geometry = &self.cache[cache_index].geometry;
+            self.record_access(CacheKind::Committed, access);
+            let geometry = &self
+                .cache
+                .get(&paragraph.id)
+                .expect("prepared committed geometry must remain resident")
+                .geometry;
             materialize_geometry(
                 geometry,
                 snapshot.revision(),
@@ -95,16 +226,19 @@ impl LayoutEngine {
                 &mut semantics,
             );
             y_offset += geometry.height;
+            self.enforce_budget();
         }
 
         work.paint = StageWork {
             paragraphs: snapshot.paragraphs().len(),
             records: fragments.len(),
         };
-        Ok(SceneOutput {
+        let metrics = TextMetrics::from_lines(&lines, y_offset);
+        let output = SceneOutput {
             scene: TextScene {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
+                metrics,
                 lines,
                 fragments,
                 clusters,
@@ -115,7 +249,21 @@ impl LayoutEngine {
                 semantics,
             },
             work,
-        })
+        };
+        Ok(output)
+    }
+
+    /// Prepares one retained block through the same paragraph and scene path as a document.
+    pub fn prepare_block(
+        &mut self,
+        snapshot: &TextBlockSnapshot,
+        request: &BlockRequest<'_>,
+    ) -> Result<SceneOutput, SceneError> {
+        let styles = StyleMap::new(request.style.clone());
+        self.prepare(
+            snapshot.document(),
+            &SceneRequest::new(request.constraint, &styles, request.paint),
+        )
     }
 
     /// Prepares a transient generated-text scene without evicting committed work.
@@ -154,20 +302,46 @@ impl LayoutEngine {
             } else {
                 Projection::new(paragraph, request)?
             };
-            let cache = if transient {
-                &mut self.composition_cache
+            self.clock = self.clock.saturating_add(1);
+            let (kind, access) = if transient {
+                (
+                    CacheKind::Composition,
+                    prepare_paragraph_geometry(
+                        self.paragraphs.as_mut(),
+                        &mut self.composition_cache,
+                        paragraph,
+                        &projection,
+                        request.constraint,
+                        self.clock,
+                        &mut work,
+                    )?,
+                )
             } else {
-                &mut self.cache
+                (
+                    CacheKind::Committed,
+                    prepare_paragraph_geometry(
+                        self.paragraphs.as_mut(),
+                        &mut self.cache,
+                        paragraph,
+                        &projection,
+                        request.constraint,
+                        self.clock,
+                        &mut work,
+                    )?,
+                )
             };
-            let cache_index = prepare_paragraph_geometry(
-                self.paragraphs.as_mut(),
-                cache,
-                paragraph,
-                &projection,
-                request.width.0,
-                &mut work,
-            )?;
-            let geometry = &cache[cache_index].geometry;
+            self.record_access(kind, access);
+            let geometry = match kind {
+                CacheKind::Committed => self
+                    .cache
+                    .get(&paragraph.id)
+                    .expect("prepared committed geometry must remain resident"),
+                CacheKind::Composition => self
+                    .composition_cache
+                    .get(&paragraph.id)
+                    .expect("prepared composition geometry must remain resident"),
+            };
+            let geometry = &geometry.geometry;
             materialize_projected_geometry(
                 geometry,
                 snapshot.revision(),
@@ -180,18 +354,21 @@ impl LayoutEngine {
                 &mut semantics,
             );
             y_offset += geometry.height;
+            self.enforce_budget();
         }
 
         work.paint = StageWork {
             paragraphs: snapshot.paragraphs().len(),
             records: fragments.len(),
         };
-        Ok(CompositionSceneOutput {
+        let metrics = TextMetrics::from_lines(&lines, y_offset);
+        let output = CompositionSceneOutput {
             scene: CompositionScene {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
                 composition: composition.id(),
                 epoch: composition.epoch(),
+                metrics,
                 lines,
                 fragments,
                 clusters,
@@ -201,35 +378,145 @@ impl LayoutEngine {
                 semantics,
             },
             work,
-        })
+        };
+        Ok(output)
     }
+
+    /// Releases every retained geometry and backend entry for one document.
+    pub fn release_document(&mut self, document: crate::DocumentId) {
+        let Some(entries) = self.documents.remove(&document) else {
+            return;
+        };
+        let mut paragraphs = BTreeSet::new();
+        for (kind, paragraph) in entries {
+            let removed = match kind {
+                CacheKind::Committed => self.cache.remove(&paragraph),
+                CacheKind::Composition => self.composition_cache.remove(&paragraph),
+            };
+            if let Some(entry) = removed {
+                self.recency.remove(&(entry.last_used, kind, paragraph));
+                self.cache_work.releases += 1;
+            }
+            paragraphs.insert(paragraph);
+        }
+        for paragraph in paragraphs {
+            self.paragraphs.release(paragraph);
+        }
+    }
+
+    /// Releases all retained geometry and backend paragraph physics.
+    pub fn clear_cache(&mut self) {
+        self.cache_work.releases += self.cache.len() + self.composition_cache.len();
+        self.cache.clear();
+        self.composition_cache.clear();
+        self.recency.clear();
+        self.documents.clear();
+        self.paragraphs.clear();
+    }
+
+    /// Returns a snapshot of coordinated cache state and cumulative activity.
+    #[must_use]
+    pub fn cache_diagnostics(&self) -> CacheDiagnostics {
+        CacheDiagnostics {
+            budget: self.budget.max_entries,
+            committed_entries: self.cache.len(),
+            composition_entries: self.composition_cache.len(),
+            backend_entries: self.paragraphs.retained_entries(),
+            peak_entries: self.cache_work.peak_entries,
+            hits: self.cache_work.hits,
+            misses: self.cache_work.misses,
+            evictions: self.cache_work.evictions,
+            releases: self.cache_work.releases,
+        }
+    }
+
+    fn record_access(&mut self, kind: CacheKind, access: CacheAccess) {
+        if let Some(previous) = access.previous_use {
+            self.recency.remove(&(previous, kind, access.paragraph));
+            self.cache_work.hits += 1;
+        } else {
+            self.cache_work.misses += 1;
+            self.documents
+                .entry(access.paragraph.document)
+                .or_default()
+                .insert((kind, access.paragraph));
+        }
+        self.recency
+            .insert((access.current_use, kind, access.paragraph));
+        self.cache_work.peak_entries = self
+            .cache_work
+            .peak_entries
+            .max(self.cache.len() + self.composition_cache.len());
+    }
+
+    fn enforce_budget(&mut self) {
+        while self.cache.len() + self.composition_cache.len() > self.budget.max_entries {
+            let Some((_, kind, paragraph)) = self.recency.pop_first() else {
+                break;
+            };
+            match kind {
+                CacheKind::Committed => {
+                    self.cache.remove(&paragraph);
+                }
+                CacheKind::Composition => {
+                    self.composition_cache.remove(&paragraph);
+                }
+            }
+            if let Some(entries) = self.documents.get_mut(&paragraph.document) {
+                entries.remove(&(kind, paragraph));
+                if entries.is_empty() {
+                    self.documents.remove(&paragraph.document);
+                }
+            }
+            self.cache_work.evictions += 1;
+            if !self.cache.contains_key(&paragraph)
+                && !self.composition_cache.contains_key(&paragraph)
+            {
+                self.paragraphs.release(paragraph);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CacheAccess {
+    paragraph: ParagraphId,
+    previous_use: Option<u64>,
+    current_use: u64,
 }
 
 fn prepare_paragraph_geometry(
     paragraphs: &mut dyn ParagraphFormation,
-    cache: &mut Vec<ParagraphCache>,
+    cache: &mut BTreeMap<ParagraphId, ParagraphCache>,
     paragraph: &Paragraph,
     projection: &Projection<'_>,
-    width: f64,
+    constraint: TextConstraint,
+    current_use: u64,
     work: &mut WorkReport,
-) -> Result<usize, SceneError> {
-    let cache_index = cache
-        .iter()
-        .position(|entry| entry.paragraph == paragraph.id);
-    let formation_matches = cache_index.is_some_and(|index| {
-        cache[index]
+) -> Result<CacheAccess, SceneError> {
+    let formation_matches = cache.get(&paragraph.id).is_some_and(|entry| {
+        entry
             .formation_key
-            .matches(paragraph.version, projection, width)
+            .matches(paragraph.version, projection, constraint)
     });
-    let paint_matches =
-        cache_index.is_some_and(|index| cache[index].paint_runs == projection.paint_runs);
+    let paint_matches = cache
+        .get(&paragraph.id)
+        .is_some_and(|entry| entry.paint_runs == projection.paint_runs);
     if formation_matches && paint_matches {
-        let cache_index = cache_index.expect("a reusable cache index must exist");
+        let entry = cache
+            .get_mut(&paragraph.id)
+            .expect("a reusable cache entry must exist");
+        let previous_use = Some(entry.last_used);
+        entry.last_used = current_use;
         if let Some((id, epoch)) = projection.composition_identity() {
-            rebind_composition_geometry(&mut cache[cache_index].geometry, id, epoch);
+            rebind_composition_geometry(&mut entry.geometry, id, epoch);
         }
         work.reused_paragraphs += 1;
-        return Ok(cache_index);
+        return Ok(CacheAccess {
+            paragraph: paragraph.id,
+            previous_use,
+            current_use,
+        });
     }
 
     let shaping_styles: Vec<_> = projection
@@ -239,34 +526,47 @@ fn prepare_paragraph_geometry(
         .collect();
     let text_len = u32::try_from(projection.text.len())
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
-    let constraints = ParagraphConstraints::try_new(width)
-        .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
-    let output = paragraphs
-        .form(
-            ParagraphInput::new(
-                paragraph.id,
-                &projection.text,
-                &shaping_styles,
-                &projection.shaping_runs,
-                &projection.inline_flow_styles,
-                &projection.inline_flow_runs,
-                &projection.paint_runs,
-            ),
-            constraints,
-        )
-        .map_err(|error| SceneError::from_preparation(paragraph.id, error.kind()))?;
+    let constraints = ParagraphConstraints::new(constraint);
+    let output = match paragraphs.form(
+        ParagraphInput::new(
+            paragraph.id,
+            &projection.text,
+            &shaping_styles,
+            &projection.shaping_runs,
+            &projection.inline_flow_styles,
+            &projection.inline_flow_runs,
+            &projection.paint_runs,
+        ),
+        constraints,
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            release_untracked_backend(paragraphs, cache, paragraph.id);
+            return Err(SceneError::from_preparation(paragraph.id, error.kind()));
+        }
+    };
     if output.paragraph().paragraph() != paragraph.id || output.paragraph().text_len() != text_len {
+        release_untracked_backend(paragraphs, cache, paragraph.id);
         return Err(SceneError::for_paragraph(
             SceneErrorKind::SourceCoverage,
             paragraph.id,
         ));
     }
-    validate_prepared(output.paragraph(), projection)?;
+    if let Err(error) = validate_prepared(output.paragraph(), projection) {
+        release_untracked_backend(paragraphs, cache, paragraph.id);
+        return Err(error);
+    }
     record_formation_work(work, output.work());
     if projection.text.is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
-    let geometry = build_geometry(output.paragraph(), projection)?;
+    let geometry = match build_geometry(output.paragraph(), projection) {
+        Ok(geometry) => geometry,
+        Err(error) => {
+            release_untracked_backend(paragraphs, cache, paragraph.id);
+            return Err(error);
+        }
+    };
     work.geometry.add_paragraph(geometry.fragments.len());
     let formation_key = FormationKey::new(
         paragraph.version,
@@ -275,24 +575,43 @@ fn prepare_paragraph_geometry(
         projection.shaping_runs.clone(),
         projection.inline_flow_styles.clone(),
         projection.inline_flow_runs.clone(),
-        width,
+        constraint,
         projection.empty_line_height_key(),
         projection,
     );
-    if let Some(index) = cache_index {
-        let entry = &mut cache[index];
+    let previous_use = if let Some(entry) = cache.get_mut(&paragraph.id) {
+        let previous_use = Some(entry.last_used);
+        entry.last_used = current_use;
         entry.formation_key = formation_key;
         entry.paint_runs = projection.paint_runs.clone();
         entry.geometry = geometry;
-        Ok(index)
+        previous_use
     } else {
-        cache.push(ParagraphCache {
-            paragraph: paragraph.id,
-            formation_key,
-            paint_runs: projection.paint_runs.clone(),
-            geometry,
-        });
-        Ok(cache.len() - 1)
+        cache.insert(
+            paragraph.id,
+            ParagraphCache {
+                last_used: current_use,
+                formation_key,
+                paint_runs: projection.paint_runs.clone(),
+                geometry,
+            },
+        );
+        None
+    };
+    Ok(CacheAccess {
+        paragraph: paragraph.id,
+        previous_use,
+        current_use,
+    })
+}
+
+fn release_untracked_backend(
+    paragraphs: &mut dyn ParagraphFormation,
+    cache: &BTreeMap<ParagraphId, ParagraphCache>,
+    paragraph: ParagraphId,
+) {
+    if !cache.contains_key(&paragraph) {
+        paragraphs.release(paragraph);
     }
 }
 
@@ -305,7 +624,7 @@ struct FormationKey {
     shaping_runs: Vec<ShapingRun>,
     inline_flow_styles: Vec<InlineFlowStyle>,
     inline_flow_runs: Vec<InlineFlowRun>,
-    width: u64,
+    constraint: ConstraintKey,
     empty_line_height: u64,
 }
 
@@ -317,7 +636,7 @@ impl FormationKey {
         shaping_runs: Vec<ShapingRun>,
         inline_flow_styles: Vec<InlineFlowStyle>,
         inline_flow_runs: Vec<InlineFlowRun>,
-        width: f64,
+        constraint: TextConstraint,
         empty_line_height: u64,
         projection: &Projection<'_>,
     ) -> Self {
@@ -329,12 +648,17 @@ impl FormationKey {
             shaping_runs,
             inline_flow_styles,
             inline_flow_runs,
-            width: width.to_bits(),
+            constraint: ConstraintKey::from(constraint),
             empty_line_height,
         }
     }
 
-    fn matches(&self, version: u64, projection: &Projection<'_>, width: f64) -> bool {
+    fn matches(
+        &self,
+        version: u64,
+        projection: &Projection<'_>,
+        constraint: TextConstraint,
+    ) -> bool {
         self.version == version
             && self.text == projection.text
             && self.source_map == ProjectionSourceKey::from_projection(projection)
@@ -347,14 +671,31 @@ impl FormationKey {
             && self.shaping_runs == projection.shaping_runs
             && self.inline_flow_styles == projection.inline_flow_styles
             && self.inline_flow_runs == projection.inline_flow_runs
-            && self.width == width.to_bits()
+            && self.constraint == ConstraintKey::from(constraint)
             && self.empty_line_height == projection.empty_line_height_key()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConstraintKey {
+    MinContent,
+    MaxContent,
+    Wrap(u64),
+}
+
+impl From<TextConstraint> for ConstraintKey {
+    fn from(constraint: TextConstraint) -> Self {
+        match constraint {
+            TextConstraint::MinContent => Self::MinContent,
+            TextConstraint::MaxContent => Self::MaxContent,
+            TextConstraint::Wrap(width) => Self::Wrap(width.0.to_bits()),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 struct ParagraphCache {
-    paragraph: ParagraphId,
+    last_used: u64,
     formation_key: FormationKey,
     paint_runs: Vec<PaintRun>,
     geometry: CachedGeometry,
@@ -1160,6 +1501,7 @@ struct CachedGeometry {
 #[derive(Clone, Debug)]
 struct CachedLine {
     bounds: Rect,
+    advance: f64,
     sources: Vec<LocalRange>,
     fragments: Range<usize>,
     break_reason: LineBreakReason,
@@ -1471,6 +1813,7 @@ fn build_geometry(
                 line.advance().max(1.0),
                 line_top + line.height(),
             ),
+            advance: line.advance(),
             sources: projection.local_ranges(line.source())?,
             fragments: fragment_start..fragments.len(),
             break_reason: line.break_reason(),
@@ -1658,6 +2001,7 @@ fn materialize_geometry(
     lines.extend(geometry.lines.iter().map(|line| {
         SceneLine {
             bounds: line.bounds + translate,
+            advance: line.advance,
             sources: line
                 .sources
                 .iter()
@@ -1782,6 +2126,7 @@ fn materialize_projected_geometry(
     lines.extend(geometry.lines.iter().map(|line| {
         SceneLine {
             bounds: line.bounds + translate,
+            advance: line.advance,
             sources: line
                 .sources
                 .iter()
@@ -2007,6 +2352,43 @@ fn materialize_position(
     SnapshotTextPosition::new(revision, text, byte, affinity)
 }
 
+/// Exact block metrics derived from actual formed line advances and extents.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextMetrics {
+    size: Size,
+    first_baseline: Option<f64>,
+    last_baseline: Option<f64>,
+}
+
+impl TextMetrics {
+    fn from_lines<Source>(lines: &[SceneLine<Source>], height: f64) -> Self {
+        let width = lines.iter().map(SceneLine::advance).fold(0.0_f64, f64::max);
+        Self {
+            size: Size::new(width, height),
+            first_baseline: lines.first().map(SceneLine::baseline),
+            last_baseline: lines.last().map(SceneLine::baseline),
+        }
+    }
+
+    /// Returns maximum actual line advance and total block-axis extent.
+    #[must_use]
+    pub const fn size(self) -> Size {
+        self.size
+    }
+
+    /// Returns the first prepared text baseline, if the scene has a text line.
+    #[must_use]
+    pub const fn first_baseline(self) -> Option<f64> {
+        self.first_baseline
+    }
+
+    /// Returns the last prepared text baseline, if the scene has a text line.
+    #[must_use]
+    pub const fn last_baseline(self) -> Option<f64> {
+        self.last_baseline
+    }
+}
+
 /// One provenance-preserving segment of transient projected scene text.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectedTextSource {
@@ -2194,6 +2576,7 @@ pub struct CompositionScene {
     revision: DocumentRevision,
     composition: CompositionId,
     epoch: crate::CompositionEpoch,
+    metrics: TextMetrics,
     lines: Vec<SceneLine<ProjectedTextRange>>,
     fragments: Vec<SceneFragment<ProjectedTextRange>>,
     clusters: Vec<SceneCluster<ProjectedTextRange, ProjectedTextPosition>>,
@@ -2204,6 +2587,12 @@ pub struct CompositionScene {
 }
 
 impl CompositionScene {
+    /// Returns exact intrinsic metrics for this projected scene.
+    #[must_use]
+    pub const fn metrics(&self) -> TextMetrics {
+        self.metrics
+    }
+
     /// Returns the immutable document identity below the transient projection.
     #[must_use]
     pub const fn document(&self) -> crate::DocumentId {
@@ -2405,6 +2794,7 @@ impl CompositionScene {
 pub struct TextScene {
     document: crate::DocumentId,
     revision: DocumentRevision,
+    metrics: TextMetrics,
     lines: Vec<SceneLine>,
     fragments: Vec<SceneFragment>,
     clusters: Vec<SceneCluster>,
@@ -2416,6 +2806,12 @@ pub struct TextScene {
 }
 
 impl TextScene {
+    /// Returns exact intrinsic metrics for this scene.
+    #[must_use]
+    pub const fn metrics(&self) -> TextMetrics {
+        self.metrics
+    }
+
     /// Returns the document identity represented by this scene.
     #[must_use]
     pub const fn document(&self) -> crate::DocumentId {
@@ -3158,6 +3554,7 @@ fn distance_to_interval(value: f64, start: f64, end: f64) -> f64 {
 #[derive(Clone, Debug)]
 pub struct SceneLine<Source = SnapshotTextRange> {
     bounds: Rect,
+    advance: f64,
     sources: Vec<Source>,
     fragments: Range<usize>,
     break_reason: LineBreakReason,
@@ -3171,6 +3568,14 @@ impl<Source> SceneLine<Source> {
     #[must_use]
     pub const fn bounds(&self) -> Rect {
         self.bounds
+    }
+
+    /// Returns the actual inline advance, including trailing whitespace.
+    ///
+    /// Unlike [`Self::bounds`], this value has no minimum hit-area padding.
+    #[must_use]
+    pub const fn advance(&self) -> f64 {
+        self.advance
     }
 
     /// Returns the source-complete slices represented by the line.
@@ -3560,7 +3965,7 @@ mod tests {
 
     use peniko::Blob;
 
-    use super::{LayoutEngine, append_inline_flow_run, append_shaping_run};
+    use super::{CacheBudget, LayoutEngine, append_inline_flow_run, append_shaping_run};
     use crate::adapter::{
         ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
         GlyphPaintSegment, LineBreakReason, ParagraphConstraints, ParagraphFormation,
@@ -3576,8 +3981,8 @@ mod tests {
         InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, Point,
         ProjectedTextSource, Rect, SceneErrorKind, SceneRequest, ShapingStyle,
         SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
-        StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextId, TextMovement, TextSelectionMode,
-        Vec2,
+        StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextConstraint, TextId, TextMovement,
+        TextSelectionMode, Vec2,
     };
 
     #[derive(Debug)]
@@ -3803,18 +4208,82 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct RetainingInvalidAdapter {
+        retained: bool,
+    }
+
+    impl ParagraphFormation for RetainingInvalidAdapter {
+        fn form(
+            &mut self,
+            input: ParagraphInput<'_>,
+            constraints: ParagraphConstraints,
+        ) -> Result<ParagraphFormationOutput, PreparationError> {
+            self.retained = true;
+            EchoAdapter {
+                split_utf8: true,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            }
+            .form(input, constraints)
+        }
+
+        fn release(&mut self, _paragraph: crate::ParagraphId) {
+            self.retained = false;
+        }
+
+        fn clear(&mut self) {
+            self.retained = false;
+        }
+
+        fn retained_entries(&self) -> Option<usize> {
+            Some(usize::from(self.retained))
+        }
+    }
+
+    #[test]
+    fn invalid_first_output_releases_untracked_backend_state() {
+        let (document, styles, paint) = one_leaf_document(*b"scene-test-doc13", "é");
+        let mut layout =
+            LayoutEngine::new(RetainingInvalidAdapter::default(), CacheBudget::new(32));
+        let request = SceneRequest::new(
+            TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
+            &styles,
+            &paint,
+        );
+        layout
+            .prepare(&document.snapshot(), &request)
+            .expect_err("mid-scalar adapter source must be rejected");
+
+        assert_eq!(
+            layout.cache_diagnostics().current_entries(),
+            0,
+            "invalid output must not create geometry residency"
+        );
+        assert_eq!(
+            layout.cache_diagnostics().backend_entries(),
+            Some(0),
+            "invalid output must release backend state with no geometry owner"
+        );
+    }
+
     #[test]
     fn layout_rejects_adapter_ranges_inside_a_utf8_scalar() {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc01", "é");
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: true,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: true,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         let request = SceneRequest::new(
-            FiniteWidth::new(100.).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3840,15 +4309,18 @@ mod tests {
     #[test]
     fn layout_rejects_a_cursor_inside_a_utf8_scalar() {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc08", "é");
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: true,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: true,
+            },
+            CacheBudget::new(32),
+        );
         let request = SceneRequest::new(
-            FiniteWidth::new(100.).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3862,15 +4334,18 @@ mod tests {
     #[test]
     fn layout_rejects_glyphless_non_control_source() {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc06", "a");
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: true,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: true,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         let request = SceneRequest::new(
-            FiniteWidth::new(100.).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3884,15 +4359,18 @@ mod tests {
     #[test]
     fn layout_rejects_partially_unmapped_run_source() {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc07", "ab");
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: true,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: true,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         let request = SceneRequest::new(
-            FiniteWidth::new(100.).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3906,15 +4384,18 @@ mod tests {
     #[test]
     fn layout_reports_adapter_paint_mismatch_as_invalid_preparation() {
         let (document, styles, paint) = one_leaf_document(*b"scene-test-doc12", "ab");
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: true,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: false,
+                mismatched_paint: true,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         let request = SceneRequest::new(
-            FiniteWidth::new(100.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.0).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -3933,15 +4414,19 @@ mod tests {
     fn fragment_identity_is_distinct_across_documents() {
         let (first, first_styles, first_paint) = one_leaf_document(*b"scene-test-doc02", "a");
         let (second, second_styles, second_paint) = one_leaf_document(*b"scene-test-doc03", "b");
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         let width = FiniteWidth::new(100.).expect("test width is valid");
-        let first_request = SceneRequest::new(width, &first_styles, &first_paint);
+        let first_request =
+            SceneRequest::new(TextConstraint::Wrap(width), &first_styles, &first_paint);
         let first_scene = layout
             .prepare(&first.snapshot(), &first_request)
             .expect("first scene must prepare");
@@ -3950,7 +4435,8 @@ mod tests {
             2,
             "adapter break-reshape work must survive scene reporting"
         );
-        let second_request = SceneRequest::new(width, &second_styles, &second_paint);
+        let second_request =
+            SceneRequest::new(TextConstraint::Wrap(width), &second_styles, &second_paint);
         let second_scene = layout
             .prepare(&second.snapshot(), &second_request)
             .expect("second scene must prepare");
@@ -3994,17 +4480,20 @@ mod tests {
             Brush::Solid(Color::from_rgb8(0xff, 0x00, 0x00)),
         ]);
         let request = SceneRequest::new(
-            FiniteWidth::new(100.0).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.0).expect("test width is valid")),
             &styles,
             &paint,
         );
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: true,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: true,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         let output = layout
             .prepare(&document.snapshot(), &request)
             .expect("explicitly clipped split paint must lower");
@@ -4141,19 +4630,24 @@ mod tests {
         spacious_styles.set(text, compact);
         let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
         let width = FiniteWidth::new(100.).expect("test width is valid");
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
 
-        let compact_request = SceneRequest::new(width, &compact_styles, &paint);
+        let compact_request =
+            SceneRequest::new(TextConstraint::Wrap(width), &compact_styles, &paint);
         let compact_scene = layout
             .prepare(&document.snapshot(), &compact_request)
             .expect("compact scene must prepare");
-        let spacious_request = SceneRequest::new(width, &spacious_styles, &paint);
+        let spacious_request =
+            SceneRequest::new(TextConstraint::Wrap(width), &spacious_styles, &paint);
         let spacious_scene = layout
             .prepare(&document.snapshot(), &spacious_request)
             .expect("spacious scene must prepare");
@@ -4167,15 +4661,18 @@ mod tests {
     fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         let (mut document, styles, paint) = one_leaf_document(*b"scene-test-doc09", "office");
         let snapshot = document.snapshot();
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         let request = SceneRequest::new(
-            FiniteWidth::new(100.).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
             &styles,
             &paint,
         );
@@ -4444,6 +4941,7 @@ mod tests {
         let scene = super::TextScene {
             document: snapshot.id(),
             revision: snapshot.revision(),
+            metrics: super::TextMetrics::default(),
             lines: Vec::new(),
             fragments: Vec::new(),
             clusters: Vec::new(),
@@ -4515,17 +5013,20 @@ mod tests {
         let session =
             CompositionSession::new(CompositionId::from_bytes(*b"missing-target01"), selections);
         let request = SceneRequest::new(
-            FiniteWidth::new(100.).expect("test width is valid"),
+            TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
             &styles,
             &paint,
         );
-        let mut layout = LayoutEngine::new(EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
-            glyphless: false,
-            interior_cursor: false,
-        });
+        let mut layout = LayoutEngine::new(
+            EchoAdapter {
+                split_utf8: false,
+                split_paint: false,
+                mismatched_paint: false,
+                glyphless: false,
+                interior_cursor: false,
+            },
+            CacheBudget::new(32),
+        );
         assert_eq!(
             layout
                 .prepare_composition(&snapshot, &request, &session)

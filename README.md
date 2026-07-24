@@ -20,8 +20,11 @@ glyph paint with explicit source ownership, CPU visual proof, exact cluster
 interaction, and revision-bound
 multi-selection transactions. A generated-source IME composition epoch and
 revisioned editable-surface query layer now execute against the same retained
-Parley geometry for both event-feed and host-driven protocol shapes. The
-complete architecture is
+Parley geometry for both event-feed and host-driven protocol shapes. Retained
+`TextBlock`s now give labels a borrowed-style, single-paragraph façade over
+that same engine; explicit min/max/constrained formation reports exact size
+and baselines, while coordinated budgets and release keep geometry and Parley
+physics caches bounded. The complete architecture is
 [specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
 first pre-stable public slice and its exact dependency fence: `underwood` owns
 the `no_std + alloc` document, flow, and scene path, while `underwood_parley`
@@ -86,8 +89,11 @@ cargo run -p underwood_ime_compat_experiment
 ```
 
 Product performance lives in `benches/semantic-scene` and measures those same
-public crates. Pre-product hypothesis implementations live under
-`experiments/` and are explicitly barred from product performance claims.
+public crates. The label-scale `benches/labels` wind tunnel proves stable,
+identical, localized-edit, intrinsic/constrained, release, and budget-churn
+behavior through `TextBlock` and public diagnostics. Pre-product hypothesis
+implementations live under `experiments/` and are explicitly barred from
+product performance claims.
 
 The machine-readable [proof ledger](docs/proof/ledger.tsv) is authoritative for
 capability status.
@@ -121,6 +127,7 @@ typos
 bd lint --status all
 bd dep cycles
 cargo run --profile wind-tunnel -p underwood_semantic_scene_benchmark
+cargo run --profile wind-tunnel -p underwood_label_benchmark
 ```
 
 Underwood's production crates and non-rendering workspace members have an MSRV

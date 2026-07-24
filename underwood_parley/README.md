@@ -16,9 +16,17 @@ fallback is added.
 The adapter owns analysis and shaping scratch, retains Parley Core's native
 `ShapedText` across reusable formations, and lowers it into Underwood's
 portable formed-line records without maintaining a second shaped-run model.
-Parley Core boundary classes select legal and mandatory breaks, line boxes use
-the selected fonts' scaled metrics, and each line's runs are reordered visually
-only after its logical source range is fixed. Paint
+`ParleyParagraphEngine::new(fonts)` is infallible; Unicode analysis data comes
+from the pinned Parley Core implementation rather than an empty configuration
+placeholder. Paragraph physics are indexed by stable paragraph identity, and
+Underwood's cache release and budget eviction propagate into this adapter so
+dead blocks do not leave shaped text retained here.
+Parley Core boundary classes select legal and mandatory breaks. Explicit
+max-content formation ignores soft opportunities, min-content formation
+commits each legal opportunity through Parley's break-sensitive reshaping,
+and constrained formation greedily fits a validated finite width. Line boxes
+use the selected fonts' scaled metrics, and each line's runs are reordered
+visually only after its logical source range is fixed. Paint
 boundaries remain source and clip metadata rather than shaping inputs. Complete
 Underwood shaping runs supply family, weight, width, style, font size,
 language, OpenType features, and variable-font coordinates.

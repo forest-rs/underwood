@@ -4,12 +4,13 @@
 //! Deterministic compatibility trace for the two native IME protocol families.
 
 use underwood::{
-    Brush, Color, CompositionId, CompositionSession, CompositionUpdate, ComputedInlineStyle,
-    Document, DocumentId, EditableSurface, EditableSurfaceElement, FiniteWidth, FontFamily,
-    InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole, Point,
-    SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap, SurfaceTextEncoding,
+    Brush, CacheBudget, Color, CompositionId, CompositionSession, CompositionUpdate,
+    ComputedInlineStyle, Document, DocumentId, EditableSurface, EditableSurfaceElement,
+    FiniteWidth, FontFamily, InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot, PaintTable,
+    ParagraphRole, Point, SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap,
+    SurfaceTextEncoding, TextConstraint,
 };
-use underwood_parley::{Font, FontSet, ParleyParagraphEngine, TextData};
+use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 const LATIN_FONT: &[u8] =
     include_bytes!("../../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
@@ -46,7 +47,11 @@ type AnyError = Box<dyn std::error::Error>;
 fn main() -> Result<(), AnyError> {
     let mut fixture = fixture()?;
     let snapshot = fixture.document.snapshot();
-    let request = SceneRequest::new(FiniteWidth::new(640.0)?, &fixture.styles, &fixture.paint);
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(640.0)?),
+        &fixture.styles,
+        &fixture.paint,
+    );
     let committed = fixture.layout.prepare(&snapshot, &request)?;
     let scene = committed.scene();
     let primary = *scene
@@ -256,10 +261,7 @@ fn fixture() -> Result<Fixture, AnyError> {
         Font::from_bytes("arabic", ARABIC_FONT)?,
     ])?
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?;
-    let layout = LayoutEngine::new(ParleyParagraphEngine::new(
-        TextData::compiled_minimal(),
-        fonts,
-    )?);
+    let layout = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(256));
     Ok(Fixture {
         document,
         first_text,
