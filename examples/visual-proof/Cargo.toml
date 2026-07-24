@@ -3,7 +3,8 @@ name = "underwood_visual_proof"
 version.workspace = true
 authors = ["Underwood Contributors"]
 edition.workspace = true
-rust-version.workspace = true
+# The published Imaging crates currently declare Rust 1.92.
+rust-version = "1.92"
 description = "Deterministic CPU-rendered visual proof for Underwood"
 homepage = "https://github.com/forest-rs/underwood"
 repository.workspace = true

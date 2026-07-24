@@ -20,8 +20,8 @@ resolver = "2"
 version = "0.0.1"
 edition = "2024"
 # Keep synchronized with RUST_MIN_VER in .github/workflows/ci.yml and the
-# support statement in README.md.
-rust-version = "1.92"
+# support statement in README.md. Clippy derives this value from Cargo metadata.
+rust-version = "1.88"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/forest-rs/underwood"
 

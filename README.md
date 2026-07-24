@@ -108,8 +108,10 @@ bd dep cycles
 cargo run --profile wind-tunnel -p underwood_semantic_scene_benchmark
 ```
 
-The workspace MSRV is Rust 1.92. The bootstrap CI stable toolchain is Rust
-1.96.
+Underwood's production crates and non-rendering workspace members have an MSRV
+of Rust 1.88. The native showcase and visual proof require Rust 1.92 because
+the published `imaging` and `imaging_vello_cpu` crates currently declare that
+MSRV. Stable CI checks the complete workspace with Rust 1.96.
 
 ## License
 

@@ -19,8 +19,8 @@ concurrency:
 env:
   # Keep synchronized with rust-toolchain.toml.
   RUST_STABLE_VER: "1.96"
-  # Keep synchronized with workspace.package.rust-version and clippy.toml.
-  RUST_MIN_VER: "1.92"
+  # Keep synchronized with workspace.package.rust-version.
+  RUST_MIN_VER: "1.88"
 
 jobs:
   formatting:
@@ -110,7 +110,12 @@ jobs:
           toolchain: ${{ env.RUST_MIN_VER }}
 
       - name: check workspace at MSRV
-        run: cargo check --workspace --all-targets --all-features --locked
+        # The renderer-backed examples inherit the Rust 1.92 MSRV of the
+        # published Imaging crates. Stable CI still checks them above.
+        run: >-
+          cargo check --workspace --all-targets --all-features --locked
+          --exclude underwood_showcase
+          --exclude underwood_visual_proof
 
   documentation:
     name: rustdoc
