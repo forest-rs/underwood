@@ -2,7 +2,7 @@
 
 ## Module boundaries and Parley Engine convergence
 
-**Status:** Active — implementation and local proof complete; protected landing in progress
+**Status:** Complete — protected implementation and proof landed
 
 **Beads:** `und-oh0.5.5`, `und-oh0.5.5.1`, `und-oh0.5.5.2`,
 `und-oh0.5.5.3`
@@ -74,6 +74,18 @@ are decomposed by invariant, the temporary bounded-break fork is absent,
 Underwood and its consumers can share current Parley/Fontique types, all
 line-breaking and interaction correctness proofs remain executable, measured
 costs are checked in, and every local and protected remote gate is green.
+
+### Result
+
+Completed on 2026-07-24 through protected PRs #25, #26, and #27. The adapter
+and core roots are calm facades over explicitly owned modules. Underwood uses
+one exact current Parley Engine, Fontique, and Parlance revision, carries no
+bounded-break fork API, and reports its conservative public-Engine line
+shaping separately from canonical shaping. Paragraph base direction is an
+explicit computed value. Architecture, correctness, interaction, intrinsic
+layout, performance, visual, PDF, Rust 1.88, `no_std`, and full remote proofs
+are green. `und-oh0.2.10` isolates a possible future upstream performance seam
+without weakening this completed boundary.
 
 ## Retained TextBlock and intrinsic-layout campaign
 
