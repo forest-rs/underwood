@@ -110,12 +110,14 @@ jobs:
           toolchain: ${{ env.RUST_MIN_VER }}
 
       - name: check workspace at MSRV
-        # The renderer-backed examples inherit the Rust 1.92 MSRV of the
-        # published Imaging crates. Stable CI still checks them above.
+        # Renderer-backed hosts inherit the Rust 1.92 MSRV of their published
+        # renderer dependencies. Stable CI still checks them above.
         run: >-
           cargo check --workspace --all-targets --all-features --locked
           --exclude underwood_showcase
           --exclude underwood_visual_proof
+          --exclude underwood_pdf
+          --exclude underwood_pdf_proof
 
   documentation:
     name: rustdoc

@@ -1,5 +1,58 @@
 # Underwood execution plans
 
+## Prepared-scene PDF slice
+
+**Status:** Complete
+
+**Bead:** `und-oh0.9.1`
+
+### Goal
+
+Lower one real prepared `TextScene` through Krilla into a deterministic,
+human-inspectable PDF while preserving Underwood's ownership of shaping,
+fallback, bidi, geometry, paint partitioning, and Unicode provenance.
+
+### Fence
+
+This slice owns a replaceable `underwood_pdf` adapter, a mixed-script proof
+crate, and the generated proof artifact. It does not add PDF concepts to core,
+re-shape text, approximate unsupported variable instances or synthesis, claim
+tagged-PDF accessibility, or broaden the first slice beyond one page.
+
+### Steps
+
+1. Translate supported public scene observations into Krilla fonts, glyphs,
+   transforms, solid paint, and explicit paint clips.
+2. Resolve each glyph's immutable source ranges through the matching document
+   snapshot and retain that Unicode in the PDF text mapping.
+3. Reject unsupported paint, non-default variation coordinates, synthesis, bad
+   resources, and unrepresentable geometry before serialization.
+4. Build and run a deterministic mixed Latin/Arabic proof through the public
+   Underwood path; retain and visually inspect the resulting PDF.
+5. Give lines direct fragment ranges and partial-painted observations a shared
+   shaped-glyph identity, so renderer adapters need no geometric inference.
+6. Run the complete workspace policy, lint, test, and documentation gates.
+
+### Risks and controls
+
+- **Second text engine:** accept only prepared scene glyphs and never invoke
+  Krilla's shaping API.
+- **Quiet approximation:** preflight every representable scene property and
+  return a fragment-local error for unsupported inputs.
+- **Duplicate font storage:** transfer a clone of the scene's shared font
+  backing into Krilla rather than copying font bytes.
+- **Extraction overclaim:** preserve glyph Unicode, but defer logical-order
+  bidi extraction and tagged PDF to a separate evidence-backed slice; record
+  macOS Preview behavior against Underwood, Chrome, and Quartz controls.
+- **Core dependency creep:** keep Krilla and its Rust 1.92 floor in the external
+  renderer-host adapter.
+
+### Completion
+
+The slice is complete when the proof PDF is generated from a mixed-script real
+scene, its output and rejection paths are tested, the artifact is visually
+credible, and the repository is green.
+
 ## Foundation decision-support campaign
 
 **Status:** Complete — all five records ratified 2026-07-21

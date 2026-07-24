@@ -1,0 +1,20 @@
+[package]
+name = "underwood_pdf_proof"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+# The proof inherits the Rust floor of its Krilla-backed adapter.
+rust-version = "1.92"
+description = "Deterministic public-path PDF specimen for Underwood"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+underwood.workspace = true
+underwood_parley.workspace = true
+underwood_pdf.workspace = true
+
+[lints]
+workspace = true

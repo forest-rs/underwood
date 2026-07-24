@@ -43,8 +43,8 @@ pub use peniko::{Brush, Color, FontData};
 pub use scene::{
     CompositionScene, CompositionSceneOutput, LayoutEngine, ProjectedTextPosition,
     ProjectedTextRange, ProjectedTextSource, SceneCaret, SceneCompositionRect, SceneFragment,
-    SceneFragmentId, SceneGlyph, SceneLine, SceneOutput, SceneSelectionRect, SemanticFragment,
-    StageWork, TextHit, TextScene, WorkReport,
+    SceneFragmentId, SceneGlyph, SceneGlyphInstanceId, SceneLine, SceneOutput, SceneSelectionRect,
+    SemanticFragment, StageWork, TextHit, TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

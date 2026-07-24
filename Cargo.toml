@@ -2,6 +2,7 @@
 members = [
   "benches/semantic-scene",
   "examples/headless",
+  "examples/pdf-proof",
   "examples/showcase",
   "examples/visual-proof",
   "experiments/flow",
@@ -11,6 +12,7 @@ members = [
   "experiments/text-data",
   "underwood",
   "underwood_parley",
+  "underwood_pdf",
   "xtask",
 ]
 default-members = ["xtask"]
@@ -31,6 +33,7 @@ fontique = { git = "https://github.com/waywardmonkeys/parley.git", rev = "44d155
 ] }
 imaging = "0.0.1"
 imaging_vello_cpu = "0.0.2"
+krilla = { version = "0.8.2", default-features = false }
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
 libm = "0.2.16"
 parlance = { git = "https://github.com/waywardmonkeys/parley.git", rev = "44d155e17a6dbf455c8b9133c2ae40955c9f2af2", default-features = false }
@@ -47,6 +50,7 @@ softbuffer = { version = "0.4.8", default-features = false, features = [
 ] }
 underwood = { path = "underwood" }
 underwood_parley = { path = "underwood_parley" }
+underwood_pdf = { path = "underwood_pdf" }
 winit = { version = "0.30.12", default-features = false, features = [
   "rwh_06",
   "wayland",

@@ -1161,6 +1161,7 @@ struct CachedGeometry {
 struct CachedLine {
     bounds: Rect,
     sources: Vec<LocalRange>,
+    fragments: Range<usize>,
     break_reason: LineBreakReason,
     baseline: f64,
     content_ascent: f64,
@@ -1185,6 +1186,7 @@ struct CachedFragment {
 
 #[derive(Clone, Debug)]
 struct CachedGlyph {
+    instance: usize,
     id: u32,
     position: Point,
     advance: Vec2,
@@ -1356,9 +1358,11 @@ fn build_geometry(
     let mut fragments = Vec::new();
     let mut clusters = Vec::new();
     let mut carets = Vec::new();
+    let mut glyph_index = 0;
 
     for line in prepared.lines() {
         let line_index = lines.len();
+        let fragment_start = fragments.len();
         let baseline = line_top + line.baseline();
         let mut unit_x = 0.0_f64;
         for unit in line.units() {
@@ -1421,6 +1425,8 @@ fn build_geometry(
         for run in line.runs() {
             let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
             for glyph in run.glyphs() {
+                let instance = glyph_index;
+                glyph_index += 1;
                 let position = Point::new(x + glyph.offset().x, baseline - glyph.offset().y);
                 for segment in glyph.paint().segments() {
                     let sources = projection.local_ranges(segment.source())?;
@@ -1437,6 +1443,7 @@ fn build_geometry(
                     fragments.push(CachedFragment {
                         id,
                         glyphs: alloc::vec![CachedGlyph {
+                            instance,
                             id: glyph.id(),
                             position,
                             advance: glyph.advance(),
@@ -1465,6 +1472,7 @@ fn build_geometry(
                 line_top + line.height(),
             ),
             sources: projection.local_ranges(line.source())?,
+            fragments: fragment_start..fragments.len(),
             break_reason: line.break_reason(),
             baseline,
             content_ascent: line.content_ascent(),
@@ -1646,6 +1654,7 @@ fn materialize_geometry(
 ) {
     let translate = Vec2::new(0.0, y_offset);
     let line_base = lines.len();
+    let fragment_base = fragments.len();
     lines.extend(geometry.lines.iter().map(|line| {
         SceneLine {
             bounds: line.bounds + translate,
@@ -1654,6 +1663,7 @@ fn materialize_geometry(
                 .iter()
                 .map(|source| materialize_range(source, revision))
                 .collect(),
+            fragments: fragment_base + line.fragments.start..fragment_base + line.fragments.end,
             break_reason: line.break_reason,
             baseline: line.baseline + y_offset,
             content_ascent: line.content_ascent,
@@ -1671,6 +1681,7 @@ fn materialize_geometry(
                     let (source, additional_sources) =
                         materialize_sources(&glyph.sources, revision);
                     SceneGlyph {
+                        instance: SceneGlyphInstanceId(fragment_base + glyph.instance),
                         id: glyph.id,
                         position: glyph.position + translate,
                         advance: glyph.advance,
@@ -1767,6 +1778,7 @@ fn materialize_projected_geometry(
 ) {
     let translate = Vec2::new(0.0, y_offset);
     let line_base = lines.len();
+    let fragment_base = fragments.len();
     lines.extend(geometry.lines.iter().map(|line| {
         SceneLine {
             bounds: line.bounds + translate,
@@ -1775,6 +1787,7 @@ fn materialize_projected_geometry(
                 .iter()
                 .map(|source| projected_range(core::slice::from_ref(source), revision))
                 .collect(),
+            fragments: fragment_base + line.fragments.start..fragment_base + line.fragments.end,
             break_reason: line.break_reason,
             baseline: line.baseline + y_offset,
             content_ascent: line.content_ascent,
@@ -1788,6 +1801,7 @@ fn materialize_projected_geometry(
                 .glyphs
                 .iter()
                 .map(|glyph| SceneGlyph {
+                    instance: SceneGlyphInstanceId(fragment_base + glyph.instance),
                     id: glyph.id,
                     position: glyph.position + translate,
                     advance: glyph.advance,
@@ -3145,6 +3159,7 @@ fn distance_to_interval(value: f64, start: f64, end: f64) -> f64 {
 pub struct SceneLine<Source = SnapshotTextRange> {
     bounds: Rect,
     sources: Vec<Source>,
+    fragments: Range<usize>,
     break_reason: LineBreakReason,
     baseline: f64,
     content_ascent: f64,
@@ -3164,6 +3179,15 @@ impl<Source> SceneLine<Source> {
     #[must_use]
     pub fn sources(&self) -> &[Source] {
         &self.sources
+    }
+
+    /// Returns the contiguous scene-fragment range painted by this line.
+    ///
+    /// The range indexes [`TextScene::fragments`] or the corresponding
+    /// projected scene fragment slice.
+    #[must_use]
+    pub fn fragment_range(&self) -> Range<usize> {
+        self.fragments.clone()
     }
 
     /// Returns why this line ended.
@@ -3302,6 +3326,7 @@ impl<Source> SceneFragment<Source> {
 /// One shaped glyph observation.
 #[derive(Clone, Debug)]
 pub struct SceneGlyph<Source = SnapshotTextRange> {
+    instance: SceneGlyphInstanceId,
     id: u32,
     position: Point,
     advance: Vec2,
@@ -3310,6 +3335,15 @@ pub struct SceneGlyph<Source = SnapshotTextRange> {
 }
 
 impl<Source> SceneGlyph<Source> {
+    /// Returns the identity of the shaped glyph instance being painted.
+    ///
+    /// Multiple observations share this identity when one shaped glyph is
+    /// divided into partial-paint fragments.
+    #[must_use]
+    pub const fn instance_id(&self) -> SceneGlyphInstanceId {
+        self.instance
+    }
+
     /// Returns the backend glyph identifier.
     #[must_use]
     pub const fn id(&self) -> u32 {
@@ -3342,6 +3376,15 @@ impl<Source> SceneGlyph<Source> {
         core::iter::once(&self.source).chain(self.additional_sources.iter())
     }
 }
+
+/// Opaque identity of one shaped glyph instance in a prepared scene.
+///
+/// A glyph can occur in more than one paint fragment when style boundaries
+/// divide its visible area. Those observations retain one shared identity.
+/// Compare identities only within one [`TextScene`] or corresponding projected
+/// scene; they are not stable across separate preparations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SceneGlyphInstanceId(usize);
 
 /// Semantic observation with scene geometry.
 #[derive(Clone, Debug)]
@@ -3971,6 +4014,11 @@ mod tests {
 
         assert_eq!(first.glyphs()[0].id(), second.glyphs()[0].id());
         assert_eq!(
+            first.glyphs()[0].instance_id(),
+            second.glyphs()[0].instance_id(),
+            "partial-paint observations must retain one shaped-glyph identity"
+        );
+        assert_eq!(
             first.glyphs()[0].position(),
             second.glyphs()[0].position(),
             "paint splitting must not duplicate shaping or move the glyph"
@@ -3992,6 +4040,11 @@ mod tests {
         );
         assert_eq!(second.paint_clip().expect("second clip").y0, origin.y - 8.0);
         assert_eq!(second.paint_clip().expect("second clip").y1, origin.y + 2.0);
+        assert_eq!(
+            output.scene().lines()[0].fragment_range(),
+            0..2,
+            "the line must identify both paint fragments directly"
+        );
     }
 
     #[test]
