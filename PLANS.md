@@ -1,5 +1,72 @@
 # Underwood execution plans
 
+## Module boundaries and Parley Engine convergence
+
+**Status:** Active — adapter decomposition complete; Parley Engine convergence in progress
+
+**Beads:** `und-oh0.5.5`, `und-oh0.5.5.1`, `und-oh0.5.5.2`,
+`und-oh0.5.5.3`
+
+### Goal
+
+Make the implementation structure express the architecture: calm crate roots,
+private modules with one owner each, one current Parley Engine type universe,
+and a replaceable Underwood line former whose correctness and cost are explicit.
+
+### Fence
+
+Underwood owns portable paragraph-formation policy, source interaction, cache
+lifetime, and scene semantics. Parley Engine owns Unicode analysis,
+itemization, font-backed shaping, and shaped text. Crate roots own
+documentation, module declarations, and public re-exports; they explicitly do
+not own implementation algorithms.
+
+### Steps
+
+1. Split `underwood_parley/src/lib.rs` into font, engine, shaping,
+   line-breaking, lowering, interaction, validation, and focused test modules
+   without changing behavior, dependencies, features, or public paths.
+2. Prove the structural checkpoint through all local, portability, product, and
+   protected remote gates before changing text behavior.
+3. Move to current `parley_engine`, Fontique, and Parlance from one immutable
+   source revision.
+4. Replace fork-only in-place break mutation with a private line former that
+   re-itemizes retained paragraph analysis at committed line boundaries and
+   shapes final line ranges through public Parley Engine APIs.
+5. Prove Arabic joins, ligatures, fit-changing backtracking, intrinsic modes,
+   mixed bidi, source-complete interaction, and cache behavior; measure and
+   report line-reshape work rather than hiding it inside width-only formation.
+6. Split oversized Underwood scene and adapter implementation files by cache,
+   projection, geometry, interaction, prepared-record, transaction, and host
+   mapping ownership while preserving the 59-line public crate facade.
+7. Run adversarial review, every local gate, and protected remote landing for
+   each independently coherent slice.
+
+### Risks and controls
+
+- **Cosmetic decomposition:** no monolith may simply move under a new filename;
+  each module receives a one-sentence ownership fence and focused tests.
+- **Public-path drift:** crate roots re-export the exact existing public
+  vocabulary; rustdoc and downstream examples are gates.
+- **Private second shaper:** the local line former may call only public Parley
+  Engine analysis, itemization, and shaping APIs; it may not copy HarfRust
+  internals or add a direct shaping dependency.
+- **Correctness lost for convenience:** the existing Arabic, ligature,
+  backtracking, bidi, interaction, PDF, and visual traps remain blocking.
+- **Hidden performance regression:** a multiline formation wind tunnel records
+  cold, unchanged, width-churn, safe-break, and unsafe-break costs plus exact
+  line-reshape work.
+- **Portability drift:** all foundational modules remain `no_std + alloc`,
+  Rust 1.88, dependency-neutral except for replacing the existing Parley pin.
+
+### Completion
+
+The campaign is complete when crate roots are calm facades, oversized files
+are decomposed by invariant, the temporary bounded-break fork is absent,
+Underwood and its consumers can share current Parley/Fontique types, all
+line-breaking and interaction correctness proofs remain executable, measured
+costs are checked in, and every local and protected remote gate is green.
+
 ## Retained TextBlock and intrinsic-layout campaign
 
 **Status:** Complete — implementation and protected remote proof complete
