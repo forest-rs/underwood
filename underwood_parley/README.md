@@ -13,6 +13,21 @@ Fontconfig loading so compiling the optional feature does not require
 Fontconfig development headers; if the runtime library is absent, no system
 fallback is added.
 
+Implementation ownership is deliberately private and narrow:
+
+- `engine` coordinates paragraph identities, invalidation, and retained physics;
+- `font` owns immutable Fontique catalog construction and validation;
+- `shaping` projects Underwood styles into Parley analysis, itemization, font
+  selection, and initial shaping;
+- `line_break` owns intrinsic/constrained line-formation policy, metrics, and
+  line-local bidi ordering;
+- `lowering` produces portable glyph, source, synthesis, and paint records;
+- `interaction` produces source-complete grapheme units and cursor movement;
+- `validation` rejects incomplete or non-canonical adapter inputs.
+
+The crate root contains only documentation, private module declarations, and
+the stable public re-exports.
+
 The adapter owns analysis and shaping scratch, retains Parley Core's native
 `ShapedText` across reusable formations, and lowers it into Underwood's
 portable formed-line records without maintaining a second shaped-run model.
