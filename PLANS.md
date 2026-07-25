@@ -79,7 +79,10 @@ toolkit behavior or pixel production.
    dependency.
 13. Product-prove the complete path through a compelling region-aware living
    page and guided diagnostic modes.
-14. Run adversarial architecture, correctness, performance, accessibility,
+14. Retire the nonstandard "text physics" metaphor from live code and
+   normative architecture. Name analysis, shaping, prepared facts, formation,
+   adjustment, geometry, and caches according to their actual stage.
+15. Run adversarial architecture, correctness, performance, accessibility,
    PDF, portability, and real-vs-mirage review; land coherent protected
    changes with complete proof records.
 
@@ -112,10 +115,14 @@ toolkit behavior or pixel production.
   `docs/proof/line-adjustment-review-2026-07-25.md`.
 - Step 6 now has a matched before-state wind tunnel and a concrete cache
   recommendation in `docs/design/0016-cross-identity-preparation-cache.md`.
-  The proposed owner is `LayoutEngine`; the value is immutable paragraph-local
+  Design-0016 was approved on 2026-07-25. The owner is `LayoutEngine`; the value
+  is immutable paragraph-local
   prepared facts; every consumer rebuilds identity-bound geometry; retention
-  is a separately opt-in byte-budgeted LRU. The key, owner, and lifetime remain
-  at their explicit human gate.
+  is a separately opt-in byte-budgeted LRU; backend participation is
+  default-off and epoch-scoped. Implementation is active.
+- Step 14 is tracked by `und-oh0.13.16`. The catch-all "physics" metaphor will
+  be removed from live identifiers, rustdoc, and normative architecture rather
+  than replaced by another vague umbrella term.
 
 ### Risks and controls
 

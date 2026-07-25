@@ -1,6 +1,6 @@
 # Design-0016: Cross-identity preparation cache
 
-- **Status:** Proposed — pending human cache-semantics approval
+- **Status:** Approved — 2026-07-25
 - **Date:** 2026-07-25
 - **Bead:** `und-oh0.13.14`
 - **Extends:** Design-0014 and ADR-0005
@@ -8,7 +8,7 @@
 ## Goal
 
 Let distinct text consumers reuse expensive immutable preparation when their
-projected text and text-physics inputs are identical, while every consumer
+projected text and preparation inputs are identical, while every consumer
 retains its own document, paragraph, revision, source, semantic, interaction,
 paint-table, and placement identity.
 
@@ -19,8 +19,8 @@ the same content and computed policy.
 ## Fence
 
 A shared-formation cache owns immutable paragraph-local prepared facts keyed
-only by identity-free physics inputs; it explicitly does not own document or
-paragraph identity, revisions, source-leaf identity, semantic identity,
+only by identity-free preparation inputs; it explicitly does not own document
+or paragraph identity, revisions, source-leaf identity, semantic identity,
 paint-table values, selections, final geometry, or placement.
 
 ## Measured before state
@@ -52,7 +52,7 @@ before-state law.
    `TextId`, `SemanticId`, composition identity or epoch, selection,
    `SceneFragmentId`, final scene geometry, or placement.
 2. Prepared facts use paragraph-local projected UTF-8 ranges only.
-3. A hit cannot cross a text-physics input that can alter analysis, font
+3. A hit cannot cross a preparation input that can alter analysis, font
    selection, shaping, spacing, line metrics, breaking, or accepted slots.
 4. Alignment and `PaintTable` brush values do not invalidate shared formation.
 5. Paragraph-local paint-slot coverage participates while prepared glyphs
@@ -284,7 +284,7 @@ Blocking tests cover:
 1. Distinct documents with identical text share prepared facts but retain
    distinct document, paragraph, text, semantic, fragment, and revision
    identity.
-2. Different leaf segmentation and semantic roles can share text physics while
+2. Different leaf segmentation and semantic roles can share prepared facts while
    producing different source and semantic geometry.
 3. Distinct compositions rebind composition ID and epoch.
 4. Text, language, base direction, word-break policy, shaping style, spacing,
