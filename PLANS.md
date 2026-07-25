@@ -94,11 +94,12 @@ toolkit behavior or pixel production.
   Unicode `Joining_Type` from the small Parley Engine integration commit
   `97b874719f810c375025f3fa727b245530a87f9f`; no script table or new production
   dependency was added.
-- The exact Overstory computed-style lowering type-checks after its disposable
-  consumer proof uses one Parlance type universe. The parked consumer branch
-  still fails later on separately tracked editable-block APIs and two stale
-  presentation call sites; those failures do not require substitute style
-  logic in Overstory.
+- The exact Overstory computed-style and editable-control lowering type-checks
+  after its disposable consumer proof uses one Parlance type universe and
+  applies two stale presentation-pattern fixes. The branch's 25 non-alignment
+  TextInput tests pass against this Underwood worktree. Its three original
+  integration failures remain in Overstory lowering and retention policy; they
+  no longer expose missing Underwood editing primitives.
 - Chromium-recorded first-line cases are recorded for the step 11 CJK and
   CSS-profile corpus. They remain browser-compatibility evidence rather than a
   Unicode oracle.
@@ -128,6 +129,14 @@ toolkit behavior or pixel production.
   formation, adjustment, geometry, or cache state according to ownership.
   The deliberately preserved historical symbol references are recorded in
   `docs/proof/preparation-terminology-review-2026-07-25.md`.
+- Step 10 is complete. `TextScene` exposes complete-scene logical endpoints,
+  represented leaf-local caret resolution, and logical word movement from
+  retained adapter analysis. `TextBlock` exposes its stable leaf identity,
+  current text, and atomic selection replacement with post-publication
+  selections. The parked Overstory editor call site compiles without duplicate
+  navigation or transaction logic; the exact traps and remaining consumer
+  work are recorded in
+  `docs/proof/editable-text-block-operations-2026-07-25.md`.
 
 ### Risks and controls
 

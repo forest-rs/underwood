@@ -131,6 +131,19 @@ impl Document {
         }
     }
 
+    pub(crate) fn text(&self, id: TextId) -> Option<&str> {
+        if id.document != self.state.id {
+            return None;
+        }
+        self.state
+            .paragraphs
+            .get(id.paragraph as usize)?
+            .leaves
+            .get(id.index as usize)
+            .filter(|leaf| leaf.id == id)
+            .map(|leaf| leaf.text.as_ref())
+    }
+
     /// Starts an atomic staged edit.
     pub fn edit(&mut self) -> Edit<'_> {
         Edit {

@@ -41,7 +41,9 @@ The first draft public slice is deliberately complete end to end:
   explicit partial-paint clips, source mapping, exact shaped-cluster hits and
   carets (including whitespace, ligature
   components, bidi affinities, and empty editable leaves), revision-bound
-  logical and visual selection sets, and semantic observations;
+  logical and visual selection sets, complete-scene endpoints, represented
+  leaf-local positions, logical word movement from retained analysis, and
+  semantic observations;
 - document IDs are opaque and document-scoped, while [`SnapshotTextRange`] and
   [`SnapshotTextPosition`] values are dense observations valid only for their
   named revision.
@@ -143,6 +145,34 @@ let metrics = output.scene().metrics();
 label.set_text("Open")?;
 
 layout.release_document(label.id());
+```
+
+The same façade also exposes just enough revision-correct editing for a
+toolkit-owned text control. It does not own keyboard bindings, focus, IME
+policy, or widget state:
+
+```rust,ignore
+use underwood::TextSelectionMode;
+
+let snapshot = label.snapshot();
+let output = layout.prepare_block(
+    &snapshot,
+    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint),
+)?;
+let scene = output.scene();
+let text = snapshot.text_id();
+let start = scene.position_at(text, 0).unwrap();
+let end = scene.position_at(text, 4).unwrap();
+let selected = scene.selection(&start, &end, TextSelectionMode::Logical)?;
+let selected = scene.selection_set([selected])?;
+
+let rebound = label.replace_selections(&selected, "Open")?;
+assert_eq!(label.text(), "Open");
+let current = layout.prepare_block(
+    &label.snapshot(),
+    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint),
+)?;
+assert_eq!(rebound.revision(), current.scene().revision());
 ```
 
 The shared-preparation budget is opt-in and independent of the retained

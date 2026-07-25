@@ -7,6 +7,7 @@
 //! it explicitly does not own shaping or public scene interaction policy.
 
 use super::*;
+use crate::adapter::{ClusterBoundary, ClusterWhitespace};
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGeometry {
@@ -62,6 +63,8 @@ pub(super) struct CachedGlyph {
 pub(super) struct CachedCluster {
     sources: Vec<LocalRange>,
     semantic_id: SemanticId,
+    boundary: ClusterBoundary,
+    whitespace: ClusterWhitespace,
     hit_slices: Vec<CachedHitSlice>,
     bounds: Rect,
     line: usize,
@@ -333,6 +336,8 @@ pub(super) fn build_geometry(
             clusters.push(CachedCluster {
                 sources,
                 semantic_id,
+                boundary: unit.boundary(),
+                whitespace: unit.whitespace(),
                 hit_slices,
                 bounds,
                 line: line_index,
@@ -364,6 +369,8 @@ pub(super) fn build_geometry(
             clusters.push(CachedCluster {
                 semantic_id: projection.semantic_for_range(source)?,
                 sources: local_source,
+                boundary: ClusterBoundary::None,
+                whitespace: ClusterWhitespace::None,
                 hit_slices: Vec::new(),
                 bounds: Rect::new(
                     inline_start,
@@ -486,6 +493,8 @@ pub(super) fn build_geometry(
         clusters.push(CachedCluster {
             semantic_id: projection.semantic_for_range(0..0)?,
             sources,
+            boundary: ClusterBoundary::None,
+            whitespace: ClusterWhitespace::None,
             hit_slices: Vec::new(),
             bounds: empty_bounds,
             line: 0,
@@ -720,6 +729,8 @@ pub(super) fn materialize_geometry(
         SceneCluster {
             source: materialize_snapshot_unit(&cluster.sources, revision),
             semantic_id: cluster.semantic_id,
+            boundary: cluster.boundary,
+            whitespace: cluster.whitespace,
             hit_slices: cluster
                 .hit_slices
                 .iter()
@@ -841,6 +852,8 @@ pub(super) fn materialize_projected_geometry(
         SceneCluster {
             source: projected_range(&cluster.sources, revision),
             semantic_id: cluster.semantic_id,
+            boundary: cluster.boundary,
+            whitespace: cluster.whitespace,
             hit_slices: cluster
                 .hit_slices
                 .iter()

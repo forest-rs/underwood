@@ -5,7 +5,7 @@
 
 use crate::{
     ComputedInlineStyle, Document, DocumentId, DocumentSnapshot, EditError, InlineRole, PaintTable,
-    ParagraphRole, ParagraphStyle, TextConstraint, TextId,
+    ParagraphRole, ParagraphStyle, SnapshotTextSelectionSet, TextConstraint, TextId,
 };
 
 /// Mutable retained single-paragraph text content.
@@ -45,6 +45,14 @@ impl TextBlock {
         }
     }
 
+    /// Returns the complete current plain text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        self.document
+            .text(self.text)
+            .expect("TextBlock retains its single text leaf")
+    }
+
     /// Replaces the complete plain text and atomically publishes one revision.
     ///
     /// Setting the current value again performs no publication.
@@ -56,6 +64,21 @@ impl TextBlock {
         edit.replace_text(self.text, text)?;
         edit.commit()?;
         Ok(())
+    }
+
+    /// Atomically replaces every independent selection and returns rebound carets.
+    ///
+    /// The selection set must belong to the block's current revision. Each
+    /// independent selection receives one insertion even when a visual bidi
+    /// selection contains several logical ranges. The returned collapsed
+    /// selections belong to the newly published revision.
+    pub fn replace_selections(
+        &mut self,
+        selections: &SnapshotTextSelectionSet,
+        replacement: &str,
+    ) -> Result<SnapshotTextSelectionSet, EditError> {
+        let replacement = self.document.replace_selections(selections, replacement)?;
+        Ok(replacement.into_parts().1)
     }
 }
 
@@ -79,6 +102,12 @@ impl TextBlockSnapshot {
         self.document
             .text(self.text)
             .expect("TextBlock snapshots retain their single text leaf")
+    }
+
+    /// Returns the stable text-leaf identity represented by this block.
+    #[must_use]
+    pub const fn text_id(&self) -> TextId {
+        self.text
     }
 
     pub(crate) const fn document(&self) -> &DocumentSnapshot {

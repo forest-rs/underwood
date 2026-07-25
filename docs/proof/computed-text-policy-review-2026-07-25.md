@@ -117,10 +117,13 @@ let computed = ComputedInlineStyle::new(shaping, flow, PaintSlot::new(0))
     .with_analysis(AnalysisStyle::new(style.word_break));
 ```
 
-No conversion enum or substitute text engine is required. The complete parked
-crate still stops on the separately tracked editable `TextBlock` operations
-in `und-oh0.13.9` and two stale Understory presentation call sites. The
-disposable proof is not a maintained fork and contains no production change.
+No conversion enum or substitute text engine is required. The editable
+`TextBlock` operations tracked in `und-oh0.13.9` have since landed locally and
+the complete parked library type-checks after its two stale Understory
+presentation patterns are updated. The disposable proof is not a maintained
+fork and contains no production change. See
+`docs/proof/editable-text-block-operations-2026-07-25.md` for the current
+consumer result.
 
 ## Browser and specification follow-up
 
