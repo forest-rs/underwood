@@ -887,4 +887,13 @@ pub(super) fn record_formation_work(report: &mut WorkReport, work: FormationWork
         report.flow.records += work.formed_lines() as usize;
     }
     report.line_reshapes += work.line_reshapes() as usize;
+    report.line_candidates = report
+        .line_candidates
+        .saturating_add(work.line_candidates());
+    report.rejected_line_candidates = report
+        .rejected_line_candidates
+        .saturating_add(work.rejected_line_candidates());
+    report.line_checkpoint_restores = report
+        .line_checkpoint_restores
+        .saturating_add(work.line_checkpoint_restores());
 }

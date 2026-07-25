@@ -84,7 +84,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 cache.inline_flow_runs.clear();
                 cache.constraints = None;
                 cache.formed_lines.clear();
-                cache.line_work = LineFormationWork::default();
             } else {
                 self.cache.insert(
                     paragraph,
@@ -105,7 +104,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         inline_flow_runs: Vec::new(),
                         constraints: None,
                         formed_lines: Vec::new(),
-                        line_work: LineFormationWork::default(),
                     },
                 );
             }
@@ -151,6 +149,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             || physics.inline_flow_styles != input.inline_flow_styles()
             || physics.inline_flow_runs != input.inline_flow_runs()
             || physics.constraints != Some(constraints);
+        let mut line_work = LineFormationWork::default();
         if needs_formation {
             let cache = self
                 .cache
@@ -163,7 +162,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     input.inline_flow_styles(),
                     input.inline_flow_runs(),
                 )?;
-                cache.line_work = LineFormationWork::default();
             } else {
                 let analysis = &cache.analysis;
                 let shaped_text = &cache.shaped_text;
@@ -171,7 +169,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 let logical_clusters = &cache.logical_clusters;
                 let style_indices = &cache.style_indices;
                 let formed_lines = &mut cache.formed_lines;
-                cache.line_work = form_lines(
+                line_work = form_lines(
                     input.text(),
                     shaped_text,
                     scripts,
@@ -312,10 +310,15 @@ impl ParagraphFormation for ParleyParagraphEngine {
             },
             if needs_formation {
                 LineShapingWork::new(
-                    physics.line_work.reshapes,
-                    physics.line_work.resolved_clusters,
-                    physics.line_work.shaped_runs,
-                    physics.line_work.shaped_glyphs,
+                    line_work.reshapes,
+                    line_work.resolved_clusters,
+                    line_work.shaped_runs,
+                    line_work.shaped_glyphs,
+                )
+                .with_formation(
+                    line_work.candidates,
+                    line_work.rejected_candidates,
+                    line_work.checkpoint_restores,
                 )
             } else {
                 LineShapingWork::default()
@@ -355,5 +358,4 @@ struct PhysicsCache {
     inline_flow_runs: Vec<InlineFlowRun>,
     constraints: Option<ParagraphConstraints>,
     formed_lines: Vec<FormedLine>,
-    line_work: LineFormationWork,
 }

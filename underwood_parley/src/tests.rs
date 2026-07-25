@@ -39,6 +39,7 @@ mod font_and_analysis;
 mod interaction;
 mod intrinsic_and_cache;
 mod line_break;
+mod line_former;
 mod paint;
 
 const LATIN_FONT: &[u8] =

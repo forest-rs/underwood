@@ -98,6 +98,8 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut constrained_line_reshapes = 0_usize;
     let mut constrained_line_paragraphs = 0_usize;
+    let mut constrained_line_candidates = 0_usize;
+    let mut constrained_rejected_candidates = 0_usize;
     let constrained_unique = measure(|| {
         for label in &labels {
             let output = layout
@@ -135,6 +137,10 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                 constrained_line_reshapes.saturating_add(output.work().line_reshapes());
             constrained_line_paragraphs =
                 constrained_line_paragraphs.saturating_add(output.work().line_shape().paragraphs());
+            constrained_line_candidates =
+                constrained_line_candidates.saturating_add(output.work().line_candidates());
+            constrained_rejected_candidates = constrained_rejected_candidates
+                .saturating_add(output.work().rejected_line_candidates());
             black_box(output.scene().lines().len());
         }
     });
@@ -305,7 +311,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     report("text_block_retained_unique", LABELS, retained_unique);
     report("text_block_constrained_unique", LABELS, constrained_unique);
     println!(
-        "text_block_constrained_line_work\tparagraphs={constrained_line_paragraphs}\tline_reshapes={constrained_line_reshapes}"
+        "text_block_constrained_line_work\tparagraphs={constrained_line_paragraphs}\tline_reshapes={constrained_line_reshapes}\tcandidates={constrained_line_candidates}\trejected_candidates={constrained_rejected_candidates}"
     );
     report("text_block_localized_edit", 1, localized_edit);
     report("text_block_explicit_release", LABELS, release);
@@ -743,6 +749,12 @@ fn profile_width_churn(
                     output.work().shape().paragraphs(),
                     0,
                     "width churn must retain canonical shaping"
+                );
+                assert_eq!(
+                    output.work().line_candidates(),
+                    output.work().accepted_line_candidates()
+                        + output.work().rejected_line_candidates(),
+                    "every proposed line candidate must be accepted or visibly rejected"
                 );
                 black_box(output.scene().lines().len());
             }

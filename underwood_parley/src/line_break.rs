@@ -10,9 +10,16 @@
 use alloc::vec::Vec;
 use core::ops::Range;
 
-use parley_engine::{Boundary, ShapedText, shape::Whitespace};
+use parley_engine::ShapedText;
 use underwood::adapter::{InlineFlowRun, LineBreakReason, ParagraphConstraints, PreparationError};
 use underwood::{InlineFlowStyle, TextConstraint};
+
+use crate::line_former::{
+    CandidateBreak, CommitOutcome, FormationConstraint, LineCandidate, LineFormer, LineFormerError,
+    LineFormerWork, LineLimits, LineMeasurements,
+};
+
+pub(crate) use crate::line_former::LogicalCluster;
 
 #[derive(Clone, Debug)]
 pub(crate) struct LinePlan {
@@ -47,18 +54,9 @@ pub(crate) struct LineFormationWork {
     pub(crate) resolved_clusters: u32,
     pub(crate) shaped_runs: u32,
     pub(crate) shaped_glyphs: u32,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct LogicalCluster {
-    pub(crate) run: usize,
-    pub(crate) index: usize,
-    pub(crate) source: Range<usize>,
-    pub(crate) boundary: Boundary,
-    pub(crate) source_char: char,
-    pub(crate) whitespace: Whitespace,
-    pub(crate) ligature_component: bool,
-    pub(crate) advance: f64,
+    pub(crate) candidates: u32,
+    pub(crate) rejected_candidates: u32,
+    pub(crate) checkpoint_restores: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -86,32 +84,59 @@ pub(crate) fn form_lines(
         return Err(PreparationError::invalid_output());
     }
 
-    let first_choice = choose_line(clusters, 0, constraints.text())?;
-    if first_choice.reason == LineBreakReason::End && first_choice.end == clusters.len() {
+    let constraint = formation_constraint(constraints.text());
+    let limits = line_limits(constraint);
+    let mut former =
+        LineFormer::new(clusters, constraint).map_err(|_| PreparationError::invalid_output())?;
+    let first_candidate = former
+        .candidate()
+        .map_err(map_former_error)?
+        .ok_or_else(PreparationError::invalid_output)?;
+    validate_candidate(first_candidate)?;
+    if first_candidate.reason() == CandidateBreak::End && first_candidate.end() == clusters.len() {
+        let plan = make_line_plan(
+            canonical_text,
+            clusters,
+            inline_flow_styles,
+            inline_flow_runs,
+            first_candidate.clusters(),
+            line_break_reason(first_candidate.reason()),
+            first_candidate.canonical_advance(),
+            None,
+        )?;
+        match former
+            .commit(
+                first_candidate,
+                LineMeasurements {
+                    advance: plan.advance,
+                    height: plan.height,
+                },
+                limits,
+            )
+            .map_err(map_former_error)?
+        {
+            CommitOutcome::Accepted(_) => {}
+            CommitOutcome::Retry(_) | CommitOutcome::SlotRejected => {
+                return Err(PreparationError::invalid_output());
+            }
+        }
         lines.push(FormedLine {
-            plan: make_line_plan(
-                canonical_text,
-                clusters,
-                inline_flow_styles,
-                inline_flow_runs,
-                0..clusters.len(),
-                first_choice.reason,
-                first_choice.advance,
-                None,
-            )?,
+            plan,
             shaped_text: canonical_text.clone(),
             scripts: canonical_scripts.to_vec(),
         });
-        return Ok(LineFormationWork::default());
+        let mut work = LineFormationWork::default();
+        record_former_work(&mut work, former.work());
+        return Ok(work);
     }
 
     let mut work = LineFormationWork::default();
-    let mut start = 0_usize;
-    while start < clusters.len() {
-        let choice = choose_line(clusters, start, constraints.text())?;
-        let mut end = choice.end;
-        let formed = loop {
-            let source = line_source(clusters, start..end)?;
+    let mut candidate = first_candidate;
+    loop {
+        let checkpoint = former.checkpoint(lines.len());
+        loop {
+            validate_candidate(candidate)?;
+            let source = candidate.source();
             let output = shape_line(source.clone())?;
             let LineShapeOutput {
                 shaped_text,
@@ -132,63 +157,54 @@ pub(crate) fn form_lines(
                 return Err(PreparationError::invalid_output());
             }
             let advance = formed_clusters.iter().map(|cluster| cluster.advance).sum();
-            let fits = choice.reason != LineBreakReason::Regular
-                || match constraints.text() {
-                    TextConstraint::MinContent => true,
-                    TextConstraint::MaxContent => true,
-                    TextConstraint::Wrap(width) => advance <= width.get(),
-                };
-            if fits {
-                let plan = make_line_plan(
-                    &shaped_text,
-                    &formed_clusters,
-                    inline_flow_styles,
-                    inline_flow_runs,
-                    0..formed_clusters.len(),
-                    choice.reason,
-                    advance,
-                    None,
-                )?;
-                break FormedLine {
-                    plan,
-                    shaped_text,
-                    scripts,
-                };
+            let plan = make_line_plan(
+                &shaped_text,
+                &formed_clusters,
+                inline_flow_styles,
+                inline_flow_runs,
+                0..formed_clusters.len(),
+                line_break_reason(candidate.reason()),
+                advance,
+                None,
+            )?;
+            if scripts.len() != shaped_text.runs().len() {
+                return Err(PreparationError::invalid_output());
             }
-            let previous = (start + 1..end).rev().find(|&index| {
-                let cluster = &clusters[index];
-                cluster.boundary == Boundary::Line && !cluster.ligature_component
-            });
-            let Some(previous) = previous else {
-                let plan = make_line_plan(
-                    &shaped_text,
-                    &formed_clusters,
-                    inline_flow_styles,
-                    inline_flow_runs,
-                    0..formed_clusters.len(),
-                    choice.reason,
-                    advance,
-                    None,
-                )?;
-                break FormedLine {
-                    plan,
-                    shaped_text,
-                    scripts,
-                };
-            };
-            end = previous;
-        };
-        if formed.scripts.len() != formed.shaped_text.runs().len() {
-            return Err(PreparationError::invalid_output());
+            match former
+                .commit(
+                    candidate,
+                    LineMeasurements {
+                        advance: plan.advance,
+                        height: plan.height,
+                    },
+                    limits,
+                )
+                .map_err(map_former_error)?
+            {
+                CommitOutcome::Accepted(_) => {
+                    lines.push(FormedLine {
+                        plan,
+                        shaped_text,
+                        scripts,
+                    });
+                    break;
+                }
+                CommitOutcome::Retry(retry) => candidate = retry,
+                CommitOutcome::SlotRejected => {
+                    former
+                        .restore(checkpoint, lines)
+                        .map_err(map_former_error)?;
+                    return Err(PreparationError::invalid_output());
+                }
+            }
         }
-        lines.push(formed);
-        start = end;
+        let Some(next) = former.candidate().map_err(map_former_error)? else {
+            break;
+        };
+        candidate = next;
     }
 
-    if lines
-        .last()
-        .is_some_and(|line| line.plan.reason == LineBreakReason::Mandatory)
-    {
+    if former.needs_terminal_empty_line() {
         let previous = lines
             .last()
             .map(|line| line.plan.clone())
@@ -208,7 +224,81 @@ pub(crate) fn form_lines(
             scripts: Vec::new(),
         });
     }
+    record_former_work(&mut work, former.work());
     Ok(work)
+}
+
+fn formation_constraint(constraint: TextConstraint) -> FormationConstraint {
+    match constraint {
+        TextConstraint::MinContent => FormationConstraint::MinContent,
+        TextConstraint::MaxContent => FormationConstraint::MaxContent,
+        TextConstraint::Wrap(width) => FormationConstraint::Wrap(width.get()),
+    }
+}
+
+fn line_limits(constraint: FormationConstraint) -> LineLimits {
+    LineLimits {
+        max_advance: match constraint {
+            FormationConstraint::Wrap(width) => Some(width),
+            FormationConstraint::MinContent | FormationConstraint::MaxContent => None,
+        },
+        max_height: None,
+    }
+}
+
+fn line_break_reason(reason: CandidateBreak) -> LineBreakReason {
+    match reason {
+        CandidateBreak::Regular => LineBreakReason::Regular,
+        CandidateBreak::Mandatory => LineBreakReason::Mandatory,
+        CandidateBreak::End => LineBreakReason::End,
+    }
+}
+
+fn map_former_error(_error: LineFormerError) -> PreparationError {
+    PreparationError::invalid_output()
+}
+
+fn validate_candidate(candidate: LineCandidate) -> Result<(), PreparationError> {
+    let clusters = candidate.clusters();
+    let trailing = candidate.trailing_whitespace_clusters();
+    if trailing.start < clusters.start
+        || trailing.end != clusters.end
+        || candidate.trailing_whitespace_advance() > candidate.canonical_advance()
+    {
+        return Err(PreparationError::invalid_output());
+    }
+    Ok(())
+}
+
+fn record_former_work(work: &mut LineFormationWork, former: LineFormerWork) {
+    work.candidates = former.proposed;
+    work.rejected_candidates = former.rejected;
+    work.checkpoint_restores = former.restores;
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LineChoice {
+    pub(crate) end: usize,
+    pub(crate) reason: LineBreakReason,
+}
+
+#[cfg(test)]
+pub(crate) fn choose_line(
+    clusters: &[LogicalCluster],
+    start: usize,
+    constraint: TextConstraint,
+) -> Result<LineChoice, PreparationError> {
+    let mut former = LineFormer::at(clusters, formation_constraint(constraint), start)
+        .map_err(map_former_error)?;
+    let candidate = former
+        .candidate()
+        .map_err(map_former_error)?
+        .ok_or_else(PreparationError::invalid_output)?;
+    Ok(LineChoice {
+        end: candidate.end(),
+        reason: line_break_reason(candidate.reason()),
+    })
 }
 
 pub(crate) fn update_line_metrics(
@@ -235,86 +325,6 @@ pub(crate) fn update_line_metrics(
         previous = Some(line.plan.clone());
     }
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct LineChoice {
-    pub(crate) end: usize,
-    pub(crate) reason: LineBreakReason,
-    pub(crate) advance: f64,
-}
-
-pub(crate) fn choose_line(
-    clusters: &[LogicalCluster],
-    start: usize,
-    constraint: TextConstraint,
-) -> Result<LineChoice, PreparationError> {
-    let mut index = start;
-    let mut advance = 0.0_f64;
-    let mut last_opportunity: Option<(usize, f64)> = None;
-    while index < clusters.len() {
-        let cluster = &clusters[index];
-        if cluster.boundary == Boundary::Line && !cluster.ligature_component && index > start {
-            if constraint == TextConstraint::MinContent {
-                return Ok(LineChoice {
-                    end: index,
-                    reason: LineBreakReason::Regular,
-                    advance,
-                });
-            }
-            if matches!(constraint, TextConstraint::Wrap(_)) {
-                last_opportunity = Some((index, advance));
-            }
-        }
-
-        let next_advance = advance + cluster.advance;
-        if cluster.whitespace == Whitespace::Newline {
-            advance = next_advance;
-            index += 1;
-            let cr_before_lf = cluster.source_char == '\r'
-                && clusters
-                    .get(index)
-                    .is_some_and(|next| next.source_char == '\n');
-            if cr_before_lf {
-                continue;
-            }
-            return Ok(LineChoice {
-                end: index,
-                reason: LineBreakReason::Mandatory,
-                advance,
-            });
-        }
-
-        if matches!(constraint, TextConstraint::Wrap(width) if next_advance > width.get())
-            && let Some((end, opportunity_advance)) = last_opportunity
-        {
-            return Ok(LineChoice {
-                end,
-                reason: LineBreakReason::Regular,
-                advance: opportunity_advance,
-            });
-        }
-        advance = next_advance;
-        index += 1;
-    }
-    Ok(LineChoice {
-        end: clusters.len(),
-        reason: LineBreakReason::End,
-        advance,
-    })
-}
-
-fn line_source(
-    clusters: &[LogicalCluster],
-    logical_range: Range<usize>,
-) -> Result<Range<usize>, PreparationError> {
-    let first = clusters
-        .get(logical_range.start)
-        .ok_or_else(PreparationError::invalid_output)?;
-    let last = clusters
-        .get(logical_range.end.saturating_sub(1))
-        .ok_or_else(PreparationError::invalid_output)?;
-    Ok(first.source.start..last.source.end)
 }
 
 pub(crate) fn collect_logical_clusters(

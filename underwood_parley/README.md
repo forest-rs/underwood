@@ -35,8 +35,11 @@ Implementation ownership is deliberately private and narrow:
 - `font` owns immutable Fontique catalog construction and validation;
 - `shaping` projects Underwood styles into Parley analysis, itemization, font
   selection, initial shaping, and line-final shaping with retained fonts;
-- `line_break` owns intrinsic/constrained line-formation policy, metrics, and
-  line-local bidi ordering;
+- `line_former` owns reversible candidates, fit checks, retries, and
+  checkpoints over Parley Engine cluster facts without importing Underwood
+  document or scene types;
+- `line_break` adapts Underwood constraints and line metrics to that reusable
+  kernel, then owns line-local bidi ordering;
 - `lowering` produces portable glyph, source, synthesis, and paint records;
 - `interaction` produces source-complete grapheme units and cursor movement;
 - `validation` rejects incomplete or non-canonical adapter inputs.
@@ -56,11 +59,14 @@ Parley Engine boundary classes select legal and mandatory breaks. Explicit
 max-content formation ignores soft opportunities, min-content formation
 commits each legal opportunity through line-final re-itemization and shaping,
 and constrained formation greedily fits a validated finite width. If a
-line-final shape no longer fits, Underwood backs up to the preceding legal
-opportunity and reports every attempted line shape. A single unwrapped line
-reuses the retained canonical shape. Line boxes use the selected fonts' scaled
-metrics, and each line's runs are reordered visually only after its logical
-source range is fixed. Paint
+line-final shape no longer fits, the line former rejects that candidate and
+backs up to the preceding legal opportunity without advancing its traversal
+cursor. Checkpoints restore both traversal and caller-owned provisional output.
+Candidate, rejection, and restoration counts remain transient call work rather
+than retained cache state. A single unwrapped line reuses the retained
+canonical shape. Line boxes use the selected fonts' scaled metrics, and each
+line's runs are reordered visually only after its logical source range is
+fixed. Paint
 boundaries remain source and clip metadata rather than shaping inputs. Complete
 Underwood shaping runs supply family, weight, width, style, font size,
 language, OpenType features, and variable-font coordinates.

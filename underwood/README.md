@@ -152,6 +152,13 @@ break through line-final shaping, and
 optional first/last baselines. Empty blocks have zero width, their resolved
 line height, and no text baseline.
 
+Line formation is observable independently of shaping.
+[`WorkReport::line_candidates`] counts proposed candidates,
+[`WorkReport::rejected_line_candidates`] exposes fit-changing retries, and
+[`WorkReport::line_checkpoint_restores`] records rewinds of traversal and
+provisional output. These counters are actual work from the current call;
+they are not retained paragraph physics.
+
 `ComputedInlineStyle` clones share the owned family, feature, and variation
 arrays. `BlockRequest` goes further and borrows one caller-owned style, so any
 number of labels can reuse the same style and paint table without rebuilding

@@ -283,13 +283,16 @@ pub struct FormationWork {
     line_shaping: LineShapingWork,
 }
 
-/// Exact work performed while shaping committed or rejected line candidates.
+/// Exact work performed while forming and shaping line candidates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LineShapingWork {
     attempts: u32,
     resolved_clusters: u32,
     shaped_runs: u32,
     shaped_glyphs: u32,
+    candidates: u32,
+    rejected_candidates: u32,
+    checkpoint_restores: u32,
 }
 
 impl LineShapingWork {
@@ -306,7 +309,27 @@ impl LineShapingWork {
             resolved_clusters,
             shaped_runs,
             shaped_glyphs,
+            candidates: 0,
+            rejected_candidates: 0,
+            checkpoint_restores: 0,
         }
+    }
+
+    /// Adds state-machine observations for line formation.
+    ///
+    /// A proposed candidate can use retained canonical shaping, so `candidates`
+    /// is intentionally independent of [`Self::attempts`].
+    #[must_use]
+    pub const fn with_formation(
+        mut self,
+        candidates: u32,
+        rejected_candidates: u32,
+        checkpoint_restores: u32,
+    ) -> Self {
+        self.candidates = candidates;
+        self.rejected_candidates = rejected_candidates;
+        self.checkpoint_restores = checkpoint_restores;
+        self
     }
 
     /// Returns the number of line-final shaping attempts, including rejected
@@ -332,6 +355,30 @@ impl LineShapingWork {
     #[must_use]
     pub const fn shaped_glyphs(self) -> u32 {
         self.shaped_glyphs
+    }
+
+    /// Returns the number of proposed line candidates, including retries.
+    #[must_use]
+    pub const fn candidates(self) -> u32 {
+        self.candidates
+    }
+
+    /// Returns candidates rejected after line-final width or height checks.
+    #[must_use]
+    pub const fn rejected_candidates(self) -> u32 {
+        self.rejected_candidates
+    }
+
+    /// Returns candidates committed to the current line sequence.
+    #[must_use]
+    pub const fn accepted_candidates(self) -> u32 {
+        self.candidates.saturating_sub(self.rejected_candidates)
+    }
+
+    /// Returns restorations of traversal and provisional line output.
+    #[must_use]
+    pub const fn checkpoint_restores(self) -> u32 {
+        self.checkpoint_restores
     }
 }
 
@@ -417,6 +464,30 @@ impl FormationWork {
     #[must_use]
     pub const fn line_shaped_glyphs(self) -> u32 {
         self.line_shaping.shaped_glyphs()
+    }
+
+    /// Returns proposed line candidates, including retry candidates.
+    #[must_use]
+    pub const fn line_candidates(self) -> u32 {
+        self.line_shaping.candidates()
+    }
+
+    /// Returns line candidates rejected by line-final fit checks.
+    #[must_use]
+    pub const fn rejected_line_candidates(self) -> u32 {
+        self.line_shaping.rejected_candidates()
+    }
+
+    /// Returns line candidates committed to the current line sequence.
+    #[must_use]
+    pub const fn accepted_line_candidates(self) -> u32 {
+        self.line_shaping.accepted_candidates()
+    }
+
+    /// Returns restorations of line traversal and provisional output.
+    #[must_use]
+    pub const fn line_checkpoint_restores(self) -> u32 {
+        self.line_shaping.checkpoint_restores()
     }
 
     /// Returns the complete line-final shaping work record.

@@ -381,6 +381,16 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
         output.work().line_reshapes() >= 3,
         "rejected candidate, accepted candidate, and remainder must be visible work"
     );
+    assert_eq!(
+        output.work().rejected_line_candidates(),
+        1,
+        "the failed line-final fit must be observable independently of shaping"
+    );
+    assert_eq!(
+        output.work().line_candidates(),
+        output.work().accepted_line_candidates() + 1,
+        "the retry is the only rejected candidate"
+    );
 }
 
 #[test]

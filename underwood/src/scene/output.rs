@@ -168,6 +168,9 @@ pub struct WorkReport {
     pub(super) geometry: StageWork,
     pub(super) paint: StageWork,
     pub(super) line_reshapes: usize,
+    pub(super) line_candidates: u32,
+    pub(super) rejected_line_candidates: u32,
+    pub(super) line_checkpoint_restores: u32,
     pub(super) reused_paragraphs: usize,
 }
 
@@ -230,6 +233,31 @@ impl WorkReport {
     #[must_use]
     pub const fn line_reshapes(&self) -> usize {
         self.line_reshapes
+    }
+
+    /// Returns proposed line candidates, including retry candidates.
+    #[must_use]
+    pub const fn line_candidates(&self) -> usize {
+        self.line_candidates as usize
+    }
+
+    /// Returns line candidates rejected by line-final fit checks.
+    #[must_use]
+    pub const fn rejected_line_candidates(&self) -> usize {
+        self.rejected_line_candidates as usize
+    }
+
+    /// Returns line candidates committed to the current scene.
+    #[must_use]
+    pub const fn accepted_line_candidates(&self) -> usize {
+        self.line_candidates
+            .saturating_sub(self.rejected_line_candidates) as usize
+    }
+
+    /// Returns restorations of line traversal and provisional output.
+    #[must_use]
+    pub const fn line_checkpoint_restores(&self) -> usize {
+        self.line_checkpoint_restores as usize
     }
 
     /// Returns paragraphs reused without calling the adapter.

@@ -240,7 +240,15 @@ impl ParagraphFormation for EchoAdapter {
         let paragraph = PreparedParagraph::try_new(input.paragraph(), text_len, [line], movements)?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
-            FormationWork::new(true, true, 1, 1, 1, 1, LineShapingWork::new(2, 3, 4, 5)),
+            FormationWork::new(
+                true,
+                true,
+                1,
+                1,
+                1,
+                1,
+                LineShapingWork::new(2, 3, 4, 5).with_formation(6, 1, 2),
+            ),
         ))
     }
 }
@@ -480,6 +488,10 @@ fn fragment_identity_is_distinct_across_documents() {
         5,
         "line-final shaped glyph work must survive scene reporting"
     );
+    assert_eq!(first_scene.work().line_candidates(), 6);
+    assert_eq!(first_scene.work().rejected_line_candidates(), 1);
+    assert_eq!(first_scene.work().accepted_line_candidates(), 5);
+    assert_eq!(first_scene.work().line_checkpoint_restores(), 2);
     let second_request =
         SceneRequest::new(TextConstraint::Wrap(width), &second_styles, &second_paint);
     let second_scene = layout

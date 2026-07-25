@@ -12,6 +12,7 @@ mod engine;
 mod font;
 mod interaction;
 mod line_break;
+mod line_former;
 mod lowering;
 mod shaping;
 mod validation;
