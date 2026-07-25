@@ -296,21 +296,35 @@ impl LayoutEngine {
         let mut region_cursor = region_start;
 
         for paragraph in snapshot.paragraphs() {
-            let projection = Projection::new(paragraph, request)?;
             self.clock = self.clock.saturating_add(1);
-            let access = prepare_paragraph_geometry(
-                self.paragraphs.as_mut(),
+            let access = if let Some(access) = reuse_paragraph_geometry(
                 &mut self.cache,
                 paragraph,
-                &projection,
-                request.constraint,
-                request.region_flow,
+                request,
                 region_cursor,
                 self.clock,
-                &mut self.shared_preparation,
                 &mut work,
                 &mut reuse,
-            )?;
+            ) {
+                access
+            } else {
+                let projection = Projection::new(paragraph, request)?;
+                let preflight_key = ParagraphPreflightKey::new(paragraph, request, region_cursor);
+                prepare_paragraph_geometry(
+                    self.paragraphs.as_mut(),
+                    &mut self.cache,
+                    paragraph,
+                    &projection,
+                    preflight_key,
+                    request.constraint,
+                    request.region_flow,
+                    region_cursor,
+                    self.clock,
+                    &mut self.shared_preparation,
+                    &mut work,
+                    &mut reuse,
+                )?
+            };
             self.record_access(CacheKind::Committed, &access);
             if let Some(transcript) = &access.region_transcript {
                 self.scratch
@@ -473,46 +487,62 @@ impl LayoutEngine {
 
         for paragraph in snapshot.paragraphs() {
             let transient = paragraph.id.index == target.paragraph;
-            let projection = if transient {
-                Projection::with_composition(paragraph, request, composition)?
-            } else {
-                Projection::new(paragraph, request)?
-            };
             self.clock = self.clock.saturating_add(1);
-            let (kind, access) = if transient {
-                (
-                    CacheKind::Composition,
-                    prepare_paragraph_geometry(
-                        self.paragraphs.as_mut(),
-                        &mut self.composition_cache,
-                        paragraph,
-                        &projection,
-                        request.constraint,
-                        request.region_flow,
-                        region_cursor,
-                        self.clock,
-                        &mut self.shared_preparation,
-                        &mut work,
-                        &mut reuse,
-                    )?,
-                )
+            let (kind, access) = if !transient
+                && let Some(access) = reuse_paragraph_geometry(
+                    &mut self.cache,
+                    paragraph,
+                    request,
+                    region_cursor,
+                    self.clock,
+                    &mut work,
+                    &mut reuse,
+                ) {
+                (CacheKind::Committed, access)
             } else {
-                (
-                    CacheKind::Committed,
-                    prepare_paragraph_geometry(
-                        self.paragraphs.as_mut(),
-                        &mut self.cache,
-                        paragraph,
-                        &projection,
-                        request.constraint,
-                        request.region_flow,
-                        region_cursor,
-                        self.clock,
-                        &mut self.shared_preparation,
-                        &mut work,
-                        &mut reuse,
-                    )?,
-                )
+                let projection = if transient {
+                    Projection::with_composition(paragraph, request, composition)?
+                } else {
+                    Projection::new(paragraph, request)?
+                };
+                let preflight_key = ParagraphPreflightKey::new(paragraph, request, region_cursor);
+                if transient {
+                    (
+                        CacheKind::Composition,
+                        prepare_paragraph_geometry(
+                            self.paragraphs.as_mut(),
+                            &mut self.composition_cache,
+                            paragraph,
+                            &projection,
+                            preflight_key,
+                            request.constraint,
+                            request.region_flow,
+                            region_cursor,
+                            self.clock,
+                            &mut self.shared_preparation,
+                            &mut work,
+                            &mut reuse,
+                        )?,
+                    )
+                } else {
+                    (
+                        CacheKind::Committed,
+                        prepare_paragraph_geometry(
+                            self.paragraphs.as_mut(),
+                            &mut self.cache,
+                            paragraph,
+                            &projection,
+                            preflight_key,
+                            request.constraint,
+                            request.region_flow,
+                            region_cursor,
+                            self.clock,
+                            &mut self.shared_preparation,
+                            &mut work,
+                            &mut reuse,
+                        )?,
+                    )
+                }
             };
             self.record_access(kind, &access);
             if let Some(transcript) = &access.region_transcript {
@@ -760,11 +790,44 @@ struct CacheAccess {
     region_transcript: Option<RegionTranscript>,
 }
 
+fn reuse_paragraph_geometry(
+    cache: &mut BTreeMap<ParagraphId, ParagraphCache>,
+    paragraph: &Paragraph,
+    request: &SceneRequest<'_>,
+    region_cursor: Option<RegionCursor>,
+    current_use: u64,
+    work: &mut WorkReport,
+    reuse: &mut PreparationReuse,
+) -> Option<CacheAccess> {
+    let entry = cache.get_mut(&paragraph.id)?;
+    if !entry
+        .preflight_key
+        .matches(paragraph, request, region_cursor)
+    {
+        return None;
+    }
+    let previous_use = Some(entry.last_used);
+    entry.last_used = current_use;
+    reuse.paragraphs = reuse.paragraphs.saturating_add(1);
+    reuse.preflight_reuses = reuse.preflight_reuses.saturating_add(1);
+    reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(1);
+    work.reused_paragraphs = work.reused_paragraphs.saturating_add(1);
+    Some(CacheAccess {
+        paragraph: paragraph.id,
+        previous_use,
+        current_use,
+        previous_accounted_bytes: entry.accounted_bytes,
+        current_accounted_bytes: entry.accounted_bytes,
+        region_transcript: entry.region_transcript.clone(),
+    })
+}
+
 fn prepare_paragraph_geometry(
     paragraphs: &mut dyn ParagraphFormation,
     cache: &mut BTreeMap<ParagraphId, ParagraphCache>,
     paragraph: &Paragraph,
     projection: &Projection<'_>,
+    preflight_key: ParagraphPreflightKey,
     constraint: TextConstraint,
     region_flow: Option<&RegionFlow>,
     region_cursor: Option<RegionCursor>,
@@ -809,6 +872,7 @@ fn prepare_paragraph_geometry(
             .expect("a reusable cache entry must exist");
         let previous_use = Some(entry.last_used);
         entry.last_used = current_use;
+        entry.preflight_key = preflight_key;
         if let Some((id, epoch)) = projection.composition_identity() {
             rebind_composition_geometry(&mut entry.geometry, id, epoch);
         }
@@ -999,6 +1063,7 @@ fn prepare_paragraph_geometry(
             let previous_use = Some(entry.last_used);
             let previous_accounted_bytes = entry.accounted_bytes;
             entry.last_used = current_use;
+            entry.preflight_key = preflight_key;
             entry.formation_key = formation_key;
             entry.paint_runs = projection.paint_runs.clone();
             entry.region_transcript = region_transcript.clone();
@@ -1012,6 +1077,7 @@ fn prepare_paragraph_geometry(
         } else {
             let mut entry = ParagraphCache {
                 last_used: current_use,
+                preflight_key,
                 formation_key,
                 paint_runs: projection.paint_runs.clone(),
                 region_transcript: region_transcript.clone(),
@@ -1040,6 +1106,62 @@ fn release_untracked_backend(
 ) {
     if !cache.contains_key(&paragraph) {
         paragraphs.release(paragraph);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ParagraphPreflightKey {
+    version: u64,
+    styles: StyleMap,
+    default_style: ComputedInlineStyle,
+    source_styles: Vec<ComputedInlineStyle>,
+    paragraph_style: ParagraphStyle,
+    constraint: ConstraintKey,
+    region_flow: Option<RegionFlow>,
+    region_cursor: Option<RegionCursor>,
+}
+
+impl ParagraphPreflightKey {
+    fn new(
+        paragraph: &Paragraph,
+        request: &SceneRequest<'_>,
+        region_cursor: Option<RegionCursor>,
+    ) -> Self {
+        Self {
+            version: paragraph.version,
+            styles: request.styles.clone(),
+            default_style: request.styles.default_style().clone(),
+            source_styles: paragraph
+                .leaves
+                .iter()
+                .map(|leaf| request.styles.style_for(leaf.id).clone())
+                .collect(),
+            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
+            constraint: ConstraintKey::from(request.constraint),
+            region_flow: request.region_flow.cloned(),
+            region_cursor,
+        }
+    }
+
+    fn matches(
+        &self,
+        paragraph: &Paragraph,
+        request: &SceneRequest<'_>,
+        region_cursor: Option<RegionCursor>,
+    ) -> bool {
+        self.version == paragraph.version
+            && self.constraint == ConstraintKey::from(request.constraint)
+            && self.region_cursor == region_cursor
+            && region_provenance_matches(self.region_flow.as_ref(), request.region_flow)
+            && (self.styles.shares_state_with(request.styles)
+                || (self.default_style == *request.styles.default_style()
+                    && self.paragraph_style == request.styles.paragraph_style_for(paragraph.id)
+                    && self.source_styles.len() == paragraph.leaves.len()
+                    && self
+                        .source_styles
+                        .iter()
+                        .zip(&paragraph.leaves)
+                        .all(|(cached, leaf)| cached == request.styles.style_for(leaf.id))))
     }
 }
 
@@ -1148,6 +1270,7 @@ impl From<TextConstraint> for ConstraintKey {
 #[derive(Clone, Debug)]
 struct ParagraphCache {
     last_used: u64,
+    preflight_key: ParagraphPreflightKey,
     formation_key: FormationKey,
     paint_runs: Vec<PaintRun>,
     region_transcript: Option<RegionTranscript>,
@@ -1158,6 +1281,9 @@ struct ParagraphCache {
 impl ParagraphCache {
     fn calculate_accounted_owned_bytes(&self) -> usize {
         size_of::<Self>()
+            .saturating_add(vec_bytes::<ComputedInlineStyle>(
+                self.preflight_key.source_styles.capacity(),
+            ))
             .saturating_add(self.formation_key.accounted_owned_bytes())
             .saturating_add(vec_bytes::<PaintRun>(self.paint_runs.capacity()))
             .saturating_add(self.region_transcript.as_ref().map_or(0, |transcript| {
@@ -1236,6 +1362,14 @@ const fn vec_bytes<T>(capacity: usize) -> usize {
 fn option_ref_eq<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
     match (left, right) {
         (Some(left), Some(right)) => left == right,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn region_provenance_matches(left: Option<&RegionFlow>, right: Option<&RegionFlow>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.shares_backing_with(right),
         (None, None) => true,
         _ => false,
     }

@@ -632,7 +632,12 @@ impl Default for ParagraphStyle {
 /// Complete per-paragraph and per-leaf computed styles over default values.
 #[derive(Clone, Debug)]
 pub struct StyleMap {
-    pub(crate) default: ComputedInlineStyle,
+    state: Arc<StyleMapState>,
+}
+
+#[derive(Clone, Debug)]
+struct StyleMapState {
+    default: ComputedInlineStyle,
     styles: Vec<(TextId, ComputedInlineStyle)>,
     default_paragraph: ParagraphStyle,
     paragraph_styles: Vec<(ParagraphId, ParagraphStyle)>,
@@ -643,78 +648,103 @@ impl StyleMap {
     #[must_use]
     pub fn new(default: ComputedInlineStyle) -> Self {
         Self {
-            default,
-            styles: Vec::new(),
-            default_paragraph: ParagraphStyle::default(),
-            paragraph_styles: Vec::new(),
+            state: Arc::new(StyleMapState {
+                default,
+                styles: Vec::new(),
+                default_paragraph: ParagraphStyle::default(),
+                paragraph_styles: Vec::new(),
+            }),
         }
     }
 
     /// Returns a style map whose unassigned paragraphs use `style`.
     #[must_use]
     pub fn with_default_paragraph_style(mut self, style: ParagraphStyle) -> Self {
-        self.default_paragraph = style;
+        if self.state.default_paragraph != style {
+            Arc::make_mut(&mut self.state).default_paragraph = style;
+        }
         self
     }
 
     /// Assigns one complete style to a text identity.
     pub fn set(&mut self, text: TextId, style: ComputedInlineStyle) {
-        if let Some((_, current)) = self.styles.iter_mut().find(|(id, _)| *id == text) {
+        if self.style_for(text) == &style {
+            return;
+        }
+        let state = Arc::make_mut(&mut self.state);
+        if let Some((_, current)) = state.styles.iter_mut().find(|(id, _)| *id == text) {
             *current = style;
         } else {
-            self.styles.push((text, style));
+            state.styles.push((text, style));
         }
     }
 
     /// Assigns complete paragraph-level values to one paragraph identity.
     pub fn set_paragraph_style(&mut self, paragraph: ParagraphId, style: ParagraphStyle) {
-        if let Some((_, current)) = self
+        if self.paragraph_style_for(paragraph) == style {
+            return;
+        }
+        let state = Arc::make_mut(&mut self.state);
+        if let Some((_, current)) = state
             .paragraph_styles
             .iter_mut()
             .find(|(id, _)| *id == paragraph)
         {
             *current = style;
         } else {
-            self.paragraph_styles.push((paragraph, style));
+            state.paragraph_styles.push((paragraph, style));
         }
     }
 
     /// Returns the assigned style or the default when no override exists.
     #[must_use]
     pub fn style_for(&self, text: TextId) -> &ComputedInlineStyle {
-        self.styles
-            .iter()
-            .find_map(|(id, style)| (*id == text).then_some(style))
-            .unwrap_or(&self.default)
+        self.style_override(text).unwrap_or(&self.state.default)
     }
 
     /// Returns the default style.
     #[must_use]
-    pub const fn default_style(&self) -> &ComputedInlineStyle {
-        &self.default
+    pub fn default_style(&self) -> &ComputedInlineStyle {
+        &self.state.default
     }
 
     /// Returns the assigned paragraph style or the paragraph default.
     #[must_use]
     pub fn paragraph_style_for(&self, paragraph: ParagraphId) -> ParagraphStyle {
-        self.paragraph_styles
-            .iter()
-            .find_map(|(id, style)| (*id == paragraph).then_some(*style))
-            .unwrap_or(self.default_paragraph)
+        self.paragraph_style_override(paragraph)
+            .unwrap_or(self.state.default_paragraph)
     }
 
     /// Returns the paragraph-level default.
     #[must_use]
-    pub const fn default_paragraph_style(&self) -> ParagraphStyle {
-        self.default_paragraph
+    pub fn default_paragraph_style(&self) -> ParagraphStyle {
+        self.state.default_paragraph
     }
 
     pub(crate) fn overrides(&self) -> &[(TextId, ComputedInlineStyle)] {
-        &self.styles
+        &self.state.styles
     }
 
     pub(crate) fn paragraph_overrides(&self) -> &[(ParagraphId, ParagraphStyle)] {
-        &self.paragraph_styles
+        &self.state.paragraph_styles
+    }
+
+    pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    fn style_override(&self, text: TextId) -> Option<&ComputedInlineStyle> {
+        self.state
+            .styles
+            .iter()
+            .find_map(|(id, style)| (*id == text).then_some(style))
+    }
+
+    fn paragraph_style_override(&self, paragraph: ParagraphId) -> Option<ParagraphStyle> {
+        self.state
+            .paragraph_styles
+            .iter()
+            .find_map(|(id, style)| (*id == paragraph).then_some(*style))
     }
 }
 
@@ -776,6 +806,37 @@ mod tests {
             styles.paragraph_style_for(paragraph).alignment(),
             TextAlignment::Center
         );
+    }
+
+    #[test]
+    fn style_map_clones_share_state_until_a_real_change() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"style-provenance"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        let text = edit
+            .append_text(paragraph, crate::InlineRole::TEXT, "shared")
+            .expect("fixture text is valid");
+        edit.commit().expect("fixture document is valid");
+        let inline = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0).expect("fixture style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let original = StyleMap::new(inline.clone());
+        let mut branch = original.clone();
+
+        assert!(original.shares_state_with(&branch));
+        branch.set(text, inline.clone());
+        assert!(original.shares_state_with(&branch));
+        branch.set_paragraph_style(paragraph, ParagraphStyle::DEFAULT);
+        assert!(original.shares_state_with(&branch));
+
+        branch.set(text, inline.with_paint(PaintSlot::new(1)));
+        assert!(!original.shares_state_with(&branch));
+        assert_eq!(original.style_for(text).paint(), PaintSlot::new(0));
+        assert_eq!(branch.style_for(text).paint(), PaintSlot::new(1));
     }
 
     #[test]

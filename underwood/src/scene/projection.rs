@@ -489,7 +489,7 @@ pub(super) fn append_projection_span<'a>(
     leaf: &crate::document::TextLeaf,
     value: &str,
     source: LeafSpanSource,
-    style: &'a crate::ComputedInlineStyle,
+    style: &'a ComputedInlineStyle,
 ) -> Result<(), SceneError> {
     let start = u32::try_from(text.len())
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?;

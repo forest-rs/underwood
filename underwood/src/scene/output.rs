@@ -176,6 +176,7 @@ impl SceneOutput {
 pub struct PreparationReuse {
     pub(super) paragraphs: usize,
     pub(super) cold_paragraphs: usize,
+    pub(super) preflight_reuses: usize,
     pub(super) exact_geometry_reuses: usize,
     pub(super) shared_preparation_reuses: usize,
     pub(super) adapter_calls: usize,
@@ -195,6 +196,12 @@ impl PreparationReuse {
     #[must_use]
     pub const fn cold_paragraphs(self) -> usize {
         self.cold_paragraphs
+    }
+
+    /// Returns paragraphs accepted from provenance before projection was built.
+    #[must_use]
+    pub const fn preflight_reuses(self) -> usize {
+        self.preflight_reuses
     }
 
     /// Returns paragraphs that reused exact identity-local geometry.

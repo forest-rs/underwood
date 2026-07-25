@@ -206,6 +206,10 @@ impl RegionFlow {
         self.max_inline_size
     }
 
+    pub(crate) fn shares_backing_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.regions, &other.regions)
+    }
+
     /// Offers the exact slot at `cursor`, skipping fully excluded bands.
     #[must_use]
     pub fn slot(&self, cursor: RegionCursor) -> Option<LineSlot> {

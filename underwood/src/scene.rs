@@ -18,14 +18,14 @@ use crate::adapter::{
 use crate::document::Paragraph;
 use crate::{
     Affine, AnalysisStyle, BaseDirection, BlockRequest, CompositionError, CompositionErrorKind,
-    CompositionId, CompositionSession, CompositionStart, DocumentRevision, DocumentSnapshot,
-    FontData, InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole,
-    ParagraphStyle, Point, ProjectedText as TextProjection, ProjectionKind, ProjectionSegment,
-    Rect, RegionAttemptOutcome, RegionCursor, RegionFlow, RegionTranscript, ResolvedDirection,
-    SceneError, SceneErrorKind, SceneRequest, SelectionError, SelectionErrorKind, SemanticId,
-    ShapingStyle, Size, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
-    SnapshotTextSelectionSet, SnapshotTextUnit, StyleMap, TextAlignment, TextBlockSnapshot,
-    TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2,
+    CompositionId, CompositionSession, CompositionStart, ComputedInlineStyle, DocumentRevision,
+    DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId,
+    ParagraphRole, ParagraphStyle, Point, ProjectedText as TextProjection, ProjectionKind,
+    ProjectionSegment, Rect, RegionAttemptOutcome, RegionCursor, RegionFlow, RegionTranscript,
+    ResolvedDirection, SceneError, SceneErrorKind, SceneRequest, SelectionError,
+    SelectionErrorKind, SemanticId, ShapingStyle, Size, SnapshotTextPosition, SnapshotTextRange,
+    SnapshotTextSelection, SnapshotTextSelectionSet, SnapshotTextUnit, StyleMap, TextAlignment,
+    TextBlockSnapshot, TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2,
 };
 
 mod adjustment;

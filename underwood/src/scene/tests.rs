@@ -626,6 +626,7 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
         .prepare(&document.snapshot(), &request)
         .expect("retained trace fixture prepares");
     let retained_trace = retained.trace().expect("trace was requested");
+    assert_eq!(retained_trace.reuse().preflight_reuses(), 1);
     assert_eq!(retained_trace.reuse().exact_geometry_reuses(), 1);
     assert_eq!(retained_trace.reuse().adapter_calls(), 0);
     assert_eq!(retained.work().reused_paragraphs(), 1);
@@ -1547,6 +1548,56 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
             .kind(),
         SceneErrorKind::InvalidComposition,
         "composition base revisions are exact rather than relocatable"
+    );
+}
+
+#[test]
+fn unrelated_equal_styles_use_checked_value_preflight() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-preflight1", "provenance");
+    let equal_styles = StyleMap::new(styles.default_style().clone());
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial preparation succeeds");
+
+    let fallback = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &equal_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("equal unrelated style state remains reusable");
+    let fallback_reuse = fallback.trace().expect("trace was requested").reuse();
+    assert_eq!(fallback_reuse.preflight_reuses(), 1);
+    assert_eq!(fallback_reuse.exact_geometry_reuses(), 1);
+    assert_eq!(fallback_reuse.adapter_calls(), 0);
+
+    let retained = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &equal_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("equal value preflight remains reusable");
+    assert_eq!(
+        retained
+            .trace()
+            .expect("trace was requested")
+            .reuse()
+            .preflight_reuses(),
+        1
     );
 }
 
