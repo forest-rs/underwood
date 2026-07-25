@@ -19,7 +19,7 @@
 The goal is to make one Unicode extended grapheme the unit of interaction even
 when shaping emits several records, source crosses semantic leaves, or an IME
 mixes committed and generated provenance. Parley remains the only owner of
-grapheme boundaries and paragraph cursor physics. Underwood projects those
+grapheme boundaries and paragraph cursor facts. Underwood projects those
 facts into revision-bound semantic sources, selection geometry, and atomic
 document transactions.
 

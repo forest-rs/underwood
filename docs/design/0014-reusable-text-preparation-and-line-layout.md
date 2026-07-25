@@ -337,7 +337,7 @@ Cache laws are part of the public semantics:
 - line height invalidates line metrics, region flow when height affects slots,
   and downstream geometry; it does not select a different font.
 - alignment invalidates adjustment and geometry only.
-- paint remains independent of all text physics.
+- paint remains independent of text analysis, shaping, formation, and adjustment.
 
 Alignment resolves logical start/end from paragraph direction and the accepted
 slot. `Auto` uses the resolved paragraph direction from analysis, not a second

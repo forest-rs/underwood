@@ -75,7 +75,7 @@ struct RunRecord {
 struct PreparedObservation {
     analysis_digest: u64,
     item_digest: u64,
-    physics_digest: u64,
+    shaping_digest: u64,
     slot_digest: u64,
     items: Vec<ItemRecord>,
     runs: Vec<RunRecord>,
@@ -207,12 +207,12 @@ fn prepare(
     }
 
     let item_digest = digest_items(&items);
-    let physics_digest = digest_physics(&runs);
+    let shaping_digest = digest_shaping(&runs);
     let slot_digest = digest_slots(&runs);
     PreparedObservation {
         analysis_digest,
         item_digest,
-        physics_digest,
+        shaping_digest,
         slot_digest,
         items,
         runs,
@@ -373,7 +373,7 @@ fn digest_items(items: &[ItemRecord]) -> u64 {
     digest.finish()
 }
 
-fn digest_physics(runs: &[RunRecord]) -> u64 {
+fn digest_shaping(runs: &[RunRecord]) -> u64 {
     let mut digest = Digest::new();
     for run in runs {
         digest.range(&run.byte_range);
@@ -509,11 +509,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let glyph_count: usize = prepared.runs.iter().map(|run| run.glyphs.len()).sum();
 
     println!(
-        "parley={} analysis={:016x} items={:016x} physics={:016x} slots={:016x} paint={:016x} items_count={} runs={} glyphs={} gaps={}",
+        "parley={} analysis={:016x} items={:016x} shaping={:016x} slots={:016x} paint={:016x} items_count={} runs={} glyphs={} gaps={}",
         PARLEY_REVISION,
         prepared.analysis_digest,
         prepared.item_digest,
-        prepared.physics_digest,
+        prepared.shaping_digest,
         prepared.slot_digest,
         paint_digest,
         prepared.items.len(),
@@ -613,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn paint_values_and_boundaries_never_change_text_physics() {
+    fn paint_values_and_boundaries_never_change_shaping() {
         let fonts = load_fonts().expect("pinned Parley fonts must load");
         let flat = prepare(CORPUS, &fonts, &default_slots(CORPUS), config(&[], &[]));
         let divided = prepare(
@@ -632,7 +632,7 @@ mod tests {
             "paint topology must not alter shaping itemization"
         );
         assert_eq!(
-            flat.physics_digest, divided.physics_digest,
+            flat.shaping_digest, divided.shaping_digest,
             "paint topology must not alter glyphs or advances"
         );
         assert_ne!(
@@ -697,8 +697,8 @@ mod tests {
                 "constant shaping values must not change item topology"
             );
             assert_ne!(
-                baseline.physics_digest, candidate.physics_digest,
-                "weight and kerning settings must change shaped physics"
+                baseline.shaping_digest, candidate.shaping_digest,
+                "weight and kerning settings must change shaped output"
             );
         }
     }

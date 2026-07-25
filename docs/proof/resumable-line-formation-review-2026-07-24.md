@@ -76,8 +76,9 @@ now:
 
 The unwrapped single-line fast path also proposes and commits through the same
 kernel, while continuing to reuse the canonical retained `ShapedText`.
-Transient formation telemetry was removed from `PhysicsCache`; cache entries
-contain reusable physics, not observations from the most recent call.
+Transient formation telemetry was removed from the paragraph preparation
+cache; cache entries contain reusable prepared state, not observations from
+the most recent call.
 
 ## Observable rejected work
 

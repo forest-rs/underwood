@@ -1039,7 +1039,7 @@ mod tests {
 
         let hovered = content
             .prepare(300.0, 0.5)
-            .expect("hover paint must prepare without changing text physics");
+            .expect("hover paint must prepare without repeating text preparation");
         assert_eq!(hovered.work.shape().paragraphs(), 0);
         assert_eq!(hovered.work.flow().paragraphs(), 0);
         assert!(hovered.work.paint().paragraphs() > 0);

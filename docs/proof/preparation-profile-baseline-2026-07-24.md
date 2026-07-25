@@ -169,7 +169,7 @@ The top-of-stack view included 96 samples in `build_geometry`, 69 in
 adapter, 48 in cursor-step materialization, 34 in Parley Engine shaping, and
 multiple allocator and vector-growth sites.
 
-The sample supports both leading hypotheses: repeated text physics is real, and
+The sample supports both leading hypotheses: repeated text preparation is real, and
 identity-bound interaction/geometry work is large enough that a shared shaping
 cache alone will not make distinct labels equivalent to retained calls.
 
@@ -231,7 +231,7 @@ stage-owned scratch capacity and growth reporting remain the explicit
    all document, revision, semantic, interaction, paint, and placement state.
 2. **Selective non-editable materialization.** Measure whether static labels can
    omit cursor-movement and selection structures while retaining the same
-   prepared physics and scene vocabulary.
+   prepared facts and scene vocabulary.
 3. **Geometry scratch and exact reservation.** Reuse or reserve the vectors
    implicated by cursor and geometry construction after allocation counts are
    available.

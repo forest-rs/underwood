@@ -21,7 +21,8 @@ second text engine.
 
 `underwood_parley` owns adaptation between Underwood prepared contracts and a
 pinned Parley revision; it explicitly does not own semantic documents,
-document flow, renderer policy, or a general-purpose fork of text physics.
+document flow, renderer policy, or a general-purpose fork of Unicode analysis
+and shaping.
 
 ## Constitutional invariants
 
@@ -85,7 +86,7 @@ Parley `main` at
 [`6c81e1dd9b67793cdd959c65cc650c96a1262fb7`](https://github.com/linebender/parley/commit/6c81e1dd9b67793cdd959c65cc650c96a1262fb7)
 contains the owned reusable `parley_core::ShapedText` introduced by PR #679.
 Underwood adopts that immutable revision under Design-0005 and removes its
-callback-shaped `PhysicsRun`/`PhysicsGlyph` copy. The original audit above
+callback-shaped run/glyph copy. The original audit above
 remains the evidence that justified the contingency; its retained-output gap
 is now resolved. Bounded break reshaping, vertical shaping, core inline
 objects, and identified text-data provisioning remain open.

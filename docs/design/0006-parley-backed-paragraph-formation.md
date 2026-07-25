@@ -198,7 +198,7 @@ continue to supply width once through `SceneRequest`.
    Removing it restores the unbroken glyphs and advances.
 8. Width is absent from analysis and shape identities. Inline line height is
    absent from those identities but present in formation identity. Paint values
-   are absent from all text-physics identities.
+   are absent from all text-preparation identities.
 9. A failed formation publishes no partial paragraph or scene.
 
 ## Executable corpus
@@ -246,7 +246,7 @@ would preserve the wrong ownership.
 ### Keep breaking in `TextScene`
 
 Adding boundary flags and metrics to `PreparedGlyph` would improve symptoms but
-leave text physics hidden in scene lowering. It also makes break-sensitive
+leave text preparation hidden in scene lowering. It also makes break-sensitive
 reshaping impossible without a callback into the adapter. Rejected.
 
 ### Use high-level `parley::Layout` in production

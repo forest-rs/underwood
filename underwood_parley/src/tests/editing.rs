@@ -434,7 +434,7 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     assert_eq!(
         committed_update.work().shape().paragraphs(),
         0,
-        "the committed publication can reuse physics already formed for the identical preedit"
+        "the committed publication can reuse preparation already formed for the identical preedit"
     );
     assert_eq!(committed_update.work().geometry().paragraphs(), 1);
     assert_eq!(committed_update.work().reused_paragraphs(), 2);

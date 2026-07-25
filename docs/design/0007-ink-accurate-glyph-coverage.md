@@ -64,7 +64,7 @@ enables Kurbo's `std` implementation elsewhere in the workspace; this adds no
 package to the dependency graph.
 
 This is the intended upstream-sharing pattern: expose a small piece of text
-physics at the lowest honest layer, then keep Underwood's stronger document,
+shaping at the lowest honest layer, then keep Underwood's stronger document,
 region-flow, invalidation, work-accounting, semantic, and portable-scene
 contracts above it.
 

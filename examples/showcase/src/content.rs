@@ -737,7 +737,7 @@ mod tests {
     }
 
     #[test]
-    fn paint_toggle_does_not_repeat_text_physics() {
+    fn paint_toggle_does_not_repeat_text_preparation() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         content.prepare(760.0, 0.5).expect("initial must prepare");
         content.toggle_paint();

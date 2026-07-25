@@ -3,7 +3,7 @@
 
 //! Retained paragraph-engine orchestration and cache ownership.
 //!
-//! This module owns formation invalidation and retained Parley physics; it
+//! This module owns formation invalidation and retained Parley preparation; it
 //! explicitly does not own line-breaking, shaping, lowering, or interaction
 //! algorithms.
 
@@ -43,7 +43,7 @@ pub struct ParleyParagraphEngine {
     fonts: FontSet,
     analyzer: Analyzer,
     shaper: Shaper,
-    cache: BTreeMap<ParagraphId, PhysicsCache>,
+    cache: BTreeMap<ParagraphId, PreparationCache>,
 }
 
 impl ParleyParagraphEngine {
@@ -120,7 +120,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             } else {
                 self.cache.insert(
                     paragraph,
-                    PhysicsCache {
+                    PreparationCache {
                         text: Arc::from(input.text()),
                         paragraph_style: input.paragraph_style(),
                         analysis_styles: input.analysis_styles().to_vec(),
@@ -148,38 +148,38 @@ impl ParagraphFormation for ParleyParagraphEngine {
             }
         }
 
-        let physics = self
+        let preparation = self
             .cache
             .get(&paragraph)
             .ok_or_else(PreparationError::invalid_output)?;
-        let font_queried = physics.shaping_styles != input.shaping_styles()
-            || physics.shaping_runs != input.shaping_runs();
-        let flow_projection_changed = physics.inline_flow_styles != input.inline_flow_styles()
-            || physics.inline_flow_runs != input.inline_flow_runs();
+        let font_queried = preparation.shaping_styles != input.shaping_styles()
+            || preparation.shaping_runs != input.shaping_runs();
+        let flow_projection_changed = preparation.inline_flow_styles != input.inline_flow_styles()
+            || preparation.inline_flow_runs != input.inline_flow_runs();
         let ligature_policy_changed = !inline_flow_values_match(
-            &physics.inline_flow_styles,
-            &physics.inline_flow_runs,
+            &preparation.inline_flow_styles,
+            &preparation.inline_flow_runs,
             input.inline_flow_styles(),
             input.inline_flow_runs(),
             |left, right| (left.spacing().letter() == 0.0) == (right.spacing().letter() == 0.0),
         )?;
         let spacing_changed = !inline_flow_values_match(
-            &physics.inline_flow_styles,
-            &physics.inline_flow_runs,
+            &preparation.inline_flow_styles,
+            &preparation.inline_flow_runs,
             input.inline_flow_styles(),
             input.inline_flow_runs(),
             |left, right| left.spacing() == right.spacing(),
         )?;
         let line_height_changed = !inline_flow_values_match(
-            &physics.inline_flow_styles,
-            &physics.inline_flow_runs,
+            &preparation.inline_flow_styles,
+            &preparation.inline_flow_runs,
             input.inline_flow_styles(),
             input.inline_flow_runs(),
             |left, right| left.line_height() == right.line_height(),
         )?;
         let break_policy_changed = !inline_flow_values_match(
-            &physics.inline_flow_styles,
-            &physics.inline_flow_runs,
+            &preparation.inline_flow_styles,
+            &preparation.inline_flow_runs,
             input.inline_flow_styles(),
             input.inline_flow_runs(),
             |left, right| {
@@ -287,11 +287,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
             )?;
         }
 
-        let physics = self
+        let preparation = self
             .cache
             .get(&paragraph)
             .ok_or_else(PreparationError::invalid_output)?;
-        let constraints_match = physics.constraints.as_ref().is_some_and(|cached| {
+        let constraints_match = preparation.constraints.as_ref().is_some_and(|cached| {
             paragraph_constraints_match(cached, &constraints, input.text().is_empty())
         });
         let needs_formation = shaped
@@ -377,12 +377,12 @@ impl ParagraphFormation for ParleyParagraphEngine {
             .ok_or_else(PreparationError::invalid_output)?
             .paragraph_style = input.paragraph_style();
 
-        let physics = self
+        let preparation = self
             .cache
             .get(&paragraph)
             .ok_or_else(PreparationError::invalid_output)?;
-        let mut prepared_lines = Vec::with_capacity(physics.formed_lines.len());
-        for formed in &physics.formed_lines {
+        let mut prepared_lines = Vec::with_capacity(preparation.formed_lines.len());
+        for formed in &preparation.formed_lines {
             let plan = &formed.plan;
             let shaped_text = &formed.shaped_text;
             if shaped_text.runs().len() != formed.scripts.len() {
@@ -395,7 +395,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 shaped_text,
                 &formed.scripts,
                 &pieces,
-                &physics.interaction_units,
+                &preparation.interaction_units,
                 &plan.source,
                 plan.reason == LineBreakReason::Mandatory,
             )?;
@@ -434,7 +434,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 let synthesis = portable_synthesis(font.synthesis)?;
                 let prepared_glyphs = lower_glyphs(
                     input.text(),
-                    &physics.analysis,
+                    &preparation.analysis,
                     shaped_text,
                     run,
                     piece.clusters.clone(),
@@ -442,7 +442,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 )?;
                 let unrendered_source = unrendered_source(
                     input.text(),
-                    &physics.analysis,
+                    &preparation.analysis,
                     source.clone(),
                     &prepared_glyphs,
                 )?;
@@ -474,7 +474,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         let movements = prepared_cursor_movements(&prepared_lines, text_len)?;
-        let resolved_direction = if physics.analysis.is_rtl() {
+        let resolved_direction = if preparation.analysis.is_rtl() {
             ResolvedDirection::Rtl
         } else {
             ResolvedDirection::Ltr
@@ -491,13 +491,13 @@ impl ParagraphFormation for ParleyParagraphEngine {
             shaped,
             selected_clusters,
             if shaped {
-                u32::try_from(physics.shaped_text.runs().len()).unwrap_or(u32::MAX)
+                u32::try_from(preparation.shaped_text.runs().len()).unwrap_or(u32::MAX)
             } else {
                 0
             },
-            if shaped { physics.shaped_glyphs } else { 0 },
+            if shaped { preparation.shaped_glyphs } else { 0 },
             if needs_formation {
-                u32::try_from(physics.formed_lines.len()).unwrap_or(u32::MAX)
+                u32::try_from(preparation.formed_lines.len()).unwrap_or(u32::MAX)
             } else {
                 0
             },
@@ -517,7 +517,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 LineShapingWork::default()
             },
         );
-        match physics.region_transcript.clone() {
+        match preparation.region_transcript.clone() {
             Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
                 paragraph, work, transcript,
             )),
@@ -539,7 +539,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
 }
 
 #[derive(Debug)]
-struct PhysicsCache {
+struct PreparationCache {
     text: Arc<str>,
     paragraph_style: ParagraphStyle,
     analysis_styles: Vec<AnalysisStyle>,

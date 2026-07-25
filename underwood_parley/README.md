@@ -31,7 +31,7 @@ caches remain local, while the font universe stays coherent.
 
 Implementation ownership is deliberately private and narrow:
 
-- `engine` coordinates paragraph identities, invalidation, and retained physics;
+- `engine` coordinates paragraph identities, invalidation, and retained preparation;
 - `font` owns immutable Fontique catalog construction and validation;
 - `shaping` projects Underwood styles into Parley analysis, itemization, font
   selection, initial shaping, and line-final shaping with retained fonts;
@@ -52,7 +52,7 @@ The adapter owns analysis and shaping scratch, retains Parley Engine's native
 portable formed-line records without maintaining a second shaped-run model.
 `ParleyParagraphEngine::new(fonts)` is infallible; Unicode analysis data comes
 from the pinned Parley Engine implementation rather than an empty configuration
-placeholder. Paragraph physics are indexed by stable paragraph identity, and
+placeholder. Paragraph preparation is indexed by stable paragraph identity, and
 Underwood's cache release and budget eviction propagate into this adapter so
 dead blocks do not leave shaped text retained here.
 Parley Engine boundary classes select legal and mandatory breaks. Explicit

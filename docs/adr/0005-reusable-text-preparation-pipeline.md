@@ -52,7 +52,7 @@ The durable choice must preserve:
 
 1. authored source distinct from presentation text;
 2. complete bidirectional source mapping through collapse and replacement;
-3. public Parley Engine analysis and shaping as the only text-physics engine;
+3. public Parley Engine analysis and shaping as the only Unicode and shaping engine;
 4. reversible line candidates and line-final shaping before acceptance;
 5. caller-owned region and float policy;
 6. immutable canonical shaping plus explicit line adjustments;

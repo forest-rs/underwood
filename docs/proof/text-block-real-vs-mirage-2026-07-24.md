@@ -17,7 +17,7 @@ interaction facts. That is deliberate architectural reuse, not a label-only
 fast path. The proof and API docs now say “low ceremony” or “lightweight call
 site” rather than implying a separate reduced-cost engine.
 
-The retained pass performs zero text physics but takes about 19 ms for 2,048
+The retained pass performs zero analysis, shaping, or formation but takes about 19 ms for 2,048
 full outputs on the reference machine. A host that keeps its owned output does
 not pay that every frame; whether a real toolkit does so is one integration
 review deep and remains tracked in `und-oh0.5.4`.
@@ -45,7 +45,7 @@ the present name. No docs or tests claim a rich-run builder today.
 - Style sharing is concrete: block requests borrow one computed style, and
   pointer-identity tests prove its family, feature, and variation arrays remain
   shared across clones.
-- Cache scaling is structural: geometry and Parley physics use indexed
+- Cache scaling is structural: geometry and Parley preparation use indexed
   paragraph identity; document release has its own index; LRU budget eviction,
   explicit release, zero budget, reload, and failure cleanup are observable.
 - The wind tunnel covers 2,048 public blocks and treats work/cache assertions
@@ -55,7 +55,7 @@ the present name. No docs or tests claim a rich-run builder today.
 
 The first Overstory label integration could accidentally call
 `prepare_block` for every unchanged label during every layout pass. That would
-turn retained text-physics reuse into repeated scene allocation and copying.
+turn retained preparation reuse into repeated scene allocation and copying.
 The next integration must first prove host output retention. Only if that is
 insufficient should Underwood add a selective non-editable scene payload, and
 that payload must preserve the existing paragraph engine and source facts.

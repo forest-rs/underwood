@@ -93,7 +93,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                     &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
                 )
                 .expect("retained unique label must prepare");
-            assert_no_physics(&output);
+            assert_no_preparation_work(&output);
             black_box(output.scene().fragments().len());
         }
     });
@@ -236,7 +236,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                     &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
                 )
                 .expect("retained repeated text must prepare");
-            assert_no_physics(&output);
+            assert_no_preparation_work(&output);
         }
     });
     for label in &identical {
@@ -880,7 +880,7 @@ fn profile_retained_identical(
                         &BlockRequest::new(TextConstraint::MaxContent, style, paint),
                     )
                     .expect("retained identical label must prepare");
-                assert_no_physics(&output);
+                assert_no_preparation_work(&output);
                 black_box(output.scene().metrics());
             }
         }
@@ -917,7 +917,7 @@ fn profile_retained_adjustment(
                             .with_region_flow(&flow),
                     )
                     .expect("retained adjustment fixture must prepare");
-                assert_no_physics(&output);
+                assert_no_preparation_work(&output);
                 black_box(output.scene().metrics());
             }
         }
@@ -959,7 +959,7 @@ fn profile_paint_change(
                         &BlockRequest::new(TextConstraint::MaxContent, style, paint),
                     )
                     .expect("paint-only label must prepare");
-                assert_no_physics(&output);
+                assert_no_preparation_work(&output);
                 black_box(output.scene().fragments().len());
             }
         }
@@ -1407,7 +1407,7 @@ fn assert_adjustment_only(output: &SceneOutput) {
     );
 }
 
-fn assert_no_physics(output: &SceneOutput) {
+fn assert_no_preparation_work(output: &SceneOutput) {
     assert_eq!(
         output.work().analysis().paragraphs(),
         0,

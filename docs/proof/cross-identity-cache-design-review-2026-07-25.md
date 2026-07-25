@@ -56,7 +56,7 @@ Required tests:
 - two documents with identical projected text retain distinct document,
   paragraph, text, semantic, fragment, and revision identity;
 - distinct composition IDs and epochs survive a shared hit;
-- different leaf segmentation and semantic roles share physics but not source
+- different leaf segmentation and semantic roles share preparation but not source
   or semantic geometry;
 - a poisoned cached fact cannot bypass current-projection validation.
 

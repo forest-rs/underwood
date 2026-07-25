@@ -29,7 +29,7 @@ Overstory TextResourcesBuilder
 
 Underwood owns catalog validation and consumption. Overstory remains free to
 own builder errors, discovered-family presentation, and application policy.
-Analyzer, shaper, query state, paragraph physics, and layout caches remain
+Analyzer, shaper, query state, paragraph preparation, and layout caches remain
 engine-local.
 
 Configuration is a build-time operation. Generic-family and fallback mappings

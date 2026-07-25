@@ -79,7 +79,7 @@ toolkit behavior or pixel production.
    dependency.
 13. Product-prove the complete path through a compelling region-aware living
    page and guided diagnostic modes.
-14. Retire the nonstandard "text physics" metaphor from live code and
+14. Retire the nonstandard catch-all preparation metaphor from live code and
    normative architecture. Name analysis, shaping, prepared facts, formation,
    adjustment, geometry, and caches according to their actual stage.
 15. Run adversarial architecture, correctness, performance, accessibility,
@@ -111,7 +111,7 @@ toolkit behavior or pixel production.
   alignment consume accepted slots and retained analysis direction; Western
   U+0020 expansion moves paint, hits, carets, selections, semantics,
   compositions, visual output, and PDF geometry together without repeating
-  text physics. Measurements and exact limits are recorded in
+  analysis, shaping, or formation. Measurements and exact limits are recorded in
   `docs/proof/line-adjustment-review-2026-07-25.md`.
 - Step 6 has a matched before-state wind tunnel and the approved cache from
   `docs/design/0016-cross-identity-preparation-cache.md` is implemented.
@@ -123,9 +123,11 @@ toolkit behavior or pixel production.
   composition, region-rebinding, byte-budget, eviction, oversized-entry, and
   release laws are protected. The measured result is recorded in
   `docs/proof/cross-identity-preparation-cache-2026-07-25.md`.
-- Step 14 is tracked by `und-oh0.13.16`. The catch-all "physics" metaphor will
-  be removed from live identifiers, rustdoc, and normative architecture rather
-  than replaced by another vague umbrella term.
+- Step 14 is complete. Live identifiers, rustdoc, examples, benchmarks, and
+  normative architecture now name analysis, shaping, prepared facts,
+  formation, adjustment, geometry, or cache state according to ownership.
+  The deliberately preserved historical symbol references are recorded in
+  `docs/proof/preparation-terminology-review-2026-07-25.md`.
 
 ### Risks and controls
 
@@ -311,7 +313,7 @@ font-resource integration policy.
 ### Completion
 
 The campaign is complete when thousands of blocks execute through the public
-path with exact intrinsic metrics, stable work performs no repeated physics,
+path with exact intrinsic metrics, stable work repeats no text preparation,
 width changes perform only required formation, edit work stays local,
 destroyed/budget-evicted blocks release both cache layers, measured evidence is
 checked in, all callers migrate, and every local and protected remote gate is
@@ -699,8 +701,8 @@ same change.
 
 1. Ratify `docs/design/0005-retained-parley-shaped-text.md` against exact
    Parley main and update the existing dependency pins together.
-2. Replace `PhysicsRun`, `PhysicsGlyph`, and callback copy-out with one reusable
-   `ShapedText` plus the minimal script sidecar.
+2. Replace the callback-owned run/glyph copies with one reusable `ShapedText`
+   plus the minimal script sidecar.
 3. Lower Parley's cluster storage into portable prepared glyphs with explicit
    ligature, RTL, UTF-8, and control-only source laws.
 4. Preserve public invalidation/work behavior and migrate the private seam
@@ -766,7 +768,7 @@ exists.
 3. Add a high-level Parley oracle to the private seam experiment for legal and
    mandatory breaks, CRLF, overflow, bidi line ranges, and line metrics.
 4. Implement retained Core-backed line formation in `underwood_parley`, remove
-   text physics from scene construction, and prove width-only reuse.
+   text preparation from scene construction, and prove width-only reuse.
 5. Exercise and record the break-sensitive case against the upstream bounded
    reshape seam; do not close or land the campaign with a counterfeit local
    substitute.
@@ -964,7 +966,7 @@ hit testing synchronously.
 
 ### Fence
 
-Parley owns paragraph-local cluster, bidi, caret-affinity, and cursor physics;
+Parley owns paragraph-local cluster, bidi, caret-affinity, and cursor facts;
 Underwood owns revision-bound semantic positions, selection geometry,
 transactions, source projection, revisioned editable surfaces, composition
 epochs, and retained work; the showcase owns native gestures, keyboard/IME
@@ -1003,7 +1005,7 @@ retained TextScene -> imaging -> live native proof
    paragraph formation across preedit churn and cancel.
 4. Translate native pointer, keyboard, and Winit IME events in the showcase;
    render selection, caret, and composition overlays without changing text
-   physics or moving host policy into core.
+   preparation or moving host policy into core.
 5. Add exact semantic hover, press cancellation, and activation through a
    showcase-owned `SemanticId` action registry; hand a URL-shaped request to the
    host without stabilizing a permanent core link schema or launching a browser.

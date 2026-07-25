@@ -190,7 +190,7 @@ impl HostApplication for ShowcaseApp {
             )
             .map_err(|error| error.to_string())?;
         let render_ms = render_started.elapsed().as_secs_f64() * 1_000.0;
-        if self.capture_next_work || has_text_physics_work(&work) {
+        if self.capture_next_work || has_text_preparation_work(&work) {
             self.evidence_work = Some(work.clone());
             self.capture_next_work = false;
         }
@@ -294,7 +294,7 @@ impl HostApplication for ShowcaseApp {
     }
 }
 
-fn has_text_physics_work(work: &WorkReport) -> bool {
+fn has_text_preparation_work(work: &WorkReport) -> bool {
     work.analysis().paragraphs() > 0
         || work.font_selection().paragraphs() > 0
         || work.shape().paragraphs() > 0

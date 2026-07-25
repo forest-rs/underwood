@@ -12,7 +12,7 @@ The safe-break checkpoint in commit `023c777` was real product-path work but
 was not sufficient to close `und-oh0.2.2`. The final branch now pins the narrow
 Parley candidate `181664b28144cb59671a7f1b736757c6ebe270f2`, commits unsafe line boundaries
 through bounded Core reshaping, and preserves the original unbroken
-`ShapedText` as reusable width-independent physics.
+`ShapedText` as reusable width-independent shaping.
 
 No `unsafe` code or new production dependency was added. The existing Parley
 dependency moves temporarily to an exact public fork commit under ADR-0004's

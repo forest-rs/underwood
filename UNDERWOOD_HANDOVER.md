@@ -288,7 +288,7 @@ Underwood scene adapters ───────────► Imaging / parley_d
 
 Dependencies may be factored into adapter crates to avoid cycles. The conceptual ownership must remain clear even if temporary implementation details differ.
 
-### 5.2 Parley owns text physics
+### 5.2 Parley owns Unicode analysis and shaping
 
 The Parley repository should own universally applicable text machinery:
 
@@ -1492,7 +1492,7 @@ This cannot be left as an accidental consequence of `Layout<Brush>`.
 
 ### 15.6 The Parley contingency is designed, not improvised
 
-“Do not fork text physics” means Underwood does not casually build a second shaper, bidi engine, or Unicode analyzer. It does not mean the platform waits indefinitely for every upstream seam.
+“Do not fork Unicode analysis and shaping” means Underwood does not casually build a second shaper, bidi engine, or Unicode analyzer. It does not mean the platform waits indefinitely for every upstream seam.
 
 `underwood_parley` is the only allowed adaptation boundary. It targets a pinned Parley revision and owns a conformance suite over analysis, itemization, shaping, breaks, vertical text, and inline objects. If a required capability is designed, demonstrated, and blocked upstream beyond an explicit review threshold, the project may carry a narrowly scoped patch stack or pinned fork there under these rules:
 

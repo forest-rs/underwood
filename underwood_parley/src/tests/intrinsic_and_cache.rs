@@ -857,7 +857,7 @@ fn shared_preparation_budget_is_byte_bounded_lru_and_oversized_safe() {
 }
 
 #[test]
-fn failed_first_preparation_releases_untracked_backend_physics() {
+fn failed_first_preparation_releases_untracked_backend_state() {
     let (document, styles, paint) = fixture_document("中文", 1.2);
     let fonts = FontSet::try_from_fonts([
         Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
@@ -880,7 +880,7 @@ fn failed_first_preparation_releases_untracked_backend_physics() {
     assert_eq!(
         cache.backend_entries(),
         Some(0),
-        "failed preparation must not strand untracked Parley physics"
+        "failed preparation must not strand untracked Parley preparation"
     );
 }
 
