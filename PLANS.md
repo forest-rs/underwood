@@ -85,12 +85,6 @@ toolkit behavior or pixel production.
 15. Run adversarial architecture, correctness, performance, accessibility,
    PDF, portability, and real-vs-mirage review; land coherent protected
    changes with complete proof records.
-16. Correct the retained lifecycle exposed by the allocation audit before
-   freezing preparation diagnostics: prove cache eligibility from
-   provenance-qualified scalar keys; publish already-retained paragraph
-   segments rather than rematerializing their records; retain adapter lowering
-   output; stage document edits copy-on-write; and shape common-case source,
-   paint, and interaction records for bounded indexed access.
 
 ### Progress
 
@@ -154,90 +148,12 @@ toolkit behavior or pixel production.
   claims; the precedence-merged Parley boundary fact blocking the latter is
   tracked by `und-oh0.2.11`. Exact results are recorded in
   `docs/proof/cjk-line-breaking-review-2026-07-25.md`.
-- Step 16 was added after a committed-tree allocation and API audit exposed a
-  repeated lifecycle failure across document staging, cache validation, and
-  scene publication: unchanged values were rebuilt and deep-compared, then
-  retained records were deep-copied into each output. The existing
-  64-paragraph public-path wind tunnel confirms the symptom: a localized edit
-  costs approximately the same wall time as an unchanged retained prepare.
-  Before selecting representations, a 1,000-paragraph matched allocation
-  workload will establish the exact current cost and guard each independently
-  shippable correction.
-  That baseline is now executable: at 1,000 paragraphs an exact retained
-  prepare performs 666,167 allocation calls and requests 163,571,752 bytes;
-  one-byte edit staging performs 1,015 calls; and preparation of that localized
-  edit performs 666,807 calls. Exact results and instrument limits are recorded
-  in `docs/proof/retained-lifecycle-baseline-2026-07-25.md`.
-
-### Retained lifecycle work laws
-
-- An exact repeated `(snapshot, request)` may return the previously published
-  immutable scene handle in O(1), with no projection, adapter, geometry, or
-  record allocation.
-- A localized text edit performs document staging, projection, preparation,
-  geometry, and publication work proportional to the changed paragraph plus a
-  sublinear persistent-scene-spine update. It does not touch unchanged sibling
-  paragraph records.
-- A paint-only change rebinds paint without repeating text projection,
-  analysis, shaping, formation, or identity-bound interaction geometry.
-- A global width, region, or style-policy change may visit every affected
-  paragraph; the trace must say why and must distinguish required formation
-  work from avoidable value reconstruction.
-- Cache eligibility uses stable provenance plus facet generations or immutable
-  compiled-snapshot identity. A naked generation counter shared by unrelated
-  `StyleMap` or `PaintTable` values is not a valid key.
-- Revision and epoch identity live at the scene/publication boundary. Cached
-  paragraph-local records do not rewrite document identity on every hit;
-  checked public queries mint or validate stamped positions at the boundary.
-- Public constructors remain checked. Internal values whose provenance already
-  proves an invariant may use private trusted construction paths, with the
-  proof boundary named and tested.
-- Allocation counts and bytes are external wind-tunnel evidence. Core
-  diagnostics report deterministic work, capacities, cache residency, and
-  growth without pretending to observe process allocations or wall time.
-
-### Retained lifecycle ownership
-
-`LayoutEngine` owns request invalidation, paragraph-segment reuse, the
-persistent scene spine, and assembly/publication of immutable scene snapshots.
-It does not own shaping internals, widget retention, renderer timing, or process
-allocation accounting.
-
-The Parley adapter owns retained analyzed, shaped, formed, lowered facts and its
-mutable scratch workspaces. It does not own document identity, scene
-publication, or whole-document invalidation policy.
-
-`Document` owns immutable publication and copy-on-write edit staging. Text
-mutation converts shared leaf storage to owned storage once per touched leaf;
-it does not use layout as an editing prerequisite.
-
-### Retained lifecycle execution order
-
-1. Add matched 64- and 1,000-paragraph unchanged and one-byte-edit timing and
-   allocation workloads through the real public path.
-2. Ratify the cache-key and persistent-scene representation against the work
-   laws, including downstream-origin changes when paragraph height changes.
-3. Add provenance-qualified preflight keys and skip `Projection` construction
-   on retained hits.
-4. Return the exact prior scene on exact repeats, then introduce shared
-   paragraph-local segments and a persistent/chunked scene spine for localized
-   updates and lazy origin/revision resolution.
-5. Retain adapter lowering output and add engine-owned scratch so cache hits do
-   not re-lower or discard capacity.
-6. Make `DocumentState` staging copy-on-write and mutate each touched leaf text
-   once.
-7. Introduce one-or-many source coverage, whole-or-split glyph paint,
-   coalesced fragments, and sorted interaction indexes only with before/after
-   allocation and query evidence.
-8. Publish preparation trace and memory accounting against this lifecycle,
-   then finish the region-aware living page and final campaign review.
-
-The proposed representation and public migration are recorded in
-`docs/design/0017-retained-scene-lifecycle.md`. It chooses immutable
-provenance-qualified preflight keys plus a persistent summary tree of
-paragraph-local scene segments. Flat slice traversal is deliberately replaced
-by positioned views because keeping already-translated, revision-stamped
-contiguous records would preserve the document-wide copy under another name.
+- The committed-tree allocation audit exposed a separate retained-lifecycle
+  problem: unchanged values are rebuilt and deep-compared, then retained
+  records are deep-copied into each output. Its matched 1,000-paragraph
+  baseline and proposed correction now live in the sibling campaign
+  `und-oh0.13.17`; they do not extend this campaign's finish line. The
+  preparation trace remains neutral before-state evidence for that later work.
 
 ### Risks and controls
 
@@ -253,12 +169,6 @@ contiguous records would preserve the document-wide copy under another name.
   owns candidates and checkpoints only.
 - **Memory optimism:** scratch changes require allocation and wall-time
   before/after evidence on the same workloads.
-- **Arc optimism:** shared paragraph records are not sufficient if every
-  prepare still rebuilds a flat document vector or eagerly rewrites downstream
-  origins. Exact-repeat and localized-edit complexity are separate gates.
-- **Generation collision:** independent mutable inputs can share numeric
-  generation values. Every fast key is provenance-qualified or comes from an
-  immutable compiled snapshot.
 - **Style mismatch:** the final Overstory analysis is an explicit input before
   paragraph styles freeze.
 - **Prototype anchoring:** Overstory companion code contributes traps and call
@@ -284,6 +194,104 @@ identity, editable blocks and font catalogs satisfy the exact Overstory
 call-site invariants, CPU and memory costs are observable and bounded, CJK
 limits are executable rather than anecdotal, the living page depends on the
 work, and all local and protected remote gates are green.
+
+## Retained O(change) preparation and scene lifecycle
+
+**Status:** Proposed — sibling campaign; Design-0017 awaits architecture approval
+
+**Beads:** `und-oh0.13.17` and its dependency-ordered children
+
+### Goal
+
+Replace rebuild-and-deep-compare cache validation, deep-copy scene
+publication, repeated adapter lowering, whole-document edit staging, and
+allocation-heavy common-case records with a coherent retained lifecycle.
+Exact repeats should be O(1), and localized edits should touch changed
+paragraph facts plus a sublinear scene-spine update.
+
+### Fence
+
+This campaign is informed by the preparation trace but is not part of the
+reusable text-tools completion gate. It must not begin foundational
+implementation until Design-0017 and its public traversal migration are
+approved.
+
+### Measured baseline
+
+At 1,000 paragraphs an exact retained prepare performs 666,167 allocation
+calls and requests 163,571,752 bytes; one-byte edit staging performs 1,015
+calls; and preparation of that localized edit performs 666,807 calls. Exact
+results and instrument limits are recorded in
+`docs/proof/retained-lifecycle-baseline-2026-07-25.md`.
+
+### Work laws
+
+- An exact repeated `(snapshot, request)` may return the previously published
+  immutable scene handle in O(1), with no projection, adapter, geometry, or
+  record allocation.
+- A localized text edit performs document staging, projection, preparation,
+  geometry, and publication work proportional to the changed paragraph plus a
+  sublinear persistent-scene-spine update. It does not touch unchanged sibling
+  paragraph records.
+- A paint-only change rebinds paint without repeating text projection,
+  analysis, shaping, formation, or identity-bound interaction geometry.
+- A global width, region, or style-policy change may visit every affected
+  paragraph; the trace must say why and distinguish required formation work
+  from avoidable value reconstruction.
+- Cache eligibility uses stable provenance plus facet generations or immutable
+  compiled-snapshot identity. A naked generation counter shared by unrelated
+  values is not a valid key.
+- Revision and epoch identity live at the scene/publication boundary. Cached
+  paragraph-local records do not rewrite document identity on every hit;
+  checked public queries mint or validate stamped positions at the boundary.
+- Allocation counts and bytes are external wind-tunnel evidence. Core
+  diagnostics report deterministic work, capacities, cache residency, and
+  growth without pretending to observe process allocations or wall time.
+
+### Ownership
+
+`LayoutEngine` owns request invalidation, paragraph-segment reuse, the
+persistent scene spine, and immutable scene publication. The Parley adapter
+owns retained analyzed, shaped, formed, and lowered facts plus its scratch
+workspaces. `Document` owns immutable publication and copy-on-write edit
+staging.
+
+### Execution order
+
+1. Ratify the cache-key and persistent-scene representation against the work
+   laws, including downstream-origin changes when paragraph height changes.
+2. Add provenance-qualified preflight keys and skip projection construction
+   on retained hits.
+3. Return the exact prior scene on exact repeats, then introduce shared
+   paragraph-local segments and a persistent scene spine.
+4. Retain adapter lowering output and add engine-owned scratch.
+5. Make document staging copy-on-write and mutate each touched leaf once.
+6. Compact common-case source, paint, and interaction records with matched
+   before/after allocation and query evidence.
+
+The proposed representation and public migration are recorded in
+`docs/design/0017-retained-scene-lifecycle.md`.
+
+### Risks and controls
+
+- **Arc optimism:** shared paragraph records are not sufficient if every
+  prepare still rebuilds a flat document vector or eagerly rewrites downstream
+  origins.
+- **Generation collision:** every fast key is provenance-qualified or comes
+  from an immutable compiled snapshot.
+- **Cache pinning:** shared publication must remain explicitly budgeted and
+  observable.
+- **Hidden materialization:** flat convenience collection must remain an
+  explicit cold-path operation rather than the default traversal API.
+
+### Completion
+
+Matched 64- and 1,000-paragraph public-path wind tunnels prove exact-repeat and
+localized-edit work laws; unchanged records are shared rather than copied;
+adapter hits do not re-lower; one-byte edits do not clone untouched paragraph
+or leaf storage; common records avoid per-glyph allocation; and the full Rust
+1.88, `no_std`, formatting, lint, test, documentation, repository, and
+protected-remote gates pass.
 
 ## Module boundaries and Parley Engine convergence
 
