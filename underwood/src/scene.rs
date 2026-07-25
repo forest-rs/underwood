@@ -12,7 +12,8 @@ use core::ops::Range;
 use crate::adapter::{
     AnalysisRun, AnalysisStyleId, FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId,
     LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphInput,
-    PreparationErrorKind, PreparedParagraph, ShapingRun, ShapingStyleId, TextAffinity,
+    PreparationErrorKind, PreparedParagraph, PreparedParagraphFacts, ShapingRun, ShapingStyleId,
+    TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{
@@ -34,6 +35,7 @@ mod interaction;
 mod output;
 mod projection;
 mod records;
+mod shared_cache;
 
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
 pub use interaction::{CompositionScene, TextScene};
@@ -52,6 +54,7 @@ use interaction::{
     SceneCaretStop, SceneCluster, SceneCursorMovement, SceneCursorStep, SceneHitSlice,
 };
 use projection::*;
+use shared_cache::*;
 
 #[cfg(test)]
 use projection::{append_analysis_run, append_inline_flow_run, append_shaping_run};

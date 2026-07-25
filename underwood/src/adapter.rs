@@ -9,6 +9,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::mem::size_of;
 use core::ops::Range;
 
 use crate::{
@@ -35,6 +36,7 @@ pub use interaction::{
     TextAffinity,
 };
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
+pub(crate) use prepared::PreparedParagraphFacts;
 pub use prepared::{FontSynthesis, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun};
 
 #[cfg(test)]

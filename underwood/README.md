@@ -22,11 +22,12 @@ The first draft public slice is deliberately complete end to end:
   constraint-only changes; wrapped constraint changes expose their separate
   line-final shaping work;
   an explicit [`CacheBudget`] bounds retained geometry and coordinated backend
-  state, while release operations and [`CacheDiagnostics`] expose lifecycle
-  facts to hosts;
+  state and can separately bound exact identity-free preparation shared by
+  equivalent labels, while release operations and [`CacheDiagnostics`] expose
+  lifecycle facts to hosts;
 - [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
   and font-derived metrics behind the paragraph-engine boundary instead of
-  hiding text physics in scene construction; formed lines retain complete
+  hiding text preparation in scene construction; formed lines retain complete
   source slices across semantic leaves and distinguish real glyphs from
   intentionally unrendered controls;
 - [`ComputedInlineStyle`] keeps [`ShapingStyle`], [`InlineFlowStyle`], and
@@ -129,7 +130,7 @@ use underwood_parley::ParleyParagraphEngine;
 
 let mut layout = LayoutEngine::new(
     ParleyParagraphEngine::new(fonts),
-    CacheBudget::new(4_096),
+    CacheBudget::new(4_096).with_shared_preparation_bytes(8 * 1024 * 1024),
 );
 let mut label =
     TextBlock::plain(DocumentId::from_bytes(*b"save-label-00001"), "Save")?;
@@ -144,6 +145,14 @@ label.set_text("Open")?;
 layout.release_document(label.id());
 ```
 
+The shared-preparation budget is opt-in and independent of the retained
+geometry entry budget. An exact hit skips backend analysis, font selection,
+shaping, and line formation, then rebuilds current document, revision,
+semantic, interaction, paint, and geometry identity. `release_document`
+releases identity-bound entries but preserves useful shared facts;
+`clear_cache` releases both. The byte diagnostics are deterministic retention
+charges, not allocator-exact heap measurements.
+
 [`TextConstraint::MaxContent`] suppresses soft wrapping while preserving
 mandatory breaks. [`TextConstraint::MinContent`] commits every legal soft
 break through line-final shaping, and
@@ -157,7 +166,7 @@ Line formation is observable independently of shaping.
 [`WorkReport::rejected_line_candidates`] exposes fit-changing retries, and
 [`WorkReport::line_checkpoint_restores`] records rewinds of traversal and
 provisional output. These counters are actual work from the current call;
-they are not retained paragraph physics.
+they are not retained paragraph preparation.
 
 `ComputedInlineStyle` clones share the owned family, feature, and variation
 arrays. `BlockRequest` goes further and borrows one caller-owned style, so any

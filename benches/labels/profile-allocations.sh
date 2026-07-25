@@ -15,10 +15,12 @@ fi
 run_trace() {
     scenario=$1
     code=$2
+    rounds=${3:-1}
+    labels=${4:-1}
 
     env MallocStackLogging=full UNDERWOOD_PROFILE_HOLD_SECS=3600 \
         UNDERWOOD_PROFILE_QUIET=1 \
-        "$binary" "$code" 1 1 >/dev/null 2>&1 &
+        "$binary" "$code" "$rounds" "$labels" >/dev/null 2>&1 &
     pid=$!
 
     sleep 0.2
@@ -49,8 +51,8 @@ run_trace() {
 results=$(mktemp "${TMPDIR:-/tmp}/underwood-allocation-results.XXXXXX")
 trap 'rm -f "$results"' EXIT HUP INT TERM
 
-while read -r scenario code; do
-    run_trace "$scenario" "$code" >>"$results"
+while read -r scenario code rounds labels; do
+    run_trace "$scenario" "$code" "${rounds:-1}" "${labels:-1}" >>"$results"
 done <<'SCENARIOS'
 setup-identical s0
 setup-identity s1
@@ -58,6 +60,8 @@ setup-cross-identical x0
 cross-identical x1
 setup-cross-distinct x2
 cross-distinct x3
+setup-shared-hit y0 1 2
+shared-hit y1 1 2
 primed-identical p0
 primed-paint p1
 primed-unique p2
@@ -102,6 +106,9 @@ awk '
         print "cross-distinct", \
             calls["cross-distinct"] - calls["setup-cross-distinct"], \
             bytes["cross-distinct"] - bytes["setup-cross-distinct"]
+        print "shared-hit", \
+            calls["shared-hit"] - calls["setup-shared-hit"], \
+            bytes["shared-hit"] - bytes["setup-shared-hit"]
         print "retained-identical", \
             calls["retained-identical"] - calls["primed-identical"], \
             bytes["retained-identical"] - bytes["primed-identical"]

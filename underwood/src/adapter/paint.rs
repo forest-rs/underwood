@@ -15,6 +15,10 @@ pub struct GlyphPaintCoverage {
 }
 
 impl GlyphPaintCoverage {
+    pub(crate) fn segment_capacity(&self) -> usize {
+        self.segments.capacity()
+    }
+
     /// Creates whole-glyph coverage with no renderer clip.
     pub fn whole(source: Range<u32>, slot: PaintSlot) -> Result<Self, PreparationError> {
         Self::try_from_segments([GlyphPaintSegment::whole(source, slot)?])

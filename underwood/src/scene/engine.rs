@@ -12,6 +12,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheBudget {
     max_entries: usize,
+    shared_preparation_bytes: usize,
 }
 
 impl CacheBudget {
@@ -20,13 +21,32 @@ impl CacheBudget {
     /// A zero budget materializes owned outputs without retaining cache entries.
     #[must_use]
     pub const fn new(max_entries: usize) -> Self {
-        Self { max_entries }
+        Self {
+            max_entries,
+            shared_preparation_bytes: 0,
+        }
+    }
+
+    /// Returns a budget that may retain this many bytes of exact shared
+    /// paragraph preparation.
+    ///
+    /// The default is zero, so cross-identity retention is always explicit.
+    #[must_use]
+    pub const fn with_shared_preparation_bytes(mut self, bytes: usize) -> Self {
+        self.shared_preparation_bytes = bytes;
+        self
     }
 
     /// Returns the maximum number of retained geometry entries.
     #[must_use]
     pub const fn max_entries(self) -> usize {
         self.max_entries
+    }
+
+    /// Returns the maximum accounting charge for shared preparation entries.
+    #[must_use]
+    pub const fn shared_preparation_bytes(self) -> usize {
+        self.shared_preparation_bytes
     }
 }
 
@@ -42,6 +62,14 @@ pub struct CacheDiagnostics {
     misses: usize,
     evictions: usize,
     releases: usize,
+    shared_preparation_budget: usize,
+    shared_preparation_entries: usize,
+    shared_preparation_resident_bytes: usize,
+    shared_preparation_peak_bytes: usize,
+    shared_preparation_hits: usize,
+    shared_preparation_misses: usize,
+    shared_preparation_evictions: usize,
+    shared_preparation_oversized_non_retentions: usize,
 }
 
 impl CacheDiagnostics {
@@ -69,7 +97,7 @@ impl CacheDiagnostics {
         self.committed_entries + self.composition_entries
     }
 
-    /// Returns retained backend physics entries, when the backend reports them.
+    /// Returns retained backend preparation entries, when the backend reports them.
     #[must_use]
     pub const fn backend_entries(self) -> Option<usize> {
         self.backend_entries
@@ -104,6 +132,54 @@ impl CacheDiagnostics {
     pub const fn releases(self) -> usize {
         self.releases
     }
+
+    /// Returns the configured shared-preparation byte budget.
+    #[must_use]
+    pub const fn shared_preparation_budget(self) -> usize {
+        self.shared_preparation_budget
+    }
+
+    /// Returns resident identity-free preparation entries.
+    #[must_use]
+    pub const fn shared_preparation_entries(self) -> usize {
+        self.shared_preparation_entries
+    }
+
+    /// Returns the current deterministic shared-preparation accounting charge.
+    #[must_use]
+    pub const fn shared_preparation_resident_bytes(self) -> usize {
+        self.shared_preparation_resident_bytes
+    }
+
+    /// Returns the highest observed shared-preparation accounting charge.
+    #[must_use]
+    pub const fn shared_preparation_peak_bytes(self) -> usize {
+        self.shared_preparation_peak_bytes
+    }
+
+    /// Returns exact cross-identity prepared-fact cache hits.
+    #[must_use]
+    pub const fn shared_preparation_hits(self) -> usize {
+        self.shared_preparation_hits
+    }
+
+    /// Returns eligible shared-preparation lookups that missed.
+    #[must_use]
+    pub const fn shared_preparation_misses(self) -> usize {
+        self.shared_preparation_misses
+    }
+
+    /// Returns shared entries removed to enforce the byte budget.
+    #[must_use]
+    pub const fn shared_preparation_evictions(self) -> usize {
+        self.shared_preparation_evictions
+    }
+
+    /// Returns prepared values served but too large to retain.
+    #[must_use]
+    pub const fn shared_preparation_oversized_non_retentions(self) -> usize {
+        self.shared_preparation_oversized_non_retentions
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -131,6 +207,7 @@ pub struct LayoutEngine {
     clock: u64,
     budget: CacheBudget,
     cache_work: CacheWork,
+    shared_preparation: SharedPreparationCache,
 }
 
 impl core::fmt::Debug for LayoutEngine {
@@ -141,6 +218,10 @@ impl core::fmt::Debug for LayoutEngine {
             .field(
                 "cached_composition_paragraphs",
                 &self.composition_cache.len(),
+            )
+            .field(
+                "shared_preparation_entries",
+                &self.shared_preparation.diagnostics().entries,
             )
             .finish_non_exhaustive()
     }
@@ -159,6 +240,7 @@ impl LayoutEngine {
             clock: 0,
             budget,
             cache_work: CacheWork::default(),
+            shared_preparation: SharedPreparationCache::new(budget.shared_preparation_bytes),
         }
     }
 
@@ -195,6 +277,7 @@ impl LayoutEngine {
                 request.region_flow,
                 region_cursor,
                 self.clock,
+                &mut self.shared_preparation,
                 &mut work,
             )?;
             self.record_access(CacheKind::Committed, &access);
@@ -336,6 +419,7 @@ impl LayoutEngine {
                         request.region_flow,
                         region_cursor,
                         self.clock,
+                        &mut self.shared_preparation,
                         &mut work,
                     )?,
                 )
@@ -351,6 +435,7 @@ impl LayoutEngine {
                         request.region_flow,
                         region_cursor,
                         self.clock,
+                        &mut self.shared_preparation,
                         &mut work,
                     )?,
                 )
@@ -452,19 +537,21 @@ impl LayoutEngine {
         }
     }
 
-    /// Releases all retained geometry and backend paragraph physics.
+    /// Releases all retained geometry, shared preparation, and backend entries.
     pub fn clear_cache(&mut self) {
         self.cache_work.releases += self.cache.len() + self.composition_cache.len();
         self.cache.clear();
         self.composition_cache.clear();
         self.recency.clear();
         self.documents.clear();
+        self.shared_preparation.clear();
         self.paragraphs.clear();
     }
 
     /// Returns a snapshot of coordinated cache state and cumulative activity.
     #[must_use]
     pub fn cache_diagnostics(&self) -> CacheDiagnostics {
+        let shared = self.shared_preparation.diagnostics();
         CacheDiagnostics {
             budget: self.budget.max_entries,
             committed_entries: self.cache.len(),
@@ -475,7 +562,29 @@ impl LayoutEngine {
             misses: self.cache_work.misses,
             evictions: self.cache_work.evictions,
             releases: self.cache_work.releases,
+            shared_preparation_budget: shared.budget,
+            shared_preparation_entries: shared.entries,
+            shared_preparation_resident_bytes: shared.resident_bytes,
+            shared_preparation_peak_bytes: shared.peak_bytes,
+            shared_preparation_hits: shared.hits,
+            shared_preparation_misses: shared.misses,
+            shared_preparation_evictions: shared.evictions,
+            shared_preparation_oversized_non_retentions: shared.oversized_non_retentions,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn replace_first_shared_facts_for_test(
+        &mut self,
+        facts: Arc<PreparedParagraphFacts>,
+    ) {
+        self.shared_preparation.replace_first_facts_for_test(facts);
+    }
+
+    #[cfg(test)]
+    pub(super) fn collide_shared_bucket_for_test(&mut self, source: &str, target: &str) {
+        self.shared_preparation
+            .collide_bucket_for_test(source, target);
     }
 
     fn record_access(&mut self, kind: CacheKind, access: &CacheAccess) {
@@ -543,6 +652,7 @@ fn prepare_paragraph_geometry(
     region_flow: Option<&RegionFlow>,
     region_cursor: Option<RegionCursor>,
     current_use: u64,
+    shared_preparation: &mut SharedPreparationCache,
     work: &mut WorkReport,
 ) -> Result<CacheAccess, SceneError> {
     let formation_matches = cache.get(&paragraph.id).is_some_and(|entry| {
@@ -585,99 +695,145 @@ fn prepare_paragraph_geometry(
         .collect();
     let text_len = u32::try_from(projection.mapping.text().len())
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
-    let constraints = match (region_flow, region_cursor) {
-        (Some(flow), Some(cursor)) => ParagraphConstraints::in_regions(
+    let preparation_epoch = paragraphs.shared_preparation_epoch();
+    shared_preparation.synchronize_epoch(preparation_epoch);
+    let shared_query = preparation_epoch
+        .filter(|_| shared_preparation.is_enabled())
+        .map(|epoch| SharedPreparationQuery {
+            epoch,
+            projection,
             constraint,
-            projection.empty_line_height(),
-            flow.clone(),
-            cursor,
-        ),
-        (None, None) => ParagraphConstraints::new(constraint, projection.empty_line_height()),
-        _ => {
-            release_untracked_backend(paragraphs, cache, paragraph.id);
-            return Err(SceneError::for_paragraph(
-                SceneErrorKind::Flow,
+            region_flow,
+            region_cursor,
+        });
+    let shared_hit = shared_query
+        .as_ref()
+        .and_then(|query| shared_preparation.lookup(query, current_use));
+    let (prepared, candidate_transcript, backend_called) = if let Some(hit) = shared_hit {
+        work.shared_preparations = work.shared_preparations.saturating_add(1);
+        let transcript = hit.region_transcript(paragraph.id, region_flow)?;
+        (
+            PreparedParagraph::from_shared_facts(paragraph.id, hit.facts),
+            transcript,
+            false,
+        )
+    } else {
+        let constraints = match (region_flow, region_cursor) {
+            (Some(flow), Some(cursor)) => ParagraphConstraints::in_regions(
+                constraint,
+                projection.empty_line_height(),
+                flow.clone(),
+                cursor,
+            ),
+            (None, None) => ParagraphConstraints::new(constraint, projection.empty_line_height()),
+            _ => {
+                release_untracked_backend(paragraphs, cache, paragraph.id);
+                return Err(SceneError::for_paragraph(
+                    SceneErrorKind::Flow,
+                    paragraph.id,
+                ));
+            }
+        };
+        let output = match paragraphs.form(
+            ParagraphInput::new(
                 paragraph.id,
-            ));
-        }
+                projection.paragraph_style,
+                projection.mapping.text(),
+                &projection.analysis_styles,
+                &projection.analysis_runs,
+                &shaping_styles,
+                &projection.shaping_runs,
+                &projection.inline_flow_styles,
+                &projection.inline_flow_runs,
+                &projection.paint_runs,
+            ),
+            constraints,
+        ) {
+            Ok(output) => output,
+            Err(error) => {
+                release_untracked_backend(paragraphs, cache, paragraph.id);
+                return Err(SceneError::from_preparation(paragraph.id, error.kind()));
+            }
+        };
+        record_formation_work(work, output.work());
+        (
+            output.paragraph().clone(),
+            output.region_transcript().cloned(),
+            true,
+        )
     };
-    let output = match paragraphs.form(
-        ParagraphInput::new(
-            paragraph.id,
-            projection.paragraph_style,
-            projection.mapping.text(),
-            &projection.analysis_styles,
-            &projection.analysis_runs,
-            &shaping_styles,
-            &projection.shaping_runs,
-            &projection.inline_flow_styles,
-            &projection.inline_flow_runs,
-            &projection.paint_runs,
-        ),
-        constraints,
-    ) {
-        Ok(output) => output,
-        Err(error) => {
+    if prepared.paragraph() != paragraph.id || prepared.text_len() != text_len {
+        if backend_called {
             release_untracked_backend(paragraphs, cache, paragraph.id);
-            return Err(SceneError::from_preparation(paragraph.id, error.kind()));
         }
-    };
-    if output.paragraph().paragraph() != paragraph.id || output.paragraph().text_len() != text_len {
-        release_untracked_backend(paragraphs, cache, paragraph.id);
         return Err(SceneError::for_paragraph(
             SceneErrorKind::SourceCoverage,
             paragraph.id,
         ));
     }
-    if let Err(error) = validate_prepared(output.paragraph(), projection) {
-        release_untracked_backend(paragraphs, cache, paragraph.id);
+    if let Err(error) = validate_prepared(&prepared, projection) {
+        if backend_called {
+            release_untracked_backend(paragraphs, cache, paragraph.id);
+        }
         return Err(error);
     }
-    let region_transcript = match (region_flow, region_cursor, output.region_transcript()) {
+    let region_transcript = match (region_flow, region_cursor, candidate_transcript) {
         (Some(flow), Some(cursor), Some(transcript))
             if transcript.start() == cursor
                 && transcript.replay(flow) == Ok(transcript.end())
-                && region_output_matches(output.paragraph(), transcript, projection) =>
+                && region_output_matches(&prepared, &transcript, projection) =>
         {
-            Some(transcript.clone())
+            Some(transcript)
         }
         (None, None, None) => None,
         _ => {
-            release_untracked_backend(paragraphs, cache, paragraph.id);
+            if backend_called {
+                release_untracked_backend(paragraphs, cache, paragraph.id);
+            }
             return Err(SceneError::for_paragraph(
                 SceneErrorKind::Flow,
                 paragraph.id,
             ));
         }
     };
-    let slots_match = output
-        .paragraph()
+    let slots_match = prepared
         .lines()
         .iter()
         .all(|line| line.slot().is_some() == region_flow.is_some());
     if !slots_match {
-        release_untracked_backend(paragraphs, cache, paragraph.id);
+        if backend_called {
+            release_untracked_backend(paragraphs, cache, paragraph.id);
+        }
         return Err(SceneError::for_paragraph(
             SceneErrorKind::Flow,
             paragraph.id,
         ));
     }
-    record_formation_work(work, output.work());
-    if projection.mapping.text().is_empty() && !formation_matches {
+    if backend_called && projection.mapping.text().is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
     let geometry = match build_geometry(
-        output.paragraph(),
+        &prepared,
         projection,
         constraint,
         region_transcript.as_ref(),
     ) {
         Ok(geometry) => geometry,
         Err(error) => {
-            release_untracked_backend(paragraphs, cache, paragraph.id);
+            if backend_called {
+                release_untracked_backend(paragraphs, cache, paragraph.id);
+            }
             return Err(error);
         }
     };
+    if backend_called && let Some(query) = &shared_query {
+        shared_preparation.insert(
+            query,
+            prepared.shared_facts(),
+            region_transcript.as_ref(),
+            current_use,
+        );
+    }
     work.adjustment.add_paragraph(if geometry.lines.is_empty() {
         1
     } else {

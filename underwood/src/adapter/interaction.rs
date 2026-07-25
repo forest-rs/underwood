@@ -268,6 +268,10 @@ pub struct PreparedInteractionUnit {
 }
 
 impl PreparedInteractionUnit {
+    pub(crate) fn slice_capacity(&self) -> usize {
+        self.slices.capacity()
+    }
+
     /// Validates one source-complete interaction unit and its visual slices.
     pub fn try_new(
         source: Range<u32>,

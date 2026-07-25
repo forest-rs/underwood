@@ -60,6 +60,10 @@ impl ParleyParagraphEngine {
 }
 
 impl ParagraphFormation for ParleyParagraphEngine {
+    fn shared_preparation_epoch(&self) -> Option<u64> {
+        Some(0)
+    }
+
     fn form(
         &mut self,
         input: ParagraphInput<'_>,

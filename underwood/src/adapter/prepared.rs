@@ -333,14 +333,23 @@ impl PreparedLine {
     }
 }
 
-/// Validated owned formed lines for one paragraph.
-#[derive(Clone, Debug)]
-pub struct PreparedParagraph {
-    paragraph: ParagraphId,
+#[derive(Debug)]
+pub(crate) struct PreparedParagraphFacts {
     text_len: u32,
     resolved_direction: ResolvedDirection,
     lines: Vec<PreparedLine>,
     movements: Vec<PreparedCursorMovement>,
+}
+
+/// Validated owned formed lines for one paragraph.
+///
+/// The paragraph identity is a fresh envelope around immutable paragraph-local
+/// facts. This lets an eligible retained cache share exact preparation without
+/// sharing document or paragraph identity.
+#[derive(Clone, Debug)]
+pub struct PreparedParagraph {
+    paragraph: ParagraphId,
+    facts: Arc<PreparedParagraphFacts>,
 }
 
 impl PreparedParagraph {
@@ -433,11 +442,24 @@ impl PreparedParagraph {
         }
         Ok(Self {
             paragraph,
-            text_len,
-            resolved_direction,
-            lines,
-            movements,
+            facts: Arc::new(PreparedParagraphFacts {
+                text_len,
+                resolved_direction,
+                lines,
+                movements,
+            }),
         })
+    }
+
+    pub(crate) fn from_shared_facts(
+        paragraph: ParagraphId,
+        facts: Arc<PreparedParagraphFacts>,
+    ) -> Self {
+        Self { paragraph, facts }
+    }
+
+    pub(crate) fn shared_facts(&self) -> Arc<PreparedParagraphFacts> {
+        self.facts.clone()
     }
 
     /// Returns the paragraph identity.
@@ -448,27 +470,69 @@ impl PreparedParagraph {
 
     /// Returns the projected paragraph length in UTF-8 bytes.
     #[must_use]
-    pub const fn text_len(&self) -> u32 {
-        self.text_len
+    pub fn text_len(&self) -> u32 {
+        self.facts.text_len
     }
 
     /// Returns the base direction resolved by the backend's Unicode analysis.
     #[must_use]
-    pub const fn resolved_direction(&self) -> ResolvedDirection {
-        self.resolved_direction
+    pub fn resolved_direction(&self) -> ResolvedDirection {
+        self.facts.resolved_direction
     }
 
     /// Returns the source-ordered formed lines.
     #[must_use]
     pub fn lines(&self) -> &[PreparedLine] {
-        &self.lines
+        &self.facts.lines
     }
 
     /// Returns complete paragraph-local cursor transitions.
     #[must_use]
     pub fn movements(&self) -> &[PreparedCursorMovement] {
-        &self.movements
+        &self.facts.movements
     }
+}
+
+impl PreparedParagraphFacts {
+    pub(crate) fn estimated_owned_bytes(&self) -> usize {
+        let mut bytes = size_of::<Self>()
+            .saturating_add(vec_bytes::<PreparedLine>(self.lines.capacity()))
+            .saturating_add(vec_bytes::<PreparedCursorMovement>(
+                self.movements.capacity(),
+            ));
+        for line in &self.lines {
+            bytes = bytes
+                .saturating_add(vec_bytes::<PreparedInteractionUnit>(line.units.capacity()))
+                .saturating_add(vec_bytes::<PreparedRun>(line.runs.capacity()));
+            for unit in &line.units {
+                bytes = bytes.saturating_add(
+                    size_of::<PreparedInteractionSlice>().saturating_mul(unit.slice_capacity()),
+                );
+            }
+            for run in &line.runs {
+                bytes = bytes
+                    .saturating_add(vec_bytes::<i16>(run.normalized_coords.capacity()))
+                    .saturating_add(vec_bytes::<Range<u32>>(run.unrendered_source.capacity()))
+                    .saturating_add(vec_bytes::<PreparedGlyph>(run.glyphs.capacity()));
+                if let Some(evidence) = &run.synthesis.evidence {
+                    bytes = bytes
+                        .saturating_add(size_of::<FontSynthesisEvidence>())
+                        .saturating_add(vec_bytes::<FontVariation>(evidence.variations.capacity()));
+                }
+                for glyph in &run.glyphs {
+                    bytes = bytes.saturating_add(
+                        size_of::<GlyphPaintSegment>()
+                            .saturating_mul(glyph.paint.segment_capacity()),
+                    );
+                }
+            }
+        }
+        bytes
+    }
+}
+
+const fn vec_bytes<T>(capacity: usize) -> usize {
+    size_of::<T>().saturating_mul(capacity)
 }
 
 fn valid_step_source(step: &PreparedCursorStep, unit_sources: &[Range<u32>]) -> bool {

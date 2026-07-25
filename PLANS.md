@@ -113,13 +113,16 @@ toolkit behavior or pixel production.
   compositions, visual output, and PDF geometry together without repeating
   text physics. Measurements and exact limits are recorded in
   `docs/proof/line-adjustment-review-2026-07-25.md`.
-- Step 6 now has a matched before-state wind tunnel and a concrete cache
-  recommendation in `docs/design/0016-cross-identity-preparation-cache.md`.
+- Step 6 has a matched before-state wind tunnel and the approved cache from
+  `docs/design/0016-cross-identity-preparation-cache.md` is implemented.
   Design-0016 was approved on 2026-07-25. The owner is `LayoutEngine`; the value
   is immutable paragraph-local
   prepared facts; every consumer rebuilds identity-bound geometry; retention
   is a separately opt-in byte-budgeted LRU; backend participation is
-  default-off and epoch-scoped. Implementation is active.
+  default-off and epoch-scoped. Exact identity, invalidation, collision,
+  composition, region-rebinding, byte-budget, eviction, oversized-entry, and
+  release laws are protected. The measured result is recorded in
+  `docs/proof/cross-identity-preparation-cache-2026-07-25.md`.
 - Step 14 is tracked by `und-oh0.13.16`. The catch-all "physics" metaphor will
   be removed from live identifiers, rustdoc, and normative architecture rather
   than replaced by another vague umbrella term.

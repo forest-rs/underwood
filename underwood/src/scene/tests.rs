@@ -1,7 +1,8 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::{vec, vec::Vec};
+use alloc::{rc::Rc, vec, vec::Vec};
+use core::cell::Cell;
 
 use peniko::Blob;
 
@@ -359,6 +360,204 @@ impl ParagraphFormation for MismatchedEmptyRegionAdapter {
             transcript,
         ))
     }
+}
+
+#[derive(Debug)]
+struct SharedEligibilityAdapter {
+    calls: Rc<Cell<usize>>,
+    epoch: Rc<Cell<Option<u64>>>,
+}
+
+impl ParagraphFormation for SharedEligibilityAdapter {
+    fn shared_preparation_epoch(&self) -> Option<u64> {
+        self.epoch.get()
+    }
+
+    fn form(
+        &mut self,
+        input: ParagraphInput<'_>,
+        constraints: ParagraphConstraints,
+    ) -> Result<ParagraphFormationOutput, PreparationError> {
+        self.calls.set(self.calls.get().saturating_add(1));
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        }
+        .form(input, constraints)
+    }
+}
+
+#[test]
+fn backends_are_ineligible_for_cross_identity_reuse_by_default() {
+    let calls = Rc::new(Cell::new(0));
+    let epoch = Rc::new(Cell::new(None));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch,
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0001", "same");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0002", "same");
+
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("first document prepares");
+    let second_output = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("second document prepares");
+
+    assert_eq!(calls.get(), 2);
+    assert_eq!(second_output.work().shared_preparations(), 0);
+    let diagnostics = layout.cache_diagnostics();
+    assert_eq!(diagnostics.shared_preparation_entries(), 0);
+    assert_eq!(diagnostics.shared_preparation_hits(), 0);
+    assert_eq!(diagnostics.shared_preparation_misses(), 0);
+}
+
+#[test]
+fn eligible_backend_epoch_changes_invalidate_shared_preparation() {
+    let calls = Rc::new(Cell::new(0));
+    let epoch = Rc::new(Cell::new(Some(7)));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: epoch.clone(),
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0003", "same");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0004", "same");
+    let (third, third_styles, third_paint) = one_leaf_document(*b"scene-share-0005", "same");
+
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("first document prepares");
+    let shared = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("second document shares preparation");
+    assert_eq!(calls.get(), 1);
+    assert_eq!(shared.work().shared_preparations(), 1);
+
+    epoch.set(Some(8));
+    let invalidated = layout
+        .prepare(
+            &third.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint),
+        )
+        .expect("new epoch prepares fresh output");
+    assert_eq!(calls.get(), 2);
+    assert_eq!(invalidated.work().shared_preparations(), 0);
+    let diagnostics = layout.cache_diagnostics();
+    assert_eq!(diagnostics.shared_preparation_entries(), 1);
+    assert_eq!(diagnostics.shared_preparation_hits(), 1);
+    assert_eq!(diagnostics.shared_preparation_misses(), 2);
+}
+
+#[test]
+fn shared_hit_is_revalidated_against_the_current_projection() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls,
+            epoch: Rc::new(Cell::new(Some(1))),
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0006", "same");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0007", "same");
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("seed preparation succeeds");
+
+    let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
+    let poisoned = PreparedParagraph::try_new(
+        first.snapshot().paragraphs()[0].id,
+        0,
+        ResolvedDirection::Ltr,
+        [],
+        [PreparedCursorMovement::new(
+            position,
+            PreparedCaret::try_new(0, 0.0).expect("empty caret is valid"),
+            None,
+            None,
+            None,
+            None,
+        )],
+    )
+    .expect("empty prepared facts are internally valid");
+    layout.replace_first_shared_facts_for_test(poisoned.shared_facts());
+
+    let error = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect_err("poisoned shared facts must fail current-projection validation");
+    assert_eq!(error.kind(), SceneErrorKind::SourceCoverage);
+    assert_eq!(layout.cache_diagnostics().shared_preparation_hits(), 1);
+}
+
+#[test]
+fn fingerprint_collision_never_substitutes_a_nonmatching_key() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: Rc::new(Cell::new(Some(1))),
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0008", "aaaa");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0009", "bbbb");
+    let (third, third_styles, third_paint) = one_leaf_document(*b"scene-share-0010", "bbbb");
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("first key prepares");
+    layout.collide_shared_bucket_for_test("aaaa", "bbbb");
+
+    let collision_miss = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("nonmatching colliding key prepares");
+    assert_eq!(collision_miss.work().shared_preparations(), 0);
+    assert_eq!(calls.get(), 2);
+
+    let exact_hit = layout
+        .prepare(
+            &third.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint),
+        )
+        .expect("exact key after a colliding entry shares");
+    assert_eq!(exact_hit.work().shared_preparations(), 1);
+    assert_eq!(calls.get(), 2);
+    let diagnostics = layout.cache_diagnostics();
+    assert_eq!(diagnostics.shared_preparation_misses(), 2);
+    assert_eq!(diagnostics.shared_preparation_hits(), 1);
 }
 
 #[test]

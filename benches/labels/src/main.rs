@@ -16,6 +16,7 @@ use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 const LABELS: usize = 2_048;
 const CHURN_BUDGET: usize = 64;
+const SHARED_PREPARATION_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
@@ -24,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|retained-identical|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|shared-hit|retained-identical|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -347,6 +348,7 @@ fn run_profile(
         "setup-cross-distinct" | "x2" => {
             profile_setup_cross_identity("setup-cross-distinct", rounds, labels, true)
         }
+        "setup-shared-hit" | "y0" => profile_setup_shared_hit(rounds, labels, &style, &paint),
         "primed-identical" | "p0" => {
             profile_primed_identical("primed-identical", rounds, labels, &style, &paint, false)
         }
@@ -365,6 +367,7 @@ fn run_profile(
         "cross-distinct" | "x3" => {
             profile_cross_identity("cross-distinct", rounds, labels, &style, &paint, true)
         }
+        "shared-hit" | "y1" => profile_shared_hit(rounds, labels, &style, &paint),
         "retained-identical" | "r0" => profile_retained_identical(rounds, labels, &style, &paint),
         "retained-adjustment" | "r1" => profile_retained_adjustment(rounds, labels, &style, &paint),
         "paint-change" | "a0" => profile_paint_change(rounds, labels, &style, &paint),
@@ -545,10 +548,112 @@ fn profile_setup_cross_identity(
     };
     let layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
     );
     black_box((&labels, &layout));
     report_profile(name, rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_setup_shared_hit(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if label_count < 2 {
+        return Err("shared-hit scenarios require at least two labels".into());
+    }
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
+    );
+    for _ in 0..rounds {
+        layout.clear_cache();
+        layout.prepare_block(
+            &labels[0].snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    black_box((&labels, &layout));
+    report_profile("setup-shared-hit", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_shared_hit(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if label_count < 2 {
+        return Err("shared-hit scenarios require at least two labels".into());
+    }
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
+    );
+    let mut elapsed = Duration::ZERO;
+    for _ in 0..rounds {
+        layout.clear_cache();
+        let seed = layout.prepare_block(
+            &labels[0].snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+        assert_eq!(
+            seed.work().shape().paragraphs(),
+            1,
+            "each cleared round must seed one fresh prepared value"
+        );
+        elapsed += measure(|| {
+            for label in &labels[1..] {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("eligible identical identity must share preparation");
+                assert_eq!(
+                    output.work().shared_preparations(),
+                    1,
+                    "every non-seed identical identity must hit shared preparation"
+                );
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    0,
+                    "a shared hit must perform no canonical shaping"
+                );
+                assert_eq!(
+                    output.work().flow().paragraphs(),
+                    0,
+                    "a shared hit must perform no line formation"
+                );
+                assert_eq!(
+                    output.work().geometry().paragraphs(),
+                    1,
+                    "each consumer must still build its own geometry"
+                );
+                black_box(output.scene().metrics());
+            }
+        });
+    }
+    let operations = rounds
+        .checked_mul(label_count - 1)
+        .ok_or("shared-hit operation count overflowed")?;
+    report("shared-hit", operations, elapsed);
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        let cache = layout.cache_diagnostics();
+        println!(
+            "shared-hit_work\toperations={operations}\thits={}\tmisses={}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
+            cache.shared_preparation_hits(),
+            cache.shared_preparation_misses(),
+            cache.shared_preparation_entries(),
+            cache.shared_preparation_resident_bytes(),
+            cache.shared_preparation_peak_bytes()
+        );
+    }
     Ok(())
 }
 
@@ -696,11 +801,12 @@ fn profile_cross_identity(
     };
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
     );
     let mut analyzed = 0_usize;
     let mut shaped = 0_usize;
     let mut formed = 0_usize;
+    let mut shared = 0_usize;
     let elapsed = measure(|| {
         for _ in 0..rounds {
             layout.clear_cache();
@@ -714,6 +820,7 @@ fn profile_cross_identity(
                 analyzed += output.work().analysis().paragraphs();
                 shaped += output.work().shape().paragraphs();
                 formed += output.work().flow().paragraphs();
+                shared += output.work().shared_preparations();
                 black_box(output.scene().metrics());
             }
         }
@@ -721,29 +828,27 @@ fn profile_cross_identity(
     let operations = rounds
         .checked_mul(label_count)
         .ok_or("cross-identity operation count overflowed")?;
-    assert!(
-        analyzed > 0 && analyzed <= operations,
-        "the workload must observe a bounded amount of real analysis"
-    );
-    assert!(
-        shaped > 0 && shaped <= operations,
-        "the workload must observe a bounded amount of real shaping"
-    );
-    assert!(
-        formed > 0 && formed <= operations,
-        "the workload must observe a bounded amount of real formation"
-    );
     if distinct_text {
         assert_eq!(
-            (analyzed, shaped, formed),
-            (operations, operations, operations),
+            (analyzed, shaped, formed, shared),
+            (operations, operations, operations, 0),
             "distinct text must not cross-reuse preparation"
+        );
+    } else {
+        assert_eq!(
+            (analyzed, shaped, formed, shared),
+            (rounds, rounds, rounds, operations.saturating_sub(rounds)),
+            "each cleared identical round must prepare once and share every remaining identity"
         );
     }
     report_profile(name, rounds, label_count, elapsed);
     if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        let cache = layout.cache_diagnostics();
         println!(
-            "{name}_work\toperations={operations}\tanalyzed={analyzed}\tshaped={shaped}\tformed={formed}"
+            "{name}_work\toperations={operations}\tanalyzed={analyzed}\tshaped={shaped}\tformed={formed}\tshared={shared}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
+            cache.shared_preparation_entries(),
+            cache.shared_preparation_resident_bytes(),
+            cache.shared_preparation_peak_bytes()
         );
     }
     Ok(())

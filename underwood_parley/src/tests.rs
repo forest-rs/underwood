@@ -21,10 +21,10 @@ use underwood::{
     EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
     InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, OverflowWrap, PaintSlot, PaintTable,
     ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, Rect,
-    RegionAttemptOutcome, ResolvedDirection, SceneRequest, SelectionErrorKind, ShapingStyle,
-    SnapshotTextUnit, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextBlock,
-    TextConstraint, TextMovement, TextScene, TextSelectionMode, TextSpacing, TextWrapMode, Vec2,
-    WhitespaceCollapse, WordBreak,
+    RegionAttemptOutcome, RegionFlow, ResolvedDirection, SceneRequest, SelectionErrorKind,
+    ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity,
+    TextBlock, TextConstraint, TextMovement, TextScene, TextSelectionMode, TextSpacing,
+    TextWrapMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 use underwood::{Language, Script};
 
@@ -240,6 +240,10 @@ fn fixture_engine() -> LayoutEngine {
 }
 
 fn fixture_engine_with_budget(budget: usize) -> LayoutEngine {
+    fixture_engine_with_budgets(budget, 0)
+}
+
+fn fixture_engine_with_budgets(budget: usize, shared_preparation_bytes: usize) -> LayoutEngine {
     let fonts = FontSet::try_from_fonts([
         Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
         Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
@@ -247,7 +251,10 @@ fn fixture_engine_with_budget(budget: usize) -> LayoutEngine {
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
     .expect("Arabic fallback is valid");
-    LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(budget))
+    LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(budget).with_shared_preparation_bytes(shared_preparation_bytes),
+    )
 }
 
 fn fixture_document(text: &str, line_height: f32) -> (Document, StyleMap, PaintTable) {

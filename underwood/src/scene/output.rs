@@ -197,6 +197,7 @@ pub struct WorkReport {
     pub(super) rejected_line_candidates: u32,
     pub(super) line_checkpoint_restores: u32,
     pub(super) reused_paragraphs: usize,
+    pub(super) shared_preparations: usize,
 }
 
 impl WorkReport {
@@ -295,5 +296,12 @@ impl WorkReport {
     #[must_use]
     pub const fn reused_paragraphs(&self) -> usize {
         self.reused_paragraphs
+    }
+
+    /// Returns paragraphs whose identity-free prepared facts were shared from
+    /// another consumer.
+    #[must_use]
+    pub const fn shared_preparations(&self) -> usize {
+        self.shared_preparations
     }
 }

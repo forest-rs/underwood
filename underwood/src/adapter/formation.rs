@@ -17,12 +17,23 @@ pub trait ParagraphFormation {
         constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, PreparationError>;
 
-    /// Releases retained physics for one paragraph identity.
+    /// Declares eligibility for exact cross-identity prepared-fact reuse.
+    ///
+    /// `None` is the safe default and disables sharing. `Some(epoch)` promises
+    /// that prepared facts depend only on non-identity formation inputs,
+    /// constraints, and the returned epoch. The epoch must change before any
+    /// hidden font, text-data, or backend resource can change prepared output.
+    #[must_use]
+    fn shared_preparation_epoch(&self) -> Option<u64> {
+        None
+    }
+
+    /// Releases retained preparation for one paragraph identity.
     ///
     /// Stateless implementations may keep the default no-op behavior.
     fn release(&mut self, _paragraph: ParagraphId) {}
 
-    /// Releases all retained paragraph physics.
+    /// Releases all retained paragraph preparation.
     ///
     /// Stateless implementations may keep the default no-op behavior.
     fn clear(&mut self) {}

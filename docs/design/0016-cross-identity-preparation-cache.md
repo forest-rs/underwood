@@ -330,3 +330,17 @@ Approval of this note freezes:
 
 It does not approve a new dependency, `unsafe`, sharing final scenes, or a
 backend-private cache. Those remain out of scope.
+
+## Implementation
+
+Implemented on 2026-07-25. `LayoutEngine` owns an exact-key,
+backend-epoch-scoped shared cache in `scene/shared_cache.rs`.
+`PreparedParagraph` is now a fresh paragraph envelope over immutable
+reference-counted facts, and cached region attempts are rebound into a fresh
+public transcript. The public budget, diagnostics, and work-report additions
+follow this design without changing the existing default: a zero shared byte
+budget disables the cache.
+
+The executable correctness matrix and measured before/after result are
+recorded in
+`docs/proof/cross-identity-preparation-cache-2026-07-25.md`.
