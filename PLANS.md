@@ -232,6 +232,13 @@ it does not use layout as an editing prerequisite.
 8. Publish preparation trace and memory accounting against this lifecycle,
    then finish the region-aware living page and final campaign review.
 
+The proposed representation and public migration are recorded in
+`docs/design/0017-retained-scene-lifecycle.md`. It chooses immutable
+provenance-qualified preflight keys plus a persistent summary tree of
+paragraph-local scene segments. Flat slice traversal is deliberately replaced
+by positioned views because keeping already-translated, revision-stamped
+contiguous records would preserve the document-wide copy under another name.
+
 ### Risks and controls
 
 - **Architecture without product:** whitespace collapse and the living page are
