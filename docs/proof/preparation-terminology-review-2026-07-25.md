@@ -30,23 +30,24 @@ diagnostic-label, and documentation migration.
 
 ## Historical exception
 
-A case-insensitive repository search has only two remaining matches outside
-Beads history. They are the exact former private symbol spellings quoted in
-`docs/proof/retained-shaped-text-benchmark-2026-07-22.md`, which identifies the
-before-state types measured by that historical benchmark.
+Current Rust, normative architecture, proof prose, examples, benchmarks, and
+diagnostics contain no use of the retired metaphor. The older benchmark now
+describes its before-state structurally rather than repeating former private
+symbol spellings.
 
-Rewriting those symbols as though they had different source names would falsify
-the old measurement. They are neither live identifiers nor current
-architectural vocabulary. Current designs contain no occurrence.
+Append-only Beads history retains older discussion written before this
+migration. Those records are historical audit evidence, not live API,
+architecture, or project vocabulary.
 
 ## Validation
 
-The blocking search is:
+The blocking search for live Rust is:
 
 ```sh
 test -z "$(rg -il 'phys''ics' --glob '*.rs' --glob '!target/**')"
 ```
 
-Repository-wide matches must remain limited to the one historical evidence
-file above. Formatting, all-target/all-feature Clippy with warnings denied,
-workspace tests, rustdoc, and repository policy protect the renamed live code.
+Normative docs and proof prose are also reviewed with a repository-wide search
+excluding append-only Beads history. Formatting, all-target/all-feature Clippy
+with warnings denied, workspace tests, rustdoc, and repository policy protect
+the renamed live code.

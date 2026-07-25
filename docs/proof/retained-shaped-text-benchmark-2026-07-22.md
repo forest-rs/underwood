@@ -3,8 +3,8 @@
 ## Scope
 
 This measurement checks the real public semantic-to-scene path after replacing
-`underwood_parley`'s callback-time `PhysicsRun`/`PhysicsGlyph` copy with one
-reusable upstream `parley_core::ShapedText` per paragraph. The benchmark owns no
+`underwood_parley`'s former callback-time run/glyph copy with one reusable
+upstream `parley_core::ShapedText` per paragraph. The benchmark owns no
 alternate shaping or layout implementation. Its five workloads execute the
 same 64-paragraph Latin/Arabic document through `Document`, `LayoutEngine`,
 `ParleyParagraphEngine`, and `TextScene` while asserting exact `WorkReport`

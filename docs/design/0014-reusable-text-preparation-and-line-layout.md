@@ -651,3 +651,60 @@ The campaign is complete when:
   unbounded cache is introduced;
 - all local and protected remote gates are green and proof records name every
   remaining limitation.
+
+## Migration note
+
+This campaign intentionally changes the draft public preparation contract:
+
+- `LineHeight::from_multiplier(multiplier)` and `LineHeight::multiplier()` become
+  `LineHeight::{metrics_relative, font_size_relative, absolute}` plus
+  `basis()`, `value()`, and `resolve()`. Callers must choose the authored
+  basis; the old multiplier maps to `font_size_relative`.
+- Paragraph backends receive analysis style/runs separately from shaping and
+  publish `ResolvedDirection` through `PreparedParagraph::try_new`. External
+  `ParagraphFormation` implementations must thread the direction chosen by
+  their Unicode analysis.
+- `ParagraphStyle` gains whitespace-collapse and alignment values;
+  `ComputedInlineStyle` gains the independently invalidated `AnalysisStyle`;
+  existing constructors retain the previous preserve/start/normal defaults.
+- `SceneRequest` and `BlockRequest` gain optional region-flow and preparation
+  trace configuration. Existing finite-width rectangle callers require no
+  change.
+- `TextBlock` gains calm text, leaf-identity, and selection-replacement
+  operations; `TextScene` gains scene endpoints, exact represented-caret
+  resolution, and logical word movement. These additions do not introduce a
+  second editing model.
+
+Downstream adapters should update as one source change: split computed style
+into analysis/shaping/inline-flow/paint partitions, pass resolved paragraph
+direction when constructing prepared facts, and retain prepared outputs rather
+than preparing stable labels every frame.
+
+## Implementation outcome — 2026-07-25
+
+The approved design is implemented through one public preparation path. The
+path now composes source-complete projected text, Parley Engine analysis and
+shaping, reusable candidate formation, exact region slots, accepted-line
+adjustment, portable scene records, interaction, and renderer adapters.
+
+The completion evidence is indexed by
+`docs/proof/reusable-text-tools-campaign-review-2026-07-25.md`. In particular:
+
+- preserved and collapsed whitespace retain exact authored provenance;
+- candidate formation is reversible and independently exercised;
+- rectangles, exclusions, floats, columns, and off-page continuation use one
+  replayable slot protocol;
+- computed line height, spacing, wrapping, direction, alignment, and honest
+  Western justification invalidate their owning stages;
+- identical elements may share budgeted identity-free preparation while
+  revisions, semantics, interaction, paint, and placement are rebound;
+- editable blocks, shared font catalogs, CJK line breaking, and preparation
+  traces have named executable or measured proof;
+- the region-aware living page and PDF proof consume the same portable output;
+- foundational crates remain `no_std + alloc`, Rust 1.88 compatible, and free
+  of high-level Parley and new `unsafe`.
+
+This outcome does not silently widen the design. Complete CSS Text semantics
+remain `und-oh0.13.15`; O(change) document and scene publication remains
+`und-oh0.13.17`; Arabic and CJK justification, mixed-bidi PDF viewer
+conformance, and pixel snapping retain separate claims and follow-ups.

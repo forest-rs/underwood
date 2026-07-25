@@ -170,6 +170,13 @@ toolkit behavior or pixel production.
   baseline and proposed correction now live in the sibling campaign
   `und-oh0.13.17`; they do not extend this campaign's finish line. The
   preparation trace remains neutral before-state evidence for that later work.
+- Step 15 has completed local adversarial review. The Must findings—finite
+  visible-region exhaustion, language-mismatched Han proof fonts, stale
+  migration/proof wording, and the last current proof-prose use of the retired
+  preparation metaphor—are resolved. The aggregate measured judgment and
+  exact non-claims are recorded in
+  `docs/proof/reusable-text-tools-campaign-review-2026-07-25.md`. Protected
+  remote checks remain the final landing gate.
 
 ### Risks and controls
 

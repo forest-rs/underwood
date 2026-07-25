@@ -182,14 +182,28 @@ If Option C is accepted:
 
 ## Migration
 
-Pending evidence and public API design. Existing `TextBlock`, document
-preparation, and scene consumers must retain a calm façade and receive a
-source-level migration note for any changed paragraph style or region request.
+The migration is complete. Existing `TextBlock` and document callers retain a
+calm façade while the public request surface now carries computed paragraph
+policy and optional `RegionFlow`. Rectangle preparation remains the ordinary
+path; advanced callers may supply exact slots without constructing projection,
+shaping, or line-formation internals.
+
+The source-level changes and their replacements are recorded in
+Design-0014's migration note. No high-level Parley type entered the public or
+production dependency surface.
 
 ## Proof impact
 
-This decision will update `style-projection`, `paragraph-formation`,
+The migration updates `style-projection`, `paragraph-formation`,
 `layout-scene`, `exact-text-interaction`, and
-`retained-text-block-intrinsics`. New ledger capabilities will cover projected
-text, reusable line formation, region filling, line adjustment, CJK breaking,
-and preparation tracing when executable evidence exists.
+`retained-text-block-intrinsics`. The proof ledger now names measured
+`projected-text`, `reusable-line-formation`, `region-flow`,
+`line-adjustment`, `cross-identity-text-reuse`, and `preparation-trace`
+capabilities, plus executable computed-policy, CJK, font-catalog, and editable
+block evidence.
+
+The aggregate campaign review is
+`docs/proof/reusable-text-tools-campaign-review-2026-07-25.md`. It deliberately
+does not claim complete CSS Text semantics, script-independent justification,
+mixed-bidi PDF extraction conformance, pixel snapping, or O(change) scene
+publication.
