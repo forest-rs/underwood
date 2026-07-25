@@ -10,13 +10,13 @@ use alloc::vec::Vec;
 use core::ops::Range;
 
 use crate::adapter::{
-    FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId, LineBreakReason, PaintRun,
-    ParagraphConstraints, ParagraphFormation, ParagraphInput, PreparationErrorKind,
-    PreparedParagraph, ShapingRun, ShapingStyleId, TextAffinity,
+    AnalysisRun, AnalysisStyleId, FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId,
+    LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphInput,
+    PreparationErrorKind, PreparedParagraph, ShapingRun, ShapingStyleId, TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{
-    Affine, BlockRequest, CompositionError, CompositionErrorKind, CompositionId,
+    Affine, AnalysisStyle, BlockRequest, CompositionError, CompositionErrorKind, CompositionId,
     CompositionSession, CompositionStart, DocumentRevision, DocumentSnapshot, FontData,
     InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole, ParagraphStyle,
     Point, ProjectedText as TextProjection, ProjectionKind, ProjectionSegment, Rect, SceneError,
@@ -51,7 +51,7 @@ use interaction::{
 use projection::*;
 
 #[cfg(test)]
-use projection::{append_inline_flow_run, append_shaping_run};
+use projection::{append_analysis_run, append_inline_flow_run, append_shaping_run};
 
 #[cfg(test)]
 mod tests;

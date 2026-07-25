@@ -82,6 +82,61 @@ fn paragraph_style_direction_invalidates_analysis_and_reaches_the_scene() {
 }
 
 #[test]
+fn word_break_is_range_projected_and_invalidates_from_analysis() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"word-break-test1"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    edit.append_text(paragraph, InlineRole::TEXT, "abcd")
+        .expect("first fixture leaf is valid");
+    let breakable = edit
+        .append_text(paragraph, InlineRole::EMPHASIS, "efgh")
+        .expect("second fixture leaf is valid");
+    edit.commit().expect("fixture edit is valid");
+    let normal = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let normal_styles = StyleMap::new(normal.clone());
+    let mut break_all_styles = StyleMap::new(normal.clone());
+    break_all_styles.set(
+        breakable,
+        normal.with_analysis(AnalysisStyle::new(WordBreak::BreakAll)),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let constraint = TextConstraint::Wrap(FiniteWidth::new(24.0).expect("fixture width is valid"));
+    let mut engine = fixture_engine();
+
+    let normal = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &normal_styles, &paint),
+        )
+        .expect("normal word breaking prepares");
+    assert_eq!(
+        normal.scene().lines().len(),
+        1,
+        "an ordinary Latin word has no internal soft wrap opportunity"
+    );
+
+    let broken = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &break_all_styles, &paint),
+        )
+        .expect("break-all word breaking prepares");
+    assert_eq!(broken.work().analysis().paragraphs(), 1);
+    assert_eq!(broken.work().shape().paragraphs(), 1);
+    assert!(
+        broken.scene().lines().len() > 1,
+        "the leaf-local analysis run must expose break-all opportunities"
+    );
+}
+
+#[test]
 fn big_endian_readers_reject_short_input() {
     assert_eq!(read_u16(&[0x12, 0x34], 0), Some(0x1234));
     assert_eq!(read_u16(&[0x12], 0), None);

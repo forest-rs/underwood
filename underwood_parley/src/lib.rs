@@ -15,6 +15,7 @@ mod line_break;
 mod line_former;
 mod lowering;
 mod shaping;
+mod spacing;
 mod validation;
 
 pub use engine::ParleyParagraphEngine;

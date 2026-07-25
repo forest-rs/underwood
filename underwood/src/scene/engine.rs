@@ -518,6 +518,8 @@ fn prepare_paragraph_geometry(
             paragraph.id,
             projection.paragraph_style,
             projection.mapping.text(),
+            &projection.analysis_styles,
+            &projection.analysis_runs,
             &shaping_styles,
             &projection.shaping_runs,
             &projection.inline_flow_styles,
@@ -558,6 +560,8 @@ fn prepare_paragraph_geometry(
     let formation_key = FormationKey::new(
         paragraph.version,
         alloc::string::String::from(projection.mapping.text()),
+        projection.analysis_styles.clone(),
+        projection.analysis_runs.clone(),
         shaping_styles,
         projection.shaping_runs.clone(),
         projection.inline_flow_styles.clone(),
@@ -608,6 +612,8 @@ struct FormationKey {
     version: u64,
     text: alloc::string::String,
     source_map: Vec<ProjectionSourceKey>,
+    analysis_styles: Vec<AnalysisStyle>,
+    analysis_runs: Vec<AnalysisRun>,
     shaping_styles: Vec<ShapingStyle>,
     shaping_runs: Vec<ShapingRun>,
     inline_flow_styles: Vec<InlineFlowStyle>,
@@ -621,6 +627,8 @@ impl FormationKey {
     fn new(
         version: u64,
         text: alloc::string::String,
+        analysis_styles: Vec<AnalysisStyle>,
+        analysis_runs: Vec<AnalysisRun>,
         shaping_styles: Vec<ShapingStyle>,
         shaping_runs: Vec<ShapingRun>,
         inline_flow_styles: Vec<InlineFlowStyle>,
@@ -634,6 +642,8 @@ impl FormationKey {
             version,
             text,
             source_map: ProjectionSourceKey::from_projection(projection),
+            analysis_styles,
+            analysis_runs,
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
@@ -653,6 +663,8 @@ impl FormationKey {
         self.version == version
             && self.text == projection.mapping.text()
             && self.source_map == ProjectionSourceKey::from_projection(projection)
+            && self.analysis_styles == projection.analysis_styles
+            && self.analysis_runs == projection.analysis_runs
             && self.shaping_styles.len() == projection.shaping_styles.len()
             && self
                 .shaping_styles

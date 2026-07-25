@@ -5,7 +5,9 @@ use alloc::{vec, vec::Vec};
 
 use peniko::Blob;
 
-use super::{CacheBudget, LayoutEngine, append_inline_flow_run, append_shaping_run};
+use super::{
+    CacheBudget, LayoutEngine, append_analysis_run, append_inline_flow_run, append_shaping_run,
+};
 use crate::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
@@ -15,14 +17,14 @@ use crate::adapter::{
     PreparedRun, TextAffinity,
 };
 use crate::{
-    BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind, CompositionErrorKind,
-    CompositionId, CompositionSession, CompositionUpdate, ComputedInlineStyle, Document,
-    DocumentId, EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily,
-    InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, Point,
-    ProjectedTextSource, Rect, SceneErrorKind, SceneRequest, ShapingStyle, SnapshotTextPosition,
-    SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind,
-    SurfaceTextEncoding, TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2,
-    WhitespaceCollapse,
+    AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
+    CompositionErrorKind, CompositionId, CompositionSession, CompositionUpdate,
+    ComputedInlineStyle, Document, DocumentId, EditableSurface, EditableSurfaceElement,
+    FiniteWidth, FontData, FontFamily, InlineFlowStyle, InlineRole, PaintSlot, PaintTable,
+    ParagraphRole, ParagraphStyle, Point, ProjectedTextSource, Rect, SceneErrorKind, SceneRequest,
+    ShapingStyle, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+    SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextConstraint,
+    TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 
 #[derive(Debug)]
@@ -120,12 +122,11 @@ impl ParagraphFormation for EchoAdapter {
             glyphs,
         )?;
         let font_size = input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size();
-        let line_height = f64::from(font_size)
-            * f64::from(
-                input.inline_flow_styles()[input.inline_flow_runs()[0].style().index()]
-                    .line_height()
-                    .multiplier(),
-            );
+        let line_height = f64::from(
+            input.inline_flow_styles()[input.inline_flow_runs()[0].style().index()]
+                .line_height()
+                .resolve(font_size, font_size),
+        );
         let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
         let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
         let units = if self.split_paint {
@@ -695,6 +696,39 @@ fn paragraph_projection_interns_repeated_style_partitions() {
     let paragraph = document.snapshot().paragraphs()[0].id;
     let first = ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style is valid");
     let second = ShapingStyle::new(FontFamily::named("Test"), 24.).expect("test style is valid");
+    let normal = AnalysisStyle::default();
+    let keep_all = AnalysisStyle::new(WordBreak::KeepAll);
+    let mut analysis_styles = Vec::new();
+    let mut analysis_runs = Vec::new();
+    append_analysis_run(
+        &mut analysis_styles,
+        &mut analysis_runs,
+        0..1,
+        normal,
+        paragraph,
+    )
+    .expect("first analysis style must intern");
+    append_analysis_run(
+        &mut analysis_styles,
+        &mut analysis_runs,
+        1..2,
+        keep_all,
+        paragraph,
+    )
+    .expect("second analysis style must intern");
+    append_analysis_run(
+        &mut analysis_styles,
+        &mut analysis_runs,
+        2..3,
+        normal,
+        paragraph,
+    )
+    .expect("repeated analysis style must intern");
+    assert_eq!(analysis_styles, [normal, keep_all]);
+    assert_eq!(analysis_runs[0].style().index(), 0);
+    assert_eq!(analysis_runs[1].style().index(), 1);
+    assert_eq!(analysis_runs[2].style().index(), 0);
+
     let mut shaping_styles = Vec::new();
     let mut shaping_runs = Vec::new();
     append_shaping_run(

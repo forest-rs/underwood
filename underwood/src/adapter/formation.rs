@@ -40,6 +40,8 @@ pub struct ParagraphInput<'a> {
     paragraph: ParagraphId,
     paragraph_style: ParagraphStyle,
     text: &'a str,
+    analysis_styles: &'a [AnalysisStyle],
+    analysis_runs: &'a [AnalysisRun],
     shaping_styles: &'a [ShapingStyle],
     shaping_runs: &'a [ShapingRun],
     inline_flow_styles: &'a [InlineFlowStyle],
@@ -52,6 +54,8 @@ impl<'a> ParagraphInput<'a> {
         paragraph: ParagraphId,
         paragraph_style: ParagraphStyle,
         text: &'a str,
+        analysis_styles: &'a [AnalysisStyle],
+        analysis_runs: &'a [AnalysisRun],
         shaping_styles: &'a [ShapingStyle],
         shaping_runs: &'a [ShapingRun],
         inline_flow_styles: &'a [InlineFlowStyle],
@@ -62,12 +66,26 @@ impl<'a> ParagraphInput<'a> {
             paragraph,
             paragraph_style,
             text,
+            analysis_styles,
+            analysis_runs,
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
             inline_flow_runs,
             paint_runs,
         }
+    }
+
+    /// Returns the paragraph-local table of unique Unicode-analysis values.
+    #[must_use]
+    pub const fn analysis_styles(&self) -> &[AnalysisStyle] {
+        self.analysis_styles
+    }
+
+    /// Returns source-ordered Unicode-analysis metadata covering the paragraph.
+    #[must_use]
+    pub const fn analysis_runs(&self) -> &[AnalysisRun] {
+        self.analysis_runs
     }
 
     /// Returns the paragraph-local table of unique shaping values.
@@ -134,6 +152,47 @@ impl ParagraphConstraints {
     #[must_use]
     pub const fn text(self) -> TextConstraint {
         self.text
+    }
+}
+
+/// Dense paragraph-local identity for one entry in the analysis-style table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnalysisStyleId(u16);
+
+impl AnalysisStyleId {
+    pub(crate) const fn new(index: u16) -> Self {
+        Self(index)
+    }
+
+    /// Returns the paragraph-local table index.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Complete Unicode-analysis values over a paragraph-local UTF-8 byte range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalysisRun {
+    bytes: Range<u32>,
+    style: AnalysisStyleId,
+}
+
+impl AnalysisRun {
+    pub(crate) const fn new(bytes: Range<u32>, style: AnalysisStyleId) -> Self {
+        Self { bytes, style }
+    }
+
+    /// Returns the paragraph-local UTF-8 byte range.
+    #[must_use]
+    pub fn bytes(&self) -> Range<u32> {
+        self.bytes.clone()
+    }
+
+    /// Returns the paragraph-local analysis-style identity for this range.
+    #[must_use]
+    pub const fn style(&self) -> AnalysisStyleId {
+        self.style
     }
 }
 

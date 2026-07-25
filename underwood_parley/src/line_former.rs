@@ -22,6 +22,9 @@ pub(crate) struct LogicalCluster {
     pub(crate) source_char: char,
     pub(crate) whitespace: Whitespace,
     pub(crate) ligature_component: bool,
+    pub(crate) allows_soft_wrap: bool,
+    pub(crate) allows_emergency_wrap: bool,
+    pub(crate) emergency_affects_min_content: bool,
     pub(crate) advance: f64,
 }
 
@@ -269,10 +272,10 @@ impl<'a> LineFormer<'a> {
         if candidate.start != self.cursor || candidate.end > self.clusters.len() {
             return Err(LineFormerError::State);
         }
-        let Some(end) = (candidate.start + 1..candidate.end)
-            .rev()
-            .find(|&index| is_legal_boundary(&self.clusters[index]))
-        else {
+        let Some(end) = (candidate.start + 1..candidate.end).rev().find(|&index| {
+            is_soft_boundary(&self.clusters[index])
+                || is_emergency_boundary(&self.clusters[index], self.constraint)
+        }) else {
             return Ok(None);
         };
         let canonical_advance = self.clusters[candidate.start..end]
@@ -297,8 +300,18 @@ fn valid_limit(value: Option<f64>) -> bool {
     value.is_none_or(|value| value.is_finite() && value > 0.0)
 }
 
-fn is_legal_boundary(cluster: &LogicalCluster) -> bool {
-    cluster.boundary == Boundary::Line && !cluster.ligature_component
+fn is_soft_boundary(cluster: &LogicalCluster) -> bool {
+    cluster.allows_soft_wrap && cluster.boundary == Boundary::Line && !cluster.ligature_component
+}
+
+fn is_emergency_boundary(cluster: &LogicalCluster, constraint: FormationConstraint) -> bool {
+    !cluster.ligature_component
+        && cluster.allows_emergency_wrap
+        && match constraint {
+            FormationConstraint::Wrap(_) => true,
+            FormationConstraint::MinContent => cluster.emergency_affects_min_content,
+            FormationConstraint::MaxContent => false,
+        }
 }
 
 fn choose_candidate(
@@ -320,8 +333,10 @@ fn choose_candidate(
         {
             return Err(LineFormerError::Facts);
         }
-        if is_legal_boundary(cluster) && index > start {
-            if constraint == FormationConstraint::MinContent {
+        if index > start {
+            let soft = is_soft_boundary(cluster);
+            let emergency = is_emergency_boundary(cluster, constraint);
+            if constraint == FormationConstraint::MinContent && (soft || emergency) {
                 return Ok(make_candidate(
                     clusters,
                     start,
@@ -330,12 +345,34 @@ fn choose_candidate(
                     advance,
                 ));
             }
-            if matches!(constraint, FormationConstraint::Wrap(_)) {
+            if matches!(constraint, FormationConstraint::Wrap(_)) && soft {
                 last_opportunity = Some((index, advance));
             }
         }
 
         let next_advance = advance + cluster.advance;
+        if matches!(constraint, FormationConstraint::Wrap(width) if next_advance > width)
+            && index > start
+        {
+            if let Some((end, opportunity_advance)) = last_opportunity {
+                return Ok(make_candidate(
+                    clusters,
+                    start,
+                    end,
+                    CandidateBreak::Regular,
+                    opportunity_advance,
+                ));
+            }
+            if is_emergency_boundary(cluster, constraint) {
+                return Ok(make_candidate(
+                    clusters,
+                    start,
+                    index,
+                    CandidateBreak::Regular,
+                    advance,
+                ));
+            }
+        }
         if cluster.whitespace == Whitespace::Newline {
             advance = next_advance;
             index += 1;
@@ -355,17 +392,6 @@ fn choose_candidate(
             ));
         }
 
-        if matches!(constraint, FormationConstraint::Wrap(width) if next_advance > width)
-            && let Some((end, opportunity_advance)) = last_opportunity
-        {
-            return Ok(make_candidate(
-                clusters,
-                start,
-                end,
-                CandidateBreak::Regular,
-                opportunity_advance,
-            ));
-        }
         advance = next_advance;
         index += 1;
     }

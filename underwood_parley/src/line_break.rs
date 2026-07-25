@@ -12,7 +12,7 @@ use core::ops::Range;
 
 use parley_engine::ShapedText;
 use underwood::adapter::{InlineFlowRun, LineBreakReason, ParagraphConstraints, PreparationError};
-use underwood::{InlineFlowStyle, TextConstraint};
+use underwood::{InlineFlowStyle, OverflowWrap, TextConstraint, TextWrapMode};
 
 use crate::line_former::{
     CandidateBreak, CommitOutcome, FormationConstraint, LineCandidate, LineFormer, LineFormerError,
@@ -358,6 +358,9 @@ pub(crate) fn collect_logical_clusters(
                 source_char: cluster.info.source_char(),
                 whitespace: cluster.info.whitespace(),
                 ligature_component: cluster.is_ligature_component(),
+                allows_soft_wrap: true,
+                allows_emergency_wrap: false,
+                emergency_affects_min_content: false,
                 advance: f64::from(cluster.advance),
             });
         }
@@ -366,6 +369,44 @@ pub(crate) fn collect_logical_clusters(
         return Err(PreparationError::invalid_output());
     }
     Ok(clusters)
+}
+
+pub(crate) fn apply_wrap_policy(
+    clusters: &mut [LogicalCluster],
+    styles: &[InlineFlowStyle],
+    runs: &[InlineFlowRun],
+) -> Result<(), PreparationError> {
+    for cluster in clusters {
+        let style = inline_flow_style_at(cluster.source.start, styles, runs)?;
+        cluster.allows_soft_wrap = style.text_wrap_mode() == TextWrapMode::Wrap;
+        cluster.allows_emergency_wrap = cluster.allows_soft_wrap
+            && matches!(
+                style.overflow_wrap(),
+                OverflowWrap::Anywhere | OverflowWrap::BreakWord
+            );
+        cluster.emergency_affects_min_content =
+            cluster.allows_soft_wrap && style.overflow_wrap() == OverflowWrap::Anywhere;
+    }
+    Ok(())
+}
+
+fn inline_flow_style_at(
+    source: usize,
+    styles: &[InlineFlowStyle],
+    runs: &[InlineFlowRun],
+) -> Result<InlineFlowStyle, PreparationError> {
+    let index = runs.partition_point(|run| run.bytes().end as usize <= source);
+    let run = runs
+        .get(index)
+        .filter(|run| {
+            let bytes = run.bytes();
+            bytes.start as usize <= source && source < bytes.end as usize
+        })
+        .ok_or_else(PreparationError::invalid_output)?;
+    styles
+        .get(run.style().index())
+        .copied()
+        .ok_or_else(PreparationError::invalid_output)
 }
 
 fn make_line_plan(
@@ -408,11 +449,17 @@ fn make_line_plan(
             .runs()
             .get(cluster.run)
             .ok_or_else(PreparationError::invalid_output)?;
-        let multiplier =
-            inline_flow_multiplier(&cluster.source, inline_flow_styles, inline_flow_runs)?;
-        let requested_height = f64::from(run.font_size) * f64::from(multiplier);
         let ascent = f64::from(run.font_metrics.ascent);
         let descent = f64::from(run.font_metrics.descent);
+        let metrics_height =
+            run.font_metrics.ascent + run.font_metrics.descent + run.font_metrics.leading;
+        let requested_height = inline_flow_line_height(
+            &cluster.source,
+            inline_flow_styles,
+            inline_flow_runs,
+            run.font_size,
+            metrics_height,
+        )?;
         let half_leading = (requested_height - (ascent + descent)) / 2.0;
         let run_above = ascent + half_leading;
         above = above.max(run_above);
@@ -432,12 +479,14 @@ fn make_line_plan(
     })
 }
 
-fn inline_flow_multiplier(
+fn inline_flow_line_height(
     source: &Range<usize>,
     styles: &[InlineFlowStyle],
     runs: &[InlineFlowRun],
-) -> Result<f32, PreparationError> {
-    let mut multiplier = 0.0_f32;
+    font_size: f32,
+    metrics_height: f32,
+) -> Result<f64, PreparationError> {
+    let mut height = 0.0_f32;
     for run in runs {
         let bytes = run.bytes();
         if bytes.start as usize >= source.end || bytes.end as usize <= source.start {
@@ -446,12 +495,12 @@ fn inline_flow_multiplier(
         let style = styles
             .get(run.style().index())
             .ok_or_else(PreparationError::invalid_output)?;
-        multiplier = multiplier.max(style.line_height().multiplier());
+        height = height.max(style.line_height().resolve(font_size, metrics_height));
     }
-    if multiplier <= 0.0 {
+    if !height.is_finite() || height <= 0.0 {
         return Err(PreparationError::invalid_output());
     }
-    Ok(multiplier)
+    Ok(f64::from(height))
 }
 
 pub(crate) fn line_run_pieces(

@@ -16,14 +16,14 @@ use underwood::adapter::{
     PreparedParagraph, PreparedRun,
 };
 use underwood::{
-    BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId, CompositionUpdate,
-    ComputedInlineStyle, Document, DocumentId, EditErrorKind, EditableSurface,
+    AnalysisStyle, BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId,
+    CompositionUpdate, ComputedInlineStyle, Document, DocumentId, EditErrorKind, EditableSurface,
     EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
-    InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole,
-    ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
+    InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, OverflowWrap, PaintSlot, PaintTable,
+    ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
     SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
     SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
-    TextSelectionMode, Vec2, WhitespaceCollapse,
+    TextSelectionMode, TextSpacing, TextWrapMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 use underwood::{Language, Script};
 
@@ -32,7 +32,7 @@ use crate::font::{read_u16, read_u32};
 use crate::interaction::{collect_analysis_units, prepared_cursor_movements};
 use crate::line_break::{choose_line, collect_logical_clusters};
 use crate::lowering::checked_source_range;
-use crate::shaping::{analyze_text, split_item_after};
+use crate::shaping::{analyze_text, analyze_text_with_styles, split_item_after};
 
 mod editing;
 mod font_and_analysis;
@@ -56,11 +56,13 @@ impl ParagraphFormation for AnalysisCursorProof {
         input: underwood::adapter::ParagraphInput<'_>,
         _constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, underwood::adapter::PreparationError> {
-        let analysis = analyze_text(
+        let analysis = analyze_text_with_styles(
             &mut parley_engine::Analyzer::new(),
             input.text(),
             input.paragraph_style().base_direction(),
-        );
+            input.analysis_styles(),
+            input.analysis_runs(),
+        )?;
         let units = collect_analysis_units(input.text(), &analysis)?;
         let mut prepared_units = Vec::with_capacity(units.len());
         let mut glyphs = Vec::with_capacity(units.len());

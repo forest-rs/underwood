@@ -20,6 +20,9 @@ fn cluster(index: usize, boundary: Boundary, source_char: char) -> LogicalCluste
             _ => Whitespace::None,
         },
         ligature_component: false,
+        allows_soft_wrap: true,
+        allows_emergency_wrap: false,
+        emergency_affects_min_content: false,
         advance: 2.0,
     }
 }
@@ -165,6 +168,72 @@ fn a_too_short_slot_rejects_without_advancing() {
     );
     assert!(!former.is_done());
     assert_eq!(former.work().rejected, 1);
+}
+
+#[test]
+fn wrap_policy_distinguishes_soft_emergency_and_intrinsic_breaks() {
+    let mut no_wrap = [
+        cluster(0, Boundary::None, 'a'),
+        cluster(1, Boundary::Line, 'b'),
+        cluster(2, Boundary::Line, 'c'),
+    ];
+    for cluster in &mut no_wrap {
+        cluster.allows_soft_wrap = false;
+    }
+    let mut former =
+        LineFormer::new(&no_wrap, FormationConstraint::Wrap(3.0)).expect("no-wrap facts are valid");
+    assert_eq!(
+        former
+            .candidate()
+            .expect("candidate selection succeeds")
+            .expect("candidate exists")
+            .clusters(),
+        0..3
+    );
+
+    let mut anywhere = [
+        cluster(0, Boundary::None, 'a'),
+        cluster(1, Boundary::None, 'b'),
+        cluster(2, Boundary::None, 'c'),
+    ];
+    for cluster in &mut anywhere {
+        cluster.allows_emergency_wrap = true;
+        cluster.emergency_affects_min_content = true;
+    }
+    let mut former = LineFormer::new(&anywhere, FormationConstraint::Wrap(3.0))
+        .expect("emergency-wrap facts are valid");
+    assert_eq!(
+        former
+            .candidate()
+            .expect("candidate selection succeeds")
+            .expect("candidate exists")
+            .clusters(),
+        0..1
+    );
+    let mut former = LineFormer::new(&anywhere, FormationConstraint::MinContent)
+        .expect("anywhere min-content facts are valid");
+    assert_eq!(
+        former
+            .candidate()
+            .expect("candidate selection succeeds")
+            .expect("candidate exists")
+            .clusters(),
+        0..1
+    );
+
+    for cluster in &mut anywhere {
+        cluster.emergency_affects_min_content = false;
+    }
+    let mut former = LineFormer::new(&anywhere, FormationConstraint::MinContent)
+        .expect("break-word min-content facts are valid");
+    assert_eq!(
+        former
+            .candidate()
+            .expect("candidate selection succeeds")
+            .expect("candidate exists")
+            .clusters(),
+        0..3
+    );
 }
 
 #[test]

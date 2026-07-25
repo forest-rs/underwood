@@ -181,6 +181,30 @@ styles.set_paragraph_style(
 Changing paragraph direction invalidates Unicode analysis for that paragraph.
 Changing only line height reuses accepted line glyphs and recomputes metrics.
 
+Computed text policy is partitioned by the earliest preparation stage it can
+change. A host can lower its resolved style without constructing CSS or widget
+objects in Underwood:
+
+```rust,ignore
+use underwood::{
+    AnalysisStyle, ComputedInlineStyle, InlineFlowStyle, LineHeight,
+    OverflowWrap, PaintSlot, TextSpacing, TextWrapMode, WordBreak,
+};
+
+let flow = InlineFlowStyle::new(LineHeight::metrics_relative(1.1)?)
+    .with_spacing(TextSpacing::new(0.5, 2.0)?)
+    .with_overflow_wrap(OverflowWrap::Anywhere)
+    .with_text_wrap_mode(TextWrapMode::Wrap);
+let style = ComputedInlineStyle::new(shaping, flow, PaintSlot::new(0))
+    .with_analysis(AnalysisStyle::new(WordBreak::Normal));
+```
+
+`WordBreak` participates in Unicode analysis. Wrap and emergency-break policy
+participate in line formation. Line-height changes recompute metrics. A
+nonzero letter-spacing transition may reshape with retained fonts to disable
+optional ligatures; changing only a nonzero spacing amount adjusts retained
+advances without another font query.
+
 ## Source-complete text projection
 
 [`ProjectedText`] is a small `no_std + alloc` transformation kernel independent

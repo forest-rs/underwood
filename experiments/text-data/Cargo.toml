@@ -16,7 +16,7 @@ complex-scripts = ["parley_engine/complex-scripts"]
 default = []
 
 [dependencies]
-parley_engine = { git = "https://github.com/waywardmonkeys/parley.git", rev = "9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb", default-features = false, features = [
+parley_engine = { git = "https://github.com/waywardmonkeys/parley.git", rev = "97b874719f810c375025f3fa727b245530a87f9f", default-features = false, features = [
   "std",
 ] }
 

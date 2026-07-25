@@ -17,6 +17,8 @@ pub(super) struct Projection<'a> {
     pub(super) paragraph: ParagraphId,
     pub(super) mapping: TextProjection,
     pub(super) spans: Vec<LeafSpan>,
+    pub(super) analysis_styles: Vec<AnalysisStyle>,
+    pub(super) analysis_runs: Vec<AnalysisRun>,
     pub(super) shaping_styles: Vec<&'a ShapingStyle>,
     pub(super) shaping_runs: Vec<ShapingRun>,
     pub(super) inline_flow_styles: Vec<InlineFlowStyle>,
@@ -36,6 +38,8 @@ impl<'a> Projection<'a> {
     ) -> Result<Self, SceneError> {
         let text = paragraph.projected_text();
         let mut spans = Vec::with_capacity(paragraph.leaves.len());
+        let mut analysis_styles = Vec::new();
+        let mut analysis_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut shaping_styles = Vec::new();
         let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut inline_flow_styles = Vec::new();
@@ -59,6 +63,13 @@ impl<'a> Projection<'a> {
                 semantic: leaf.semantic_id(),
             });
             if start != end {
+                append_analysis_run(
+                    &mut analysis_styles,
+                    &mut analysis_runs,
+                    start..end,
+                    style.analysis(),
+                    paragraph.id,
+                )?;
                 append_shaping_run(
                     &mut shaping_styles,
                     &mut shaping_runs,
@@ -83,6 +94,7 @@ impl<'a> Projection<'a> {
         project_style_runs(
             paragraph.id,
             &mapping,
+            &mut analysis_runs,
             &mut shaping_runs,
             &mut inline_flow_runs,
             &mut paint_runs,
@@ -91,6 +103,8 @@ impl<'a> Projection<'a> {
             paragraph: paragraph.id,
             mapping,
             spans,
+            analysis_styles,
+            analysis_runs,
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
@@ -132,6 +146,8 @@ impl<'a> Projection<'a> {
 
         let mut text = alloc::string::String::new();
         let mut spans = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
+        let mut analysis_styles = Vec::new();
+        let mut analysis_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
         let mut shaping_styles = Vec::new();
         let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
         let mut inline_flow_styles = Vec::new();
@@ -146,6 +162,8 @@ impl<'a> Projection<'a> {
                     paragraph.id,
                     &mut text,
                     &mut spans,
+                    &mut analysis_styles,
+                    &mut analysis_runs,
                     &mut shaping_styles,
                     &mut shaping_runs,
                     &mut inline_flow_styles,
@@ -190,6 +208,8 @@ impl<'a> Projection<'a> {
                         paragraph.id,
                         &mut text,
                         &mut spans,
+                        &mut analysis_styles,
+                        &mut analysis_runs,
                         &mut shaping_styles,
                         &mut shaping_runs,
                         &mut inline_flow_styles,
@@ -206,6 +226,8 @@ impl<'a> Projection<'a> {
                         paragraph.id,
                         &mut text,
                         &mut spans,
+                        &mut analysis_styles,
+                        &mut analysis_runs,
                         &mut shaping_styles,
                         &mut shaping_runs,
                         &mut inline_flow_styles,
@@ -238,6 +260,8 @@ impl<'a> Projection<'a> {
                     paragraph.id,
                     &mut text,
                     &mut spans,
+                    &mut analysis_styles,
+                    &mut analysis_runs,
                     &mut shaping_styles,
                     &mut shaping_runs,
                     &mut inline_flow_styles,
@@ -263,6 +287,7 @@ impl<'a> Projection<'a> {
         project_style_runs(
             paragraph.id,
             &mapping,
+            &mut analysis_runs,
             &mut shaping_runs,
             &mut inline_flow_runs,
             &mut paint_runs,
@@ -271,6 +296,8 @@ impl<'a> Projection<'a> {
             paragraph: paragraph.id,
             mapping,
             spans,
+            analysis_styles,
+            analysis_runs,
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
@@ -422,12 +449,22 @@ impl<'a> Projection<'a> {
 
     pub(super) fn empty_line_height_key(&self) -> u64 {
         if self.mapping.text().is_empty() {
-            (f64::from(self.default_font_size)
-                * f64::from(self.default_inline_flow.line_height().multiplier()))
-            .to_bits()
+            self.empty_line_height().to_bits()
         } else {
             0
         }
+    }
+
+    pub(super) fn empty_line_height(&self) -> f64 {
+        let font_size = self.default_font_size;
+        // Empty text selects no font. Until a paragraph strut carries selected
+        // font metrics, metrics-relative height uses the computed font size as
+        // its explicit deterministic fallback.
+        f64::from(
+            self.default_inline_flow
+                .line_height()
+                .resolve(font_size, font_size),
+        )
     }
 
     pub(super) fn composition_identity(&self) -> Option<(CompositionId, crate::CompositionEpoch)> {
@@ -442,6 +479,8 @@ pub(super) fn append_projection_span<'a>(
     paragraph: ParagraphId,
     text: &mut alloc::string::String,
     spans: &mut Vec<LeafSpan>,
+    analysis_styles: &mut Vec<AnalysisStyle>,
+    analysis_runs: &mut Vec<AnalysisRun>,
     shaping_styles: &mut Vec<&'a ShapingStyle>,
     shaping_runs: &mut Vec<ShapingRun>,
     inline_flow_styles: &mut Vec<InlineFlowStyle>,
@@ -467,6 +506,13 @@ pub(super) fn append_projection_span<'a>(
         semantic: leaf.semantic_id(),
     });
     if start != end {
+        append_analysis_run(
+            analysis_styles,
+            analysis_runs,
+            start..end,
+            style.analysis(),
+            paragraph,
+        )?;
         append_shaping_run(
             shaping_styles,
             shaping_runs,
@@ -606,6 +652,36 @@ impl LeafSpan {
             },
         }
     }
+}
+
+pub(super) fn append_analysis_run(
+    styles: &mut Vec<AnalysisStyle>,
+    runs: &mut Vec<AnalysisRun>,
+    bytes: Range<u32>,
+    style: AnalysisStyle,
+    paragraph: ParagraphId,
+) -> Result<(), SceneError> {
+    let style = if let Some(index) = styles.iter().position(|candidate| *candidate == style) {
+        AnalysisStyleId::new(
+            u16::try_from(index)
+                .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?,
+        )
+    } else {
+        let index = u16::try_from(styles.len())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?;
+        styles.push(style);
+        AnalysisStyleId::new(index)
+    };
+    if let Some(last) = runs.last_mut()
+        && last.bytes().end == bytes.start
+        && last.style() == style
+    {
+        let start = last.bytes().start;
+        *last = AnalysisRun::new(start..bytes.end, style);
+    } else {
+        runs.push(AnalysisRun::new(bytes, style));
+    }
+    Ok(())
 }
 
 pub(super) fn append_shaping_run<'a>(

@@ -8,6 +8,7 @@ use super::*;
 pub(super) fn project_style_runs(
     paragraph: ParagraphId,
     mapping: &TextProjection,
+    analysis: &mut Vec<AnalysisRun>,
     shaping: &mut Vec<ShapingRun>,
     inline_flow: &mut Vec<InlineFlowRun>,
     paint: &mut Vec<PaintRun>,
@@ -15,10 +16,42 @@ pub(super) fn project_style_runs(
     if mapping.is_identity() {
         return Ok(());
     }
+    *analysis = project_analysis_runs(paragraph, mapping, analysis)?;
     *shaping = project_shaping_runs(paragraph, mapping, shaping)?;
     *inline_flow = project_inline_flow_runs(paragraph, mapping, inline_flow)?;
     *paint = project_paint_runs(paragraph, mapping, paint)?;
     Ok(())
+}
+
+fn project_analysis_runs(
+    paragraph: ParagraphId,
+    mapping: &TextProjection,
+    source_runs: &[AnalysisRun],
+) -> Result<Vec<AnalysisRun>, SceneError> {
+    let mut projected = Vec::new();
+    for segment in mapping.segments() {
+        match segment.kind() {
+            ProjectionKind::Identity => {
+                project_identity_runs(&segment, source_runs, AnalysisRun::bytes, |range, run| {
+                    append_analysis_id_run(&mut projected, range, run.style());
+                });
+            }
+            ProjectionKind::Replacement | ProjectionKind::Collapsed | ProjectionKind::Inserted => {
+                let owner = segment.source().start;
+                let run =
+                    run_for_position(source_runs, owner, AnalysisRun::bytes).ok_or_else(|| {
+                        SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            paragraph,
+                            segment.source(),
+                        )
+                    })?;
+                append_analysis_id_run(&mut projected, segment.projected(), run.style());
+            }
+            ProjectionKind::Omitted => {}
+        }
+    }
+    Ok(projected)
 }
 
 fn project_shaping_runs(
@@ -170,6 +203,18 @@ fn append_shaping_id_run(runs: &mut Vec<ShapingRun>, bytes: Range<u32>, style: S
         *last = ShapingRun::new(start..bytes.end, style);
     } else {
         runs.push(ShapingRun::new(bytes, style));
+    }
+}
+
+fn append_analysis_id_run(runs: &mut Vec<AnalysisRun>, bytes: Range<u32>, style: AnalysisStyleId) {
+    if let Some(last) = runs.last_mut()
+        && last.bytes().end == bytes.start
+        && last.style() == style
+    {
+        let start = last.bytes().start;
+        *last = AnalysisRun::new(start..bytes.end, style);
+    } else {
+        runs.push(AnalysisRun::new(bytes, style));
     }
 }
 

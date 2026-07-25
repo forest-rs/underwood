@@ -219,8 +219,7 @@ pub(super) fn build_geometry(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
 ) -> Result<CachedGeometry, SceneError> {
-    let empty_line_height = f64::from(projection.default_font_size)
-        * f64::from(projection.default_inline_flow.line_height().multiplier());
+    let empty_line_height = projection.empty_line_height();
     let mut line_top = 0.0;
     let mut lines = Vec::new();
     let mut fragments = Vec::new();

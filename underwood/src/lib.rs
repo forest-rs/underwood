@@ -40,7 +40,7 @@ pub use error::{
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
 pub use parlance::{
     BaseDirection, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
-    FontWidth, GenericFamily, Language, Script, Tag,
+    FontWidth, GenericFamily, Language, OverflowWrap, Script, Tag, TextWrapMode, WordBreak,
 };
 pub use peniko::{Brush, Color, FontData};
 pub use projection::{
@@ -59,6 +59,7 @@ pub use selection::{
     SnapshotTextUnit, TextMovement, TextSelectionMode,
 };
 pub use style::{
-    ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, PaintSlot, PaintTable,
-    ParagraphStyle, SceneRequest, ShapingStyle, StyleMap, TextConstraint,
+    AnalysisStyle, ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, LineHeightBasis,
+    PaintSlot, PaintTable, ParagraphStyle, SceneRequest, ShapingStyle, StyleMap, TextConstraint,
+    TextSpacing,
 };

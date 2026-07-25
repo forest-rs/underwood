@@ -8,11 +8,27 @@
 
 use core::ops::Range;
 
-use underwood::adapter::{InlineFlowRun, ParagraphInput, PreparationError, ShapingRun};
+use underwood::adapter::{
+    AnalysisRun, InlineFlowRun, ParagraphInput, PreparationError, ShapingRun,
+};
 
 pub(crate) fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationError> {
     let text_len =
         u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
+    validate_run_coverage(
+        input,
+        input.analysis_runs().iter().map(AnalysisRun::bytes),
+        text_len,
+        PreparationError::invalid_output,
+    )?;
+    if input.analysis_styles().len() > usize::from(u16::MAX) + 1
+        || input
+            .analysis_runs()
+            .iter()
+            .any(|run| run.style().index() >= input.analysis_styles().len())
+    {
+        return Err(PreparationError::invalid_output());
+    }
     validate_run_coverage(
         input,
         input.shaping_runs().iter().map(ShapingRun::bytes),

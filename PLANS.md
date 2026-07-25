@@ -83,6 +83,23 @@ toolkit behavior or pixel production.
    PDF, portability, and real-vs-mirage review; land coherent protected
    changes with complete proof records.
 
+### Progress
+
+- Steps 1–4 and the independent shared-font-catalog part of step 7 are landed
+  and protected.
+- Step 5 is implemented through the real public scene path. Underwood consumes
+  Unicode `Joining_Type` from the small Parley Engine integration commit
+  `97b874719f810c375025f3fa727b245530a87f9f`; no script table or new production
+  dependency was added.
+- The exact Overstory computed-style lowering type-checks after its disposable
+  consumer proof uses one Parlance type universe. The parked consumer branch
+  still fails later on separately tracked editable-block APIs and two stale
+  presentation call sites; those failures do not require substitute style
+  logic in Overstory.
+- Chromium-recorded first-line cases are recorded for the step 11 CJK and
+  CSS-profile corpus. They remain browser-compatibility evidence rather than a
+  Unicode oracle.
+
 ### Risks and controls
 
 - **Architecture without product:** whitespace collapse and the living page are

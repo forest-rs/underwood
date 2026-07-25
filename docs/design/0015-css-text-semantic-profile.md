@@ -438,6 +438,37 @@ imported cases must retain provenance and compatible licensing; otherwise
 Underwood should write compact fixtures from normative requirements and link
 the relevant specification section.
 
+## Current executable subset
+
+The reusable-text-tools campaign now makes a deliberately narrower subset
+executable through the public document and `TextBlock` path:
+
+| Concept | Current status | Earliest observed invalidation |
+| --- | --- | --- |
+| whitespace collapse | executable Underwood semantics | projection |
+| `word-break` | executable for the Parlance/Parley Engine values | analysis |
+| wrap/no-wrap | executable | formation |
+| `overflow-wrap: normal/anywhere/break-word` | executable | formation |
+| metrics-, font-size-, and absolute line height | executable | line metrics |
+| letter and word spacing | executable Underwood semantics | retained shaping policy or shaped advances |
+
+This is not Tier A conformance. Text transformation, complete CSS whitespace
+behavior, alignment, justification, and a selected normative corpus remain
+incomplete. Letter spacing currently changes eligible retained advances and
+suppresses optional `liga`/`clig` shaping for nonjoining text unless the author
+explicitly controls those features. Unicode `Joining_Type` facts protect
+cursive joining without a hard-coded script list. The implementation does not
+yet claim CSS line-edge spacing or complete mixed-bidi spacing equivalence.
+
+Daniel Benjamin's existing
+`parley_tests/linebreaking_browser_recorder` is a useful compatibility model:
+it generates deterministic strings and widths, asks Chromium for the first
+line boundary, and checks the engine against the recorded result. Its current
+ASCII corpus is a browser oracle, not Unicode conformance. A follow-up should
+run an extended CJK and computed-policy corpus at Underwood's public formation
+seam while keeping three claims distinct: Unicode/specification conformance,
+Chromium compatibility, and deliberate Underwood deviations.
+
 ## Relationship to native application behavior
 
 CSS compatibility never weakens these Underwood requirements:
@@ -530,4 +561,3 @@ building a property-shaped façade over incomplete semantics.
 - [CSS Text Module Level 4](https://www.w3.org/TR/css-text-4/)
 - [CSS Inline Layout Module Level 3](https://www.w3.org/TR/css-inline-3/)
 - [CSS Writing Modes Level 4](https://www.w3.org/TR/css-writing-modes-4/)
-
