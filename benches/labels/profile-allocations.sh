@@ -54,6 +54,10 @@ while read -r scenario code; do
 done <<'SCENARIOS'
 setup-identical s0
 setup-identity s1
+setup-cross-identical x0
+cross-identical x1
+setup-cross-distinct x2
+cross-distinct x3
 primed-identical p0
 primed-paint p1
 primed-unique p2
@@ -92,6 +96,12 @@ awk '
         print "cold-identical", \
             calls["cold-identical"] - calls["setup-identical"], \
             bytes["cold-identical"] - bytes["setup-identical"]
+        print "cross-identical", \
+            calls["cross-identical"] - calls["setup-cross-identical"], \
+            bytes["cross-identical"] - bytes["setup-cross-identical"]
+        print "cross-distinct", \
+            calls["cross-distinct"] - calls["setup-cross-distinct"], \
+            bytes["cross-distinct"] - bytes["setup-cross-distinct"]
         print "retained-identical", \
             calls["retained-identical"] - calls["primed-identical"], \
             bytes["retained-identical"] - bytes["primed-identical"]

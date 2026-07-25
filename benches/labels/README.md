@@ -11,6 +11,8 @@ diagnostics. It covers:
 
 - thousands of stable unique labels;
 - thousands of distinct labels sharing identical text and style;
+- matched cold runs of distinct identities with identical versus distinct
+  text, including exact analysis, shaping, and formation counts;
 - one localized text change among stable siblings;
 - max-content and constrained-width changes;
 - explicit destruction and budget-driven cache churn.
@@ -41,6 +43,8 @@ target/release/underwood_label_benchmark region-churn 200 512
 target/release/underwood_label_benchmark retained-adjustment 200 512
 target/release/underwood_label_benchmark alignment-churn 200 512
 target/release/underwood_label_benchmark justification-churn 200 512
+target/release/underwood_label_benchmark cross-identical 200 512
+target/release/underwood_label_benchmark cross-distinct 200 512
 benches/labels/profile-allocations.sh
 ```
 

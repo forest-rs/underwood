@@ -110,6 +110,12 @@ toolkit behavior or pixel production.
   compositions, visual output, and PDF geometry together without repeating
   text physics. Measurements and exact limits are recorded in
   `docs/proof/line-adjustment-review-2026-07-25.md`.
+- Step 6 now has a matched before-state wind tunnel and a concrete cache
+  recommendation in `docs/design/0016-cross-identity-preparation-cache.md`.
+  The proposed owner is `LayoutEngine`; the value is immutable paragraph-local
+  prepared facts; every consumer rebuilds identity-bound geometry; retention
+  is a separately opt-in byte-budgeted LRU. The key, owner, and lifetime remain
+  at their explicit human gate.
 
 ### Risks and controls
 

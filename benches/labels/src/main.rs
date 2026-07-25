@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|retained-identical|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|retained-identical|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -341,6 +341,12 @@ fn run_profile(
     match scenario {
         "setup-identical" | "s0" => profile_setup_identical(rounds, labels),
         "setup-identity" | "s1" => profile_setup_identity(rounds, labels),
+        "setup-cross-identical" | "x0" => {
+            profile_setup_cross_identity("setup-cross-identical", rounds, labels, false)
+        }
+        "setup-cross-distinct" | "x2" => {
+            profile_setup_cross_identity("setup-cross-distinct", rounds, labels, true)
+        }
         "primed-identical" | "p0" => {
             profile_primed_identical("primed-identical", rounds, labels, &style, &paint, false)
         }
@@ -352,6 +358,12 @@ fn run_profile(
         "primed-adjustment" | "p4" => profile_primed_adjustment(rounds, labels, &style, &paint),
         "cold-identical" | "c0" => {
             profile_cold_identical("cold-identical", rounds, labels, &style, &paint)
+        }
+        "cross-identical" | "x1" => {
+            profile_cross_identity("cross-identical", rounds, labels, &style, &paint, false)
+        }
+        "cross-distinct" | "x3" => {
+            profile_cross_identity("cross-distinct", rounds, labels, &style, &paint, true)
         }
         "retained-identical" | "r0" => profile_retained_identical(rounds, labels, &style, &paint),
         "retained-adjustment" | "r1" => profile_retained_adjustment(rounds, labels, &style, &paint),
@@ -520,6 +532,26 @@ fn profile_setup_identity(
     Ok(())
 }
 
+fn profile_setup_cross_identity(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    distinct_text: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = if distinct_text {
+        distinct_labels_with_count(label_count)?
+    } else {
+        identical_labels_with_count(label_count)?
+    };
+    let layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    black_box((&labels, &layout));
+    report_profile(name, rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
 fn profile_primed_identical(
     name: &str,
     rounds: usize,
@@ -646,6 +678,74 @@ fn profile_cold_identical(
         }
     });
     report_profile(name, rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_cross_identity(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    distinct_text: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = if distinct_text {
+        distinct_labels_with_count(label_count)?
+    } else {
+        identical_labels_with_count(label_count)?
+    };
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let mut analyzed = 0_usize;
+    let mut shaped = 0_usize;
+    let mut formed = 0_usize;
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            layout.clear_cache();
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("cross-identity label must prepare");
+                analyzed += output.work().analysis().paragraphs();
+                shaped += output.work().shape().paragraphs();
+                formed += output.work().flow().paragraphs();
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("cross-identity operation count overflowed")?;
+    assert!(
+        analyzed > 0 && analyzed <= operations,
+        "the workload must observe a bounded amount of real analysis"
+    );
+    assert!(
+        shaped > 0 && shaped <= operations,
+        "the workload must observe a bounded amount of real shaping"
+    );
+    assert!(
+        formed > 0 && formed <= operations,
+        "the workload must observe a bounded amount of real formation"
+    );
+    if distinct_text {
+        assert_eq!(
+            (analyzed, shaped, formed),
+            (operations, operations, operations),
+            "distinct text must not cross-reuse preparation"
+        );
+    }
+    report_profile(name, rounds, label_count, elapsed);
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        println!(
+            "{name}_work\toperations={operations}\tanalyzed={analyzed}\tshaped={shaped}\tformed={formed}"
+        );
+    }
     Ok(())
 }
 
@@ -1090,6 +1190,15 @@ fn identical_labels() -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
 fn identical_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
     (0..count)
         .map(|index| TextBlock::plain(identity(2, index), "Save changes").map_err(Into::into))
+        .collect()
+}
+
+fn distinct_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
+        .map(|index| {
+            let text = format!("Distinct label {index:08}");
+            TextBlock::plain(identity(5, index), &text).map_err(Into::into)
+        })
         .collect()
 }
 
