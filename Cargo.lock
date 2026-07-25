@@ -2120,6 +2120,7 @@ version = "0.0.1"
 dependencies = [
  "imaging",
  "imaging_vello_cpu",
+ "png",
  "softbuffer",
  "underwood",
  "underwood_parley",

@@ -1194,6 +1194,7 @@ mod tests {
     fn two_pointer_carets_publish_one_atomic_insertion() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let initial = content.prepare(760.0, 0.5).expect("scene must prepare");
+        let paragraph_count = initial.trace.reuse().paragraphs();
         let (first, second) = two_points_in_text_leaf(&initial.scene, content.editable_text());
         let mut editor = EditorState::default();
         editor.handle(
@@ -1233,7 +1234,7 @@ mod tests {
             .prepare(760.0, 0.5)
             .expect("edited scene must prepare");
         assert_eq!(edited.work.shape().paragraphs(), 1);
-        assert_eq!(edited.work.reused_paragraphs(), 9);
+        assert_eq!(edited.work.reused_paragraphs(), paragraph_count - 1);
     }
 
     #[test]
@@ -1449,6 +1450,7 @@ mod tests {
     fn preedit_is_transient_and_commit_publishes_once() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
+        let paragraph_count = committed.trace.reuse().paragraphs();
         let point = two_points_in_text_leaf(&committed.scene, content.editable_text()).0;
         let mut editor = EditorState::default();
         editor.handle(
@@ -1489,7 +1491,7 @@ mod tests {
             .prepare(760.0, 0.5)
             .expect("cancelled preedit must return to committed formation");
         assert_eq!(cancelled.work.shape().paragraphs(), 0);
-        assert_eq!(cancelled.work.reused_paragraphs(), 10);
+        assert_eq!(cancelled.work.reused_paragraphs(), paragraph_count);
 
         editor.handle(
             EditorEvent::Ime(ImeInput::Preedit {
@@ -1512,14 +1514,13 @@ mod tests {
             .prepare(760.0, 0.5)
             .expect("committed preedit must form");
         assert!(committed.work.shape().paragraphs() <= 1);
-        assert!(committed.work.reused_paragraphs() >= 9);
+        assert!(committed.work.reused_paragraphs() >= paragraph_count - 1);
         assert!(content.editable_value().contains("مرحبا"));
     }
 
-    #[cfg(target_vendor = "apple")]
     #[test]
-    fn native_ime_chinese_commit_prepares_through_system_fallback() {
-        let mut content = ShowcaseContent::new().expect("showcase must initialize");
+    fn native_ime_chinese_commit_prepares_through_bundled_sc_fallback() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
         let point = two_points_in_text_leaf(&committed.scene, content.editable_text()).0;
         let mut editor = EditorState::default();
@@ -1548,7 +1549,7 @@ mod tests {
 
         let prepared = content
             .prepare(760.0, 0.5)
-            .expect("committed Han text must resolve through the native font catalog");
+            .expect("committed Han text must resolve through the bundled font catalog");
         assert_ne!(prepared.scene.revision(), revision);
         assert!(prepared.scene.fragments().iter().any(|fragment| {
             fragment

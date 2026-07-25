@@ -3,12 +3,14 @@
 
 //! Rendering-only bridge from a portable Underwood scene to `imaging`.
 
+use crate::page::{LivingPagePlan, PageDecorationKind};
 use imaging::kurbo::{Affine, Circle, Line, Rect, RoundedRect, Stroke};
-use imaging::peniko::{Color, Fill, Style};
+use imaging::peniko::{Color, Fill, Gradient, Style};
 use imaging::{PaintSink, Painter, record};
 use underwood::{
-    CompositionScene, InlineRole, PaintTable, ParagraphRole, Point, SceneFragment, SceneLine,
-    SemanticFragment, TextScene, Vec2, adapter::LineBreakReason,
+    CompositionScene, InlineRole, PaintTable, ParagraphRole, Point, RegionAttemptOutcome,
+    RegionTranscript, SceneFragment, SceneLine, SemanticFragment, TextScene, Vec2,
+    adapter::LineBreakReason,
 };
 
 const BACKGROUND: Color = Color::from_rgb8(0x08, 0x0d, 0x14);
@@ -27,6 +29,8 @@ pub(crate) enum DiagnosticsMode {
     /// Paint only the authored document and editor overlays.
     #[default]
     Off,
+    /// Show source regions, floats, exclusions, offered slots, and rejected retries.
+    Flow,
     /// Show line boxes, content metrics, baselines, and break kinds.
     Lines,
     /// Show fragment advances against exact line content metrics, scripts, and bidi direction.
@@ -42,7 +46,8 @@ impl DiagnosticsMode {
     #[must_use]
     pub(crate) const fn next(self) -> Self {
         match self {
-            Self::Off => Self::Lines,
+            Self::Off => Self::Flow,
+            Self::Flow => Self::Lines,
             Self::Lines => Self::Fragments,
             Self::Fragments => Self::Glyphs,
             Self::Glyphs => Self::Semantics,
@@ -55,6 +60,7 @@ impl DiagnosticsMode {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Off => "OFF",
+            Self::Flow => "FLOW",
             Self::Lines => "LINES",
             Self::Fragments => "FRAGMENTS",
             Self::Glyphs => "GLYPHS",
@@ -108,7 +114,7 @@ impl FrameLayout {
         Self {
             scale,
             origin_x: (logical_width - content_width) * 0.5,
-            origin_y: outer + inset,
+            origin_y: outer + (inset * 0.68).clamp(24.0, 48.0),
             content_width,
             logical_width,
             logical_height,
@@ -153,6 +159,8 @@ impl FrameLayout {
 /// Records the document and optional line evidence into an imaging scene.
 pub(crate) fn record_frame(
     document: &TextScene,
+    page: &LivingPagePlan,
+    transcript: &RegionTranscript,
     layout: FrameLayout,
     diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
@@ -167,6 +175,8 @@ pub(crate) fn record_frame(
         document.fragments(),
         document.paint(),
         &semantics,
+        page,
+        transcript,
         layout,
         diagnostics,
         overlay,
@@ -176,6 +186,8 @@ pub(crate) fn record_frame(
 /// Records a transient composition scene with the same native presentation.
 pub(crate) fn record_composition_frame(
     document: &CompositionScene,
+    page: &LivingPagePlan,
+    transcript: &RegionTranscript,
     layout: FrameLayout,
     diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
@@ -190,6 +202,8 @@ pub(crate) fn record_composition_frame(
         document.fragments(),
         document.paint(),
         &semantics,
+        page,
+        transcript,
         layout,
         diagnostics,
         overlay,
@@ -201,6 +215,8 @@ fn record_scene<Source>(
     fragments: &[SceneFragment<Source>],
     paint: &PaintTable,
     semantics: &[&SemanticFragment],
+    page_plan: &LivingPagePlan,
+    transcript: &RegionTranscript,
     layout: FrameLayout,
     diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
@@ -241,6 +257,13 @@ fn record_scene<Source>(
             .transform(Affine::scale(layout.scale))
             .draw();
 
+        let content_placement =
+            Affine::scale(layout.scale) * Affine::translate((layout.origin_x, layout.origin_y));
+        paint_page_foundation(&mut painter, page_plan, content_placement);
+        if diagnostics == DiagnosticsMode::Flow {
+            paint_flow_diagnostics(&mut painter, page_plan, transcript, content_placement);
+        }
+
         TextSceneAdapter::new(lines, fragments, paint, semantics, layout).paint_into(
             &mut painter,
             diagnostics,
@@ -249,6 +272,155 @@ fn record_scene<Source>(
     }
     scene.validate()?;
     Ok(scene)
+}
+
+fn paint_page_foundation<S: PaintSink + ?Sized>(
+    painter: &mut Painter<'_, S>,
+    page: &LivingPagePlan,
+    placement: Affine,
+) {
+    for column in page.column_regions() {
+        painter
+            .fill(
+                RoundedRect::from_rect(*column, 12.0),
+                Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x05),
+            )
+            .transform(placement)
+            .draw();
+        painter
+            .stroke(
+                RoundedRect::from_rect(*column, 12.0),
+                &Stroke::new(0.7),
+                Color::from_rgba8(0x8b, 0x9b, 0xb1, 0x12),
+            )
+            .transform(placement)
+            .draw();
+    }
+
+    for decoration in page.decorations() {
+        match decoration.kind {
+            PageDecorationKind::HeroFloat => {
+                let bounds = decoration.bounds;
+                let gradient = Gradient::new_linear((bounds.x0, bounds.y0), (bounds.x1, bounds.y1))
+                    .with_stops([
+                        (0.0_f32, Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x30)),
+                        (0.52_f32, Color::from_rgba8(0xff, 0x6b, 0x67, 0x24)),
+                        (1.0_f32, Color::from_rgba8(0xf5, 0xc4, 0x51, 0x30)),
+                    ]);
+                painter
+                    .fill(RoundedRect::from_rect(bounds, 18.0), &gradient)
+                    .transform(placement)
+                    .draw();
+                painter
+                    .stroke(
+                        RoundedRect::from_rect(bounds, 18.0),
+                        &Stroke::new(1.0),
+                        PAGE_EDGE.with_alpha(0.72),
+                    )
+                    .transform(placement)
+                    .draw();
+                let radius = bounds.height() * 0.29;
+                let center = bounds.center();
+                painter
+                    .stroke(
+                        Circle::new(center, radius),
+                        &Stroke::new(1.2),
+                        CYAN.with_alpha(0.72),
+                    )
+                    .transform(placement)
+                    .draw();
+                painter
+                    .stroke(
+                        Circle::new((center.x + radius * 0.72, center.y), radius * 0.68),
+                        &Stroke::new(1.2),
+                        GOLD.with_alpha(0.7),
+                    )
+                    .transform(placement)
+                    .draw();
+                painter
+                    .fill(
+                        Circle::new((center.x - radius * 0.72, center.y), radius * 0.22),
+                        CORAL.with_alpha(0.82),
+                    )
+                    .transform(placement)
+                    .draw();
+            }
+            PageDecorationKind::ColumnExclusion => {
+                let bounds = decoration.bounds;
+                painter
+                    .fill(
+                        RoundedRect::from_rect(bounds, 12.0),
+                        Color::from_rgba8(0xf5, 0xc4, 0x51, 0x17),
+                    )
+                    .transform(placement)
+                    .draw();
+                painter
+                    .stroke(
+                        RoundedRect::from_rect(bounds, 12.0),
+                        &Stroke::new(1.0),
+                        GOLD.with_alpha(0.48),
+                    )
+                    .transform(placement)
+                    .draw();
+                for fraction in [0.28, 0.5, 0.72] {
+                    let y = bounds.y0 + bounds.height() * fraction;
+                    painter
+                        .stroke(
+                            Line::new((bounds.x0 + 14.0, y), (bounds.x1 - 14.0, y)),
+                            &Stroke::new(1.0),
+                            CORAL.with_alpha(0.5),
+                        )
+                        .transform(placement)
+                        .draw();
+                }
+            }
+        }
+    }
+}
+
+fn paint_flow_diagnostics<S: PaintSink + ?Sized>(
+    painter: &mut Painter<'_, S>,
+    page: &LivingPagePlan,
+    transcript: &RegionTranscript,
+    placement: Affine,
+) {
+    let region_stroke = Stroke::new(1.0).with_dashes(0.0, [8.0, 5.0]);
+    for (index, region) in page.flow().regions().enumerate() {
+        let color = if index == 0 { CORAL } else { CYAN };
+        painter
+            .stroke(
+                region.bounds(),
+                &region_stroke,
+                color.with_alpha(if index == 0 { 0.72 } else { 0.38 }),
+            )
+            .transform(placement)
+            .draw();
+    }
+    for attempt in transcript.attempts() {
+        let color = match attempt.outcome() {
+            RegionAttemptOutcome::Accepted => CYAN,
+            RegionAttemptOutcome::HeightRejected => CORAL,
+        };
+        let bounds = attempt.slot().bounds();
+        painter
+            .fill(bounds, color.with_alpha(0.045))
+            .transform(placement)
+            .draw();
+        painter
+            .stroke(
+                bounds,
+                &Stroke::new(
+                    if attempt.outcome() == RegionAttemptOutcome::HeightRejected {
+                        2.0
+                    } else {
+                        0.7
+                    },
+                ),
+                color.with_alpha(0.6),
+            )
+            .transform(placement)
+            .draw();
+    }
 }
 
 struct TextSceneAdapter<'a, Source> {
@@ -286,7 +458,10 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
         match diagnostics {
             DiagnosticsMode::Lines => self.paint_line_diagnostics(painter),
             DiagnosticsMode::Fragments => self.paint_fragment_diagnostics(painter),
-            DiagnosticsMode::Off | DiagnosticsMode::Glyphs | DiagnosticsMode::Semantics => {}
+            DiagnosticsMode::Off
+            | DiagnosticsMode::Flow
+            | DiagnosticsMode::Glyphs
+            | DiagnosticsMode::Semantics => {}
         }
 
         self.paint_selection_backgrounds(painter, overlay);
@@ -324,7 +499,10 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
         match diagnostics {
             DiagnosticsMode::Glyphs => self.paint_glyph_diagnostics(painter),
             DiagnosticsMode::Semantics => self.paint_semantic_diagnostics(painter),
-            DiagnosticsMode::Off | DiagnosticsMode::Lines | DiagnosticsMode::Fragments => {}
+            DiagnosticsMode::Off
+            | DiagnosticsMode::Flow
+            | DiagnosticsMode::Lines
+            | DiagnosticsMode::Fragments => {}
         }
     }
 
@@ -587,7 +765,18 @@ mod tests {
         let default_document = content
             .prepare(default.content_width, 0.62)
             .expect("default document must prepare");
-        assert!(!default.document_is_clipped(&default_document.scene));
+        let content_bottom = default_document
+            .scene
+            .lines()
+            .iter()
+            .map(|line| line.bounds().y1)
+            .fold(0.0_f64, f64::max);
+        assert!(
+            !default.document_is_clipped(&default_document.scene),
+            "content bottom {content_bottom}, origin {}, page bottom {}",
+            default.origin_y,
+            default.page_rect().y1
+        );
 
         let short = FrameLayout::new(520, 520, 1.0);
         let short_document = content
@@ -600,6 +789,7 @@ mod tests {
     fn diagnostic_modes_form_one_complete_cycle() {
         let modes = [
             DiagnosticsMode::Off,
+            DiagnosticsMode::Flow,
             DiagnosticsMode::Lines,
             DiagnosticsMode::Fragments,
             DiagnosticsMode::Glyphs,
@@ -612,7 +802,7 @@ mod tests {
         }
         assert_eq!(
             modes.map(DiagnosticsMode::label),
-            ["OFF", "LINES", "FRAGMENTS", "GLYPHS", "SEMANTICS"]
+            ["OFF", "FLOW", "LINES", "FRAGMENTS", "GLYPHS", "SEMANTICS"]
         );
     }
 
@@ -624,16 +814,31 @@ mod tests {
             .prepare(layout.content_width, 0.62)
             .expect("document must prepare");
         let overlay = EditorOverlay::default();
-        let clean = record_frame(&prepared.scene, layout, DiagnosticsMode::Off, &overlay)
-            .expect("clean frame must record");
+        let clean = record_frame(
+            &prepared.scene,
+            &prepared.page,
+            &prepared.region_transcript,
+            layout,
+            DiagnosticsMode::Off,
+            &overlay,
+        )
+        .expect("clean frame must record");
         for mode in [
+            DiagnosticsMode::Flow,
             DiagnosticsMode::Lines,
             DiagnosticsMode::Fragments,
             DiagnosticsMode::Glyphs,
             DiagnosticsMode::Semantics,
         ] {
-            let debug = record_frame(&prepared.scene, layout, mode, &overlay)
-                .expect("diagnostic frame must record");
+            let debug = record_frame(
+                &prepared.scene,
+                &prepared.page,
+                &prepared.region_transcript,
+                layout,
+                mode,
+                &overlay,
+            )
+            .expect("diagnostic frame must record");
             assert!(
                 debug.commands().len() > clean.commands().len(),
                 "{mode:?} must add visible diagnostic commands"

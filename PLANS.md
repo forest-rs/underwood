@@ -157,6 +157,13 @@ toolkit behavior or pixel production.
   was made incremental. Spoor remains the independently gated `und-oh0.14`;
   exact results are recorded in
   `docs/proof/preparation-trace-review-2026-07-25.md`.
+- Step 13 is complete. One semantic document now traverses a rejected probe,
+  padded hero float, responsive bounded columns, and a real exclusion while
+  preserving whitespace source mapping, mixed-script interaction, CJK line
+  policy, variable/OpenType styling, editing, and retained diagnostics. The
+  native release page and bundled-font headless snapshot consume the same
+  public path; exact product findings and non-claims are recorded in
+  `docs/proof/region-aware-living-page-review-2026-07-25.md`.
 - The committed-tree allocation audit exposed a separate retained-lifecycle
   problem: unchanged values are rebuilt and deep-compared, then retained
   records are deep-copied into each output. Its matched 1,000-paragraph

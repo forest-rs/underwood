@@ -53,15 +53,21 @@ Underwood output.
 
 ![Underwood visual proof](examples/visual-proof/snapshots/underwood-visual-proof.png)
 
-The external `examples/showcase` host presents one real semantic heading/body
-document in a native resizable window. Resizing drives retained finite-width
-formation; Space performs a local edit; `P` changes paint without repeating
-text preparation; `A` animates the Roboto Flex weight axis; and `G` reveals legal
-line and baseline evidence. Run the optimized meeting demo with:
+The external `examples/showcase` host presents one editable semantic document
+as a native region-aware living page. It visibly traverses a rejected probe,
+padded float, responsive columns, and an exclusion while preserving mixed
+Latin/Arabic interaction, CJK line policy, whitespace source mapping,
+OpenType features, and variable-font styling. `F4` cycles public scene and flow
+diagnostics; the title separates preparation from rendering time and reports
+invalidation and retained-memory evidence. Run the optimized showcase with:
 
 ```sh
 cargo run --release -p underwood_showcase
 ```
+
+Its bundled-font 1100×800 rendering is deterministic and pixel-tested:
+
+![Underwood living page](examples/showcase/snapshots/underwood-living-page.png)
 
 The external `underwood_pdf` adapter lowers that same public prepared-scene
 contract through Krilla without moving PDF policy into the foundational

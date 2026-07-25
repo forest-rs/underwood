@@ -3,6 +3,11 @@
 
 //! Live native proof of Underwood's retained document pipeline.
 
+use std::fs::{self, File};
+#[cfg(test)]
+use std::io::BufReader;
+use std::io::BufWriter;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::content::{PreparedCompositionFrame, PreparedDocumentFrame, ShowcaseContent};
@@ -47,8 +52,12 @@ struct ShowcaseApp {
 
 impl ShowcaseApp {
     fn new() -> Result<Self, AnyError> {
+        Self::with_content(ShowcaseContent::new()?)
+    }
+
+    fn with_content(content: ShowcaseContent) -> Result<Self, AnyError> {
         Ok(Self {
-            content: ShowcaseContent::new()?,
+            content,
             renderer: VelloCpuRenderer::new(1, 1),
             axis_animation: AxisAnimation::new(),
             editor: EditorState::default(),
@@ -97,6 +106,50 @@ impl ShowcaseApp {
     }
 }
 
+const SNAPSHOT_WIDTH: u32 = 1_100;
+const SNAPSHOT_HEIGHT: u32 = 800;
+
+/// Writes the deterministic bundled-font rendering of the living page.
+pub(crate) fn write_snapshot() -> Result<PathBuf, AnyError> {
+    let frame = render_snapshot()?;
+    let path = snapshot_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = File::create(&path)?;
+    let mut encoder = png::Encoder::new(BufWriter::new(file), frame.width, frame.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&frame.rgba)?;
+    Ok(path)
+}
+
+fn render_snapshot() -> Result<Frame, AnyError> {
+    let mut app = ShowcaseApp::with_content(ShowcaseContent::new_deterministic()?)?;
+    app.render(SNAPSHOT_WIDTH, SNAPSHOT_HEIGHT, 1.0, Duration::ZERO)
+        .map_err(Into::into)
+}
+
+fn snapshot_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("snapshots")
+        .join("underwood-living-page.png")
+}
+
+#[cfg(test)]
+fn read_snapshot() -> Result<(u32, u32, Vec<u8>), AnyError> {
+    let decoder = png::Decoder::new(BufReader::new(File::open(snapshot_path())?));
+    let mut reader = decoder.read_info()?;
+    let mut data = vec![0; reader.output_buffer_size().ok_or("snapshot is too large")?];
+    let info = reader.next_frame(&mut data)?;
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return Err("snapshot must be RGBA8".into());
+    }
+    data.truncate(info.buffer_size());
+    Ok((info.width, info.height, data))
+}
+
 impl HostApplication for ShowcaseApp {
     fn render(
         &mut self,
@@ -140,6 +193,8 @@ impl HostApplication for ShowcaseApp {
                     );
                     let scene = presentation::record_composition_frame(
                         &prepared.scene,
+                        &prepared.page,
+                        &prepared.region_transcript,
                         layout,
                         self.diagnostics,
                         &overlay,
@@ -167,6 +222,8 @@ impl HostApplication for ShowcaseApp {
                         .committed_overlay(&prepared.scene, caret_visible);
                     let scene = presentation::record_frame(
                         &prepared.scene,
+                        &prepared.page,
+                        &prepared.region_transcript,
                         layout,
                         self.diagnostics,
                         &overlay,
@@ -206,7 +263,7 @@ impl HostApplication for ShowcaseApp {
         let diagnostics = if self.diagnostics == DiagnosticsMode::Off {
             String::new()
         } else {
-            format!(" · DEBUG {}", self.diagnostics.label())
+            format!(" · GUIDE {}", self.diagnostics.label())
         };
         let trace_diagnostics = trace_diagnostics(self.diagnostics, &trace);
         let window_title = format!(
@@ -389,7 +446,9 @@ impl AxisAnimation {
 
 #[cfg(test)]
 mod tests {
-    use super::{AXIS_RADIANS_PER_SECOND, AxisAnimation, INITIAL_AXIS_ANGLE};
+    use super::{
+        AXIS_RADIANS_PER_SECOND, AxisAnimation, INITIAL_AXIS_ANGLE, read_snapshot, render_snapshot,
+    };
     use std::f64::consts::PI;
     use std::time::Duration;
 
@@ -433,5 +492,25 @@ mod tests {
         animation.reset();
         assert!(!animation.is_enabled());
         assert!((animation.phase(Duration::from_secs(99)) - 0.62).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn living_page_matches_committed_cpu_snapshot() {
+        let actual = render_snapshot().expect("living page must render headlessly");
+        let (width, height, rgba) =
+            read_snapshot().expect("committed living-page snapshot must decode");
+        assert_eq!((actual.width, actual.height), (width, height));
+        assert_eq!(actual.rgba.len(), rgba.len());
+        if let Some(index) = actual
+            .rgba
+            .iter()
+            .zip(&rgba)
+            .position(|(actual, expected)| actual != expected)
+        {
+            panic!(
+                "living-page pixels drifted at byte {index}: actual {}, expected {}",
+                actual.rgba[index], rgba[index]
+            );
+        }
     }
 }
