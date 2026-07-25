@@ -148,6 +148,15 @@ toolkit behavior or pixel production.
   claims; the precedence-merged Parley boundary fact blocking the latter is
   tracked by `und-oh0.2.11`. Exact results are recorded in
   `docs/proof/cjk-line-breaking-review-2026-07-25.md`.
+- Step 12 is complete. `WorkReport` remains the always-on stage ledger while
+  opt-in `PreparationTrace` explains cold, exact, shared, adapter,
+  invalidation, candidate, region, output-capacity, scratch-growth, and cache
+  residency facts. Host tooling owns separate prepare/render time and process
+  allocation evidence. The matched label wind tunnel measures tracing at
+  0.14–0.22% over the retained path on this host after cache-byte accounting
+  was made incremental. Spoor remains the independently gated `und-oh0.14`;
+  exact results are recorded in
+  `docs/proof/preparation-trace-review-2026-07-25.md`.
 - The committed-tree allocation audit exposed a separate retained-lifecycle
   problem: unchanged values are rebuilt and deep-compared, then retained
   records are deep-copied into each output. Its matched 1,000-paragraph

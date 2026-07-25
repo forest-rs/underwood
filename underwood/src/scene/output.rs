@@ -102,6 +102,7 @@ pub enum ProjectedTextPosition {
 pub struct SceneOutput {
     pub(super) scene: TextScene,
     pub(super) work: WorkReport,
+    pub(super) trace: Option<PreparationTrace>,
     pub(super) region_transcript: Option<RegionTranscript>,
 }
 
@@ -110,6 +111,7 @@ pub struct SceneOutput {
 pub struct CompositionSceneOutput {
     pub(super) scene: CompositionScene,
     pub(super) work: WorkReport,
+    pub(super) trace: Option<PreparationTrace>,
     pub(super) region_transcript: Option<RegionTranscript>,
 }
 
@@ -124,6 +126,12 @@ impl CompositionSceneOutput {
     #[must_use]
     pub const fn work(&self) -> &WorkReport {
         &self.work
+    }
+
+    /// Returns requested preparation decisions, work, and memory accounting.
+    #[must_use]
+    pub const fn trace(&self) -> Option<&PreparationTrace> {
+        self.trace.as_ref()
     }
 
     /// Returns replayable region attempts for this transient request.
@@ -146,10 +154,183 @@ impl SceneOutput {
         &self.work
     }
 
+    /// Returns requested preparation decisions, work, and memory accounting.
+    #[must_use]
+    pub const fn trace(&self) -> Option<&PreparationTrace> {
+        self.trace.as_ref()
+    }
+
     /// Returns replayable region attempts for this request.
     #[must_use]
     pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
         self.region_transcript.as_ref()
+    }
+}
+
+/// Aggregate retained-cache decisions made during one scene preparation.
+///
+/// Invalidation counters may overlap: one cached paragraph can change both
+/// adjustment and paint inputs. Exact reuse, shared preparation, and adapter
+/// calls are mutually exclusive outcomes for a paragraph.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PreparationReuse {
+    pub(super) paragraphs: usize,
+    pub(super) cold_paragraphs: usize,
+    pub(super) exact_geometry_reuses: usize,
+    pub(super) shared_preparation_reuses: usize,
+    pub(super) adapter_calls: usize,
+    pub(super) formation_invalidations: usize,
+    pub(super) adjustment_invalidations: usize,
+    pub(super) paint_invalidations: usize,
+}
+
+impl PreparationReuse {
+    /// Returns paragraphs considered by retained preparation.
+    #[must_use]
+    pub const fn paragraphs(self) -> usize {
+        self.paragraphs
+    }
+
+    /// Returns paragraphs with no identity-local geometry entry.
+    #[must_use]
+    pub const fn cold_paragraphs(self) -> usize {
+        self.cold_paragraphs
+    }
+
+    /// Returns paragraphs that reused exact identity-local geometry.
+    #[must_use]
+    pub const fn exact_geometry_reuses(self) -> usize {
+        self.exact_geometry_reuses
+    }
+
+    /// Returns paragraphs prepared from identity-free shared facts.
+    #[must_use]
+    pub const fn shared_preparation_reuses(self) -> usize {
+        self.shared_preparation_reuses
+    }
+
+    /// Returns paragraphs sent through the configured formation adapter.
+    #[must_use]
+    pub const fn adapter_calls(self) -> usize {
+        self.adapter_calls
+    }
+
+    /// Returns cached paragraphs whose text, shaping, flow, or region key changed.
+    #[must_use]
+    pub const fn formation_invalidations(self) -> usize {
+        self.formation_invalidations
+    }
+
+    /// Returns cached paragraphs whose accepted-line adjustment changed.
+    #[must_use]
+    pub const fn adjustment_invalidations(self) -> usize {
+        self.adjustment_invalidations
+    }
+
+    /// Returns cached paragraphs whose paint assignment changed.
+    #[must_use]
+    pub const fn paint_invalidations(self) -> usize {
+        self.paint_invalidations
+    }
+}
+
+/// Deterministic capacity and residency observations for one preparation.
+///
+/// These values are accounting charges derived from owned collection
+/// capacities. They are not allocator telemetry, resident-set size, or
+/// wall-clock measurements.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PreparationMemory {
+    pub(super) cache_before: CacheDiagnostics,
+    pub(super) cache_after: CacheDiagnostics,
+    pub(super) scene_output_capacity_bytes: usize,
+    pub(super) scratch_capacity_before: usize,
+    pub(super) scratch_capacity_after: usize,
+}
+
+impl PreparationMemory {
+    /// Returns retained-cache state before preparation.
+    #[must_use]
+    pub const fn cache_before(self) -> CacheDiagnostics {
+        self.cache_before
+    }
+
+    /// Returns retained-cache state after preparation and budget enforcement.
+    #[must_use]
+    pub const fn cache_after(self) -> CacheDiagnostics {
+        self.cache_after
+    }
+
+    /// Returns the capacity charge for the newly published scene's owned vectors.
+    #[must_use]
+    pub const fn scene_output_capacity_bytes(self) -> usize {
+        self.scene_output_capacity_bytes
+    }
+
+    /// Returns reusable layout scratch capacity before preparation.
+    #[must_use]
+    pub const fn scratch_capacity_before(self) -> usize {
+        self.scratch_capacity_before
+    }
+
+    /// Returns reusable layout scratch capacity after preparation.
+    #[must_use]
+    pub const fn scratch_capacity_after(self) -> usize {
+        self.scratch_capacity_after
+    }
+
+    /// Returns reusable layout scratch growth during preparation.
+    #[must_use]
+    pub const fn scratch_growth_bytes(self) -> usize {
+        self.scratch_capacity_after
+            .saturating_sub(self.scratch_capacity_before)
+    }
+}
+
+/// Opt-in deterministic explanation of one successful scene preparation.
+///
+/// Exact region slots remain available through
+/// [`SceneOutput::region_transcript`] or
+/// [`CompositionSceneOutput::region_transcript`]. Host timing and process
+/// allocation counts intentionally remain outside this `no_std` core.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PreparationTrace {
+    pub(super) work: WorkReport,
+    pub(super) reuse: PreparationReuse,
+    pub(super) memory: PreparationMemory,
+    pub(super) region_attempts: usize,
+    pub(super) region_height_rejections: usize,
+}
+
+impl PreparationTrace {
+    /// Returns actual stage work performed by the request.
+    #[must_use]
+    pub const fn work(&self) -> &WorkReport {
+        &self.work
+    }
+
+    /// Returns retained reuse and invalidation decisions.
+    #[must_use]
+    pub const fn reuse(&self) -> PreparationReuse {
+        self.reuse
+    }
+
+    /// Returns deterministic capacity and cache-residency observations.
+    #[must_use]
+    pub const fn memory(&self) -> PreparationMemory {
+        self.memory
+    }
+
+    /// Returns exact-region slot attempts made during preparation.
+    #[must_use]
+    pub const fn region_attempts(&self) -> usize {
+        self.region_attempts
+    }
+
+    /// Returns region attempts rejected because the offered slot was too short.
+    #[must_use]
+    pub const fn region_height_rejections(&self) -> usize {
+        self.region_height_rejections
     }
 }
 

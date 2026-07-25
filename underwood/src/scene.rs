@@ -40,8 +40,9 @@ mod shared_cache;
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
 pub use interaction::{CompositionScene, TextScene};
 pub use output::{
-    CompositionSceneOutput, ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource,
-    SceneOutput, StageWork, TextMetrics, WorkReport,
+    CompositionSceneOutput, PreparationMemory, PreparationReuse, PreparationTrace,
+    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneOutput, StageWork,
+    TextMetrics, WorkReport,
 };
 pub use records::{
     LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragment, SceneFragmentId, SceneGlyph,

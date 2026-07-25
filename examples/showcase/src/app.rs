@@ -12,7 +12,7 @@ use crate::interaction::{
 };
 use crate::presentation::{self, DiagnosticsMode, FrameLayout};
 use imaging_vello_cpu::VelloCpuRenderer;
-use underwood::{TextScene, WorkReport};
+use underwood::{PreparationTrace, TextScene, WorkReport};
 
 type AnyError = Box<dyn std::error::Error>;
 
@@ -127,60 +127,68 @@ impl HostApplication for ShowcaseApp {
         };
         let prepare_ms = prepare_started.elapsed().as_secs_f64() * 1_000.0;
         let render_started = Instant::now();
-        let (scene, work, line_count, axis_weight, clipped, ime_cursor_area, mode) = match prepared
-        {
-            PreparedFrame::Composition(prepared) => {
-                let composition = composition
-                    .as_ref()
-                    .expect("composition frame requires the captured session");
-                let overlay =
-                    self.editor
-                        .composition_overlay(&self.content, &prepared.scene, caret_visible);
-                let scene = presentation::record_composition_frame(
-                    &prepared.scene,
-                    layout,
-                    self.diagnostics,
-                    &overlay,
-                )
-                .map_err(|error| error.to_string())?;
-                let ime_cursor = self.editor.ime_cursor_rect(
-                    &self.content,
-                    self.last_committed_scene.as_ref(),
-                    Some(&prepared.scene),
-                );
-                (
-                    scene,
-                    prepared.work,
-                    prepared.line_count,
-                    prepared.axis_weight,
-                    layout.lines_are_clipped(prepared.scene.lines()),
-                    ime_cursor.map(|rect| layout.window_rect(rect)),
-                    format!("IME {}", composition.epoch().get()),
-                )
-            }
-            PreparedFrame::Committed(prepared) => {
-                let overlay = self
-                    .editor
-                    .committed_overlay(&prepared.scene, caret_visible);
-                let scene =
-                    presentation::record_frame(&prepared.scene, layout, self.diagnostics, &overlay)
-                        .map_err(|error| error.to_string())?;
-                let ime_cursor =
-                    self.editor
-                        .ime_cursor_rect(&self.content, Some(&prepared.scene), None);
-                let clipped = layout.document_is_clipped(&prepared.scene);
-                self.remember_committed_scene(prepared.scene)?;
-                (
-                    scene,
-                    prepared.work,
-                    prepared.line_count,
-                    prepared.axis_weight,
-                    clipped,
-                    ime_cursor.map(|rect| layout.window_rect(rect)),
-                    String::from("EDIT"),
-                )
-            }
-        };
+        let (scene, work, trace, line_count, axis_weight, clipped, ime_cursor_area, mode) =
+            match prepared {
+                PreparedFrame::Composition(prepared) => {
+                    let composition = composition
+                        .as_ref()
+                        .expect("composition frame requires the captured session");
+                    let overlay = self.editor.composition_overlay(
+                        &self.content,
+                        &prepared.scene,
+                        caret_visible,
+                    );
+                    let scene = presentation::record_composition_frame(
+                        &prepared.scene,
+                        layout,
+                        self.diagnostics,
+                        &overlay,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    let ime_cursor = self.editor.ime_cursor_rect(
+                        &self.content,
+                        self.last_committed_scene.as_ref(),
+                        Some(&prepared.scene),
+                    );
+                    (
+                        scene,
+                        prepared.work,
+                        prepared.trace,
+                        prepared.line_count,
+                        prepared.axis_weight,
+                        layout.lines_are_clipped(prepared.scene.lines()),
+                        ime_cursor.map(|rect| layout.window_rect(rect)),
+                        format!("IME {}", composition.epoch().get()),
+                    )
+                }
+                PreparedFrame::Committed(prepared) => {
+                    let overlay = self
+                        .editor
+                        .committed_overlay(&prepared.scene, caret_visible);
+                    let scene = presentation::record_frame(
+                        &prepared.scene,
+                        layout,
+                        self.diagnostics,
+                        &overlay,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    let ime_cursor =
+                        self.editor
+                            .ime_cursor_rect(&self.content, Some(&prepared.scene), None);
+                    let clipped = layout.document_is_clipped(&prepared.scene);
+                    self.remember_committed_scene(prepared.scene)?;
+                    (
+                        scene,
+                        prepared.work,
+                        prepared.trace,
+                        prepared.line_count,
+                        prepared.axis_weight,
+                        clipped,
+                        ime_cursor.map(|rect| layout.window_rect(rect)),
+                        String::from("EDIT"),
+                    )
+                }
+            };
         let image = self
             .renderer
             .render_scene(
@@ -200,8 +208,9 @@ impl HostApplication for ShowcaseApp {
         } else {
             format!(" · DEBUG {}", self.diagnostics.label())
         };
+        let trace_diagnostics = trace_diagnostics(self.diagnostics, &trace);
         let window_title = format!(
-            "Underwood — {mode}{diagnostics} · {} · {} lines · wght {:.0} · shape {} · flow {} · paint {} · reused {} · prep {:.1} ms · render {:.1} ms{}{}",
+            "Underwood — {mode}{diagnostics} · {} · {} lines · wght {:.0} · shape {} · flow {} · paint {} · reused {} · prep {:.1} ms · render {:.1} ms{trace_diagnostics}{}{}",
             self.editor.status(),
             line_count,
             axis_weight,
@@ -292,6 +301,26 @@ impl HostApplication for ShowcaseApp {
     fn animation_enabled(&self) -> bool {
         self.axis_animation.is_enabled() || self.editor.caret_animation_enabled()
     }
+}
+
+fn trace_diagnostics(mode: DiagnosticsMode, trace: &PreparationTrace) -> String {
+    if mode == DiagnosticsMode::Off {
+        return String::new();
+    }
+    let reuse = trace.reuse();
+    let memory = trace.memory();
+    format!(
+        " · cause C{} F{} A{} P{} · slots {} · rejected {} · scene {} KiB · cache {} KiB · scratch +{} B",
+        reuse.cold_paragraphs(),
+        reuse.formation_invalidations(),
+        reuse.adjustment_invalidations(),
+        reuse.paint_invalidations(),
+        trace.region_attempts(),
+        trace.region_height_rejections(),
+        memory.scene_output_capacity_bytes() / 1024,
+        memory.cache_after().scene_cache_accounted_bytes() / 1024,
+        memory.scratch_growth_bytes(),
+    )
 }
 
 fn has_text_preparation_work(work: &WorkReport) -> bool {

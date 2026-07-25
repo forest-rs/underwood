@@ -123,6 +123,7 @@ pub struct BlockRequest<'a> {
     pub(crate) paint: &'a PaintTable,
     pub(crate) paragraph_style: ParagraphStyle,
     pub(crate) region_flow: Option<&'a crate::RegionFlow>,
+    pub(crate) trace: bool,
 }
 
 impl<'a> BlockRequest<'a> {
@@ -139,6 +140,7 @@ impl<'a> BlockRequest<'a> {
             paint,
             paragraph_style: ParagraphStyle::DEFAULT,
             region_flow: None,
+            trace: false,
         }
     }
 
@@ -164,6 +166,19 @@ impl<'a> BlockRequest<'a> {
     #[must_use]
     pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
         self.region_flow
+    }
+
+    /// Returns a request that records deterministic preparation diagnostics.
+    #[must_use]
+    pub const fn with_preparation_trace(mut self) -> Self {
+        self.trace = true;
+        self
+    }
+
+    /// Returns whether detailed preparation tracing was requested.
+    #[must_use]
+    pub const fn preparation_trace(self) -> bool {
+        self.trace
     }
 }
 

@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|shared-hit|retained-identical|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -369,6 +369,7 @@ fn run_profile(
         }
         "shared-hit" | "y1" => profile_shared_hit(rounds, labels, &style, &paint),
         "retained-identical" | "r0" => profile_retained_identical(rounds, labels, &style, &paint),
+        "traced-retained" | "t0" => profile_traced_retained(rounds, labels, &style, &paint),
         "retained-adjustment" | "r1" => profile_retained_adjustment(rounds, labels, &style, &paint),
         "paint-change" | "a0" => profile_paint_change(rounds, labels, &style, &paint),
         "alignment-churn" | "a1" => profile_alignment_churn(rounds, labels, &style, &paint, false),
@@ -886,6 +887,63 @@ fn profile_retained_identical(
         }
     });
     report_profile("retained-identical", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_traced_retained(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let mut exact_reuses = 0_usize;
+    let mut last_scene_bytes = 0_usize;
+    let mut last_cache_bytes = 0_usize;
+    let mut last_scratch_bytes = 0_usize;
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_preparation_trace(),
+                    )
+                    .expect("traced retained label must prepare");
+                assert_no_preparation_work(&output);
+                let trace = output.trace().expect("trace was requested");
+                exact_reuses = exact_reuses.saturating_add(trace.reuse().exact_geometry_reuses());
+                last_scene_bytes = trace.memory().scene_output_capacity_bytes();
+                last_cache_bytes = trace.memory().cache_after().scene_cache_accounted_bytes();
+                last_scratch_bytes = trace.memory().scratch_capacity_after();
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("traced operation count overflowed")?;
+    assert_eq!(
+        exact_reuses, operations,
+        "every traced stable identity must report exact geometry reuse"
+    );
+    report("traced-retained", operations, elapsed);
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        println!(
+            "traced-retained_memory\toperations={operations}\tscene_output_bytes={last_scene_bytes}\tscene_cache_bytes={last_cache_bytes}\tscratch_bytes={last_scratch_bytes}"
+        );
+    }
     Ok(())
 }
 

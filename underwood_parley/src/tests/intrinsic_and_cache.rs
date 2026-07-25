@@ -214,6 +214,7 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     assert_eq!(after_churn.budget(), 2);
     assert_eq!(after_churn.misses(), 3);
     assert_eq!(after_churn.hits(), 0);
+    assert!(after_churn.scene_cache_accounted_bytes() > 0);
 
     let retained = engine
         .prepare_block(
@@ -231,6 +232,9 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     assert_eq!(after_release.current_entries(), 1);
     assert_eq!(after_release.backend_entries(), Some(1));
     assert_eq!(after_release.releases(), 1);
+    assert!(
+        after_release.scene_cache_accounted_bytes() < after_churn.scene_cache_accounted_bytes()
+    );
 
     let reloaded = engine
         .prepare_block(
@@ -242,6 +246,7 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     engine.clear_cache();
     assert_eq!(engine.cache_diagnostics().current_entries(), 0);
     assert_eq!(engine.cache_diagnostics().backend_entries(), Some(0));
+    assert_eq!(engine.cache_diagnostics().scene_cache_accounted_bytes(), 0);
 
     let mut zero = fixture_engine_with_budget(0);
     let owned = zero
@@ -253,6 +258,7 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     assert!(!owned.scene().fragments().is_empty());
     assert_eq!(zero.cache_diagnostics().current_entries(), 0);
     assert_eq!(zero.cache_diagnostics().backend_entries(), Some(0));
+    assert_eq!(zero.cache_diagnostics().scene_cache_accounted_bytes(), 0);
     assert_eq!(zero.cache_diagnostics().evictions(), 1);
 }
 

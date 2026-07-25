@@ -25,8 +25,8 @@ use crate::{
     ParagraphRole, ParagraphStyle, Point, ProjectedTextSource, Rect, RegionAttempt,
     RegionAttemptOutcome, RegionFlow, RegionTranscript, ResolvedDirection, SceneErrorKind,
     SceneRequest, ShapingStyle, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
-    SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextConstraint,
-    TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
+    SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAlignment,
+    TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 
 #[derive(Debug)]
@@ -582,6 +582,114 @@ fn invalid_first_output_releases_untracked_backend_state() {
         layout.cache_diagnostics().backend_entries(),
         Some(0),
         "invalid output must release backend state with no geometry owner"
+    );
+}
+
+#[test]
+fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-trace-0001", "trace");
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
+
+    let cold = layout
+        .prepare(&document.snapshot(), &request)
+        .expect("cold trace fixture prepares");
+    let cold_trace = cold.trace().expect("trace was requested");
+    assert_eq!(cold_trace.work(), cold.work());
+    assert_eq!(cold_trace.reuse().paragraphs(), 1);
+    assert_eq!(cold_trace.reuse().cold_paragraphs(), 1);
+    assert_eq!(cold_trace.reuse().adapter_calls(), 1);
+    assert_eq!(cold_trace.reuse().exact_geometry_reuses(), 0);
+    assert_eq!(cold_trace.memory().cache_before().current_entries(), 0);
+    assert_eq!(cold_trace.memory().cache_after().current_entries(), 1);
+    assert!(
+        cold_trace
+            .memory()
+            .cache_after()
+            .scene_cache_accounted_bytes()
+            > 0
+    );
+    assert!(cold_trace.memory().scene_output_capacity_bytes() > 0);
+    assert_eq!(cold_trace.memory().scratch_growth_bytes(), 0);
+
+    let retained = layout
+        .prepare(&document.snapshot(), &request)
+        .expect("retained trace fixture prepares");
+    let retained_trace = retained.trace().expect("trace was requested");
+    assert_eq!(retained_trace.reuse().exact_geometry_reuses(), 1);
+    assert_eq!(retained_trace.reuse().adapter_calls(), 0);
+    assert_eq!(retained.work().reused_paragraphs(), 1);
+    assert_eq!(
+        retained_trace
+            .memory()
+            .cache_before()
+            .scene_cache_accounted_bytes(),
+        retained_trace
+            .memory()
+            .cache_after()
+            .scene_cache_accounted_bytes()
+    );
+
+    let centered = ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Center);
+    let centered_styles = styles.clone().with_default_paragraph_style(centered);
+    let adjusted = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &centered_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("adjustment-only trace fixture prepares");
+    let adjusted_trace = adjusted.trace().expect("trace was requested");
+    assert_eq!(adjusted_trace.reuse().formation_invalidations(), 0);
+    assert_eq!(adjusted_trace.reuse().adjustment_invalidations(), 1);
+    assert_eq!(adjusted_trace.reuse().paint_invalidations(), 0);
+
+    let painted_styles =
+        StyleMap::new(styles.default_style().clone().with_paint(PaintSlot::new(1)))
+            .with_default_paragraph_style(centered);
+    let painted_table =
+        PaintTable::from_brushes([Brush::Solid(Color::BLACK), Brush::Solid(Color::WHITE)]);
+    let painted = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &painted_styles, &painted_table)
+                .with_preparation_trace(),
+        )
+        .expect("paint-only trace fixture prepares");
+    let painted_trace = painted.trace().expect("trace was requested");
+    assert_eq!(painted_trace.reuse().formation_invalidations(), 0);
+    assert_eq!(painted_trace.reuse().adjustment_invalidations(), 0);
+    assert_eq!(painted_trace.reuse().paint_invalidations(), 1);
+
+    let mut untraced = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(1),
+    );
+    let ordinary = untraced
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("ordinary preparation remains available");
+    assert!(
+        ordinary.trace().is_none(),
+        "deep diagnostics are opt-in rather than a stable-path tax"
     );
 }
 

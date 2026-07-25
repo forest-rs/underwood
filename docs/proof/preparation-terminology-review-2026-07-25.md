@@ -28,19 +28,16 @@ preparation work they exclude.
 No public type or function changed. This is a private identifier, test,
 diagnostic-label, and documentation migration.
 
-## Historical exceptions
+## Historical exception
 
-A case-insensitive repository search has only three remaining matches outside
-Beads history. They are exact former private symbol spellings quoted in:
+A case-insensitive repository search has only two remaining matches outside
+Beads history. They are the exact former private symbol spellings quoted in
+`docs/proof/retained-shaped-text-benchmark-2026-07-22.md`, which identifies the
+before-state types measured by that historical benchmark.
 
-- `docs/design/0005-retained-parley-shaped-text.md`, which records the old
-  representation that the design replaced;
-- `docs/proof/retained-shaped-text-benchmark-2026-07-22.md`, which identifies
-  the exact before-state types measured by that historical benchmark.
-
-Rewriting those symbols as though they had different source names would
-falsify the old design and measurement. They are neither live identifiers nor
-current architectural vocabulary.
+Rewriting those symbols as though they had different source names would falsify
+the old measurement. They are neither live identifiers nor current
+architectural vocabulary. Current designs contain no occurrence.
 
 ## Validation
 
@@ -50,6 +47,6 @@ The blocking search is:
 test -z "$(rg -il 'phys''ics' --glob '*.rs' --glob '!target/**')"
 ```
 
-Repository-wide matches must remain limited to the two historical evidence
-files above. Formatting, all-target/all-feature Clippy with warnings denied,
+Repository-wide matches must remain limited to the one historical evidence
+file above. Formatting, all-target/all-feature Clippy with warnings denied,
 workspace tests, rustdoc, and repository policy protect the renamed live code.

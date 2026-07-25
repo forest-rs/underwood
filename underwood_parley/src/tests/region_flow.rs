@@ -18,8 +18,10 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
         &styles,
         &paint,
     )
-    .with_region_flow(&flow);
-    let output = fixture_engine()
+    .with_region_flow(&flow)
+    .with_preparation_trace();
+    let mut engine = fixture_engine();
+    let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("text must retry into the second column");
     let transcript = output
@@ -45,6 +47,24 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
     assert_eq!(output.scene().lines()[0].sources()[0].bytes().start, 0);
     assert!(output.work().rejected_line_candidates() >= 1);
     assert!(output.work().line_checkpoint_restores() >= 1);
+    let trace = output.trace().expect("trace was requested");
+    assert_eq!(trace.region_attempts(), transcript.attempts().len());
+    assert_eq!(trace.region_height_rejections(), 1);
+    assert!(
+        trace.memory().scratch_growth_bytes() > 0,
+        "the first region request grows reusable attempt scratch"
+    );
+
+    let retained = engine
+        .prepare(&document.snapshot(), &request)
+        .expect("retained region trace prepares");
+    let retained_trace = retained.trace().expect("trace was requested");
+    assert_eq!(retained_trace.reuse().exact_geometry_reuses(), 1);
+    assert_eq!(retained_trace.memory().scratch_growth_bytes(), 0);
+    assert_eq!(
+        retained_trace.memory().scratch_capacity_before(),
+        retained_trace.memory().scratch_capacity_after()
+    );
 }
 
 #[test]

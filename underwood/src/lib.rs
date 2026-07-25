@@ -54,10 +54,10 @@ pub use region::{
 };
 pub use scene::{
     CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
-    LineAdjustment, ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,
-    SceneCompositionRect, SceneFragment, SceneFragmentId, SceneGlyph, SceneGlyphInstanceId,
-    SceneLine, SceneOutput, SceneSelectionRect, SemanticFragment, StageWork, TextHit, TextMetrics,
-    TextScene, WorkReport,
+    LineAdjustment, PreparationMemory, PreparationReuse, PreparationTrace, ProjectedTextPosition,
+    ProjectedTextRange, ProjectedTextSource, SceneCaret, SceneCompositionRect, SceneFragment,
+    SceneFragmentId, SceneGlyph, SceneGlyphInstanceId, SceneLine, SceneOutput, SceneSelectionRect,
+    SemanticFragment, StageWork, TextHit, TextMetrics, TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

@@ -8,9 +8,9 @@ use underwood::{
     Brush, CacheBudget, Color, CompositionScene, CompositionSession, ComputedInlineStyle, Document,
     DocumentId, DocumentSnapshot, FiniteWidth, FontFeature, FontVariation, FontWeight,
     InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable,
-    ParagraphId, ParagraphRole, ParagraphStyle, SceneRequest, Script, ShapingStyle,
-    SnapshotTextSelectionSet, StyleMap, Tag, TextAlignment, TextConstraint, TextId, TextScene,
-    WorkReport,
+    ParagraphId, ParagraphRole, ParagraphStyle, PreparationTrace, SceneRequest, Script,
+    ShapingStyle, SnapshotTextSelectionSet, StyleMap, Tag, TextAlignment, TextConstraint, TextId,
+    TextScene, WorkReport,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -48,6 +48,7 @@ pub(crate) enum ActionVisual {
 pub(crate) struct PreparedDocumentFrame {
     pub(crate) scene: TextScene,
     pub(crate) work: WorkReport,
+    pub(crate) trace: PreparationTrace,
     pub(crate) line_count: usize,
     pub(crate) axis_weight: f32,
 }
@@ -57,6 +58,7 @@ pub(crate) struct PreparedDocumentFrame {
 pub(crate) struct PreparedCompositionFrame {
     pub(crate) scene: CompositionScene,
     pub(crate) work: WorkReport,
+    pub(crate) trace: PreparationTrace,
     pub(crate) line_count: usize,
     pub(crate) axis_weight: f32,
 }
@@ -288,12 +290,17 @@ impl ShowcaseContent {
             TextConstraint::Wrap(FiniteWidth::new(width)?),
             &styles,
             &paints,
-        );
+        )
+        .with_preparation_trace();
         let output = self.layout.prepare(&self.document.snapshot(), &request)?;
         Ok(PreparedDocumentFrame {
             line_count: output.scene().lines().len(),
             scene: output.scene().clone(),
             work: output.work().clone(),
+            trace: output
+                .trace()
+                .expect("the showcase requests preparation tracing")
+                .clone(),
             axis_weight,
         })
     }
@@ -312,7 +319,8 @@ impl ShowcaseContent {
             TextConstraint::Wrap(FiniteWidth::new(width)?),
             &styles,
             &paints,
-        );
+        )
+        .with_preparation_trace();
         let output =
             self.layout
                 .prepare_composition(&self.document.snapshot(), &request, composition)?;
@@ -320,6 +328,10 @@ impl ShowcaseContent {
             line_count: output.scene().lines().len(),
             scene: output.scene().clone(),
             work: output.work().clone(),
+            trace: output
+                .trace()
+                .expect("the showcase requests preparation tracing")
+                .clone(),
             axis_weight,
         })
     }

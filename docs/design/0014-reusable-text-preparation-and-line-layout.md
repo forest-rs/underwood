@@ -505,17 +505,24 @@ projection -> analysis -> shaping -> candidate formation
 
 It records:
 
-- input and output units;
-- cache reuse and invalidation reason;
+- exact stage work and output units;
+- identity-local reuse, shared preparation, adapter calls, and overlapping
+  formation, adjustment, and paint invalidation reasons;
 - candidate retries and rejected work;
-- slots requested and accepted;
+- exact slots, accepted attempts, and height rejection through the replayable
+  region transcript;
 - stage duration in host tooling;
-- allocation and retained-capacity facts in profiling builds;
-- capability limits such as unsupported transform or justification policy.
+- scene-output capacity, reusable scratch growth, and retained scene/shared
+  cache residency;
+- process allocation calls and bytes in external profiling tools.
 
-The trace is deterministic apart from explicitly host-measured time. A region
-transcript can be replayed without fonts or a renderer once shaped candidate
-facts are captured.
+`WorkReport` remains always available. Detailed `PreparationTrace` is opt-in
+through `SceneRequest::with_preparation_trace` or
+`BlockRequest::with_preparation_trace` because capacity accounting performs
+additional diagnostic work. The trace itself is deterministic; wall time and
+allocator behavior are explicitly host observations. A region transcript can
+be replayed without fonts or a renderer once shaped candidate facts are
+captured.
 
 ## Options
 

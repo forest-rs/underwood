@@ -1017,6 +1017,7 @@ pub struct SceneRequest<'a> {
     pub(crate) styles: &'a StyleMap,
     pub(crate) paint: &'a PaintTable,
     pub(crate) region_flow: Option<&'a crate::RegionFlow>,
+    pub(crate) trace: bool,
 }
 
 impl<'a> SceneRequest<'a> {
@@ -1028,6 +1029,7 @@ impl<'a> SceneRequest<'a> {
             styles,
             paint,
             region_flow: None,
+            trace: false,
         }
     }
 
@@ -1046,5 +1048,22 @@ impl<'a> SceneRequest<'a> {
     #[must_use]
     pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
         self.region_flow
+    }
+
+    /// Returns a request that records deterministic preparation diagnostics.
+    ///
+    /// Tracing performs additional capacity-accounting passes. Ordinary
+    /// preparation remains untraced so stable UI paths do not pay diagnostic
+    /// overhead.
+    #[must_use]
+    pub const fn with_preparation_trace(mut self) -> Self {
+        self.trace = true;
+        self
+    }
+
+    /// Returns whether detailed preparation tracing was requested.
+    #[must_use]
+    pub const fn preparation_trace(self) -> bool {
+        self.trace
     }
 }

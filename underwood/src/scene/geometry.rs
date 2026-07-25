@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::adapter::{ClusterBoundary, ClusterWhitespace};
+use core::mem::size_of;
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGeometry {
@@ -136,6 +137,60 @@ pub(super) enum LocalPosition {
         byte: u32,
         affinity: TextAffinity,
     },
+}
+
+impl CachedGeometry {
+    pub(super) fn accounted_owned_bytes(&self) -> usize {
+        let mut bytes = vec_bytes::<CachedLine>(self.lines.capacity())
+            .saturating_add(vec_bytes::<CachedFragment>(self.fragments.capacity()))
+            .saturating_add(vec_bytes::<CachedCluster>(self.clusters.capacity()))
+            .saturating_add(vec_bytes::<CachedCaret>(self.carets.capacity()))
+            .saturating_add(vec_bytes::<CachedCursorMovement>(self.movements.capacity()))
+            .saturating_add(vec_bytes::<LocalRange>(self.texts.capacity()))
+            .saturating_add(vec_bytes::<CachedSemantic>(self.semantics.capacity()));
+        for line in &self.lines {
+            bytes = bytes.saturating_add(vec_bytes::<LocalRange>(line.sources.capacity()));
+        }
+        for fragment in &self.fragments {
+            bytes = bytes
+                .saturating_add(vec_bytes::<CachedGlyph>(fragment.glyphs.capacity()))
+                .saturating_add(vec_bytes::<LocalRange>(fragment.sources.capacity()))
+                .saturating_add(vec_bytes::<i16>(fragment.normalized_coords.len()));
+            for glyph in &fragment.glyphs {
+                bytes = bytes.saturating_add(vec_bytes::<LocalRange>(glyph.sources.capacity()));
+            }
+        }
+        for cluster in &self.clusters {
+            bytes = bytes
+                .saturating_add(vec_bytes::<LocalRange>(cluster.sources.capacity()))
+                .saturating_add(vec_bytes::<CachedHitSlice>(cluster.hit_slices.capacity()));
+        }
+        for movement in &self.movements {
+            bytes = bytes
+                .saturating_add(cursor_step_bytes(movement.previous_visual.as_ref()))
+                .saturating_add(cursor_step_bytes(movement.next_visual.as_ref()))
+                .saturating_add(cursor_step_bytes(movement.previous_logical.as_ref()))
+                .saturating_add(cursor_step_bytes(movement.next_logical.as_ref()));
+        }
+        for semantic in &self.semantics {
+            bytes = bytes.saturating_add(
+                semantic
+                    .source
+                    .as_ref()
+                    .map_or(0, |source| vec_bytes::<LocalRange>(source.capacity())),
+            );
+        }
+        bytes
+    }
+}
+
+fn cursor_step_bytes(step: Option<&CachedCursorStep>) -> usize {
+    step.and_then(|step| step.source.as_ref())
+        .map_or(0, |source| vec_bytes::<LocalRange>(source.capacity()))
+}
+
+const fn vec_bytes<T>(capacity: usize) -> usize {
+    size_of::<T>().saturating_mul(capacity)
 }
 
 pub(super) fn rebind_composition_geometry(
