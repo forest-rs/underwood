@@ -73,6 +73,14 @@ before-state law.
     peak estimated bytes are observable.
 13. Core implementation remains `no_std + alloc`, Rust 1.88 compatible, and
     adds neither a dependency nor `unsafe`.
+14. A paragraph backend participates only through an explicit
+    identity-independence contract. The default for existing and third-party
+    backends is no shared reuse.
+15. An opted-in backend supplies a cache epoch covering every hidden resource
+    that can alter prepared output. An epoch change invalidates all shared
+    entries before another lookup.
+16. A shared hit is validated against the current projection exactly as a
+    fresh backend output is; cache residency never weakens adapter validation.
 
 ## Options
 
@@ -109,9 +117,38 @@ Choose C.
 
 This keeps cache budget, lifetime, diagnostics, and semantic rebinding with the
 owner that already coordinates retained geometry. It works for every paragraph
-backend, does not expose backend-private Parley records, and removes all
-analysis, font-selection, shaping, and formation work for exact repeated
-labels. It deliberately continues to pay per-consumer geometry cost.
+backend that explicitly promises identity-independent prepared facts, does not
+expose backend-private Parley records, and removes all analysis, font-selection,
+shaping, and formation work for exact repeated labels. It deliberately
+continues to pay per-consumer geometry cost.
+
+## Backend eligibility
+
+`ParagraphFormation` currently receives a `ParagraphId`. Existing trait
+semantics do not forbid a backend from choosing different metrics, glyphs, or
+interaction records for different identities. Reusing such output would be
+incorrect even when every visible input in `ParagraphInput` matched.
+
+Add an opt-in method conceptually equivalent to:
+
+```rust
+fn shared_preparation_epoch(&self) -> Option<u64> {
+    None
+}
+```
+
+`None` disables cross-identity reuse. `Some(epoch)` promises that prepared
+facts are a pure function of the non-identity paragraph input, constraints,
+and that epoch. The paragraph identity may still be used for diagnostics,
+public output envelopes, and region-transcript rebinding.
+
+`ParleyParagraphEngine` opts in because its `FontSet` is an immutable snapshot
+owned by the engine. It initially returns epoch zero. A future runtime font or
+data mutation API must advance the epoch before changed output is observable.
+`LayoutEngine` clears its shared entries whenever the reported epoch changes.
+
+This additive method is both a capability declaration and a safety fence. A
+backend that does not understand the contract remains correct by doing nothing.
 
 ## Shared key
 
@@ -126,6 +163,7 @@ The exact key contains:
 - exact region flow and starting cursor, when present;
 - empty-paragraph line-height facts;
 - paragraph-local paint-slot runs while prepared glyph coverage carries them.
+- the opted-in backend preparation epoch.
 
 It excludes:
 
@@ -137,9 +175,9 @@ It excludes:
 - `PaintTable` brushes;
 - final block placement.
 
-Font-catalog identity is implicit and stronger than an opaque key: a
-`LayoutEngine` owns one backend instance constructed from one immutable font
-snapshot, and shared facts never leave that engine.
+Font-catalog identity is scoped twice: shared facts never leave the
+`LayoutEngine` that owns one backend instance, and the backend epoch changes
+before any hidden font or data resource can change prepared output.
 
 The first index uses a deterministic projected-text fingerprint to select a
 small collision bucket, followed by complete key equality. This avoids a new
@@ -150,7 +188,9 @@ is separate from key equality.
 
 `PreparedParagraph` becomes a small paragraph-identity envelope over
 reference-counted immutable prepared facts. Its public behavior remains the
-same. The cache stores only the facts, never the envelope.
+same. The cache stores only the facts, never the envelope. A hit constructs a
+new envelope and passes it through the ordinary current-projection validation
+before geometry lowering.
 
 The facts contain:
 
@@ -158,6 +198,14 @@ The facts contain:
 - paragraph-local prepared lines, interaction units, runs, glyphs, and cursor
   movement;
 - immutable font-resource handles already selected by the backend.
+
+Prepared glyphs currently carry paragraph-local `PaintSlot` coverage. This is
+not a brush, paint table, renderer resource, or semantic owner; it is a
+validated partition of a glyph's projected source. It may therefore be shared
+only when the exact projected paint-slot runs match. Changing `PaintTable`
+brush values remains a hit. Changing the source-to-slot partition is a miss.
+If glyph paint partitioning later moves out of prepared facts, the slot runs
+move out of this key at the same time.
 
 Region transcript facts store cursor transitions, paragraph-local ranges,
 slots, measured heights, and outcomes without a paragraph identity. The public
@@ -180,10 +228,13 @@ let budget = CacheBudget::new(2_048)
 let layout = LayoutEngine::new(paragraphs, budget);
 ```
 
-The byte weight is a deterministic estimate of storage uniquely owned by the
-shared key and prepared-fact containers. Shared font blobs and other external
-`Arc` backing are not counted again per entry. The diagnostic is an engine
-retention accounting value, not a claim about allocator-exact heap size.
+The byte weight is a deterministic upper accounting charge for storage owned
+by the shared key, entry metadata, and every nested prepared-fact container.
+It includes a nonzero fixed charge plus string and vector capacities, uses
+saturating arithmetic, and does not charge shared font blobs or other external
+`Arc` backing again per entry. The diagnostic is an engine retention
+accounting value, not a claim about allocator bookkeeping or an
+allocator-exact heap size.
 
 Insertion evicts least-recently-used shared entries until the new entry fits.
 An oversized entry is used once without entering the cache. Reads update
@@ -207,6 +258,11 @@ memory impossible to enable accidentally.
 `CacheDiagnostics` adds shared preparation budget, resident entries, resident
 estimated bytes, peak estimated bytes, hits, misses, evictions, and oversized
 non-retentions. Existing geometry diagnostics retain their meanings.
+
+Backend-entry counts are allowed to be lower than retained geometry counts:
+consumers served by shared portable facts never create a backend identity
+entry. This is a documented diagnostic change, and old equality assertions
+become separate upper-bound assertions.
 
 The expected first-hit work law for 512 identities with identical inputs is:
 
@@ -236,19 +292,25 @@ Blocking tests cover:
    invalidate the exact key.
 5. Alignment and `PaintTable` brush changes do not invalidate prepared facts.
 6. Separate engines and font snapshots cannot share entries.
-7. Shared entries obey the byte budget, LRU eviction, oversized-entry,
-   explicit-clear, and document-release laws.
-8. Identical versus distinct text, stable retention, width churn,
+7. Backends are ineligible by default; an opted-in identity-dependent test
+   backend is caught by differential traps; changing the backend epoch clears
+   shared reuse before changed output is observed.
+8. Shared entries obey the byte budget, LRU eviction, oversized-entry,
+   zero-budget, saturated-weight, explicit-clear, and document-release laws.
+9. Identical versus distinct text, stable retention, width churn,
    creation/destruction churn, and paint-only changes retain exact work
    assertions in the label-scale wind tunnel.
-9. Allocation calls, allocated bytes, elapsed time, and resident estimated
+10. Allocation calls, allocated bytes, elapsed time, and resident estimated
    bytes are reported before and after on the same workloads.
+11. Fingerprint collisions run complete key equality and can produce a miss or
+    hit only according to that equality.
 
 ## Migration
 
 No existing call site changes for the proposed budget spelling. Callers that
 want cross-identity reuse add `with_shared_preparation_bytes`. New diagnostic
-accessors are additive.
+accessors and the default-disabled `ParagraphFormation` eligibility method are
+additive.
 
 The internal `PreparedParagraph` storage changes, but its constructors and
 observational public API remain source-compatible. Backend implementations do
@@ -260,6 +322,7 @@ be shared after validation.
 Approval of this note freezes:
 
 - `LayoutEngine` as the owner of exact portable prepared-fact reuse;
+- explicit backend opt-in and epoch invalidation;
 - the included and excluded key inputs;
 - fresh per-consumer geometry and identity rebinding;
 - a separately opt-in, byte-budgeted LRU lifetime;
