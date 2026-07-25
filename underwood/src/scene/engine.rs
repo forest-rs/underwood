@@ -557,7 +557,10 @@ fn prepare_paragraph_geometry(
     let paint_matches = cache
         .get(&paragraph.id)
         .is_some_and(|entry| entry.paint_runs == projection.paint_runs);
-    if formation_matches && paint_matches {
+    let adjustment_matches = cache.get(&paragraph.id).is_some_and(|entry| {
+        entry.formation_key.paragraph_style.alignment() == projection.paragraph_style.alignment()
+    });
+    if formation_matches && paint_matches && adjustment_matches {
         let entry = cache
             .get_mut(&paragraph.id)
             .expect("a reusable cache entry must exist");
@@ -663,14 +666,23 @@ fn prepare_paragraph_geometry(
     if projection.mapping.text().is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
-    let geometry = match build_geometry(output.paragraph(), projection, region_transcript.as_ref())
-    {
+    let geometry = match build_geometry(
+        output.paragraph(),
+        projection,
+        constraint,
+        region_transcript.as_ref(),
+    ) {
         Ok(geometry) => geometry,
         Err(error) => {
             release_untracked_backend(paragraphs, cache, paragraph.id);
             return Err(error);
         }
     };
+    work.adjustment.add_paragraph(if geometry.lines.is_empty() {
+        1
+    } else {
+        geometry.lines.len()
+    });
     work.geometry.add_paragraph(geometry.fragments.len());
     let formation_key = FormationKey::new(
         paragraph.version,
@@ -802,7 +814,9 @@ impl FormationKey {
             && self.shaping_runs == projection.shaping_runs
             && self.inline_flow_styles == projection.inline_flow_styles
             && self.inline_flow_runs == projection.inline_flow_runs
-            && self.paragraph_style == projection.paragraph_style
+            && self.paragraph_style.base_direction() == projection.paragraph_style.base_direction()
+            && self.paragraph_style.whitespace_collapse()
+                == projection.paragraph_style.whitespace_collapse()
             && self.constraint == ConstraintKey::from(constraint)
             && option_ref_eq(self.region_flow.as_ref(), region_flow)
             && self.region_cursor == region_cursor

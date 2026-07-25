@@ -104,6 +104,12 @@ toolkit behavior or pixel production.
   height rejection restores text traversal; mixed-bidi interaction geometry
   and retained invalidation are product-proven. The measured local cost is
   recorded in `docs/proof/region-flow-review-2026-07-25.md`.
+- Step 9 is implemented through the same public paths. Logical and physical
+  alignment consume accepted slots and retained analysis direction; Western
+  U+0020 expansion moves paint, hits, carets, selections, semantics,
+  compositions, visual output, and PDF geometry together without repeating
+  text physics. Measurements and exact limits are recorded in
+  `docs/proof/line-adjustment-review-2026-07-25.md`.
 
 ### Risks and controls
 

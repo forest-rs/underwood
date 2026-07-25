@@ -11,7 +11,9 @@ use super::{
     PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedInteractionSlice,
     PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
 };
-use crate::{DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, Tag, Vec2};
+use crate::{
+    DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, ResolvedDirection, Tag, Vec2,
+};
 
 #[test]
 fn synthesis_evidence_is_validated_canonical_and_last_wins() {
@@ -130,8 +132,9 @@ fn prepared_paragraph_rejects_a_gap_between_lines() {
     };
     let first = line(0..1);
     let second = line(2..3);
-    let error = PreparedParagraph::try_new(paragraph, 3, [first, second], [])
-        .expect_err("source gaps must be rejected at the adapter boundary");
+    let error =
+        PreparedParagraph::try_new(paragraph, 3, ResolvedDirection::Ltr, [first, second], [])
+            .expect_err("source gaps must be rejected at the adapter boundary");
     assert_eq!(
         error.kind(),
         PreparationErrorKind::InvalidOutput,
@@ -165,9 +168,14 @@ fn prepared_paragraph_rejects_incomplete_cursor_facts() {
         Some(PreparedCursorStep::new(start, Some(0..1))),
         None,
     );
-    let error =
-        PreparedParagraph::try_new(paragraph, 1, [line(0..1)], [start_movement, end_movement])
-            .expect_err("every cursor target must have its own movement record");
+    let error = PreparedParagraph::try_new(
+        paragraph,
+        1,
+        ResolvedDirection::Ltr,
+        [line(0..1)],
+        [start_movement, end_movement],
+    )
+    .expect_err("every cursor target must have its own movement record");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
@@ -196,9 +204,14 @@ fn prepared_paragraph_rejects_a_caret_on_an_unknown_line() {
         Some(PreparedCursorStep::new(start, Some(0..1))),
         None,
     );
-    let error =
-        PreparedParagraph::try_new(paragraph, 1, [line(0..1)], [start_movement, end_movement])
-            .expect_err("caret line identities must resolve inside the paragraph");
+    let error = PreparedParagraph::try_new(
+        paragraph,
+        1,
+        ResolvedDirection::Ltr,
+        [line(0..1)],
+        [start_movement, end_movement],
+    )
+    .expect_err("caret line identities must resolve inside the paragraph");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
@@ -226,9 +239,14 @@ fn prepared_paragraph_rejects_a_step_source_that_is_not_an_interaction_unit() {
         Some(PreparedCursorStep::new(start, Some(0..1))),
         None,
     );
-    let error =
-        PreparedParagraph::try_new(paragraph, 2, [line(0..2)], [start_movement, end_movement])
-            .expect_err("a cursor step must cross one actual prepared interaction unit");
+    let error = PreparedParagraph::try_new(
+        paragraph,
+        2,
+        ResolvedDirection::Ltr,
+        [line(0..2)],
+        [start_movement, end_movement],
+    )
+    .expect_err("a cursor step must cross one actual prepared interaction unit");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 

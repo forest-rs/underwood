@@ -803,6 +803,18 @@ pub(super) fn validate_prepared(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
 ) -> Result<(), SceneError> {
+    if matches!(
+        (
+            projection.paragraph_style.base_direction(),
+            prepared.resolved_direction(),
+        ),
+        (BaseDirection::Ltr, ResolvedDirection::Rtl) | (BaseDirection::Rtl, ResolvedDirection::Ltr)
+    ) {
+        return Err(SceneError::from_preparation(
+            prepared.paragraph(),
+            PreparationErrorKind::InvalidOutput,
+        ));
+    }
     for line in prepared.lines() {
         let line_source = line.source();
         if projection
@@ -816,6 +828,23 @@ pub(super) fn validate_prepared(
                 prepared.paragraph(),
                 line_source,
             ));
+        }
+        for unit in line.units() {
+            if unit.is_western_justification_opportunity() {
+                let source = unit.source();
+                if projection
+                    .mapping
+                    .text()
+                    .get(source.start as usize..source.end as usize)
+                    != Some(" ")
+                {
+                    return Err(SceneError::from_preparation_source(
+                        prepared.paragraph(),
+                        source,
+                        PreparationErrorKind::InvalidOutput,
+                    ));
+                }
+            }
         }
         for run in line.runs() {
             let source = run.source();

@@ -30,6 +30,7 @@ pub(super) struct CachedLine {
     baseline: f64,
     content_ascent: f64,
     content_descent: f64,
+    adjustment: LineAdjustment,
 }
 
 #[derive(Clone, Debug)]
@@ -218,6 +219,7 @@ pub(super) fn rebind_position(
 pub(super) fn build_geometry(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
+    constraint: TextConstraint,
     region_transcript: Option<&RegionTranscript>,
 ) -> Result<CachedGeometry, SceneError> {
     let empty_line_height = projection.empty_line_height();
@@ -229,7 +231,20 @@ pub(super) fn build_geometry(
                 .then_some(attempt.slot())
         })
     });
-    let empty_inline_start = empty_slot.map_or(0.0, crate::LineSlot::inline_start);
+    let empty_slot_start = empty_slot.map_or(0.0, crate::LineSlot::inline_start);
+    let empty_slot_size = empty_slot
+        .map(crate::LineSlot::inline_size)
+        .or_else(|| constrained_inline_size(constraint));
+    let empty_adjustment = resolve_line_adjustment(
+        projection.paragraph_style.alignment(),
+        prepared.resolved_direction(),
+        LineBreakReason::End,
+        0.0,
+        0.0,
+        0,
+        empty_slot_size,
+    )?;
+    let empty_inline_start = empty_slot_start + empty_adjustment.inline_offset();
     let empty_block_start = empty_slot.map_or(0.0, crate::LineSlot::block_start);
     let empty_bounds = Rect::new(
         empty_inline_start,
@@ -243,16 +258,45 @@ pub(super) fn build_geometry(
     let mut clusters = Vec::new();
     let mut carets = Vec::new();
     let mut glyph_index = 0;
+    let mut caret_maps = Vec::new();
 
     for line in prepared.lines() {
         let line_index = lines.len();
         let fragment_start = fragments.len();
-        let inline_start = line.slot().map_or(0.0, crate::LineSlot::inline_start);
+        let slot_start = line.slot().map_or(0.0, crate::LineSlot::inline_start);
+        let slot_size = line
+            .slot()
+            .map(crate::LineSlot::inline_size)
+            .or_else(|| constrained_inline_size(constraint));
+        let adjustment = resolve_line_adjustment(
+            projection.paragraph_style.alignment(),
+            prepared.resolved_direction(),
+            line.break_reason(),
+            line.advance(),
+            line.trailing_whitespace_advance(),
+            line.western_justification_opportunities(),
+            slot_size,
+        )?;
+        let inline_start = slot_start + adjustment.inline_offset();
         let current_line_top = line.slot().map_or(line_top, crate::LineSlot::block_start);
         let baseline = current_line_top + line.baseline();
+        let expansion = adjustment.opportunity_expansion();
+        let opportunity_sources: Vec<_> = if expansion > 0.0 {
+            line.western_justification_opportunity_sources().collect()
+        } else {
+            Vec::new()
+        };
         let mut unit_x = inline_start;
+        let mut original_unit_x = 0.0;
+        let mut adjusted_unit_x = 0.0;
+        let mut caret_map = CaretAdjustmentMap::with_capacity(line.units().len());
         for unit in line.units() {
             let paragraph_source = unit.source();
+            let unit_expansion = if opportunity_sources.contains(&paragraph_source) {
+                expansion
+            } else {
+                0.0
+            };
             let sources = projection.local_ranges(paragraph_source.clone())?;
             let left = projection.position_at(unit.left().offset(), unit.left().affinity())?;
             let right = projection.position_at(unit.right().offset(), unit.right().affinity())?;
@@ -269,11 +313,17 @@ pub(super) fn build_geometry(
                 });
                 slice_x = next_x;
             }
+            if unit_expansion > 0.0
+                && let Some(last) = hit_slices.last_mut()
+            {
+                last.x1 += unit_expansion;
+            }
             let semantic_id = hit_slices.first().map_or_else(
                 || projection.semantic_for_range(paragraph_source),
                 |slice| Ok(slice.semantic_id),
             )?;
-            let next_x = unit_x + unit.advance();
+            let adjusted_unit_advance = unit.advance() + unit_expansion;
+            let next_x = unit_x + adjusted_unit_advance;
             let bounds = Rect::new(
                 unit_x,
                 current_line_top,
@@ -290,8 +340,18 @@ pub(super) fn build_geometry(
                 right,
                 bidi_level: unit.bidi_level(),
             });
+            caret_map.push(
+                original_unit_x,
+                original_unit_x + unit.advance(),
+                adjusted_unit_x,
+                adjusted_unit_x + adjusted_unit_advance,
+            );
+            original_unit_x += unit.advance();
+            adjusted_unit_x += adjusted_unit_advance;
             unit_x = next_x;
         }
+        caret_map.finish_empty();
+        caret_maps.push(caret_map);
         if line.units().is_empty() && !projection.spans.is_empty() {
             let source = line.source();
             let affinity = if source.start == 0 {
@@ -317,10 +377,42 @@ pub(super) fn build_geometry(
                 bidi_level: 0,
             });
         }
+        let mut opportunity_glyphs = alloc::vec![None; opportunity_sources.len()];
+        let mut line_glyph_index = 0_usize;
+        for run in line.runs() {
+            for glyph in run.glyphs() {
+                for (index, source) in opportunity_sources.iter().enumerate() {
+                    if glyph.source() == *source {
+                        if opportunity_glyphs[index].is_some() {
+                            return Err(SceneError::for_paragraph(
+                                SceneErrorKind::SourceCoverage,
+                                prepared.paragraph(),
+                            ));
+                        }
+                        opportunity_glyphs[index] = Some(line_glyph_index);
+                    }
+                }
+                line_glyph_index += 1;
+            }
+        }
+        if expansion > 0.0 && opportunity_glyphs.iter().any(Option::is_none) {
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::SourceCoverage,
+                prepared.paragraph(),
+            ));
+        }
         let mut x = inline_start;
+        line_glyph_index = 0;
         for run in line.runs() {
             let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
             for glyph in run.glyphs() {
+                let glyph_expansion = if opportunity_glyphs.contains(&Some(line_glyph_index)) {
+                    expansion
+                } else {
+                    0.0
+                };
+                let glyph_advance =
+                    Vec2::new(glyph.advance().x + glyph_expansion, glyph.advance().y);
                 let instance = glyph_index;
                 glyph_index += 1;
                 let position = Point::new(x + glyph.offset().x, baseline - glyph.offset().y);
@@ -342,7 +434,7 @@ pub(super) fn build_geometry(
                             instance,
                             id: glyph.id(),
                             position,
-                            advance: glyph.advance(),
+                            advance: glyph_advance,
                             sources: sources.clone(),
                         }],
                         paint: segment.slot(),
@@ -357,23 +449,30 @@ pub(super) fn build_geometry(
                         script: run.script(),
                     });
                 }
-                x += glyph.advance().x;
+                x += glyph_advance.x;
+                line_glyph_index += 1;
             }
         }
+        let adjusted_advance = line.advance()
+            + expansion
+                * f64::from(u32::try_from(opportunity_sources.len()).map_err(|_| {
+                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
+                })?);
         lines.push(CachedLine {
             bounds: Rect::new(
                 inline_start,
                 current_line_top,
-                inline_start + line.advance().max(1.0),
+                inline_start + adjusted_advance.max(1.0),
                 current_line_top + line.height(),
             ),
-            advance: line.advance(),
+            advance: adjusted_advance,
             sources: projection.local_ranges(line.source())?,
             fragments: fragment_start..fragments.len(),
             break_reason: line.break_reason(),
             baseline,
             content_ascent: line.content_ascent(),
             content_descent: line.content_descent(),
+            adjustment,
         });
         line_top = line_top.max(current_line_top + line.height());
     }
@@ -477,12 +576,24 @@ pub(super) fn build_geometry(
             empty_bounds.x0 + 1.0,
             empty_bounds.y1,
         ));
+        let adjusted_inline = match caret_maps.get(line) {
+            Some(map) => map.adjusted_inline(caret.inline()).ok_or_else(|| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
+            })?,
+            None if prepared.lines().is_empty() && caret.inline() == 0.0 => 0.0,
+            None => {
+                return Err(SceneError::for_paragraph(
+                    SceneErrorKind::SourceCoverage,
+                    prepared.paragraph(),
+                ));
+            }
+        };
         carets.push(CachedCaret {
             position: movement.position,
             bounds: Rect::new(
-                line_bounds.x0 + caret.inline(),
+                line_bounds.x0 + adjusted_inline,
                 line_bounds.y0,
-                line_bounds.x0 + caret.inline() + 1.0,
+                line_bounds.x0 + adjusted_inline + 1.0,
                 line_bounds.y1,
             ),
         });
@@ -569,6 +680,7 @@ pub(super) fn materialize_geometry(
             baseline: line.baseline + y_offset,
             content_ascent: line.content_ascent,
             content_descent: line.content_descent,
+            adjustment: line.adjustment,
         }
     }));
     fragments.extend(geometry.fragments.iter().map(|fragment| {
@@ -694,6 +806,7 @@ pub(super) fn materialize_projected_geometry(
             baseline: line.baseline + y_offset,
             content_ascent: line.content_ascent,
             content_descent: line.content_descent,
+            adjustment: line.adjustment,
         }
     }));
     fragments.extend(geometry.fragments.iter().map(|fragment| {

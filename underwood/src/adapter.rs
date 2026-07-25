@@ -13,8 +13,8 @@ use core::ops::Range;
 
 use crate::{
     Affine, AnalysisStyle, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId,
-    ParagraphStyle, Rect, RegionCursor, RegionFlow, RegionTranscript, ShapingStyle, TextConstraint,
-    Vec2,
+    ParagraphStyle, Rect, RegionCursor, RegionFlow, RegionTranscript, ResolvedDirection,
+    ShapingStyle, TextConstraint, Vec2,
 };
 
 mod error;

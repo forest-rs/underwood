@@ -164,22 +164,31 @@ arrays. `BlockRequest` goes further and borrows one caller-owned style, so any
 number of labels can reuse the same style and paint table without rebuilding
 authored font requests.
 
-`ParagraphStyle` keeps paragraph base direction out of inline font style.
-Automatic direction remains the default; explicit LTR and RTL values are
-available for markup, host, and authoring semantics which cannot be inferred
-from first-strong text:
+`ParagraphStyle` keeps paragraph base direction and accepted-slot alignment
+out of inline font style. Automatic direction and logical-start alignment
+remain the defaults; explicit LTR/RTL and physical or logical alignment values
+are available for markup, host, and authoring semantics:
 
 ```rust,ignore
-use underwood::{BaseDirection, ParagraphStyle};
+use underwood::{BaseDirection, ParagraphStyle, TextAlignment};
 
 styles.set_paragraph_style(
     paragraph,
-    ParagraphStyle::new(BaseDirection::Rtl),
+    ParagraphStyle::new(BaseDirection::Rtl)
+        .with_alignment(TextAlignment::Start),
 );
 ```
 
 Changing paragraph direction invalidates Unicode analysis for that paragraph.
-Changing only line height reuses accepted line glyphs and recomputes metrics.
+Changing only alignment reuses analysis, selected fonts, canonical shaping,
+line-final shaping, and accepted source boundaries; it recomputes immutable
+line adjustment and scene geometry. `Start` and `End` consume the paragraph
+direction already resolved by Unicode analysis. `Justify` expands explicit
+Western inter-word spaces on eligible soft-wrapped lines; final and mandatory
+lines remain start-aligned, and CJK and Arabic strategies remain separate.
+[`SceneLine::adjustment`] exposes the exact offset, hanging trailing
+whitespace, and per-opportunity expansion. Changing only line height reuses
+accepted line glyphs and recomputes metrics.
 
 Computed text policy is partitioned by the earliest preparation stage it can
 change. A host can lower its resolved style without constructing CSS or widget

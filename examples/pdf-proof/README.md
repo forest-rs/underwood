@@ -16,6 +16,8 @@ The specimen exercises:
 - an authored `ffi` ligature (`office` reaches the scene as four glyphs);
 - one decomposed grapheme split across semantic text leaves;
 - multiple semantic paragraphs, sizes, line heights, and solid paints;
+- a centered heading, genuinely justified mixed-script body, and logically
+  end-aligned footer from public scene adjustment geometry;
 - embedded Roboto Flex at its default location and static Noto Kufi Arabic.
 
 This is visual PDF evidence, not yet a tagged PDF or PDF/UA claim. Logical text

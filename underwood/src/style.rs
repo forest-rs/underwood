@@ -522,14 +522,50 @@ impl ComputedInlineStyle {
     }
 }
 
+/// Resolved paragraph direction retained from Unicode analysis.
+///
+/// Unlike [`BaseDirection`], this value cannot be automatic. Paragraph
+/// backends publish it so logical alignment consumes the same bidi decision
+/// as shaping and interaction geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResolvedDirection {
+    /// Left-to-right paragraph direction.
+    Ltr,
+    /// Right-to-left paragraph direction.
+    Rtl,
+}
+
+/// Alignment applied after a line has been accepted into its exact slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextAlignment {
+    /// Align to the paragraph's resolved logical start edge.
+    #[default]
+    Start,
+    /// Align to the paragraph's resolved logical end edge.
+    End,
+    /// Align to the physical left edge.
+    Left,
+    /// Center within the accepted line slot.
+    Center,
+    /// Align to the physical right edge.
+    Right,
+    /// Expand eligible Western inter-word spaces on soft-wrapped lines.
+    ///
+    /// Final and mandatory-break lines remain logically start-aligned. CJK
+    /// and Arabic justification require separate script-specific strategies.
+    Justify,
+}
+
 /// Complete computed values that apply to one paragraph as a whole.
 ///
 /// Paragraph values are kept separate from [`ShapingStyle`] because they
-/// affect analysis and line formation rather than inline font shaping.
+/// affect analysis, line formation, and accepted-slot adjustment rather than
+/// inline font shaping.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParagraphStyle {
     base_direction: BaseDirection,
     whitespace_collapse: WhitespaceCollapse,
+    alignment: TextAlignment,
 }
 
 impl ParagraphStyle {
@@ -538,6 +574,7 @@ impl ParagraphStyle {
     pub const DEFAULT: Self = Self {
         base_direction: BaseDirection::Auto,
         whitespace_collapse: WhitespaceCollapse::Preserve,
+        alignment: TextAlignment::Start,
     };
 
     /// Creates paragraph values with an explicit or automatically inferred
@@ -547,6 +584,7 @@ impl ParagraphStyle {
         Self {
             base_direction,
             whitespace_collapse: WhitespaceCollapse::Preserve,
+            alignment: TextAlignment::Start,
         }
     }
 
@@ -569,6 +607,19 @@ impl ParagraphStyle {
     #[must_use]
     pub const fn whitespace_collapse(self) -> WhitespaceCollapse {
         self.whitespace_collapse
+    }
+
+    /// Returns a copy with accepted-slot text alignment.
+    #[must_use]
+    pub const fn with_alignment(mut self, alignment: TextAlignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Returns accepted-slot text alignment.
+    #[must_use]
+    pub const fn alignment(self) -> TextAlignment {
+        self.alignment
     }
 }
 
@@ -684,7 +735,7 @@ mod tests {
 
     use super::{
         AnalysisStyle, InlineFlowStyle, LineHeight, LineHeightBasis, ParagraphStyle, ShapingStyle,
-        StyleMap, TextSpacing,
+        StyleMap, TextAlignment, TextSpacing,
     };
     use crate::{
         BaseDirection, ComputedInlineStyle, Document, DocumentId, OverflowWrap, PaintSlot,
@@ -709,10 +760,21 @@ mod tests {
             styles.paragraph_style_for(paragraph),
             ParagraphStyle::DEFAULT
         );
-        styles.set_paragraph_style(paragraph, ParagraphStyle::new(BaseDirection::Rtl));
+        assert_eq!(
+            styles.paragraph_style_for(paragraph).alignment(),
+            TextAlignment::Start
+        );
+        styles.set_paragraph_style(
+            paragraph,
+            ParagraphStyle::new(BaseDirection::Rtl).with_alignment(TextAlignment::Center),
+        );
         assert_eq!(
             styles.paragraph_style_for(paragraph).base_direction(),
             BaseDirection::Rtl
+        );
+        assert_eq!(
+            styles.paragraph_style_for(paragraph).alignment(),
+            TextAlignment::Center
         );
     }
 

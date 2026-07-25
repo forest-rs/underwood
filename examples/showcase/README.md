@@ -38,6 +38,13 @@ atomic replacement transaction. The title keeps the last meaningful work
 observation visible while reporting current preparation and rendering times
 separately.
 
+The same document also exercises accepted-slot adjustment through Underwood's
+public paragraph styles. The variable-font hero and deck are centered, the
+mixed English/Arabic body expands eligible Western spaces on soft-wrapped
+lines, and the width-axis specimen is centered. Paint, hit testing, selection,
+composition, and semantic geometry consume those adjusted `TextScene`
+coordinates; the app does not reposition text in its renderer.
+
 The crate is deliberately outside the production crates. It does not make
 Underwood depend on a window toolkit or renderer.
 

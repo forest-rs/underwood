@@ -8,8 +8,9 @@ use underwood::{
     Brush, CacheBudget, Color, CompositionScene, CompositionSession, ComputedInlineStyle, Document,
     DocumentId, DocumentSnapshot, FiniteWidth, FontFeature, FontVariation, FontWeight,
     InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot, PaintTable,
-    ParagraphRole, SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap, Tag,
-    TextConstraint, TextId, TextScene, WorkReport,
+    ParagraphId, ParagraphRole, ParagraphStyle, SceneRequest, Script, ShapingStyle,
+    SnapshotTextSelectionSet, StyleMap, Tag, TextAlignment, TextConstraint, TextId, TextScene,
+    WorkReport,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -71,10 +72,19 @@ pub(crate) struct AppliedEdit {
 pub(crate) struct ShowcaseContent {
     document: Document,
     layout: LayoutEngine,
+    paragraphs: Paragraphs,
     leaves: Leaves,
     alternate_paint: bool,
     action_visual: ActionVisual,
     load_system_fonts: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Paragraphs {
+    title: ParagraphId,
+    deck: ParagraphId,
+    mixed: ParagraphId,
+    widths: ParagraphId,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -137,12 +147,12 @@ impl ShowcaseContent {
         let mut document = Document::new(DocumentId::from_bytes(*b"underwood-live-1"));
         let mut edit = document.edit();
 
-        let title = edit.append_paragraph(ParagraphRole::HEADING_1)?;
-        let title = edit.append_text(title, InlineRole::TEXT, "TYPE, ALIVE.")?;
+        let title_paragraph = edit.append_paragraph(ParagraphRole::HEADING_1)?;
+        let title = edit.append_text(title_paragraph, InlineRole::TEXT, "TYPE, ALIVE.")?;
 
-        let deck = edit.append_paragraph(ParagraphRole::BODY)?;
+        let deck_paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
         let deck = edit.append_text(
-            deck,
+            deck_paragraph,
             InlineRole::EMPHASIS,
             "One semantic document. Real shaping. Retained work. No toolkit in the core.",
         )?;
@@ -151,20 +161,20 @@ impl ShowcaseContent {
         let section_one =
             edit.append_text(section_one, InlineRole::TEXT, "ONE DOCUMENT / MANY SCRIPTS")?;
 
-        let body = edit.append_paragraph(ParagraphRole::BODY)?;
+        let mixed_paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
         let _mixed_prefix = edit.append_text(
-            body,
+            mixed_paragraph,
             InlineRole::TEXT,
             "Underwood keeps meaning, style, flow, and scene geometry together. ",
         )?;
-        let arabic = edit.append_text(body, InlineRole::EMPHASIS, "مرحبا بالعالم")?;
+        let arabic = edit.append_text(mixed_paragraph, InlineRole::EMPHASIS, "مرحبا بالعالم")?;
         let _mixed_suffix = edit.append_text(
-            body,
+            mixed_paragraph,
             InlineRole::TEXT,
             " runs right-to-left—with every dot intact—inside the same flowing paragraph. ",
         )?;
         let action = edit.append_text(
-            body,
+            mixed_paragraph,
             InlineRole::EMPHASIS,
             "Explore the source on GitHub — اقرأ المزيد عن Underwood",
         )?;
@@ -176,12 +186,15 @@ impl ShowcaseContent {
             "VARIABLE FORM / OPENTYPE DETAIL",
         )?;
 
-        let widths = edit.append_paragraph(ParagraphRole::BODY)?;
-        let width_narrow = edit.append_text(widths, InlineRole::EMPHASIS, "CONDENSED 75")?;
-        edit.append_text(widths, InlineRole::TEXT, "   /   ")?;
-        let width_regular = edit.append_text(widths, InlineRole::EMPHASIS, "REGULAR 100")?;
-        edit.append_text(widths, InlineRole::TEXT, "   /   ")?;
-        let width_wide = edit.append_text(widths, InlineRole::EMPHASIS, "EXPANDED 125")?;
+        let widths_paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
+        let width_narrow =
+            edit.append_text(widths_paragraph, InlineRole::EMPHASIS, "CONDENSED 75")?;
+        edit.append_text(widths_paragraph, InlineRole::TEXT, "   /   ")?;
+        let width_regular =
+            edit.append_text(widths_paragraph, InlineRole::EMPHASIS, "REGULAR 100")?;
+        edit.append_text(widths_paragraph, InlineRole::TEXT, "   /   ")?;
+        let width_wide =
+            edit.append_text(widths_paragraph, InlineRole::EMPHASIS, "EXPANDED 125")?;
 
         let features = edit.append_paragraph(ParagraphRole::BODY)?;
         edit.append_text(
@@ -228,6 +241,12 @@ impl ShowcaseContent {
         Ok(Self {
             document,
             layout: LayoutEngine::new(paragraphs, CacheBudget::new(4_096)),
+            paragraphs: Paragraphs {
+                title: title_paragraph,
+                deck: deck_paragraph,
+                mixed: mixed_paragraph,
+                widths: widths_paragraph,
+            },
             leaves: Leaves {
                 title,
                 deck,
@@ -550,6 +569,22 @@ impl ShowcaseContent {
             styles.set(leaf, editable.clone());
         }
         styles.set(self.leaves.controls, controls);
+        styles.set_paragraph_style(
+            self.paragraphs.title,
+            ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Center),
+        );
+        styles.set_paragraph_style(
+            self.paragraphs.deck,
+            ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Center),
+        );
+        styles.set_paragraph_style(
+            self.paragraphs.mixed,
+            ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Justify),
+        );
+        styles.set_paragraph_style(
+            self.paragraphs.widths,
+            ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Center),
+        );
         Ok(styles)
     }
 }
@@ -593,7 +628,7 @@ mod tests {
     use super::{
         ARABIC_FONT_BYTES, LATIN_FONT_BYTES, ORIGINAL_EDIT_TEXT, ShowcaseContent, TITLE, TextId,
     };
-    use underwood::{Brush, ParagraphRole, Point, TextScene};
+    use underwood::{Brush, ParagraphRole, Point, TextAlignment, TextScene};
 
     #[test]
     fn document_exposes_real_heading_and_body_semantics() {
@@ -607,6 +642,33 @@ mod tests {
         assert!(roles.contains(&ParagraphRole::HEADING_1));
         assert!(roles.contains(&ParagraphRole::HEADING_2));
         assert!(roles.contains(&ParagraphRole::BODY));
+    }
+
+    #[test]
+    fn showcase_exercises_centering_and_western_justification() {
+        let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
+        let frame = content.prepare(760.0, 0.5).expect("document must prepare");
+
+        let title = frame
+            .scene
+            .lines()
+            .iter()
+            .find(|line| {
+                line.sources()
+                    .iter()
+                    .any(|source| source.text() == content.leaves.title)
+            })
+            .expect("showcase title must form a line");
+        assert_eq!(title.adjustment().alignment(), TextAlignment::Center);
+        assert!(title.adjustment().inline_offset() > 0.0);
+
+        assert!(
+            frame.scene.lines().iter().any(|line| {
+                line.adjustment().alignment() == TextAlignment::Justify
+                    && line.adjustment().expanded_opportunities() > 0
+            }),
+            "a soft-wrapped mixed-direction line must expand eligible Western spaces"
+        );
     }
 
     #[test]

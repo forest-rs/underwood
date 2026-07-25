@@ -21,9 +21,9 @@ use underwood::{
     EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
     InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, OverflowWrap, PaintSlot, PaintTable,
     ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, Rect,
-    RegionAttemptOutcome, SceneRequest, SelectionErrorKind, ShapingStyle, SnapshotTextUnit,
-    StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint,
-    TextMovement, TextScene, TextSelectionMode, TextSpacing, TextWrapMode, Vec2,
+    RegionAttemptOutcome, ResolvedDirection, SceneRequest, SelectionErrorKind, ShapingStyle,
+    SnapshotTextUnit, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextBlock,
+    TextConstraint, TextMovement, TextScene, TextSelectionMode, TextSpacing, TextWrapMode, Vec2,
     WhitespaceCollapse, WordBreak,
 };
 use underwood::{Language, Script};
@@ -35,6 +35,7 @@ use crate::line_break::{choose_line, collect_logical_clusters};
 use crate::lowering::checked_source_range;
 use crate::shaping::{analyze_text, analyze_text_with_styles, split_item_after};
 
+mod alignment;
 mod editing;
 mod font_and_analysis;
 mod interaction;
@@ -125,8 +126,13 @@ impl ParagraphFormation for AnalysisCursorProof {
             [run],
         )?;
         let movements = prepared_cursor_movements(core::slice::from_ref(&line), source.end)?;
-        let paragraph =
-            PreparedParagraph::try_new(input.paragraph(), source.end, [line], movements)?;
+        let paragraph = PreparedParagraph::try_new(
+            input.paragraph(),
+            source.end,
+            ResolvedDirection::Ltr,
+            [line],
+            movements,
+        )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(

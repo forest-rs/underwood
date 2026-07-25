@@ -22,10 +22,10 @@ use crate::{
     ComputedInlineStyle, Document, DocumentId, EditableSurface, EditableSurfaceElement,
     FiniteWidth, FontData, FontFamily, InlineFlowStyle, InlineRole, PaintSlot, PaintTable,
     ParagraphRole, ParagraphStyle, Point, ProjectedTextSource, Rect, RegionAttempt,
-    RegionAttemptOutcome, RegionFlow, RegionTranscript, SceneErrorKind, SceneRequest, ShapingStyle,
-    SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
-    StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextConstraint, TextId, TextMovement,
-    TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
+    RegionAttemptOutcome, RegionFlow, RegionTranscript, ResolvedDirection, SceneErrorKind,
+    SceneRequest, ShapingStyle, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+    SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextConstraint,
+    TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 
 #[derive(Debug)]
@@ -55,7 +55,13 @@ impl ParagraphFormation for EchoAdapter {
                 None,
                 None,
             )];
-            let paragraph = PreparedParagraph::try_new(input.paragraph(), text_len, [], movements)?;
+            let paragraph = PreparedParagraph::try_new(
+                input.paragraph(),
+                text_len,
+                ResolvedDirection::Ltr,
+                [],
+                movements,
+            )?;
             return Ok(ParagraphFormationOutput::new(
                 paragraph,
                 FormationWork::new(true, true, 0, 0, 0, 0, LineShapingWork::default()),
@@ -239,7 +245,13 @@ impl ParagraphFormation for EchoAdapter {
                 None,
             ));
         }
-        let paragraph = PreparedParagraph::try_new(input.paragraph(), text_len, [line], movements)?;
+        let paragraph = PreparedParagraph::try_new(
+            input.paragraph(),
+            text_len,
+            ResolvedDirection::Ltr,
+            [line],
+            movements,
+        )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(
@@ -311,7 +323,13 @@ impl ParagraphFormation for MismatchedEmptyRegionAdapter {
             None,
             None,
         )];
-        let paragraph = PreparedParagraph::try_new(input.paragraph(), 0, [], movements)?;
+        let paragraph = PreparedParagraph::try_new(
+            input.paragraph(),
+            0,
+            ResolvedDirection::Ltr,
+            [],
+            movements,
+        )?;
         let flow = constraints
             .region_flow()
             .ok_or_else(PreparationError::invalid_output)?;
@@ -410,6 +428,28 @@ fn empty_region_output_rejects_a_cursor_height_that_disagrees_with_geometry() {
         .expect_err("flow cursor and empty geometry must consume the same height");
 
     assert_eq!(error.kind(), SceneErrorKind::Flow);
+}
+
+#[test]
+fn explicit_direction_rejects_a_backend_with_conflicting_analysis() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-test-doc16", "");
+    let styles = styles.with_default_paragraph_style(ParagraphStyle::new(BaseDirection::Rtl));
+    let flow = RegionFlow::rectangle(Rect::new(40.0, 20.0, 140.0, 100.0)).expect("region is valid");
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
+        &styles,
+        &paint,
+    )
+    .with_region_flow(&flow);
+    let error = LayoutEngine::new(MismatchedEmptyRegionAdapter, CacheBudget::new(32))
+        .prepare(&document.snapshot(), &request)
+        .expect_err("explicit RTL cannot consume backend-reported LTR analysis");
+
+    assert_eq!(error.kind(), SceneErrorKind::Preparation);
+    assert_eq!(
+        error.preparation(),
+        Some(PreparationErrorKind::InvalidOutput)
+    );
 }
 
 #[test]

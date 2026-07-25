@@ -189,6 +189,7 @@ pub struct WorkReport {
     pub(super) line_font_resolution: StageWork,
     pub(super) line_shape: StageWork,
     pub(super) flow: StageWork,
+    pub(super) adjustment: StageWork,
     pub(super) geometry: StageWork,
     pub(super) paint: StageWork,
     pub(super) line_reshapes: usize,
@@ -239,6 +240,12 @@ impl WorkReport {
     #[must_use]
     pub const fn flow(&self) -> StageWork {
         self.flow
+    }
+
+    /// Returns accepted-slot alignment and justification work.
+    #[must_use]
+    pub const fn adjustment(&self) -> StageWork {
+        self.adjustment
     }
 
     /// Returns scene-geometry work.

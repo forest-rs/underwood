@@ -10,7 +10,7 @@ use underwood::{
     Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, DocumentSnapshot,
     FiniteWidth, FontFeature, GenericFamily, InlineFlowStyle, InlineRole, Language, LayoutEngine,
     LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap,
-    Tag, TextConstraint, TextScene,
+    Tag, TextAlignment, TextConstraint, TextScene,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 use underwood_pdf::{PdfPage, to_pdf};
@@ -172,6 +172,18 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     styles.set(arabic_display_token, display_latin_style);
     styles.set(arabic_display_suffix, display_style);
     styles.set(footer_text, footer_style);
+    styles.set_paragraph_style(
+        title,
+        underwood::ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Center),
+    );
+    styles.set_paragraph_style(
+        mixed,
+        underwood::ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Justify),
+    );
+    styles.set_paragraph_style(
+        footer,
+        underwood::ParagraphStyle::DEFAULT.with_alignment(TextAlignment::End),
+    );
 
     let paints = PaintTable::from_brushes([
         Brush::Solid(Color::from_rgb8(0x16, 0x20, 0x2d)),
@@ -242,6 +254,19 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         }),
         "the specimen must remain inside the adapter's exact static/default subset"
     );
+    assert!(
+        scene.lines().iter().any(|line| {
+            line.adjustment().alignment() == TextAlignment::Center
+                && line.adjustment().inline_offset() > 0.0
+        }) && scene.lines().iter().any(|line| {
+            line.adjustment().alignment() == TextAlignment::Justify
+                && line.adjustment().expanded_opportunities() > 0
+        }) && scene.lines().iter().any(|line| {
+            line.adjustment().alignment() == TextAlignment::End
+                && line.adjustment().inline_offset() > 0.0
+        }),
+        "the exported scene must carry real centered, justified, and end-aligned PDF geometry"
+    );
 
     Ok((snapshot, scene))
 }
@@ -263,6 +288,7 @@ fn style(
 #[cfg(test)]
 mod tests {
     use super::{prepare_specimen, specimen_pdf};
+    use underwood::TextAlignment;
 
     #[test]
     fn mixed_script_pdf_is_deterministic_and_nontrivial() {
@@ -300,6 +326,33 @@ mod tests {
         assert!(
             scene.paint().len() >= 5,
             "the specimen must preserve multiple authored paints"
+        );
+    }
+
+    #[test]
+    fn justified_and_end_aligned_lines_share_the_column_right_edge() {
+        let (_, scene) = prepare_specimen().expect("the specimen must prepare");
+        let justified = scene
+            .lines()
+            .iter()
+            .find(|line| {
+                line.adjustment().alignment() == TextAlignment::Justify
+                    && line.adjustment().expanded_opportunities() > 0
+            })
+            .expect("the specimen must contain a genuinely justified soft line");
+        let end_aligned = scene
+            .lines()
+            .iter()
+            .find(|line| line.adjustment().alignment() == TextAlignment::End)
+            .expect("the specimen must contain an end-aligned line");
+        let justified_right =
+            justified.bounds().x1 - justified.adjustment().trailing_whitespace_advance();
+        let end_right =
+            end_aligned.bounds().x1 - end_aligned.adjustment().trailing_whitespace_advance();
+
+        assert!(
+            (justified_right - end_right).abs() <= 1.0e-6,
+            "justified content ended at {justified_right}, but end-aligned content ended at {end_right}"
         );
     }
 }

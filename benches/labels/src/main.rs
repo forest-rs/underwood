@@ -8,9 +8,9 @@ use std::time::{Duration, Instant};
 
 use underwood::{
     BlockRequest, Brush, CacheBudget, Color, ComputedInlineStyle, DocumentId, FiniteWidth,
-    FloatSide, FlowRegion, InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ProjectedText,
-    ProjectionBuilder, Rect, RegionFloat, RegionFlow, SceneOutput, ShapingStyle, Size, TextBlock,
-    TextConstraint, WhitespaceCollapse,
+    FloatSide, FlowRegion, InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ParagraphStyle,
+    ProjectedText, ProjectionBuilder, Rect, RegionFloat, RegionFlow, SceneOutput, ShapingStyle,
+    Size, TextAlignment, TextBlock, TextConstraint, WhitespaceCollapse,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -24,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|primed-region|cold-identical|retained-identical|paint-change|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|retained-identical|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -349,11 +349,17 @@ fn run_profile(
         }
         "primed-unique" | "p2" => profile_primed_unique(rounds, labels, &style, &paint),
         "primed-region" | "p3" => profile_primed_region(rounds, labels, &style, &paint),
+        "primed-adjustment" | "p4" => profile_primed_adjustment(rounds, labels, &style, &paint),
         "cold-identical" | "c0" => {
             profile_cold_identical("cold-identical", rounds, labels, &style, &paint)
         }
         "retained-identical" | "r0" => profile_retained_identical(rounds, labels, &style, &paint),
+        "retained-adjustment" | "r1" => profile_retained_adjustment(rounds, labels, &style, &paint),
         "paint-change" | "a0" => profile_paint_change(rounds, labels, &style, &paint),
+        "alignment-churn" | "a1" => profile_alignment_churn(rounds, labels, &style, &paint, false),
+        "justification-churn" | "a2" => {
+            profile_alignment_churn(rounds, labels, &style, &paint, true)
+        }
         "localized-edit" | "e0" => profile_localized_edit(rounds, labels, &style, &paint),
         "interaction-materialization" | "i0" => profile_cold_identical(
             "interaction-materialization",
@@ -585,6 +591,29 @@ fn profile_primed_region(
     Ok(())
 }
 
+fn profile_primed_adjustment(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = adjustment_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let flow = adjustment_flow()?;
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint).with_region_flow(&flow),
+        )?;
+    }
+    black_box((&labels, &layout, flow));
+    report_profile("primed-adjustment", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
 fn profile_cold_identical(
     name: &str,
     rounds: usize,
@@ -655,6 +684,43 @@ fn profile_retained_identical(
     Ok(())
 }
 
+fn profile_retained_adjustment(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = adjustment_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let flow = adjustment_flow()?;
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint).with_region_flow(&flow),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_region_flow(&flow),
+                    )
+                    .expect("retained adjustment fixture must prepare");
+                assert_no_physics(&output);
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("retained-adjustment", rounds, label_count, elapsed);
+    Ok(())
+}
+
 fn profile_paint_change(
     rounds: usize,
     label_count: usize,
@@ -694,6 +760,75 @@ fn profile_paint_change(
         }
     });
     report_profile("paint-change", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_alignment_churn(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    justify: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = adjustment_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let flow = adjustment_flow()?;
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint).with_region_flow(&flow),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let alignment = if justify {
+                if round.is_multiple_of(2) {
+                    TextAlignment::Justify
+                } else {
+                    TextAlignment::Start
+                }
+            } else if round.is_multiple_of(2) {
+                TextAlignment::Center
+            } else {
+                TextAlignment::End
+            };
+            let paragraph_style = ParagraphStyle::DEFAULT.with_alignment(alignment);
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_paragraph_style(paragraph_style)
+                            .with_region_flow(&flow),
+                    )
+                    .expect("adjustment-only label must prepare");
+                assert_adjustment_only(&output);
+                if alignment == TextAlignment::Justify {
+                    assert!(
+                        output.scene().lines()[0]
+                            .adjustment()
+                            .opportunity_expansion()
+                            > 0.0,
+                        "the wind tunnel must execute real Western justification"
+                    );
+                }
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile(
+        if justify {
+            "justification-churn"
+        } else {
+            "alignment-churn"
+        },
+        rounds,
+        label_count,
+        elapsed,
+    );
     Ok(())
 }
 
@@ -958,6 +1093,20 @@ fn identical_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn s
         .collect()
 }
 
+fn adjustment_labels_with_count(
+    count: usize,
+) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
+        .map(|index| {
+            TextBlock::plain(
+                identity(4, index),
+                "Save the carefully retained document changes now",
+            )
+            .map_err(Into::into)
+        })
+        .collect()
+}
+
 fn identity(namespace: u64, index: usize) -> DocumentId {
     let mut bytes = [0_u8; 16];
     bytes[..8].copy_from_slice(&namespace.to_le_bytes());
@@ -997,6 +1146,53 @@ fn region_flows() -> Result<[RegionFlow; 2], Box<dyn std::error::Error>> {
     ])
 }
 
+fn adjustment_flow() -> Result<RegionFlow, Box<dyn std::error::Error>> {
+    Ok(RegionFlow::rectangle(Rect::new(0.0, 0.0, 132.0, 240.0))?)
+}
+
+fn assert_adjustment_only(output: &SceneOutput) {
+    assert_eq!(
+        output.work().analysis().paragraphs(),
+        0,
+        "adjustment-only work must retain analysis"
+    );
+    assert_eq!(
+        output.work().itemization().paragraphs(),
+        0,
+        "adjustment-only work must retain itemization"
+    );
+    assert_eq!(
+        output.work().font_selection().paragraphs(),
+        0,
+        "adjustment-only work must retain font selection"
+    );
+    assert_eq!(
+        output.work().shape().paragraphs(),
+        0,
+        "adjustment-only work must retain canonical shaping"
+    );
+    assert_eq!(
+        output.work().line_shape().paragraphs(),
+        0,
+        "adjustment-only work must retain accepted line shaping"
+    );
+    assert_eq!(
+        output.work().flow().paragraphs(),
+        0,
+        "adjustment-only work must retain formation"
+    );
+    assert_eq!(
+        output.work().adjustment().paragraphs(),
+        1,
+        "adjustment-only work must replace one accepted-slot adjustment"
+    );
+    assert_eq!(
+        output.work().geometry().paragraphs(),
+        1,
+        "adjustment-only work must rebuild one geometry projection"
+    );
+}
+
 fn assert_no_physics(output: &SceneOutput) {
     assert_eq!(
         output.work().analysis().paragraphs(),
@@ -1027,6 +1223,11 @@ fn assert_no_physics(output: &SceneOutput) {
         output.work().flow().paragraphs(),
         0,
         "retained text must reuse formation"
+    );
+    assert_eq!(
+        output.work().adjustment().paragraphs(),
+        0,
+        "retained text must reuse accepted-slot adjustment"
     );
     assert_eq!(
         output.work().geometry().paragraphs(),

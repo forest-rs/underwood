@@ -17,7 +17,8 @@ use underwood::adapter::{
     PreparationError, PreparedLine, PreparedParagraph, PreparedRun, ShapingRun,
 };
 use underwood::{
-    AnalysisStyle, InlineFlowStyle, ParagraphId, ParagraphStyle, RegionTranscript, ShapingStyle,
+    AnalysisStyle, InlineFlowStyle, ParagraphId, ParagraphStyle, RegionTranscript,
+    ResolvedDirection, ShapingStyle,
 };
 
 use crate::font::FontSet;
@@ -367,6 +368,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
             cache.inline_flow_styles = input.inline_flow_styles().to_vec();
             cache.inline_flow_runs = input.inline_flow_runs().to_vec();
         }
+        self.cache
+            .get_mut(&paragraph)
+            .ok_or_else(PreparationError::invalid_output)?
+            .paragraph_style = input.paragraph_style();
 
         let physics = self
             .cache
@@ -384,6 +389,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             let prepared_units = lower_visual_units(
                 input.text(),
                 shaped_text,
+                &formed.scripts,
                 &pieces,
                 &physics.interaction_units,
                 &plan.source,
@@ -464,8 +470,18 @@ impl ParagraphFormation for ParleyParagraphEngine {
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         let movements = prepared_cursor_movements(&prepared_lines, text_len)?;
-        let paragraph =
-            PreparedParagraph::try_new(input.paragraph(), text_len, prepared_lines, movements)?;
+        let resolved_direction = if physics.analysis.is_rtl() {
+            ResolvedDirection::Rtl
+        } else {
+            ResolvedDirection::Ltr
+        };
+        let paragraph = PreparedParagraph::try_new(
+            input.paragraph(),
+            text_len,
+            resolved_direction,
+            prepared_lines,
+            movements,
+        )?;
         let work = FormationWork::new(
             analyzed,
             shaped,

@@ -104,6 +104,8 @@ pub struct PreparedLine {
     source: Range<u32>,
     break_reason: LineBreakReason,
     advance: f64,
+    trailing_whitespace_start: u32,
+    trailing_whitespace_advance: f64,
     baseline: f64,
     height: f64,
     content_ascent: f64,
@@ -206,6 +208,18 @@ impl PreparedLine {
         if !source_is_valid {
             return Err(PreparationError::invalid_output());
         }
+        let mut trailing_whitespace_advance = 0.0;
+        let mut trailing_start = source.end;
+        while let Some(unit) = units
+            .iter()
+            .find(|unit| unit.source().end == trailing_start)
+        {
+            if unit.whitespace() == ClusterWhitespace::None {
+                break;
+            }
+            trailing_whitespace_advance += unit.advance();
+            trailing_start = unit.source().start;
+        }
         let unit_advance = units
             .iter()
             .map(PreparedInteractionUnit::advance)
@@ -219,6 +233,8 @@ impl PreparedLine {
             source,
             break_reason,
             advance,
+            trailing_whitespace_start: trailing_start,
+            trailing_whitespace_advance,
             baseline,
             height,
             content_ascent,
@@ -250,6 +266,34 @@ impl PreparedLine {
     #[must_use]
     pub const fn advance(&self) -> f64 {
         self.advance
+    }
+
+    /// Returns the logical trailing-whitespace advance excluded from alignment.
+    ///
+    /// Trailing whitespace remains source-complete and interactive, but hangs
+    /// from the visual line edge instead of changing the aligned content box.
+    #[must_use]
+    pub const fn trailing_whitespace_advance(&self) -> f64 {
+        self.trailing_whitespace_advance
+    }
+
+    /// Returns the number of explicit Western inter-word opportunities.
+    #[must_use]
+    pub fn western_justification_opportunities(&self) -> usize {
+        self.western_justification_opportunity_sources().count()
+    }
+
+    /// Returns source ranges for non-trailing eligible Western spaces.
+    pub fn western_justification_opportunity_sources(
+        &self,
+    ) -> impl Iterator<Item = Range<u32>> + '_ {
+        self.units
+            .iter()
+            .filter(|unit| {
+                unit.is_western_justification_opportunity()
+                    && unit.source().end <= self.trailing_whitespace_start
+            })
+            .map(PreparedInteractionUnit::source)
     }
 
     /// Returns the baseline offset from the top of the line box.
@@ -294,6 +338,7 @@ impl PreparedLine {
 pub struct PreparedParagraph {
     paragraph: ParagraphId,
     text_len: u32,
+    resolved_direction: ResolvedDirection,
     lines: Vec<PreparedLine>,
     movements: Vec<PreparedCursorMovement>,
 }
@@ -303,6 +348,7 @@ impl PreparedParagraph {
     pub fn try_new(
         paragraph: ParagraphId,
         text_len: u32,
+        resolved_direction: ResolvedDirection,
         lines: impl IntoIterator<Item = PreparedLine>,
         movements: impl IntoIterator<Item = PreparedCursorMovement>,
     ) -> Result<Self, PreparationError> {
@@ -388,6 +434,7 @@ impl PreparedParagraph {
         Ok(Self {
             paragraph,
             text_len,
+            resolved_direction,
             lines,
             movements,
         })
@@ -403,6 +450,12 @@ impl PreparedParagraph {
     #[must_use]
     pub const fn text_len(&self) -> u32 {
         self.text_len
+    }
+
+    /// Returns the base direction resolved by the backend's Unicode analysis.
+    #[must_use]
+    pub const fn resolved_direction(&self) -> ResolvedDirection {
+        self.resolved_direction
     }
 
     /// Returns the source-ordered formed lines.

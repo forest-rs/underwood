@@ -54,6 +54,7 @@ struct VisualInteractionSlice {
     source: Range<usize>,
     advance: f64,
     bidi_level: u8,
+    script: [u8; 4],
     boundary: Boundary,
     whitespace: Whitespace,
 }
@@ -61,6 +62,7 @@ struct VisualInteractionSlice {
 pub(crate) fn lower_visual_units(
     text: &str,
     shaped_text: &ShapedText,
+    scripts: &[[u8; 4]],
     pieces: &[RunPiece],
     interaction_units: &[Range<usize>],
     line_source: &Range<usize>,
@@ -73,13 +75,16 @@ pub(crate) fn lower_visual_units(
             .runs()
             .get(piece.run)
             .ok_or_else(PreparationError::invalid_output)?;
+        let script = *scripts
+            .get(piece.run)
+            .ok_or_else(PreparationError::invalid_output)?;
         if run.bidi_level & 1 == 1 {
             for index in piece.clusters.clone().rev() {
-                visual_slices.push(lower_visual_slice(shaped_text, run, index)?);
+                visual_slices.push(lower_visual_slice(shaped_text, run, script, index)?);
             }
         } else {
             for index in piece.clusters.clone() {
-                visual_slices.push(lower_visual_slice(shaped_text, run, index)?);
+                visual_slices.push(lower_visual_slice(shaped_text, run, script, index)?);
             }
         }
     }
@@ -142,6 +147,7 @@ pub(crate) fn lower_visual_units(
 fn lower_visual_slice(
     shaped_text: &ShapedText,
     run: &parley_engine::ShapedRun,
+    script: [u8; 4],
     index: usize,
 ) -> Result<VisualInteractionSlice, PreparationError> {
     let cluster = shaped_text
@@ -161,6 +167,7 @@ fn lower_visual_slice(
         source: start..end,
         advance: f64::from(cluster.advance),
         bidi_level: run.bidi_level,
+        script,
         boundary: cluster.info.boundary(),
         whitespace: cluster.info.whitespace(),
     })
@@ -180,6 +187,7 @@ fn lower_prepared_unit(
         || slices
             .iter()
             .any(|slice| slice.bidi_level != first.bidi_level)
+        || slices.iter().any(|slice| slice.script != first.script)
     {
         return Err(PreparationError::invalid_output());
     }
@@ -202,6 +210,11 @@ fn lower_prepared_unit(
     {
         whitespace = Whitespace::Newline;
     }
+    let source_text = text
+        .get(source.clone())
+        .ok_or_else(PreparationError::invalid_output)?;
+    let western_justification_opportunity =
+        source_text == " " && matches!(&first.script, b"Latn" | b"Grek" | b"Cyrl");
     let source = checked_source_range(source)?;
     let (left, right) = if bidi_level & 1 == 1 {
         (
@@ -220,7 +233,7 @@ fn lower_prepared_unit(
             PreparedInteractionSlice::try_new(checked_source_range(&slice.source)?, slice.advance)
         })
         .collect::<Result<Vec<_>, PreparationError>>()?;
-    PreparedInteractionUnit::try_new(
+    PreparedInteractionUnit::try_new_with_justification(
         source,
         slices,
         bidi_level,
@@ -237,6 +250,7 @@ fn lower_prepared_unit(
             Whitespace::Tab => ClusterWhitespace::Tab,
             Whitespace::Newline => ClusterWhitespace::Newline,
         },
+        western_justification_opportunity,
         left,
         right,
     )

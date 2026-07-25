@@ -54,7 +54,7 @@ pub use region::{
 };
 pub use scene::{
     CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
-    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,
+    LineAdjustment, ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,
     SceneCompositionRect, SceneFragment, SceneFragmentId, SceneGlyph, SceneGlyphInstanceId,
     SceneLine, SceneOutput, SceneSelectionRect, SemanticFragment, StageWork, TextHit, TextMetrics,
     TextScene, WorkReport,
@@ -65,6 +65,6 @@ pub use selection::{
 };
 pub use style::{
     AnalysisStyle, ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, LineHeightBasis,
-    PaintSlot, PaintTable, ParagraphStyle, SceneRequest, ShapingStyle, StyleMap, TextConstraint,
-    TextSpacing,
+    PaintSlot, PaintTable, ParagraphStyle, ResolvedDirection, SceneRequest, ShapingStyle, StyleMap,
+    TextAlignment, TextConstraint, TextSpacing,
 };

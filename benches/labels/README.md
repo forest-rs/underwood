@@ -18,6 +18,8 @@ diagnostics. It covers:
   expansion without per-byte maps.
 - real exclusion, float, and multi-column region churn with replayable exact
   slot transcripts.
+- retained alignment and Western-justification churn over fixed accepted
+  region slots.
 
 Deterministic `WorkReport`, intrinsic-metric, and cache assertions are the
 correctness proof. Machine-local elapsed time is supporting evidence only. A
@@ -36,6 +38,9 @@ Isolate the pre-region formation baseline and real region churn with:
 cargo build --release -p underwood_label_benchmark
 target/release/underwood_label_benchmark region-ready 200 512
 target/release/underwood_label_benchmark region-churn 200 512
+target/release/underwood_label_benchmark retained-adjustment 200 512
+target/release/underwood_label_benchmark alignment-churn 200 512
+target/release/underwood_label_benchmark justification-churn 200 512
 benches/labels/profile-allocations.sh
 ```
 

@@ -12,8 +12,10 @@ The poster deliberately exposes difficult evidence. Its large Arabic and Latin
 specimen renders ordinary whole glyphs without outline-derived clip stacks and
 marks the origin of a real zero-advance Arabic glyph without pretending that
 advance or interaction geometry describes its ink. A second paragraph mixes
-Latin LTR and Arabic RTL runs with real fallback and finite-width line
-formation. One heterogeneous document carries three Fontique-selected Roboto Flex
+Latin LTR and Arabic RTL runs with real fallback, finite-width line formation,
+and visible Western-space justification within the accepted slot. Final-line
+text remains unexpanded. One heterogeneous document carries three
+Fontique-selected Roboto Flex
 weight/width instances plus explicit `opsz`, mixed font sizes and line heights,
 paint slots, and `liga` on/off shaping with asserted glyph counts. An absent
 primary family reaches Noto Kufi through an `Arab`/`ar` fallback and executes a

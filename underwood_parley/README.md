@@ -101,6 +101,15 @@ bidi direction from glyphs or using ink clips as interaction geometry. Soft
 wraps retain both affinities for their shared logical boundary, and mandatory
 break endpoints can occupy distinct lines.
 
+The adapter publishes Parley Engine's resolved paragraph direction rather than
+asking Underwood to repeat first-strong analysis. Ordinary U+0020 interaction
+units are marked as Western justification opportunities only when their
+resolved shaping script is Latin, Greek, or Cyrillic. Underwood applies
+alignment and eligible-space expansion after the line source boundary and
+exact region slot are fixed; this adapter never mutates retained canonical
+shaping for alignment. Arabic and CJK expansion remain explicitly outside this
+Western strategy.
+
 Paint coverage records source-to-paint ownership, not universal glyph ink. A
 glyph wholly owned by one paint run lowers without a per-glyph clip, leaving
 outline, bitmap, color-graph, and synthesis extent to the renderer. A glyph

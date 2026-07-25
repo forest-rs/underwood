@@ -58,9 +58,13 @@ primed-identical p0
 primed-paint p1
 primed-unique p2
 primed-region p3
+primed-adjustment p4
 cold-identical c0
 retained-identical r0
+retained-adjustment r1
 paint-change a0
+alignment-churn a1
+justification-churn a2
 localized-edit e0
 interaction-materialization i0
 width-churn w0
@@ -91,9 +95,18 @@ awk '
         print "retained-identical", \
             calls["retained-identical"] - calls["primed-identical"], \
             bytes["retained-identical"] - bytes["primed-identical"]
+        print "retained-adjustment", \
+            calls["retained-adjustment"] - calls["primed-adjustment"], \
+            bytes["retained-adjustment"] - bytes["primed-adjustment"]
         print "paint-change", \
             calls["paint-change"] - calls["primed-paint"], \
             bytes["paint-change"] - bytes["primed-paint"]
+        print "alignment-churn", \
+            calls["alignment-churn"] - calls["primed-adjustment"], \
+            bytes["alignment-churn"] - bytes["primed-adjustment"]
+        print "justification-churn", \
+            calls["justification-churn"] - calls["primed-adjustment"], \
+            bytes["justification-churn"] - bytes["primed-adjustment"]
         print "localized-edit", \
             calls["localized-edit"] - calls["primed-identical"], \
             bytes["localized-edit"] - bytes["primed-identical"]
