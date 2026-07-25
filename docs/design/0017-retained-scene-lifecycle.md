@@ -1,6 +1,6 @@
 # Design-0017: Retained scene lifecycle
 
-- **Status:** Proposed — architecture gate
+- **Status:** Approved — 2026-07-25
 - **Date:** 2026-07-25
 - **Bead:** `und-oh0.13.17`
 - **Extends:** Design-0012, Design-0014, and Design-0016
@@ -574,7 +574,7 @@ or state its candidate-dependent complexity; the proof matrix will not infer a
 
 ## Human gate
 
-Approval of this design authorizes:
+Approved by Bruce on 2026-07-25. The approval authorizes:
 
 - the public scene traversal migration above;
 - internal copy-on-write `StyleMap` and `Document` representations;

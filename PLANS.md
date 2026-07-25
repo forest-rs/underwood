@@ -220,7 +220,7 @@ work, and all local and protected remote gates are green.
 
 ## Retained O(change) preparation and scene lifecycle
 
-**Status:** Proposed — sibling campaign; Design-0017 awaits architecture approval
+**Status:** Active — Design-0017 and public traversal migration approved
 
 **Beads:** `und-oh0.13.17` and its dependency-ordered children
 
@@ -235,9 +235,9 @@ paragraph facts plus a sublinear scene-spine update.
 ### Fence
 
 This campaign is informed by the preparation trace but is not part of the
-reusable text-tools completion gate. It must not begin foundational
-implementation until Design-0017 and its public traversal migration are
-approved.
+reusable text-tools completion gate. Design-0017 and its public traversal
+migration were approved on 2026-07-25; implementation remains bound by its
+dependency, `unsafe`, serialization, and renderer-policy gates.
 
 ### Measured baseline
 
