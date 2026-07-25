@@ -85,7 +85,7 @@ The wind tunnel asserts:
 - min-content width is no greater than max-content width, and its height is no
   less; non-empty baseline metrics are present;
 - explicitly releasing all 2,048 blocks leaves zero geometry entries and zero
-  Parley physics entries;
+  Parley preparation entries;
 - a 64-entry churn budget causes exactly 1,984 evictions, observes a transient
   peak of 65 while the newest owned output materializes, retains 64 geometry
   and 64 backend entries, and reaches zero/zero after `clear_cache`.

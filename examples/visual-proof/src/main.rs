@@ -16,8 +16,9 @@ use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{
     Brush, CacheBudget, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature,
     FontStyle, FontVariation, FontWeight, FontWidth, InlineFlowStyle, InlineRole, Language,
-    LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script,
-    ShapingStyle, StyleMap, Tag, TextConstraint, TextId, TextScene, adapter::LineBreakReason,
+    LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, SceneRequest,
+    Script, ShapingStyle, StyleMap, Tag, TextAlignment, TextConstraint, TextId, TextScene,
+    adapter::LineBreakReason,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -231,11 +232,12 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
             Piece::new("j", InlineRole::TEXT, CORAL),
         ],
     )?;
-    let mixed_direction = layout_scene(
+    let mixed_direction = layout_scene_aligned(
         &mut layout,
         0x22,
         48.0,
         640.0,
+        TextAlignment::Justify,
         &[
             Piece::new("SCENE 42 — ", InlineRole::TEXT, CYAN),
             Piece::new("مرحبا بالعالم", InlineRole::EMPHASIS, GOLD),
@@ -314,6 +316,22 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         LineBreakReason::End,
         "the second line must end with the paragraph"
     );
+    assert_eq!(
+        mixed_direction.lines()[0].adjustment().alignment(),
+        TextAlignment::Justify,
+        "the mixed-direction specimen must use public paragraph alignment"
+    );
+    assert!(
+        mixed_direction.lines()[0]
+            .adjustment()
+            .expanded_opportunities()
+            > 0
+            && mixed_direction.lines()[0]
+                .adjustment()
+                .opportunity_expansion()
+                > 0.0,
+        "the regular line must visibly fill its exact slot through Western space expansion"
+    );
 
     let title = layout_label(&mut layout, 0x23, 72.0, "UNDERWOOD", INK)?;
     let computed_styles = computed_style_specimen(&mut layout)?;
@@ -328,7 +346,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         &mut layout,
         0x2e,
         18.0,
-        "MIXED LTR + RTL / 2 LEGAL LINES / FONT METRICS",
+        "MIXED LTR + RTL / JUSTIFIED SLOT / SOURCE-COMPLETE",
         MUTED,
     )?;
     let edit_label = layout_label(&mut layout, 0x26, 18.0, "LOCAL EDIT", CORAL)?;
@@ -764,6 +782,24 @@ fn layout_scene(
     width: f64,
     pieces: &[Piece<'_>],
 ) -> Result<TextScene, AnyError> {
+    layout_scene_aligned(
+        layout,
+        document_byte,
+        font_size,
+        width,
+        TextAlignment::Start,
+        pieces,
+    )
+}
+
+fn layout_scene_aligned(
+    layout: &mut LayoutEngine,
+    document_byte: u8,
+    font_size: f32,
+    width: f64,
+    alignment: TextAlignment,
+    pieces: &[Piece<'_>],
+) -> Result<TextScene, AnyError> {
     let mut document = Document::new(DocumentId::from_bytes([document_byte; 16]));
     let mut edit = document.edit();
     let paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
@@ -783,6 +819,7 @@ fn layout_scene(
     for (text, paint) in authored {
         styles.set(text, base.clone().with_paint(paint));
     }
+    styles.set_paragraph_style(paragraph, ParagraphStyle::DEFAULT.with_alignment(alignment));
     let paints = poster_paints();
     let request = SceneRequest::new(
         TextConstraint::Wrap(FiniteWidth::new(width)?),

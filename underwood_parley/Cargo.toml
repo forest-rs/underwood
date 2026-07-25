@@ -12,7 +12,9 @@ publish = false
 
 [features]
 default = []
-system-fonts = ["fontique/fontconfig-dlopen", "fontique/system"]
+complex-scripts = ["parley_engine/complex-scripts"]
+std = ["fontique/std"]
+system-fonts = ["std", "fontique/fontconfig-dlopen", "fontique/system"]
 
 [dependencies]
 fontique.workspace = true

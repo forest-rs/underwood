@@ -262,11 +262,16 @@ pub struct PreparedInteractionUnit {
     bidi_level: u8,
     boundary: ClusterBoundary,
     whitespace: ClusterWhitespace,
+    western_justification_opportunity: bool,
     left: PreparedClusterSide,
     right: PreparedClusterSide,
 }
 
 impl PreparedInteractionUnit {
+    pub(crate) fn slice_capacity(&self) -> usize {
+        self.slices.capacity()
+    }
+
     /// Validates one source-complete interaction unit and its visual slices.
     pub fn try_new(
         source: Range<u32>,
@@ -277,11 +282,36 @@ impl PreparedInteractionUnit {
         left: PreparedClusterSide,
         right: PreparedClusterSide,
     ) -> Result<Self, PreparationError> {
+        Self::try_new_with_justification(
+            source, slices, bidi_level, boundary, whitespace, false, left, right,
+        )
+    }
+
+    /// Validates one interaction unit and its Western justification eligibility.
+    ///
+    /// `western_justification_opportunity` must only be set for an ordinary
+    /// space whose script context is supported by the backend's explicit
+    /// Western inter-word strategy.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors complete portable interaction data"
+    )]
+    pub fn try_new_with_justification(
+        source: Range<u32>,
+        slices: impl IntoIterator<Item = PreparedInteractionSlice>,
+        bidi_level: u8,
+        boundary: ClusterBoundary,
+        whitespace: ClusterWhitespace,
+        western_justification_opportunity: bool,
+        left: PreparedClusterSide,
+        right: PreparedClusterSide,
+    ) -> Result<Self, PreparationError> {
         let slices: Vec<_> = slices.into_iter().collect();
         if source.start >= source.end
             || !matches!(left.offset, offset if offset == source.start || offset == source.end)
             || !matches!(right.offset, offset if offset == source.start || offset == source.end)
             || left.offset == right.offset
+            || western_justification_opportunity && whitespace != ClusterWhitespace::Space
         {
             return Err(PreparationError::invalid_output());
         }
@@ -311,6 +341,7 @@ impl PreparedInteractionUnit {
             bidi_level,
             boundary,
             whitespace,
+            western_justification_opportunity,
             left,
             right,
         })
@@ -350,6 +381,13 @@ impl PreparedInteractionUnit {
     #[must_use]
     pub const fn whitespace(&self) -> ClusterWhitespace {
         self.whitespace
+    }
+
+    /// Returns whether this ordinary space is an eligible Western inter-word
+    /// justification opportunity.
+    #[must_use]
+    pub const fn is_western_justification_opportunity(&self) -> bool {
+        self.western_justification_opportunity
     }
 
     /// Returns the position reached from the visual left side.

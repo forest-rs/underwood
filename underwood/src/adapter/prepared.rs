@@ -100,9 +100,12 @@ impl FontSynthesis {
 /// One source-complete line with backend-derived metrics and visual runs.
 #[derive(Clone, Debug)]
 pub struct PreparedLine {
+    slot: Option<crate::LineSlot>,
     source: Range<u32>,
     break_reason: LineBreakReason,
     advance: f64,
+    trailing_whitespace_start: u32,
+    trailing_whitespace_advance: f64,
     baseline: f64,
     height: f64,
     content_ascent: f64,
@@ -114,6 +117,37 @@ pub struct PreparedLine {
 impl PreparedLine {
     /// Validates and owns one formed line.
     pub fn try_new(
+        source: Range<u32>,
+        break_reason: LineBreakReason,
+        advance: f64,
+        baseline: f64,
+        height: f64,
+        content_ascent: f64,
+        content_descent: f64,
+        units: impl IntoIterator<Item = PreparedInteractionUnit>,
+        runs: impl IntoIterator<Item = PreparedRun>,
+    ) -> Result<Self, PreparationError> {
+        Self::try_new_in_slot(
+            None,
+            source,
+            break_reason,
+            advance,
+            baseline,
+            height,
+            content_ascent,
+            content_descent,
+            units,
+            runs,
+        )
+    }
+
+    /// Validates and owns one formed line accepted into an exact region slot.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors complete portable line data"
+    )]
+    pub fn try_new_in_slot(
+        slot: Option<crate::LineSlot>,
         source: Range<u32>,
         break_reason: LineBreakReason,
         advance: f64,
@@ -136,6 +170,7 @@ impl PreparedLine {
             || content_ascent < 0.0
             || !content_descent.is_finite()
             || content_descent < 0.0
+            || slot.is_some_and(|slot| height > slot.block_size())
         {
             return Err(PreparationError::invalid_output());
         }
@@ -173,6 +208,18 @@ impl PreparedLine {
         if !source_is_valid {
             return Err(PreparationError::invalid_output());
         }
+        let mut trailing_whitespace_advance = 0.0;
+        let mut trailing_start = source.end;
+        while let Some(unit) = units
+            .iter()
+            .find(|unit| unit.source().end == trailing_start)
+        {
+            if unit.whitespace() == ClusterWhitespace::None {
+                break;
+            }
+            trailing_whitespace_advance += unit.advance();
+            trailing_start = unit.source().start;
+        }
         let unit_advance = units
             .iter()
             .map(PreparedInteractionUnit::advance)
@@ -182,9 +229,12 @@ impl PreparedLine {
             return Err(PreparationError::invalid_output());
         }
         Ok(Self {
+            slot,
             source,
             break_reason,
             advance,
+            trailing_whitespace_start: trailing_start,
+            trailing_whitespace_advance,
             baseline,
             height,
             content_ascent,
@@ -192,6 +242,12 @@ impl PreparedLine {
             units,
             runs,
         })
+    }
+
+    /// Returns the exact accepted region slot, when region flow was requested.
+    #[must_use]
+    pub const fn slot(&self) -> Option<crate::LineSlot> {
+        self.slot
     }
 
     /// Returns the paragraph-local source range, including a terminating control.
@@ -210,6 +266,34 @@ impl PreparedLine {
     #[must_use]
     pub const fn advance(&self) -> f64 {
         self.advance
+    }
+
+    /// Returns the logical trailing-whitespace advance excluded from alignment.
+    ///
+    /// Trailing whitespace remains source-complete and interactive, but hangs
+    /// from the visual line edge instead of changing the aligned content box.
+    #[must_use]
+    pub const fn trailing_whitespace_advance(&self) -> f64 {
+        self.trailing_whitespace_advance
+    }
+
+    /// Returns the number of explicit Western inter-word opportunities.
+    #[must_use]
+    pub fn western_justification_opportunities(&self) -> usize {
+        self.western_justification_opportunity_sources().count()
+    }
+
+    /// Returns source ranges for non-trailing eligible Western spaces.
+    pub fn western_justification_opportunity_sources(
+        &self,
+    ) -> impl Iterator<Item = Range<u32>> + '_ {
+        self.units
+            .iter()
+            .filter(|unit| {
+                unit.is_western_justification_opportunity()
+                    && unit.source().end <= self.trailing_whitespace_start
+            })
+            .map(PreparedInteractionUnit::source)
     }
 
     /// Returns the baseline offset from the top of the line box.
@@ -249,13 +333,23 @@ impl PreparedLine {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct PreparedParagraphFacts {
+    text_len: u32,
+    resolved_direction: ResolvedDirection,
+    lines: Vec<PreparedLine>,
+    movements: Vec<PreparedCursorMovement>,
+}
+
 /// Validated owned formed lines for one paragraph.
+///
+/// The paragraph identity is a fresh envelope around immutable paragraph-local
+/// facts. This lets an eligible retained cache share exact preparation without
+/// sharing document or paragraph identity.
 #[derive(Clone, Debug)]
 pub struct PreparedParagraph {
     paragraph: ParagraphId,
-    text_len: u32,
-    lines: Vec<PreparedLine>,
-    movements: Vec<PreparedCursorMovement>,
+    facts: Arc<PreparedParagraphFacts>,
 }
 
 impl PreparedParagraph {
@@ -263,6 +357,7 @@ impl PreparedParagraph {
     pub fn try_new(
         paragraph: ParagraphId,
         text_len: u32,
+        resolved_direction: ResolvedDirection,
         lines: impl IntoIterator<Item = PreparedLine>,
         movements: impl IntoIterator<Item = PreparedCursorMovement>,
     ) -> Result<Self, PreparationError> {
@@ -347,10 +442,24 @@ impl PreparedParagraph {
         }
         Ok(Self {
             paragraph,
-            text_len,
-            lines,
-            movements,
+            facts: Arc::new(PreparedParagraphFacts {
+                text_len,
+                resolved_direction,
+                lines,
+                movements,
+            }),
         })
+    }
+
+    pub(crate) fn from_shared_facts(
+        paragraph: ParagraphId,
+        facts: Arc<PreparedParagraphFacts>,
+    ) -> Self {
+        Self { paragraph, facts }
+    }
+
+    pub(crate) fn shared_facts(&self) -> Arc<PreparedParagraphFacts> {
+        self.facts.clone()
     }
 
     /// Returns the paragraph identity.
@@ -361,21 +470,69 @@ impl PreparedParagraph {
 
     /// Returns the projected paragraph length in UTF-8 bytes.
     #[must_use]
-    pub const fn text_len(&self) -> u32 {
-        self.text_len
+    pub fn text_len(&self) -> u32 {
+        self.facts.text_len
+    }
+
+    /// Returns the base direction resolved by the backend's Unicode analysis.
+    #[must_use]
+    pub fn resolved_direction(&self) -> ResolvedDirection {
+        self.facts.resolved_direction
     }
 
     /// Returns the source-ordered formed lines.
     #[must_use]
     pub fn lines(&self) -> &[PreparedLine] {
-        &self.lines
+        &self.facts.lines
     }
 
     /// Returns complete paragraph-local cursor transitions.
     #[must_use]
     pub fn movements(&self) -> &[PreparedCursorMovement] {
-        &self.movements
+        &self.facts.movements
     }
+}
+
+impl PreparedParagraphFacts {
+    pub(crate) fn estimated_owned_bytes(&self) -> usize {
+        let mut bytes = size_of::<Self>()
+            .saturating_add(vec_bytes::<PreparedLine>(self.lines.capacity()))
+            .saturating_add(vec_bytes::<PreparedCursorMovement>(
+                self.movements.capacity(),
+            ));
+        for line in &self.lines {
+            bytes = bytes
+                .saturating_add(vec_bytes::<PreparedInteractionUnit>(line.units.capacity()))
+                .saturating_add(vec_bytes::<PreparedRun>(line.runs.capacity()));
+            for unit in &line.units {
+                bytes = bytes.saturating_add(
+                    size_of::<PreparedInteractionSlice>().saturating_mul(unit.slice_capacity()),
+                );
+            }
+            for run in &line.runs {
+                bytes = bytes
+                    .saturating_add(vec_bytes::<i16>(run.normalized_coords.capacity()))
+                    .saturating_add(vec_bytes::<Range<u32>>(run.unrendered_source.capacity()))
+                    .saturating_add(vec_bytes::<PreparedGlyph>(run.glyphs.capacity()));
+                if let Some(evidence) = &run.synthesis.evidence {
+                    bytes = bytes
+                        .saturating_add(size_of::<FontSynthesisEvidence>())
+                        .saturating_add(vec_bytes::<FontVariation>(evidence.variations.capacity()));
+                }
+                for glyph in &run.glyphs {
+                    bytes = bytes.saturating_add(
+                        size_of::<GlyphPaintSegment>()
+                            .saturating_mul(glyph.paint.segment_capacity()),
+                    );
+                }
+            }
+        }
+        bytes
+    }
+}
+
+const fn vec_bytes<T>(capacity: usize) -> usize {
+    size_of::<T>().saturating_mul(capacity)
 }
 
 fn valid_step_source(step: &PreparedCursorStep, unit_sources: &[Range<u32>]) -> bool {

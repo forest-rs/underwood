@@ -8,11 +8,17 @@
 
 use super::*;
 
+mod styles;
+
+use styles::project_style_runs;
+
 #[derive(Clone, Debug)]
 pub(super) struct Projection<'a> {
     pub(super) paragraph: ParagraphId,
-    pub(super) text: alloc::string::String,
+    pub(super) mapping: TextProjection,
     pub(super) spans: Vec<LeafSpan>,
+    pub(super) analysis_styles: Vec<AnalysisStyle>,
+    pub(super) analysis_runs: Vec<AnalysisRun>,
     pub(super) shaping_styles: Vec<&'a ShapingStyle>,
     pub(super) shaping_runs: Vec<ShapingRun>,
     pub(super) inline_flow_styles: Vec<InlineFlowStyle>,
@@ -32,6 +38,8 @@ impl<'a> Projection<'a> {
     ) -> Result<Self, SceneError> {
         let text = paragraph.projected_text();
         let mut spans = Vec::with_capacity(paragraph.leaves.len());
+        let mut analysis_styles = Vec::new();
+        let mut analysis_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut shaping_styles = Vec::new();
         let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut inline_flow_styles = Vec::new();
@@ -55,6 +63,13 @@ impl<'a> Projection<'a> {
                 semantic: leaf.semantic_id(),
             });
             if start != end {
+                append_analysis_run(
+                    &mut analysis_styles,
+                    &mut analysis_runs,
+                    start..end,
+                    style.analysis(),
+                    paragraph.id,
+                )?;
                 append_shaping_run(
                     &mut shaping_styles,
                     &mut shaping_runs,
@@ -73,10 +88,23 @@ impl<'a> Projection<'a> {
             }
             start = end;
         }
+        let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
+        let mapping = TextProjection::from_whitespace(text, paragraph_style.whitespace_collapse())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        project_style_runs(
+            paragraph.id,
+            &mapping,
+            &mut analysis_runs,
+            &mut shaping_runs,
+            &mut inline_flow_runs,
+            &mut paint_runs,
+        )?;
         Ok(Self {
             paragraph: paragraph.id,
-            text,
+            mapping,
             spans,
+            analysis_styles,
+            analysis_runs,
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
@@ -84,7 +112,7 @@ impl<'a> Projection<'a> {
             paint_runs,
             default_font_size: request.styles.default_style().shaping().font_size(),
             default_inline_flow: request.styles.default_style().inline_flow(),
-            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
+            paragraph_style,
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -118,6 +146,8 @@ impl<'a> Projection<'a> {
 
         let mut text = alloc::string::String::new();
         let mut spans = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
+        let mut analysis_styles = Vec::new();
+        let mut analysis_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
         let mut shaping_styles = Vec::new();
         let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
         let mut inline_flow_styles = Vec::new();
@@ -132,6 +162,8 @@ impl<'a> Projection<'a> {
                     paragraph.id,
                     &mut text,
                     &mut spans,
+                    &mut analysis_styles,
+                    &mut analysis_runs,
                     &mut shaping_styles,
                     &mut shaping_runs,
                     &mut inline_flow_styles,
@@ -176,6 +208,8 @@ impl<'a> Projection<'a> {
                         paragraph.id,
                         &mut text,
                         &mut spans,
+                        &mut analysis_styles,
+                        &mut analysis_runs,
                         &mut shaping_styles,
                         &mut shaping_runs,
                         &mut inline_flow_styles,
@@ -192,6 +226,8 @@ impl<'a> Projection<'a> {
                         paragraph.id,
                         &mut text,
                         &mut spans,
+                        &mut analysis_styles,
+                        &mut analysis_runs,
                         &mut shaping_styles,
                         &mut shaping_runs,
                         &mut inline_flow_styles,
@@ -224,6 +260,8 @@ impl<'a> Projection<'a> {
                     paragraph.id,
                     &mut text,
                     &mut spans,
+                    &mut analysis_styles,
+                    &mut analysis_runs,
                     &mut shaping_styles,
                     &mut shaping_runs,
                     &mut inline_flow_styles,
@@ -243,10 +281,23 @@ impl<'a> Projection<'a> {
             ));
         }
 
+        let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
+        let mapping = TextProjection::from_whitespace(text, paragraph_style.whitespace_collapse())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        project_style_runs(
+            paragraph.id,
+            &mapping,
+            &mut analysis_runs,
+            &mut shaping_runs,
+            &mut inline_flow_runs,
+            &mut paint_runs,
+        )?;
         Ok(Self {
             paragraph: paragraph.id,
-            text,
+            mapping,
             spans,
+            analysis_styles,
+            analysis_runs,
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
@@ -254,7 +305,7 @@ impl<'a> Projection<'a> {
             paint_runs,
             default_font_size: request.styles.default_style().shaping().font_size(),
             default_inline_flow: request.styles.default_style().inline_flow(),
-            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
+            paragraph_style,
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
@@ -264,19 +315,15 @@ impl<'a> Projection<'a> {
         &self,
         paragraph: Range<u32>,
     ) -> Result<Vec<LocalRange>, SceneError> {
-        if self
-            .text
-            .get(paragraph.start as usize..paragraph.end as usize)
-            .is_none()
-        {
-            return Err(SceneError::for_source(
+        let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
+            SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
-                paragraph,
-            ));
-        }
-        if paragraph.is_empty() {
-            let span = span_for_position(&self.spans, paragraph.start, TextAffinity::Upstream)
+                paragraph.clone(),
+            )
+        })?;
+        if source.is_empty() {
+            let span = span_for_position(&self.spans, source.start, TextAffinity::Upstream)
                 .ok_or_else(|| {
                     SceneError::for_source(
                         SceneErrorKind::SourceCoverage,
@@ -284,16 +331,14 @@ impl<'a> Projection<'a> {
                         paragraph.clone(),
                     )
                 })?;
-            return Ok(alloc::vec![
-                span.local_range(paragraph.start, paragraph.end)
-            ]);
+            return Ok(alloc::vec![span.local_range(source.start, source.end)]);
         }
 
-        let mut covered = paragraph.start;
+        let mut covered = source.start;
         let mut ranges = Vec::new();
         for span in &self.spans {
-            let start = paragraph.start.max(span.paragraph.start);
-            let end = paragraph.end.min(span.paragraph.end);
+            let start = source.start.max(span.paragraph.start);
+            let end = source.end.min(span.paragraph.end);
             if start >= end {
                 continue;
             }
@@ -301,13 +346,13 @@ impl<'a> Projection<'a> {
                 return Err(SceneError::for_source(
                     SceneErrorKind::SourceCoverage,
                     self.paragraph,
-                    paragraph,
+                    paragraph.clone(),
                 ));
             }
             ranges.push(span.local_range(start, end));
             covered = end;
         }
-        if covered != paragraph.end {
+        if covered != source.end {
             return Err(SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
@@ -321,16 +366,44 @@ impl<'a> Projection<'a> {
         &self,
         paragraph: Range<u32>,
     ) -> Result<SemanticId, SceneError> {
+        let owner = self.mapping.source_owner(paragraph.clone()).map_err(|_| {
+            SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph.clone(),
+            )
+        })?;
+        let transformed_unit = !paragraph.is_empty()
+            && self.mapping.segments().any(|segment| {
+                segment.kind() != ProjectionKind::Identity
+                    && !segment.projected().is_empty()
+                    && segment.projected().start <= paragraph.start
+                    && paragraph.end <= segment.projected().end
+            });
+        if paragraph.is_empty() || transformed_unit {
+            return span_for_position(&self.spans, owner, TextAffinity::Downstream)
+                .or_else(|| span_for_position(&self.spans, owner, TextAffinity::Upstream))
+                .map(|span| span.semantic)
+                .ok_or_else(|| {
+                    SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        self.paragraph,
+                        paragraph,
+                    )
+                });
+        }
+
+        let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
+            SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                self.paragraph,
+                paragraph.clone(),
+            )
+        })?;
         let mut semantics = self
             .spans
             .iter()
-            .filter(|span| {
-                if paragraph.is_empty() {
-                    span.paragraph.start <= paragraph.start && paragraph.start <= span.paragraph.end
-                } else {
-                    span.paragraph.start < paragraph.end && paragraph.start < span.paragraph.end
-                }
-            })
+            .filter(|span| span.paragraph.start < source.end && source.start < span.paragraph.end)
             .map(|span| span.semantic);
         let Some(first) = semantics.next() else {
             return Err(SceneError::for_source(
@@ -354,31 +427,44 @@ impl<'a> Projection<'a> {
         paragraph_offset: u32,
         affinity: TextAffinity,
     ) -> Result<LocalPosition, SceneError> {
-        if !self.text.is_char_boundary(paragraph_offset as usize) {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph_offset..paragraph_offset,
-            ));
-        }
-        let span = span_for_position(&self.spans, paragraph_offset, affinity).ok_or_else(|| {
+        let source = self
+            .mapping
+            .source_position(paragraph_offset, affinity)
+            .map_err(|_| {
+                SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    self.paragraph,
+                    paragraph_offset..paragraph_offset,
+                )
+            })?;
+        let span = span_for_position(&self.spans, source, affinity).ok_or_else(|| {
             SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
                 paragraph_offset..paragraph_offset,
             )
         })?;
-        Ok(span.local_position(paragraph_offset, affinity))
+        Ok(span.local_position(source, affinity))
     }
 
     pub(super) fn empty_line_height_key(&self) -> u64 {
-        if self.text.is_empty() {
-            (f64::from(self.default_font_size)
-                * f64::from(self.default_inline_flow.line_height().multiplier()))
-            .to_bits()
+        if self.mapping.text().is_empty() {
+            self.empty_line_height().to_bits()
         } else {
             0
         }
+    }
+
+    pub(super) fn empty_line_height(&self) -> f64 {
+        let font_size = self.default_font_size;
+        // Empty text selects no font. Until a paragraph strut carries selected
+        // font metrics, metrics-relative height uses the computed font size as
+        // its explicit deterministic fallback.
+        f64::from(
+            self.default_inline_flow
+                .line_height()
+                .resolve(font_size, font_size),
+        )
     }
 
     pub(super) fn composition_identity(&self) -> Option<(CompositionId, crate::CompositionEpoch)> {
@@ -393,6 +479,8 @@ pub(super) fn append_projection_span<'a>(
     paragraph: ParagraphId,
     text: &mut alloc::string::String,
     spans: &mut Vec<LeafSpan>,
+    analysis_styles: &mut Vec<AnalysisStyle>,
+    analysis_runs: &mut Vec<AnalysisRun>,
     shaping_styles: &mut Vec<&'a ShapingStyle>,
     shaping_runs: &mut Vec<ShapingRun>,
     inline_flow_styles: &mut Vec<InlineFlowStyle>,
@@ -418,6 +506,13 @@ pub(super) fn append_projection_span<'a>(
         semantic: leaf.semantic_id(),
     });
     if start != end {
+        append_analysis_run(
+            analysis_styles,
+            analysis_runs,
+            start..end,
+            style.analysis(),
+            paragraph,
+        )?;
         append_shaping_run(
             shaping_styles,
             shaping_runs,
@@ -481,35 +576,46 @@ pub(super) enum LeafSpanSource {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ProjectionSourceKey {
-    pub(super) paragraph: Range<u32>,
-    pub(super) text: TextId,
-    pub(super) source: ProjectionSourceKind,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ProjectionSourceKind {
     Snapshot { start: u32 },
     Composition { start: u32 },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ProjectionSourceKey {
+    Relation(ProjectionSegment),
+    Text {
+        paragraph: Range<u32>,
+        text: TextId,
+        source: ProjectionSourceKind,
+    },
+}
+
 impl ProjectionSourceKey {
     pub(super) fn from_projection(projection: &Projection<'_>) -> Vec<Self> {
-        projection
-            .spans
-            .iter()
-            .map(|span| Self {
-                paragraph: span.paragraph.clone(),
-                text: span.text,
-                source: match span.source {
-                    LeafSpanSource::Snapshot { start } => ProjectionSourceKind::Snapshot { start },
-                    LeafSpanSource::Composition { start, .. } => {
-                        ProjectionSourceKind::Composition { start }
-                    }
+        let mut keys = Vec::with_capacity(
+            projection.spans.len()
+                + if projection.mapping.is_identity() {
+                    0
+                } else {
+                    projection.mapping.segments().len()
                 },
-            })
-            .collect()
+        );
+        if !projection.mapping.is_identity() {
+            keys.extend(projection.mapping.segments().map(Self::Relation));
+        }
+        keys.extend(projection.spans.iter().map(|span| Self::Text {
+            paragraph: span.paragraph.clone(),
+            text: span.text,
+            source: match span.source {
+                LeafSpanSource::Snapshot { start } => ProjectionSourceKind::Snapshot { start },
+                LeafSpanSource::Composition { start, .. } => {
+                    ProjectionSourceKind::Composition { start }
+                }
+            },
+        }));
+        keys
     }
 }
 
@@ -546,6 +652,36 @@ impl LeafSpan {
             },
         }
     }
+}
+
+pub(super) fn append_analysis_run(
+    styles: &mut Vec<AnalysisStyle>,
+    runs: &mut Vec<AnalysisRun>,
+    bytes: Range<u32>,
+    style: AnalysisStyle,
+    paragraph: ParagraphId,
+) -> Result<(), SceneError> {
+    let style = if let Some(index) = styles.iter().position(|candidate| *candidate == style) {
+        AnalysisStyleId::new(
+            u16::try_from(index)
+                .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?,
+        )
+    } else {
+        let index = u16::try_from(styles.len())
+            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?;
+        styles.push(style);
+        AnalysisStyleId::new(index)
+    };
+    if let Some(last) = runs.last_mut()
+        && last.bytes().end == bytes.start
+        && last.style() == style
+    {
+        let start = last.bytes().start;
+        *last = AnalysisRun::new(start..bytes.end, style);
+    } else {
+        runs.push(AnalysisRun::new(bytes, style));
+    }
+    Ok(())
 }
 
 pub(super) fn append_shaping_run<'a>(
@@ -667,10 +803,23 @@ pub(super) fn validate_prepared(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
 ) -> Result<(), SceneError> {
+    if matches!(
+        (
+            projection.paragraph_style.base_direction(),
+            prepared.resolved_direction(),
+        ),
+        (BaseDirection::Ltr, ResolvedDirection::Rtl) | (BaseDirection::Rtl, ResolvedDirection::Ltr)
+    ) {
+        return Err(SceneError::from_preparation(
+            prepared.paragraph(),
+            PreparationErrorKind::InvalidOutput,
+        ));
+    }
     for line in prepared.lines() {
         let line_source = line.source();
         if projection
-            .text
+            .mapping
+            .text()
             .get(line_source.start as usize..line_source.end as usize)
             .is_none()
         {
@@ -680,10 +829,28 @@ pub(super) fn validate_prepared(
                 line_source,
             ));
         }
+        for unit in line.units() {
+            if unit.is_western_justification_opportunity() {
+                let source = unit.source();
+                if projection
+                    .mapping
+                    .text()
+                    .get(source.start as usize..source.end as usize)
+                    != Some(" ")
+                {
+                    return Err(SceneError::from_preparation_source(
+                        prepared.paragraph(),
+                        source,
+                        PreparationErrorKind::InvalidOutput,
+                    ));
+                }
+            }
+        }
         for run in line.runs() {
             let source = run.source();
             let Some(source_text) = projection
-                .text
+                .mapping
+                .text()
                 .get(source.start as usize..source.end as usize)
             else {
                 return Err(SceneError::for_source(
@@ -695,7 +862,8 @@ pub(super) fn validate_prepared(
             for glyph in run.glyphs() {
                 let source = glyph.source();
                 if projection
-                    .text
+                    .mapping
+                    .text()
                     .get(source.start as usize..source.end as usize)
                     .is_none()
                 {
@@ -708,7 +876,8 @@ pub(super) fn validate_prepared(
                 for segment in glyph.paint().segments() {
                     let source = segment.source();
                     if projection
-                        .text
+                        .mapping
+                        .text()
                         .get(source.start as usize..source.end as usize)
                         .is_none()
                     {
@@ -745,7 +914,8 @@ pub(super) fn validate_prepared(
             }
             for range in run.unrendered_source() {
                 if projection
-                    .text
+                    .mapping
+                    .text()
                     .get(range.start as usize..range.end as usize)
                     .is_none()
                 {
@@ -822,4 +992,13 @@ pub(super) fn record_formation_work(report: &mut WorkReport, work: FormationWork
         report.flow.records += work.formed_lines() as usize;
     }
     report.line_reshapes += work.line_reshapes() as usize;
+    report.line_candidates = report
+        .line_candidates
+        .saturating_add(work.line_candidates());
+    report.rejected_line_candidates = report
+        .rejected_line_candidates
+        .saturating_add(work.rejected_line_candidates());
+    report.line_checkpoint_restores = report
+        .line_checkpoint_restores
+        .saturating_add(work.line_checkpoint_restores());
 }

@@ -38,9 +38,9 @@ Underwood ParagraphInput
 
 ## Invariants
 
-1. `PhysicsCache` contains one `ShapedText`; the local `PhysicsRun`,
-   `PhysicsGlyph`, `copy_run`, manual HarfRust scaling, and character-offset
-   table are removed.
+1. The paragraph preparation cache contains one `ShapedText`; the local
+   callback-era shaped-run and shaped-glyph copies, their copy helper, manual
+   HarfRust scaling, and character-offset table are removed.
 2. `ShapedText` is cleared and reused only when shaping identity changes.
    Paint-only and cache-hit preparation never rerun itemization, font
    selection, or shaping.

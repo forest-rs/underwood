@@ -8,6 +8,79 @@
 
 use super::*;
 
+/// Immutable accepted-line translation and Western space expansion.
+///
+/// This is post-formation evidence: it never changes the line's source
+/// boundary or canonical shaping. Scene glyphs, hit geometry, carets,
+/// selections, semantics, and export adapters all consume the resulting
+/// adjusted coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LineAdjustment {
+    alignment: TextAlignment,
+    direction: ResolvedDirection,
+    inline_offset: f64,
+    trailing_whitespace_advance: f64,
+    opportunity_expansion: f64,
+    expanded_opportunities: u32,
+}
+
+impl LineAdjustment {
+    pub(super) const fn new(
+        alignment: TextAlignment,
+        direction: ResolvedDirection,
+        inline_offset: f64,
+        trailing_whitespace_advance: f64,
+        opportunity_expansion: f64,
+        expanded_opportunities: u32,
+    ) -> Self {
+        Self {
+            alignment,
+            direction,
+            inline_offset,
+            trailing_whitespace_advance,
+            opportunity_expansion,
+            expanded_opportunities,
+        }
+    }
+
+    /// Returns the authored paragraph alignment.
+    #[must_use]
+    pub const fn alignment(self) -> TextAlignment {
+        self.alignment
+    }
+
+    /// Returns the paragraph direction consumed to resolve logical alignment.
+    #[must_use]
+    pub const fn direction(self) -> ResolvedDirection {
+        self.direction
+    }
+
+    /// Returns the translation from the exact slot's inline start.
+    #[must_use]
+    pub const fn inline_offset(self) -> f64 {
+        self.inline_offset
+    }
+
+    /// Returns source-complete trailing whitespace hanging from the aligned
+    /// content edge.
+    #[must_use]
+    pub const fn trailing_whitespace_advance(self) -> f64 {
+        self.trailing_whitespace_advance
+    }
+
+    /// Returns expansion added to each eligible Western space.
+    #[must_use]
+    pub const fn opportunity_expansion(self) -> f64 {
+        self.opportunity_expansion
+    }
+
+    /// Returns how many Western spaces received expansion.
+    #[must_use]
+    pub const fn expanded_opportunities(self) -> usize {
+        self.expanded_opportunities as usize
+    }
+}
+
 /// One visual line.
 #[derive(Clone, Debug)]
 pub struct SceneLine<Source = SnapshotTextRange> {
@@ -19,6 +92,7 @@ pub struct SceneLine<Source = SnapshotTextRange> {
     pub(super) baseline: f64,
     pub(super) content_ascent: f64,
     pub(super) content_descent: f64,
+    pub(super) adjustment: LineAdjustment,
 }
 
 impl<Source> SceneLine<Source> {
@@ -75,6 +149,12 @@ impl<Source> SceneLine<Source> {
     #[must_use]
     pub const fn content_descent(&self) -> f64 {
         self.content_descent
+    }
+
+    /// Returns immutable post-formation placement and expansion evidence.
+    #[must_use]
+    pub const fn adjustment(&self) -> LineAdjustment {
+        self.adjustment
     }
 }
 

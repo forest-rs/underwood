@@ -7,6 +7,7 @@
 //! explicitly does not own visual record representation or scene preparation.
 
 use super::*;
+use crate::adapter::{ClusterBoundary, ClusterWhitespace};
 
 /// Immutable renderer-neutral scene for one generated composition epoch.
 #[derive(Clone, Debug)]
@@ -510,6 +511,88 @@ impl TextScene {
             })
     }
 
+    /// Returns the first logical caret position in the complete scene.
+    ///
+    /// This follows Underwood's cross-paragraph movement graph rather than
+    /// treating every paragraph-local start as a document start.
+    #[must_use]
+    pub fn start_position(&self) -> Option<SnapshotTextPosition> {
+        self.movements
+            .iter()
+            .filter(|movement| movement.previous_logical.is_none())
+            .min_by_key(|movement| logical_position_key(&movement.position))
+            .map(|movement| movement.position)
+    }
+
+    /// Returns the final logical caret position in the complete scene.
+    ///
+    /// This follows Underwood's cross-paragraph movement graph rather than
+    /// treating every paragraph-local end as a document end.
+    #[must_use]
+    pub fn end_position(&self) -> Option<SnapshotTextPosition> {
+        self.movements
+            .iter()
+            .filter(|movement| movement.next_logical.is_none())
+            .max_by_key(|movement| logical_position_key(&movement.position))
+            .map(|movement| movement.position)
+    }
+
+    /// Resolves a represented caret at one leaf-local UTF-8 boundary.
+    ///
+    /// This never fabricates a caret at an interior UTF-8 byte or at a
+    /// semantic leaf seam inside one shaped grapheme. At a soft wrap or bidi
+    /// discontinuity more than one affinity can share the byte boundary. The
+    /// leaf start prefers downstream affinity and every other boundary
+    /// prefers upstream affinity, then falls back to either represented stop.
+    #[must_use]
+    pub fn position_at(&self, text: TextId, byte: u32) -> Option<SnapshotTextPosition> {
+        if text.document != self.document {
+            return None;
+        }
+        let preferred = if byte == 0 {
+            TextAffinity::Downstream
+        } else {
+            TextAffinity::Upstream
+        };
+        self.movements
+            .iter()
+            .find(|movement| {
+                movement.position.text() == text
+                    && movement.position.byte() == byte
+                    && movement.position.affinity() == preferred
+            })
+            .or_else(|| {
+                self.movements.iter().find(|movement| {
+                    movement.position.text() == text && movement.position.byte() == byte
+                })
+            })
+            .map(|movement| movement.position)
+    }
+
+    /// Returns the preceding logical word start, or the scene start.
+    ///
+    /// Word starts come from the paragraph adapter's retained Unicode
+    /// analysis. A stale, foreign, or unrepresented position returns `None`.
+    #[must_use]
+    pub fn previous_word_position(
+        &self,
+        position: &SnapshotTextPosition,
+    ) -> Option<SnapshotTextPosition> {
+        self.word_position(position, false)
+    }
+
+    /// Returns the following logical word start, or the scene end.
+    ///
+    /// Word starts come from the paragraph adapter's retained Unicode
+    /// analysis. A stale, foreign, or unrepresented position returns `None`.
+    #[must_use]
+    pub fn next_word_position(
+        &self,
+        position: &SnapshotTextPosition,
+    ) -> Option<SnapshotTextPosition> {
+        self.word_position(position, true)
+    }
+
     fn validate_position(&self, position: &SnapshotTextPosition) -> Result<(), SelectionError> {
         if position.revision() != self.revision || position.text().document != self.document {
             return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
@@ -522,6 +605,45 @@ impl TextScene {
             Ok(())
         } else {
             Err(SelectionError::new(SelectionErrorKind::UnknownPosition))
+        }
+    }
+
+    fn word_position(
+        &self,
+        position: &SnapshotTextPosition,
+        forward: bool,
+    ) -> Option<SnapshotTextPosition> {
+        self.validate_position(position).ok()?;
+        let current = logical_position_key(position);
+        let candidates = self
+            .clusters
+            .iter()
+            .filter(|cluster| {
+                cluster.boundary != ClusterBoundary::None
+                    && cluster.whitespace == ClusterWhitespace::None
+            })
+            .filter_map(|cluster| {
+                let source = cluster.source.sources().first()?;
+                let key = logical_text_key(source.text(), source.bytes().start);
+                Some((key, source.text(), source.bytes().start))
+            })
+            .filter(|(key, _, _)| {
+                if forward {
+                    *key > current
+                } else {
+                    *key < current
+                }
+            });
+        if forward {
+            candidates
+                .min_by_key(|(key, _, _)| *key)
+                .and_then(|(_, text, byte)| self.position_at(text, byte))
+                .or_else(|| self.end_position())
+        } else {
+            candidates
+                .max_by_key(|(key, _, _)| *key)
+                .and_then(|(_, text, byte)| self.position_at(text, byte))
+                .or_else(|| self.start_position())
         }
     }
 
@@ -796,6 +918,14 @@ impl TextScene {
     }
 }
 
+fn logical_position_key(position: &SnapshotTextPosition) -> (u32, u32, u32) {
+    logical_text_key(position.text(), position.byte())
+}
+
+fn logical_text_key(text: TextId, byte: u32) -> (u32, u32, u32) {
+    (text.paragraph, text.index, byte)
+}
+
 fn projected_ranges_overlap(first: &ProjectedTextRange, second: &ProjectedTextRange) -> bool {
     first.sources().iter().any(|first| {
         second.sources().iter().any(|second| match (first, second) {
@@ -900,6 +1030,8 @@ fn nearly_equal(first: f64, second: f64) -> bool {
 pub(super) struct SceneCluster<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
     pub(super) source: Source,
     pub(super) semantic_id: SemanticId,
+    pub(super) boundary: ClusterBoundary,
+    pub(super) whitespace: ClusterWhitespace,
     pub(super) hit_slices: Vec<SceneHitSlice>,
     pub(super) bounds: Rect,
     pub(super) line: usize,

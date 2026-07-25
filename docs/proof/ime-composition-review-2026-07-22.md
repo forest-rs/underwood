@@ -6,7 +6,7 @@ The composition slice is executable. Underwood now represents IME preedit as a
 generated-source projection over one immutable document revision and one
 checked, monotonic composition epoch. It does not publish authored text until
 commit. A separate committed cache survives preedit churn and cancel, while an
-identical final commit can reuse paragraph-engine physics already formed for
+identical final commit can reuse paragraph preparation already formed for
 the preedit.
 
 The same state serves both protocol families. A feed adapter installs complete

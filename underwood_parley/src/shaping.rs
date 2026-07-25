@@ -7,38 +7,73 @@
 //! including line-final reuse of canonical fonts; it explicitly does not own
 //! line-breaking policy or portable scene records.
 
-use alloc::vec::Vec;
+use alloc::{borrow::Cow, vec::Vec};
 use core::cell::Cell;
 use core::ops::Range;
 
 use fontique::{Attributes, FallbackKey, QueryFamily, QueryStatus};
 use parley_engine::{
-    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, ShapeOptions,
-    ShapedText, Shaper,
+    Analysis, AnalysisDataSources, AnalysisOptions, Analyzer, FontInstance, JoiningType,
+    ShapeOptions, ShapedText, Shaper,
     itemize::TextRange,
     shape::{CharCluster, Status},
 };
-use underwood::adapter::{PreparationError, ShapingRun};
-use underwood::{BaseDirection, FontData, FontFamilyName, ShapingStyle};
+use underwood::adapter::{AnalysisRun, InlineFlowRun, PreparationError, ShapingRun};
+use underwood::{
+    AnalysisStyle, BaseDirection, FontData, FontFamilyName, FontFeature, InlineFlowStyle,
+    ShapingStyle, Tag, WordBreak,
+};
 
 use crate::font::FontSet;
 use crate::line_break::LineShapeOutput;
 
+#[cfg(test)]
 pub(crate) fn analyze_text(
     analyzer: &mut Analyzer,
     text: &str,
     base_direction: BaseDirection,
 ) -> Analysis {
+    analyze_text_with_styles(analyzer, text, base_direction, &[], &[])
+        .expect("empty analysis-style runs are valid")
+}
+
+pub(crate) fn analyze_text_with_styles(
+    analyzer: &mut Analyzer,
+    text: &str,
+    base_direction: BaseDirection,
+    styles: &[AnalysisStyle],
+    runs: &[AnalysisRun],
+) -> Result<Analysis, PreparationError> {
+    let mut word_break: Vec<(Range<usize>, WordBreak)> = Vec::new();
+    for run in runs {
+        let style = styles
+            .get(run.style().index())
+            .ok_or_else(PreparationError::invalid_output)?;
+        if style.word_break() == WordBreak::Normal {
+            continue;
+        }
+        let bytes = run.bytes();
+        let range = bytes.start as usize..bytes.end as usize;
+        if let Some((previous, previous_style)) = word_break.last_mut()
+            && *previous_style == style.word_break()
+            && previous.end == range.start
+        {
+            previous.end = range.end;
+        } else {
+            word_break.push((range, style.word_break()));
+        }
+    }
     let mut analysis = Analysis::new();
     analyzer.analyze(
         text,
         &AnalysisOptions {
             base_direction,
+            word_break: &word_break,
             ..AnalysisOptions::default()
         },
         &mut analysis,
     );
-    analysis
+    Ok(analysis)
 }
 
 pub(crate) fn shape_paragraph(
@@ -48,23 +83,22 @@ pub(crate) fn shape_paragraph(
     text: &str,
     shaping_styles: &[ShapingStyle],
     shaping_runs: &[ShapingRun],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_runs: &[InlineFlowRun],
     shaped_text: &mut ShapedText,
     scripts: &mut Vec<[u8; 4]>,
     style_indices: &mut Vec<u16>,
+    inline_flow_indices: &mut Vec<u16>,
 ) -> Result<u32, PreparationError> {
     shaped_text.clear();
     scripts.clear();
-    style_indices.clear();
-    style_indices.reserve(text.chars().count());
-    for run in shaping_runs {
-        let index =
-            u16::try_from(run.style().index()).map_err(|_| PreparationError::invalid_output())?;
-        let range = run.bytes();
-        let run_text = text
-            .get(range.start as usize..range.end as usize)
-            .ok_or_else(PreparationError::invalid_output)?;
-        style_indices.extend(core::iter::repeat_n(index, run_text.chars().count()));
-    }
+    prepare_style_indices(
+        text,
+        shaping_runs,
+        inline_flow_runs,
+        style_indices,
+        inline_flow_indices,
+    )?;
     shape_range(
         shaper,
         analysis,
@@ -72,6 +106,50 @@ pub(crate) fn shape_paragraph(
         text,
         shaping_styles,
         style_indices,
+        inline_flow_styles,
+        inline_flow_indices,
+        0..text.len(),
+        shaped_text,
+        scripts,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Retained canonical reshaping keeps every cache input explicit"
+)]
+pub(crate) fn reshape_paragraph_with_retained_fonts(
+    shaper: &mut Shaper,
+    analysis: &Analysis,
+    canonical_text: &ShapedText,
+    text: &str,
+    shaping_styles: &[ShapingStyle],
+    shaping_runs: &[ShapingRun],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_runs: &[InlineFlowRun],
+    shaped_text: &mut ShapedText,
+    scripts: &mut Vec<[u8; 4]>,
+    style_indices: &mut Vec<u16>,
+    inline_flow_indices: &mut Vec<u16>,
+) -> Result<u32, PreparationError> {
+    shaped_text.clear();
+    scripts.clear();
+    prepare_style_indices(
+        text,
+        shaping_runs,
+        inline_flow_runs,
+        style_indices,
+        inline_flow_indices,
+    )?;
+    shape_range(
+        shaper,
+        analysis,
+        FontSource::Retained(canonical_text),
+        text,
+        shaping_styles,
+        style_indices,
+        inline_flow_styles,
+        inline_flow_indices,
         0..text.len(),
         shaped_text,
         scripts,
@@ -85,6 +163,8 @@ pub(crate) fn shape_line(
     text: &str,
     shaping_styles: &[ShapingStyle],
     style_indices: &[u16],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_indices: &[u16],
     source: Range<usize>,
 ) -> Result<LineShapeOutput, PreparationError> {
     let mut shaped_text = ShapedText::new();
@@ -96,6 +176,8 @@ pub(crate) fn shape_line(
         text,
         shaping_styles,
         style_indices,
+        inline_flow_styles,
+        inline_flow_indices,
         source,
         &mut shaped_text,
         &mut scripts,
@@ -107,6 +189,81 @@ pub(crate) fn shape_line(
         resolved_clusters: selected_clusters,
         shaped_glyphs,
     })
+}
+
+fn prepare_style_indices(
+    text: &str,
+    shaping_runs: &[ShapingRun],
+    inline_flow_runs: &[InlineFlowRun],
+    shaping: &mut Vec<u16>,
+    inline_flow: &mut Vec<u16>,
+) -> Result<(), PreparationError> {
+    shaping.clear();
+    let characters = text.chars().count();
+    shaping.reserve(characters);
+    for run in shaping_runs {
+        let index =
+            u16::try_from(run.style().index()).map_err(|_| PreparationError::invalid_output())?;
+        let range = run.bytes();
+        let run_text = text
+            .get(range.start as usize..range.end as usize)
+            .ok_or_else(PreparationError::invalid_output)?;
+        shaping.extend(core::iter::repeat_n(index, run_text.chars().count()));
+    }
+    prepare_inline_flow_indices(text, inline_flow_runs, inline_flow)?;
+    if shaping.len() != characters || inline_flow.len() != characters {
+        return Err(PreparationError::invalid_output());
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_inline_flow_indices(
+    text: &str,
+    runs: &[InlineFlowRun],
+    indices: &mut Vec<u16>,
+) -> Result<(), PreparationError> {
+    indices.clear();
+    indices.reserve(text.chars().count());
+    for run in runs {
+        let index =
+            u16::try_from(run.style().index()).map_err(|_| PreparationError::invalid_output())?;
+        let range = run.bytes();
+        let run_text = text
+            .get(range.start as usize..range.end as usize)
+            .ok_or_else(PreparationError::invalid_output)?;
+        indices.extend(core::iter::repeat_n(index, run_text.chars().count()));
+    }
+    if indices.len() != text.chars().count() {
+        return Err(PreparationError::invalid_output());
+    }
+    Ok(())
+}
+
+fn spacing_features(
+    authored: &[FontFeature],
+    inline_flow: InlineFlowStyle,
+    has_joining_behavior: bool,
+) -> Cow<'_, [FontFeature]> {
+    if inline_flow.spacing().letter() == 0.0 || has_joining_behavior {
+        return Cow::Borrowed(authored);
+    }
+    let liga = Tag::new(b"liga");
+    let clig = Tag::new(b"clig");
+    let needs_liga = !authored.iter().any(|feature| feature.tag == liga);
+    let needs_clig = !authored.iter().any(|feature| feature.tag == clig);
+    if !needs_liga && !needs_clig {
+        return Cow::Borrowed(authored);
+    }
+    let mut features =
+        Vec::with_capacity(authored.len() + usize::from(needs_liga) + usize::from(needs_clig));
+    features.extend_from_slice(authored);
+    if needs_liga {
+        features.push(FontFeature::new(liga, 0));
+    }
+    if needs_clig {
+        features.push(FontFeature::new(clig, 0));
+    }
+    Cow::Owned(features)
 }
 
 pub(crate) fn shaped_glyph_count(shaped_text: &ShapedText) -> u32 {
@@ -135,6 +292,8 @@ fn shape_range(
     text: &str,
     shaping_styles: &[ShapingStyle],
     style_indices: &[u16],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_indices: &[u16],
     source: Range<usize>,
     shaped_text: &mut ShapedText,
     scripts: &mut Vec<[u8; 4]>,
@@ -151,6 +310,7 @@ fn shape_range(
 
     let split_after = |range: TextRange| {
         split_item_after(&range, style_indices)
+            || split_item_after(&range, inline_flow_indices)
             || range.byte_range.end == source.start
             || range.byte_range.end == source.end
     };
@@ -162,12 +322,25 @@ fn shape_range(
             return Err(PreparationError::invalid_output());
         }
         let style = &shaping_styles[usize::from(style_indices[item.range.char_range.start])];
+        let inline_flow =
+            inline_flow_styles[usize::from(inline_flow_indices[item.range.char_range.start])];
         let script = item.script.to_bytes();
         let missing_font = Cell::new(false);
+        let item_info = analysis
+            .char_info()
+            .get(item.range.char_range.clone())
+            .ok_or_else(PreparationError::invalid_output)?;
+        let features = spacing_features(
+            style.features(),
+            inline_flow,
+            item_info
+                .iter()
+                .any(|info| has_joining_behavior(info.joining_type)),
+        );
         let options = ShapeOptions {
             font_size: style.font_size(),
             language: style.language(),
-            features: style.features(),
+            features: features.as_ref(),
             variations: style.variations(),
             char_style_indices: style_indices,
         };
@@ -233,6 +406,16 @@ fn shape_range(
         return Err(PreparationError::missing_font());
     }
     Ok(selected_clusters.get())
+}
+
+pub(crate) const fn has_joining_behavior(joining_type: JoiningType) -> bool {
+    matches!(
+        joining_type,
+        JoiningType::JoinCausing
+            | JoiningType::DualJoining
+            | JoiningType::LeftJoining
+            | JoiningType::RightJoining
+    )
 }
 
 fn retained_font(canonical_text: &ShapedText, cluster: &CharCluster) -> Option<FontInstance> {

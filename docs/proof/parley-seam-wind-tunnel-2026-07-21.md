@@ -22,7 +22,7 @@ The recorded run used Rust 1.96.0
 The executable emitted:
 
 ```text
-parley=45da4a90248b1600277a4294b70d8bfde5ca8e97 analysis=cfdddc2f29b0a50b items=f92022fbdf3a152a physics=e88c05c9f03ac26e slots=f7b2494a3759e8a3 paint=b118c17a87887d7a items_count=2 runs=2 glyphs=29 gaps=5
+parley=45da4a90248b1600277a4294b70d8bfde5ca8e97 analysis=cfdddc2f29b0a50b items=f92022fbdf3a152a shaping=e88c05c9f03ac26e slots=f7b2494a3759e8a3 paint=b118c17a87887d7a items_count=2 runs=2 glyphs=29 gaps=5
 fonts=RobotoFlex-VariableFont.ttf:aecc087879796a24,NotoKufiArabic-Regular.otf:4e4306d5a30a1500
 ```
 
@@ -56,10 +56,10 @@ coordinates, glyphs, advances, offsets, clusters, and paint-slot coverage.
 | Callback ownership | Two independent preparations compare equal after every Parley callback and borrow has ended | **PASS** for private copy-out |
 | Mixed-direction itemization | The corpus emits a Latin LTR item and an Arabic RTL item with distinct selected fonts | **PASS** for this corpus |
 | Source coverage | Items tile all source bytes; every glyph maps to a nonempty in-range byte/character span | **PASS** for this corpus |
-| Weight invalidation | Roboto Flex `wght=700` preserves analysis and item digests while changing normalized coordinates and shaped physics | **PASS** |
-| Feature invalidation | Disabling `kern` over `AV` preserves analysis and item digests while changing shaped physics | **PASS** |
+| Weight invalidation | Roboto Flex `wght=700` preserves analysis and item digests while changing normalized coordinates and shaped output | **PASS** |
+| Feature invalidation | Disabling `kern` over `AV` preserves analysis and item digests while changing shaped output | **PASS** |
 | Paint-value separation | Changing only the paint table changes lowering but not analysis, items, glyphs, or advances | **PASS** |
-| Paint-topology separation | Splitting slots inside a real Roboto Flex ligature and Arabic cursive text leaves the physics digest unchanged | **PASS** for this corpus |
+| Paint-topology separation | Splitting slots inside a real Roboto Flex ligature and Arabic cursive text leaves the shaping digest unchanged | **PASS** for this corpus |
 | Ligature slot coverage | One retained glyph spans multiple source characters and carries both source slots `[0, 1]` | **PASS** for private reconstruction |
 
 The paint-slot observation is an Underwood-side reconstruction from shaped
@@ -130,12 +130,12 @@ observation records for comparison. It no longer receives a borrowed shaped
 run callback.
 
 ```text
-parley=6c81e1dd9b67793cdd959c65cc650c96a1262fb7 analysis=cfdddc2f29b0a50b items=f92022fbdf3a152a physics=3e1d17966180319d slots=f7b2494a3759e8a3 paint=b118c17a87887d7a items_count=2 runs=2 glyphs=29 gaps=4
+parley=6c81e1dd9b67793cdd959c65cc650c96a1262fb7 analysis=cfdddc2f29b0a50b items=f92022fbdf3a152a shaping=3e1d17966180319d slots=f7b2494a3759e8a3 paint=b118c17a87887d7a items_count=2 runs=2 glyphs=29 gaps=4
 fonts=RobotoFlex-VariableFont.ttf:aecc087879796a24,NotoKufiArabic-Regular.otf:4e4306d5a30a1500
 ```
 
 All six deterministic tests pass. The analysis, item, paint-slot, and paint
-digests remain unchanged. The physics digest changes because it now records
+digests remain unchanged. The shaping digest changes because it now records
 Parley's scaled `f32` retained glyph values rather than raw HarfRust integer
 positions. The retained-shaped-output gap is removed from the enum-backed
 matrix. The remaining four gaps are bounded break reshaping, vertical shaping,

@@ -7,8 +7,14 @@ mod app;
 mod content;
 mod host;
 mod interaction;
+mod page;
 mod presentation;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--write-snapshot")) {
+        let path = app::write_snapshot()?;
+        println!("wrote {}", path.display());
+        return Ok(());
+    }
     app::run()
 }

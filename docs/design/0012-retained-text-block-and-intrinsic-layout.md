@@ -41,7 +41,7 @@ widget lifetime or silently retain entries beyond its configured budget.
    requested width.
 6. An empty block has size `(0, resolved line height)` and no first or last
    text baseline. Hosts may apply their documented non-text baseline fallback.
-7. Geometry and backend physics caches are looked up by indexed stable
+7. Geometry and backend preparation caches are looked up by indexed stable
    paragraph identity.
 8. Explicit release and budget eviction remove all retained layers for an
    identity when no retained geometry still depends on it.
@@ -217,11 +217,11 @@ After an output owns its materialized scene:
 1. entries beyond `CacheBudget` are removed;
 2. when no committed or composition geometry remains for a paragraph,
    `ParagraphFormation::release` is called;
-3. `underwood_parley` removes the matching `PhysicsCache`;
+3. `underwood_parley` removes the matching paragraph preparation entry;
 4. diagnostics record budget eviction separately from explicit release.
 
 `release_document` removes every paragraph belonging to that document.
-`clear_cache` removes all geometry and backend physics. Custom stateless
+`clear_cache` removes all geometry and backend preparation. Custom stateless
 paragraph implementations may use the default no-op release hook; retained
 implementations report their resident entry count.
 

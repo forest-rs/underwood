@@ -6,7 +6,8 @@ use alloc::vec::Vec;
 
 use crate::{
     BaseDirection, Brush, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation,
-    FontWeight, FontWidth, Language, ParagraphId, StyleError, StyleErrorKind, TextId,
+    FontWeight, FontWidth, Language, OverflowWrap, ParagraphId, StyleError, StyleErrorKind, TextId,
+    TextWrapMode, WhitespaceCollapse, WordBreak,
 };
 
 /// Dense caller-defined index into a [`PaintTable`].
@@ -233,26 +234,85 @@ fn canonical_variations(
     Ok(canonical.into())
 }
 
-/// Computed line height as a multiple of the shaping font size.
+/// Basis used to resolve a [`LineHeight`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineHeightBasis {
+    /// Scale the selected font's preferred ascent, descent, and leading.
+    Metrics,
+    /// Scale the computed font size.
+    FontSize,
+    /// Use an absolute height in scene units.
+    Absolute,
+}
+
+/// Validated computed line-height policy.
+///
+/// Relative values are resolved independently for every shaped run. Absolute
+/// values use scene units and remain independent of font size.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct LineHeight(f32);
+pub struct LineHeight {
+    basis: LineHeightBasis,
+    value: f32,
+}
 
 impl LineHeight {
-    /// Underwood's current normal line-height multiplier.
-    pub const NORMAL: Self = Self(1.25);
+    /// Normal line height from the selected font's preferred metrics.
+    pub const NORMAL: Self = Self {
+        basis: LineHeightBasis::Metrics,
+        value: 1.0,
+    };
 
-    /// Validates a finite, strictly positive multiplier.
+    /// Validates a finite, strictly positive font-size-relative factor.
+    ///
+    /// This preserves the pre-stable spelling used before Underwood represented
+    /// all three line-height bases. New callers should use
+    /// [`Self::font_size_relative`].
     pub fn from_multiplier(multiplier: f32) -> Result<Self, StyleError> {
-        if !multiplier.is_finite() || multiplier <= 0.0 {
-            return Err(StyleError::new(StyleErrorKind::InvalidNumber));
-        }
-        Ok(Self(multiplier))
+        Self::font_size_relative(multiplier)
     }
 
-    /// Returns the multiplier applied to the shaping font size.
+    /// Validates a factor applied to preferred font metrics.
+    pub fn metrics_relative(factor: f32) -> Result<Self, StyleError> {
+        Self::new(LineHeightBasis::Metrics, factor)
+    }
+
+    /// Validates a factor applied to the computed font size.
+    pub fn font_size_relative(factor: f32) -> Result<Self, StyleError> {
+        Self::new(LineHeightBasis::FontSize, factor)
+    }
+
+    /// Validates an absolute line height in scene units.
+    pub fn absolute(height: f32) -> Result<Self, StyleError> {
+        Self::new(LineHeightBasis::Absolute, height)
+    }
+
+    fn new(basis: LineHeightBasis, value: f32) -> Result<Self, StyleError> {
+        if !value.is_finite() || value <= 0.0 {
+            return Err(StyleError::new(StyleErrorKind::InvalidNumber));
+        }
+        Ok(Self { basis, value })
+    }
+
+    /// Returns how this value is resolved.
     #[must_use]
-    pub const fn multiplier(self) -> f32 {
-        self.0
+    pub const fn basis(self) -> LineHeightBasis {
+        self.basis
+    }
+
+    /// Returns the validated factor or absolute height.
+    #[must_use]
+    pub const fn value(self) -> f32 {
+        self.value
+    }
+
+    /// Resolves the line height from a font size and preferred metrics height.
+    #[must_use]
+    pub fn resolve(self, font_size: f32, metrics_height: f32) -> f32 {
+        match self.basis {
+            LineHeightBasis::Metrics => metrics_height * self.value,
+            LineHeightBasis::FontSize => font_size * self.value,
+            LineHeightBasis::Absolute => self.value,
+        }
     }
 }
 
@@ -262,17 +322,105 @@ impl Default for LineHeight {
     }
 }
 
+/// Computed extra spacing in scene units.
+///
+/// Negative values are permitted because tightening is meaningful text policy.
+/// Backends may clamp a resulting advance to preserve finite, non-negative
+/// geometry.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TextSpacing {
+    letter: f32,
+    word: f32,
+}
+
+impl TextSpacing {
+    /// No additional letter or word spacing.
+    pub const NORMAL: Self = Self {
+        letter: 0.0,
+        word: 0.0,
+    };
+
+    /// Creates finite extra letter and word spacing in scene units.
+    pub fn new(letter: f32, word: f32) -> Result<Self, StyleError> {
+        if !letter.is_finite() || !word.is_finite() {
+            return Err(StyleError::new(StyleErrorKind::InvalidNumber));
+        }
+        Ok(Self { letter, word })
+    }
+
+    /// Returns additional spacing between eligible typographic units.
+    #[must_use]
+    pub const fn letter(self) -> f32 {
+        self.letter
+    }
+
+    /// Returns additional spacing at eligible word separators.
+    #[must_use]
+    pub const fn word(self) -> f32 {
+        self.word
+    }
+}
+
+/// Complete computed values consumed by Unicode analysis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AnalysisStyle {
+    word_break: WordBreak,
+}
+
+impl AnalysisStyle {
+    /// Creates analysis values from authored word-breaking policy.
+    #[must_use]
+    pub const fn new(word_break: WordBreak) -> Self {
+        Self { word_break }
+    }
+
+    /// Returns the word-breaking policy supplied to Unicode analysis.
+    #[must_use]
+    pub const fn word_break(self) -> WordBreak {
+        self.word_break
+    }
+}
+
 /// Complete computed values consumed only by inline flow and geometry.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct InlineFlowStyle {
     line_height: LineHeight,
+    spacing: TextSpacing,
+    overflow_wrap: OverflowWrap,
+    text_wrap_mode: TextWrapMode,
 }
 
 impl InlineFlowStyle {
     /// Creates inline-flow values from a validated line height.
     #[must_use]
     pub const fn new(line_height: LineHeight) -> Self {
-        Self { line_height }
+        Self {
+            line_height,
+            spacing: TextSpacing::NORMAL,
+            overflow_wrap: OverflowWrap::Normal,
+            text_wrap_mode: TextWrapMode::Wrap,
+        }
+    }
+
+    /// Returns a copy with computed extra letter and word spacing.
+    #[must_use]
+    pub const fn with_spacing(mut self, spacing: TextSpacing) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
+    /// Returns a copy with emergency line-breaking policy.
+    #[must_use]
+    pub const fn with_overflow_wrap(mut self, overflow_wrap: OverflowWrap) -> Self {
+        self.overflow_wrap = overflow_wrap;
+        self
+    }
+
+    /// Returns a copy with soft wrapping enabled or disabled.
+    #[must_use]
+    pub const fn with_text_wrap_mode(mut self, text_wrap_mode: TextWrapMode) -> Self {
+        self.text_wrap_mode = text_wrap_mode;
+        self
     }
 
     /// Returns the computed line height.
@@ -280,11 +428,30 @@ impl InlineFlowStyle {
     pub const fn line_height(self) -> LineHeight {
         self.line_height
     }
+
+    /// Returns computed extra letter and word spacing.
+    #[must_use]
+    pub const fn spacing(self) -> TextSpacing {
+        self.spacing
+    }
+
+    /// Returns emergency line-breaking policy.
+    #[must_use]
+    pub const fn overflow_wrap(self) -> OverflowWrap {
+        self.overflow_wrap
+    }
+
+    /// Returns whether soft wrapping is enabled.
+    #[must_use]
+    pub const fn text_wrap_mode(self) -> TextWrapMode {
+        self.text_wrap_mode
+    }
 }
 
 /// One complete computed inline style.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ComputedInlineStyle {
+    analysis: AnalysisStyle,
     shaping: ShapingStyle,
     inline_flow: InlineFlowStyle,
     paint: PaintSlot,
@@ -295,10 +462,18 @@ impl ComputedInlineStyle {
     #[must_use]
     pub fn new(shaping: ShapingStyle, inline_flow: InlineFlowStyle, paint: PaintSlot) -> Self {
         Self {
+            analysis: AnalysisStyle::default(),
             shaping,
             inline_flow,
             paint,
         }
+    }
+
+    /// Returns a copy with new Unicode-analysis values.
+    #[must_use]
+    pub fn with_analysis(mut self, analysis: AnalysisStyle) -> Self {
+        self.analysis = analysis;
+        self
     }
 
     /// Returns a copy with new shaping values.
@@ -322,6 +497,12 @@ impl ComputedInlineStyle {
         self
     }
 
+    /// Returns the Unicode-analysis partition.
+    #[must_use]
+    pub const fn analysis(&self) -> AnalysisStyle {
+        self.analysis
+    }
+
     /// Returns the shaping partition.
     #[must_use]
     pub const fn shaping(&self) -> &ShapingStyle {
@@ -341,13 +522,50 @@ impl ComputedInlineStyle {
     }
 }
 
+/// Resolved paragraph direction retained from Unicode analysis.
+///
+/// Unlike [`BaseDirection`], this value cannot be automatic. Paragraph
+/// backends publish it so logical alignment consumes the same bidi decision
+/// as shaping and interaction geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResolvedDirection {
+    /// Left-to-right paragraph direction.
+    Ltr,
+    /// Right-to-left paragraph direction.
+    Rtl,
+}
+
+/// Alignment applied after a line has been accepted into its exact slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextAlignment {
+    /// Align to the paragraph's resolved logical start edge.
+    #[default]
+    Start,
+    /// Align to the paragraph's resolved logical end edge.
+    End,
+    /// Align to the physical left edge.
+    Left,
+    /// Center within the accepted line slot.
+    Center,
+    /// Align to the physical right edge.
+    Right,
+    /// Expand eligible Western inter-word spaces on soft-wrapped lines.
+    ///
+    /// Final and mandatory-break lines remain logically start-aligned. CJK
+    /// and Arabic justification require separate script-specific strategies.
+    Justify,
+}
+
 /// Complete computed values that apply to one paragraph as a whole.
 ///
 /// Paragraph values are kept separate from [`ShapingStyle`] because they
-/// affect analysis and line formation rather than inline font shaping.
+/// affect analysis, line formation, and accepted-slot adjustment rather than
+/// inline font shaping.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParagraphStyle {
     base_direction: BaseDirection,
+    whitespace_collapse: WhitespaceCollapse,
+    alignment: TextAlignment,
 }
 
 impl ParagraphStyle {
@@ -355,19 +573,53 @@ impl ParagraphStyle {
     /// paragraph behavior.
     pub const DEFAULT: Self = Self {
         base_direction: BaseDirection::Auto,
+        whitespace_collapse: WhitespaceCollapse::Preserve,
+        alignment: TextAlignment::Start,
     };
 
     /// Creates paragraph values with an explicit or automatically inferred
     /// base direction.
     #[must_use]
     pub const fn new(base_direction: BaseDirection) -> Self {
-        Self { base_direction }
+        Self {
+            base_direction,
+            whitespace_collapse: WhitespaceCollapse::Preserve,
+            alignment: TextAlignment::Start,
+        }
     }
 
     /// Returns the paragraph base direction used during Unicode analysis.
     #[must_use]
     pub const fn base_direction(self) -> BaseDirection {
         self.base_direction
+    }
+
+    /// Returns a copy with paragraph-stream whitespace processing.
+    ///
+    /// Collapse state crosses inline style and semantic boundaries.
+    #[must_use]
+    pub const fn with_whitespace_collapse(mut self, policy: WhitespaceCollapse) -> Self {
+        self.whitespace_collapse = policy;
+        self
+    }
+
+    /// Returns paragraph-stream whitespace processing.
+    #[must_use]
+    pub const fn whitespace_collapse(self) -> WhitespaceCollapse {
+        self.whitespace_collapse
+    }
+
+    /// Returns a copy with accepted-slot text alignment.
+    #[must_use]
+    pub const fn with_alignment(mut self, alignment: TextAlignment) -> Self {
+        self.alignment = alignment;
+        self
+    }
+
+    /// Returns accepted-slot text alignment.
+    #[must_use]
+    pub const fn alignment(self) -> TextAlignment {
+        self.alignment
     }
 }
 
@@ -481,10 +733,13 @@ mod tests {
         Tag,
     };
 
-    use super::{LineHeight, ParagraphStyle, ShapingStyle, StyleMap};
+    use super::{
+        AnalysisStyle, InlineFlowStyle, LineHeight, LineHeightBasis, ParagraphStyle, ShapingStyle,
+        StyleMap, TextAlignment, TextSpacing,
+    };
     use crate::{
-        BaseDirection, ComputedInlineStyle, Document, DocumentId, InlineFlowStyle, PaintSlot,
-        ParagraphRole,
+        BaseDirection, ComputedInlineStyle, Document, DocumentId, OverflowWrap, PaintSlot,
+        ParagraphRole, TextWrapMode, WordBreak,
     };
 
     #[test]
@@ -505,10 +760,21 @@ mod tests {
             styles.paragraph_style_for(paragraph),
             ParagraphStyle::DEFAULT
         );
-        styles.set_paragraph_style(paragraph, ParagraphStyle::new(BaseDirection::Rtl));
+        assert_eq!(
+            styles.paragraph_style_for(paragraph).alignment(),
+            TextAlignment::Start
+        );
+        styles.set_paragraph_style(
+            paragraph,
+            ParagraphStyle::new(BaseDirection::Rtl).with_alignment(TextAlignment::Center),
+        );
         assert_eq!(
             styles.paragraph_style_for(paragraph).base_direction(),
             BaseDirection::Rtl
+        );
+        assert_eq!(
+            styles.paragraph_style_for(paragraph).alignment(),
+            TextAlignment::Center
         );
     }
 
@@ -536,6 +802,46 @@ mod tests {
         );
         assert!(LineHeight::from_multiplier(-1.0).is_err());
         assert!(LineHeight::from_multiplier(f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn computed_text_policy_has_validated_stage_owned_values() {
+        let metrics = LineHeight::metrics_relative(1.2).expect("metrics factor is valid");
+        let font_size = LineHeight::font_size_relative(1.4).expect("font-size factor is valid");
+        let absolute = LineHeight::absolute(24.0).expect("absolute height is valid");
+        assert_eq!(metrics.basis(), LineHeightBasis::Metrics);
+        assert_eq!(font_size.basis(), LineHeightBasis::FontSize);
+        assert_eq!(absolute.basis(), LineHeightBasis::Absolute);
+        assert_eq!(metrics.value(), 1.2);
+        assert_eq!(font_size.value(), 1.4);
+        assert_eq!(absolute.value(), 24.0);
+        assert!(LineHeight::metrics_relative(0.0).is_err());
+        assert!(LineHeight::font_size_relative(f32::NAN).is_err());
+        assert!(LineHeight::absolute(f32::INFINITY).is_err());
+
+        let spacing = TextSpacing::new(-0.5, 2.0).expect("finite spacing is valid");
+        assert_eq!(spacing.letter(), -0.5);
+        assert_eq!(spacing.word(), 2.0);
+        assert!(TextSpacing::new(f32::NAN, 0.0).is_err());
+        assert!(TextSpacing::new(0.0, f32::INFINITY).is_err());
+
+        let analysis = AnalysisStyle::new(WordBreak::KeepAll);
+        let flow = InlineFlowStyle::new(metrics)
+            .with_spacing(spacing)
+            .with_overflow_wrap(OverflowWrap::Anywhere)
+            .with_text_wrap_mode(TextWrapMode::NoWrap);
+        assert_eq!(analysis.word_break(), WordBreak::KeepAll);
+        assert_eq!(flow.spacing(), spacing);
+        assert_eq!(flow.overflow_wrap(), OverflowWrap::Anywhere);
+        assert_eq!(flow.text_wrap_mode(), TextWrapMode::NoWrap);
+
+        let computed = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0).expect("fixture style is valid"),
+            flow,
+            PaintSlot::new(0),
+        )
+        .with_analysis(analysis);
+        assert_eq!(computed.analysis(), analysis);
     }
 
     #[test]
@@ -710,6 +1016,8 @@ pub struct SceneRequest<'a> {
     pub(crate) constraint: TextConstraint,
     pub(crate) styles: &'a StyleMap,
     pub(crate) paint: &'a PaintTable,
+    pub(crate) region_flow: Option<&'a crate::RegionFlow>,
+    pub(crate) trace: bool,
 }
 
 impl<'a> SceneRequest<'a> {
@@ -720,6 +1028,42 @@ impl<'a> SceneRequest<'a> {
             constraint,
             styles,
             paint,
+            region_flow: None,
+            trace: false,
         }
+    }
+
+    /// Returns a request that fills exact slots from an immutable region flow.
+    ///
+    /// Region slots replace the single wrapping width for line formation.
+    /// Intrinsic requests continue to use [`Self::new`] without regions.
+    #[must_use]
+    pub fn with_region_flow(mut self, region_flow: &'a crate::RegionFlow) -> Self {
+        self.constraint = TextConstraint::Wrap(FiniteWidth(region_flow.max_inline_size()));
+        self.region_flow = Some(region_flow);
+        self
+    }
+
+    /// Returns the exact region policy, when one was requested.
+    #[must_use]
+    pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
+        self.region_flow
+    }
+
+    /// Returns a request that records deterministic preparation diagnostics.
+    ///
+    /// Tracing performs additional capacity-accounting passes. Ordinary
+    /// preparation remains untraced so stable UI paths do not pay diagnostic
+    /// overhead.
+    #[must_use]
+    pub const fn with_preparation_trace(mut self) -> Self {
+        self.trace = true;
+        self
+    }
+
+    /// Returns whether detailed preparation tracing was requested.
+    #[must_use]
+    pub const fn preparation_trace(self) -> bool {
+        self.trace
     }
 }

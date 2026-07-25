@@ -17,12 +17,23 @@ pub trait ParagraphFormation {
         constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, PreparationError>;
 
-    /// Releases retained physics for one paragraph identity.
+    /// Declares eligibility for exact cross-identity prepared-fact reuse.
+    ///
+    /// `None` is the safe default and disables sharing. `Some(epoch)` promises
+    /// that prepared facts depend only on non-identity formation inputs,
+    /// constraints, and the returned epoch. The epoch must change before any
+    /// hidden font, text-data, or backend resource can change prepared output.
+    #[must_use]
+    fn shared_preparation_epoch(&self) -> Option<u64> {
+        None
+    }
+
+    /// Releases retained preparation for one paragraph identity.
     ///
     /// Stateless implementations may keep the default no-op behavior.
     fn release(&mut self, _paragraph: ParagraphId) {}
 
-    /// Releases all retained paragraph physics.
+    /// Releases all retained paragraph preparation.
     ///
     /// Stateless implementations may keep the default no-op behavior.
     fn clear(&mut self) {}
@@ -40,6 +51,8 @@ pub struct ParagraphInput<'a> {
     paragraph: ParagraphId,
     paragraph_style: ParagraphStyle,
     text: &'a str,
+    analysis_styles: &'a [AnalysisStyle],
+    analysis_runs: &'a [AnalysisRun],
     shaping_styles: &'a [ShapingStyle],
     shaping_runs: &'a [ShapingRun],
     inline_flow_styles: &'a [InlineFlowStyle],
@@ -52,6 +65,8 @@ impl<'a> ParagraphInput<'a> {
         paragraph: ParagraphId,
         paragraph_style: ParagraphStyle,
         text: &'a str,
+        analysis_styles: &'a [AnalysisStyle],
+        analysis_runs: &'a [AnalysisRun],
         shaping_styles: &'a [ShapingStyle],
         shaping_runs: &'a [ShapingRun],
         inline_flow_styles: &'a [InlineFlowStyle],
@@ -62,12 +77,26 @@ impl<'a> ParagraphInput<'a> {
             paragraph,
             paragraph_style,
             text,
+            analysis_styles,
+            analysis_runs,
             shaping_styles,
             shaping_runs,
             inline_flow_styles,
             inline_flow_runs,
             paint_runs,
         }
+    }
+
+    /// Returns the paragraph-local table of unique Unicode-analysis values.
+    #[must_use]
+    pub const fn analysis_styles(&self) -> &[AnalysisStyle] {
+        self.analysis_styles
+    }
+
+    /// Returns source-ordered Unicode-analysis metadata covering the paragraph.
+    #[must_use]
+    pub const fn analysis_runs(&self) -> &[AnalysisRun] {
+        self.analysis_runs
     }
 
     /// Returns the paragraph-local table of unique shaping values.
@@ -120,20 +149,101 @@ impl<'a> ParagraphInput<'a> {
 }
 
 /// Validated paragraph formation constraints.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParagraphConstraints {
     text: TextConstraint,
+    empty_line_height: f64,
+    region_flow: Option<RegionFlow>,
+    region_cursor: Option<RegionCursor>,
 }
 
 impl ParagraphConstraints {
-    pub(crate) const fn new(text: TextConstraint) -> Self {
-        Self { text }
+    pub(crate) const fn new(text: TextConstraint, empty_line_height: f64) -> Self {
+        Self {
+            text,
+            empty_line_height,
+            region_flow: None,
+            region_cursor: None,
+        }
+    }
+
+    pub(crate) fn in_regions(
+        text: TextConstraint,
+        empty_line_height: f64,
+        region_flow: RegionFlow,
+        region_cursor: RegionCursor,
+    ) -> Self {
+        Self {
+            text,
+            empty_line_height,
+            region_flow: Some(region_flow),
+            region_cursor: Some(region_cursor),
+        }
     }
 
     /// Returns the requested intrinsic or constrained formation mode.
     #[must_use]
-    pub const fn text(self) -> TextConstraint {
+    pub const fn text(&self) -> TextConstraint {
         self.text
+    }
+
+    /// Returns the deterministic line-box height for a paragraph with no text.
+    #[must_use]
+    pub const fn empty_line_height(&self) -> f64 {
+        self.empty_line_height
+    }
+
+    /// Returns immutable region policy when exact line slots replace one width.
+    #[must_use]
+    pub const fn region_flow(&self) -> Option<&RegionFlow> {
+        self.region_flow.as_ref()
+    }
+
+    /// Returns the cursor from which this paragraph must resume region flow.
+    #[must_use]
+    pub const fn region_cursor(&self) -> Option<RegionCursor> {
+        self.region_cursor
+    }
+}
+
+/// Dense paragraph-local identity for one entry in the analysis-style table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnalysisStyleId(u16);
+
+impl AnalysisStyleId {
+    pub(crate) const fn new(index: u16) -> Self {
+        Self(index)
+    }
+
+    /// Returns the paragraph-local table index.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// Complete Unicode-analysis values over a paragraph-local UTF-8 byte range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnalysisRun {
+    bytes: Range<u32>,
+    style: AnalysisStyleId,
+}
+
+impl AnalysisRun {
+    pub(crate) const fn new(bytes: Range<u32>, style: AnalysisStyleId) -> Self {
+        Self { bytes, style }
+    }
+
+    /// Returns the paragraph-local UTF-8 byte range.
+    #[must_use]
+    pub fn bytes(&self) -> Range<u32> {
+        self.bytes.clone()
+    }
+
+    /// Returns the paragraph-local analysis-style identity for this range.
+    #[must_use]
+    pub const fn style(&self) -> AnalysisStyleId {
+        self.style
     }
 }
 
@@ -249,13 +359,32 @@ impl PaintRun {
 pub struct ParagraphFormationOutput {
     paragraph: PreparedParagraph,
     work: FormationWork,
+    region_transcript: Option<RegionTranscript>,
 }
 
 impl ParagraphFormationOutput {
     /// Pairs validated prepared data with actual backend work.
     #[must_use]
     pub const fn new(paragraph: PreparedParagraph, work: FormationWork) -> Self {
-        Self { paragraph, work }
+        Self {
+            paragraph,
+            work,
+            region_transcript: None,
+        }
+    }
+
+    /// Pairs prepared data with a replayable exact-region transcript.
+    #[must_use]
+    pub const fn in_regions(
+        paragraph: PreparedParagraph,
+        work: FormationWork,
+        region_transcript: RegionTranscript,
+    ) -> Self {
+        Self {
+            paragraph,
+            work,
+            region_transcript: Some(region_transcript),
+        }
     }
 
     /// Returns the prepared paragraph.
@@ -268,6 +397,12 @@ impl ParagraphFormationOutput {
     #[must_use]
     pub const fn work(&self) -> FormationWork {
         self.work
+    }
+
+    /// Returns exact region attempts and cursor transitions, when requested.
+    #[must_use]
+    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
+        self.region_transcript.as_ref()
     }
 }
 
@@ -283,13 +418,16 @@ pub struct FormationWork {
     line_shaping: LineShapingWork,
 }
 
-/// Exact work performed while shaping committed or rejected line candidates.
+/// Exact work performed while forming and shaping line candidates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LineShapingWork {
     attempts: u32,
     resolved_clusters: u32,
     shaped_runs: u32,
     shaped_glyphs: u32,
+    candidates: u32,
+    rejected_candidates: u32,
+    checkpoint_restores: u32,
 }
 
 impl LineShapingWork {
@@ -306,7 +444,27 @@ impl LineShapingWork {
             resolved_clusters,
             shaped_runs,
             shaped_glyphs,
+            candidates: 0,
+            rejected_candidates: 0,
+            checkpoint_restores: 0,
         }
+    }
+
+    /// Adds state-machine observations for line formation.
+    ///
+    /// A proposed candidate can use retained canonical shaping, so `candidates`
+    /// is intentionally independent of [`Self::attempts`].
+    #[must_use]
+    pub const fn with_formation(
+        mut self,
+        candidates: u32,
+        rejected_candidates: u32,
+        checkpoint_restores: u32,
+    ) -> Self {
+        self.candidates = candidates;
+        self.rejected_candidates = rejected_candidates;
+        self.checkpoint_restores = checkpoint_restores;
+        self
     }
 
     /// Returns the number of line-final shaping attempts, including rejected
@@ -332,6 +490,30 @@ impl LineShapingWork {
     #[must_use]
     pub const fn shaped_glyphs(self) -> u32 {
         self.shaped_glyphs
+    }
+
+    /// Returns the number of proposed line candidates, including retries.
+    #[must_use]
+    pub const fn candidates(self) -> u32 {
+        self.candidates
+    }
+
+    /// Returns candidates rejected after line-final width or height checks.
+    #[must_use]
+    pub const fn rejected_candidates(self) -> u32 {
+        self.rejected_candidates
+    }
+
+    /// Returns candidates committed to the current line sequence.
+    #[must_use]
+    pub const fn accepted_candidates(self) -> u32 {
+        self.candidates.saturating_sub(self.rejected_candidates)
+    }
+
+    /// Returns restorations of traversal and provisional line output.
+    #[must_use]
+    pub const fn checkpoint_restores(self) -> u32 {
+        self.checkpoint_restores
     }
 }
 
@@ -417,6 +599,30 @@ impl FormationWork {
     #[must_use]
     pub const fn line_shaped_glyphs(self) -> u32 {
         self.line_shaping.shaped_glyphs()
+    }
+
+    /// Returns proposed line candidates, including retry candidates.
+    #[must_use]
+    pub const fn line_candidates(self) -> u32 {
+        self.line_shaping.candidates()
+    }
+
+    /// Returns line candidates rejected by line-final fit checks.
+    #[must_use]
+    pub const fn rejected_line_candidates(self) -> u32 {
+        self.line_shaping.rejected_candidates()
+    }
+
+    /// Returns line candidates committed to the current line sequence.
+    #[must_use]
+    pub const fn accepted_line_candidates(self) -> u32 {
+        self.line_shaping.accepted_candidates()
+    }
+
+    /// Returns restorations of line traversal and provisional output.
+    #[must_use]
+    pub const fn line_checkpoint_restores(self) -> u32 {
+        self.line_shaping.checkpoint_restores()
     }
 
     /// Returns the complete line-final shaping work record.

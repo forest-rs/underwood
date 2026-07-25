@@ -646,7 +646,7 @@ The first patch contains:
 - Paint values are absent from analysis, itemization, shape, break, flow, and
   geometry keys.
 - Paint-slot topology creates no itemization split and does not enter shaping
-  physics or its cache key; the adapter may carry it as uninterpreted metadata
+  shaping or its cache key; the adapter may carry it as uninterpreted metadata
   only to reconstruct coverage for lowering.
 - Width is absent from analysis, itemization, and shaping keys.
 - A changed paragraph cannot invalidate an unchanged sibling's retained stages.

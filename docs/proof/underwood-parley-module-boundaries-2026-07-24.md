@@ -20,13 +20,13 @@ owner would optimize for line count rather than architecture.
 
 | Module | Owns | Explicitly does not own |
 | --- | --- | --- |
-| `engine` | paragraph identities, invalidation, retained physics | shaping, line-breaking, lowering, interaction algorithms |
+| `engine` | paragraph identities, invalidation, retained preparation | shaping, line-breaking, lowering, interaction algorithms |
 | `font` | immutable Fontique catalog construction and validation | shaping-time selection policy |
 | `shaping` | analysis, itemization, font selection, initial shaping | line formation and portable records |
 | `line_break` | constraints, legal breaks, line metrics, line-local bidi | font selection, shaping internals, scene construction |
 | `lowering` | portable glyph, source, synthesis, and paint records | shaping and renderer policy |
 | `interaction` | grapheme units, visual slices, cursor transitions | editing and line selection |
-| `validation` | fail-closed adapter input coverage | text physics and error presentation |
+| `validation` | fail-closed adapter input coverage | text preparation and error presentation |
 
 The test corpus is likewise divided into font/analysis, line breaking, editing,
 interaction, paint, and intrinsic/cache ownership, with shared fixtures in the
@@ -51,7 +51,7 @@ Two findings were resolved before publication:
 ### Could
 
 Further split `interaction` only when a distinct owner—such as host protocol
-mapping versus portable cursor physics—actually emerges. The current single
+mapping versus portable cursor facts—actually emerges. The current single
 invariant is preferable to arbitrary fragmentation.
 
 ## Executable evidence

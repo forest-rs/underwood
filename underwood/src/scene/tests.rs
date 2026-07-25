@@ -1,11 +1,14 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::{vec, vec::Vec};
+use alloc::{rc::Rc, vec, vec::Vec};
+use core::cell::Cell;
 
 use peniko::Blob;
 
-use super::{CacheBudget, LayoutEngine, append_inline_flow_run, append_shaping_run};
+use super::{
+    CacheBudget, LayoutEngine, append_analysis_run, append_inline_flow_run, append_shaping_run,
+};
 use crate::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
@@ -15,13 +18,15 @@ use crate::adapter::{
     PreparedRun, TextAffinity,
 };
 use crate::{
-    BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind, CompositionErrorKind,
-    CompositionId, CompositionSession, CompositionUpdate, ComputedInlineStyle, Document,
-    DocumentId, EditableSurface, EditableSurfaceElement, FiniteWidth, FontData, FontFamily,
-    InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, Point,
-    ProjectedTextSource, Rect, SceneErrorKind, SceneRequest, ShapingStyle, SnapshotTextPosition,
-    SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind,
-    SurfaceTextEncoding, TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2,
+    AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
+    CompositionErrorKind, CompositionId, CompositionSession, CompositionUpdate,
+    ComputedInlineStyle, Document, DocumentId, EditableSurface, EditableSurfaceElement,
+    FiniteWidth, FontData, FontFamily, InlineFlowStyle, InlineRole, PaintSlot, PaintTable,
+    ParagraphRole, ParagraphStyle, Point, ProjectedTextSource, Rect, RegionAttempt,
+    RegionAttemptOutcome, RegionFlow, RegionTranscript, ResolvedDirection, SceneErrorKind,
+    SceneRequest, ShapingStyle, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+    SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAlignment,
+    TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 
 #[derive(Debug)]
@@ -51,7 +56,13 @@ impl ParagraphFormation for EchoAdapter {
                 None,
                 None,
             )];
-            let paragraph = PreparedParagraph::try_new(input.paragraph(), text_len, [], movements)?;
+            let paragraph = PreparedParagraph::try_new(
+                input.paragraph(),
+                text_len,
+                ResolvedDirection::Ltr,
+                [],
+                movements,
+            )?;
             return Ok(ParagraphFormationOutput::new(
                 paragraph,
                 FormationWork::new(true, true, 0, 0, 0, 0, LineShapingWork::default()),
@@ -119,12 +130,11 @@ impl ParagraphFormation for EchoAdapter {
             glyphs,
         )?;
         let font_size = input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size();
-        let line_height = f64::from(font_size)
-            * f64::from(
-                input.inline_flow_styles()[input.inline_flow_runs()[0].style().index()]
-                    .line_height()
-                    .multiplier(),
-            );
+        let line_height = f64::from(
+            input.inline_flow_styles()[input.inline_flow_runs()[0].style().index()]
+                .line_height()
+                .resolve(font_size, font_size),
+        );
         let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
         let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
         let units = if self.split_paint {
@@ -236,10 +246,24 @@ impl ParagraphFormation for EchoAdapter {
                 None,
             ));
         }
-        let paragraph = PreparedParagraph::try_new(input.paragraph(), text_len, [line], movements)?;
+        let paragraph = PreparedParagraph::try_new(
+            input.paragraph(),
+            text_len,
+            ResolvedDirection::Ltr,
+            [line],
+            movements,
+        )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
-            FormationWork::new(true, true, 1, 1, 1, 1, LineShapingWork::new(2, 3, 4, 5)),
+            FormationWork::new(
+                true,
+                true,
+                1,
+                1,
+                1,
+                1,
+                LineShapingWork::new(2, 3, 4, 5).with_formation(6, 1, 2),
+            ),
         ))
     }
 }
@@ -279,6 +303,263 @@ impl ParagraphFormation for RetainingInvalidAdapter {
     }
 }
 
+#[derive(Debug)]
+struct MismatchedEmptyRegionAdapter;
+
+impl ParagraphFormation for MismatchedEmptyRegionAdapter {
+    fn form(
+        &mut self,
+        input: ParagraphInput<'_>,
+        constraints: ParagraphConstraints,
+    ) -> Result<ParagraphFormationOutput, PreparationError> {
+        if !input.text().is_empty() {
+            return Err(PreparationError::invalid_output());
+        }
+        let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
+        let movements = [PreparedCursorMovement::new(
+            position,
+            PreparedCaret::try_new(0, 0.0)?,
+            None,
+            None,
+            None,
+            None,
+        )];
+        let paragraph = PreparedParagraph::try_new(
+            input.paragraph(),
+            0,
+            ResolvedDirection::Ltr,
+            [],
+            movements,
+        )?;
+        let flow = constraints
+            .region_flow()
+            .ok_or_else(PreparationError::invalid_output)?;
+        let cursor = constraints
+            .region_cursor()
+            .ok_or_else(PreparationError::invalid_output)?;
+        let slot = flow
+            .slot(cursor)
+            .ok_or_else(PreparationError::invalid_output)?;
+        let wrong_height = constraints.empty_line_height() / 2.0;
+        let attempt = RegionAttempt::try_new(
+            input.paragraph(),
+            0..0,
+            slot,
+            wrong_height,
+            RegionAttemptOutcome::Accepted,
+        )
+        .map_err(|_| PreparationError::invalid_output())?;
+        let end = flow
+            .accept(cursor, slot, wrong_height)
+            .map_err(|_| PreparationError::invalid_output())?;
+        let transcript = RegionTranscript::try_new(flow, cursor, end, [attempt])
+            .map_err(|_| PreparationError::invalid_output())?;
+        Ok(ParagraphFormationOutput::in_regions(
+            paragraph,
+            FormationWork::default(),
+            transcript,
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct SharedEligibilityAdapter {
+    calls: Rc<Cell<usize>>,
+    epoch: Rc<Cell<Option<u64>>>,
+}
+
+impl ParagraphFormation for SharedEligibilityAdapter {
+    fn shared_preparation_epoch(&self) -> Option<u64> {
+        self.epoch.get()
+    }
+
+    fn form(
+        &mut self,
+        input: ParagraphInput<'_>,
+        constraints: ParagraphConstraints,
+    ) -> Result<ParagraphFormationOutput, PreparationError> {
+        self.calls.set(self.calls.get().saturating_add(1));
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        }
+        .form(input, constraints)
+    }
+}
+
+#[test]
+fn backends_are_ineligible_for_cross_identity_reuse_by_default() {
+    let calls = Rc::new(Cell::new(0));
+    let epoch = Rc::new(Cell::new(None));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch,
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0001", "same");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0002", "same");
+
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("first document prepares");
+    let second_output = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("second document prepares");
+
+    assert_eq!(calls.get(), 2);
+    assert_eq!(second_output.work().shared_preparations(), 0);
+    let diagnostics = layout.cache_diagnostics();
+    assert_eq!(diagnostics.shared_preparation_entries(), 0);
+    assert_eq!(diagnostics.shared_preparation_hits(), 0);
+    assert_eq!(diagnostics.shared_preparation_misses(), 0);
+}
+
+#[test]
+fn eligible_backend_epoch_changes_invalidate_shared_preparation() {
+    let calls = Rc::new(Cell::new(0));
+    let epoch = Rc::new(Cell::new(Some(7)));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: epoch.clone(),
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0003", "same");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0004", "same");
+    let (third, third_styles, third_paint) = one_leaf_document(*b"scene-share-0005", "same");
+
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("first document prepares");
+    let shared = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("second document shares preparation");
+    assert_eq!(calls.get(), 1);
+    assert_eq!(shared.work().shared_preparations(), 1);
+
+    epoch.set(Some(8));
+    let invalidated = layout
+        .prepare(
+            &third.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint),
+        )
+        .expect("new epoch prepares fresh output");
+    assert_eq!(calls.get(), 2);
+    assert_eq!(invalidated.work().shared_preparations(), 0);
+    let diagnostics = layout.cache_diagnostics();
+    assert_eq!(diagnostics.shared_preparation_entries(), 1);
+    assert_eq!(diagnostics.shared_preparation_hits(), 1);
+    assert_eq!(diagnostics.shared_preparation_misses(), 2);
+}
+
+#[test]
+fn shared_hit_is_revalidated_against_the_current_projection() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls,
+            epoch: Rc::new(Cell::new(Some(1))),
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0006", "same");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0007", "same");
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("seed preparation succeeds");
+
+    let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
+    let poisoned = PreparedParagraph::try_new(
+        first.snapshot().paragraphs()[0].id,
+        0,
+        ResolvedDirection::Ltr,
+        [],
+        [PreparedCursorMovement::new(
+            position,
+            PreparedCaret::try_new(0, 0.0).expect("empty caret is valid"),
+            None,
+            None,
+            None,
+            None,
+        )],
+    )
+    .expect("empty prepared facts are internally valid");
+    layout.replace_first_shared_facts_for_test(poisoned.shared_facts());
+
+    let error = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect_err("poisoned shared facts must fail current-projection validation");
+    assert_eq!(error.kind(), SceneErrorKind::SourceCoverage);
+    assert_eq!(layout.cache_diagnostics().shared_preparation_hits(), 1);
+}
+
+#[test]
+fn fingerprint_collision_never_substitutes_a_nonmatching_key() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: Rc::new(Cell::new(Some(1))),
+        },
+        CacheBudget::new(8).with_shared_preparation_bytes(1024 * 1024),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-share-0008", "aaaa");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-share-0009", "bbbb");
+    let (third, third_styles, third_paint) = one_leaf_document(*b"scene-share-0010", "bbbb");
+    layout
+        .prepare(
+            &first.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint),
+        )
+        .expect("first key prepares");
+    layout.collide_shared_bucket_for_test("aaaa", "bbbb");
+
+    let collision_miss = layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("nonmatching colliding key prepares");
+    assert_eq!(collision_miss.work().shared_preparations(), 0);
+    assert_eq!(calls.get(), 2);
+
+    let exact_hit = layout
+        .prepare(
+            &third.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint),
+        )
+        .expect("exact key after a colliding entry shares");
+    assert_eq!(exact_hit.work().shared_preparations(), 1);
+    assert_eq!(calls.get(), 2);
+    let diagnostics = layout.cache_diagnostics();
+    assert_eq!(diagnostics.shared_preparation_misses(), 2);
+    assert_eq!(diagnostics.shared_preparation_hits(), 1);
+}
+
 #[test]
 fn invalid_first_output_releases_untracked_backend_state() {
     let (document, styles, paint) = one_leaf_document(*b"scene-test-doc13", "é");
@@ -301,6 +582,180 @@ fn invalid_first_output_releases_untracked_backend_state() {
         layout.cache_diagnostics().backend_entries(),
         Some(0),
         "invalid output must release backend state with no geometry owner"
+    );
+}
+
+#[test]
+fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-trace-0001", "trace");
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
+
+    let cold = layout
+        .prepare(&document.snapshot(), &request)
+        .expect("cold trace fixture prepares");
+    let cold_trace = cold.trace().expect("trace was requested");
+    assert_eq!(cold_trace.work(), cold.work());
+    assert_eq!(cold_trace.reuse().paragraphs(), 1);
+    assert_eq!(cold_trace.reuse().cold_paragraphs(), 1);
+    assert_eq!(cold_trace.reuse().adapter_calls(), 1);
+    assert_eq!(cold_trace.reuse().exact_geometry_reuses(), 0);
+    assert_eq!(cold_trace.memory().cache_before().current_entries(), 0);
+    assert_eq!(cold_trace.memory().cache_after().current_entries(), 1);
+    assert!(
+        cold_trace
+            .memory()
+            .cache_after()
+            .scene_cache_accounted_bytes()
+            > 0
+    );
+    assert!(cold_trace.memory().scene_output_capacity_bytes() > 0);
+    assert_eq!(cold_trace.memory().scratch_growth_bytes(), 0);
+
+    let retained = layout
+        .prepare(&document.snapshot(), &request)
+        .expect("retained trace fixture prepares");
+    let retained_trace = retained.trace().expect("trace was requested");
+    assert_eq!(retained_trace.reuse().exact_geometry_reuses(), 1);
+    assert_eq!(retained_trace.reuse().adapter_calls(), 0);
+    assert_eq!(retained.work().reused_paragraphs(), 1);
+    assert_eq!(
+        retained_trace
+            .memory()
+            .cache_before()
+            .scene_cache_accounted_bytes(),
+        retained_trace
+            .memory()
+            .cache_after()
+            .scene_cache_accounted_bytes()
+    );
+
+    let centered = ParagraphStyle::DEFAULT.with_alignment(TextAlignment::Center);
+    let centered_styles = styles.clone().with_default_paragraph_style(centered);
+    let adjusted = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &centered_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("adjustment-only trace fixture prepares");
+    let adjusted_trace = adjusted.trace().expect("trace was requested");
+    assert_eq!(adjusted_trace.reuse().formation_invalidations(), 0);
+    assert_eq!(adjusted_trace.reuse().adjustment_invalidations(), 1);
+    assert_eq!(adjusted_trace.reuse().paint_invalidations(), 0);
+
+    let painted_styles =
+        StyleMap::new(styles.default_style().clone().with_paint(PaintSlot::new(1)))
+            .with_default_paragraph_style(centered);
+    let painted_table =
+        PaintTable::from_brushes([Brush::Solid(Color::BLACK), Brush::Solid(Color::WHITE)]);
+    let painted = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &painted_styles, &painted_table)
+                .with_preparation_trace(),
+        )
+        .expect("paint-only trace fixture prepares");
+    let painted_trace = painted.trace().expect("trace was requested");
+    assert_eq!(painted_trace.reuse().formation_invalidations(), 0);
+    assert_eq!(painted_trace.reuse().adjustment_invalidations(), 0);
+    assert_eq!(painted_trace.reuse().paint_invalidations(), 1);
+
+    let mut untraced = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(1),
+    );
+    let ordinary = untraced
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("ordinary preparation remains available");
+    assert!(
+        ordinary.trace().is_none(),
+        "deep diagnostics are opt-in rather than a stable-path tax"
+    );
+}
+
+#[test]
+fn region_request_rejects_an_adapter_that_ignores_exact_slots() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-test-doc14", "region");
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let flow = RegionFlow::rectangle(Rect::new(40.0, 20.0, 140.0, 100.0)).expect("region is valid");
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
+        &styles,
+        &paint,
+    )
+    .with_region_flow(&flow);
+    let error = layout
+        .prepare(&document.snapshot(), &request)
+        .expect_err("an adapter must return exact slots and a replayable transcript");
+
+    assert_eq!(error.kind(), SceneErrorKind::Flow);
+}
+
+#[test]
+fn empty_region_output_rejects_a_cursor_height_that_disagrees_with_geometry() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-test-doc15", "");
+    let flow = RegionFlow::rectangle(Rect::new(40.0, 20.0, 140.0, 100.0)).expect("region is valid");
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
+        &styles,
+        &paint,
+    )
+    .with_region_flow(&flow);
+    let error = LayoutEngine::new(MismatchedEmptyRegionAdapter, CacheBudget::new(32))
+        .prepare(&document.snapshot(), &request)
+        .expect_err("flow cursor and empty geometry must consume the same height");
+
+    assert_eq!(error.kind(), SceneErrorKind::Flow);
+}
+
+#[test]
+fn explicit_direction_rejects_a_backend_with_conflicting_analysis() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-test-doc16", "");
+    let styles = styles.with_default_paragraph_style(ParagraphStyle::new(BaseDirection::Rtl));
+    let flow = RegionFlow::rectangle(Rect::new(40.0, 20.0, 140.0, 100.0)).expect("region is valid");
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
+        &styles,
+        &paint,
+    )
+    .with_region_flow(&flow);
+    let error = LayoutEngine::new(MismatchedEmptyRegionAdapter, CacheBudget::new(32))
+        .prepare(&document.snapshot(), &request)
+        .expect_err("explicit RTL cannot consume backend-reported LTR analysis");
+
+    assert_eq!(error.kind(), SceneErrorKind::Preparation);
+    assert_eq!(
+        error.preparation(),
+        Some(PreparationErrorKind::InvalidOutput)
     );
 }
 
@@ -479,6 +934,10 @@ fn fragment_identity_is_distinct_across_documents() {
         5,
         "line-final shaped glyph work must survive scene reporting"
     );
+    assert_eq!(first_scene.work().line_candidates(), 6);
+    assert_eq!(first_scene.work().rejected_line_candidates(), 1);
+    assert_eq!(first_scene.work().accepted_line_candidates(), 5);
+    assert_eq!(first_scene.work().line_checkpoint_restores(), 2);
     let second_request =
         SceneRequest::new(TextConstraint::Wrap(width), &second_styles, &second_paint);
     let second_scene = layout
@@ -517,6 +976,79 @@ fn paragraph_style_override_from_another_document_is_rejected() {
         .prepare(&first.snapshot(), &request)
         .expect_err("a foreign paragraph style must not be silently ignored");
     assert_eq!(error.kind(), SceneErrorKind::InvalidStyle);
+}
+
+#[test]
+fn composition_whitespace_collapse_retains_complete_generated_provenance() {
+    let (document, mut styles, paint) = one_leaf_document(*b"collapse-preedt1", "x");
+    let snapshot = document.snapshot();
+    let paragraph = snapshot.paragraphs()[0].id;
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
+    );
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed collapse fixture must prepare");
+    let left = committed
+        .scene()
+        .hit_test(Point::new(0.1, 1.0))
+        .expect("left side must hit");
+    let right = committed
+        .scene()
+        .hit_test(Point::new(9.9, 1.0))
+        .expect("right side must hit");
+    let selection = committed
+        .scene()
+        .selection(
+            left.position(),
+            right.position(),
+            TextSelectionMode::Logical,
+        )
+        .expect("fixture source must select");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("fixture selection must validate");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"collapse-preedt1"))
+        .expect("composition must begin")
+        .into_session();
+    session
+        .update(
+            session.epoch(),
+            CompositionUpdate::new("\t\r\n").with_selection(3..3),
+        )
+        .expect("whitespace preedit must update");
+
+    let transient = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("collapsed whitespace preedit must prepare");
+    let source = transient.scene().fragments()[0]
+        .source()
+        .expect("generated glyph must retain provenance");
+    let [ProjectedTextSource::Composition(range)] = source.sources() else {
+        panic!("collapsed preedit must have one generated source range");
+    };
+    assert_eq!(
+        range.bytes(),
+        0..3,
+        "one display space must retain every generated whitespace byte"
+    );
+    assert_eq!(range.id(), session.id());
+    assert_eq!(range.epoch(), session.epoch());
 }
 
 #[test]
@@ -609,6 +1141,39 @@ fn paragraph_projection_interns_repeated_style_partitions() {
     let paragraph = document.snapshot().paragraphs()[0].id;
     let first = ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style is valid");
     let second = ShapingStyle::new(FontFamily::named("Test"), 24.).expect("test style is valid");
+    let normal = AnalysisStyle::default();
+    let keep_all = AnalysisStyle::new(WordBreak::KeepAll);
+    let mut analysis_styles = Vec::new();
+    let mut analysis_runs = Vec::new();
+    append_analysis_run(
+        &mut analysis_styles,
+        &mut analysis_runs,
+        0..1,
+        normal,
+        paragraph,
+    )
+    .expect("first analysis style must intern");
+    append_analysis_run(
+        &mut analysis_styles,
+        &mut analysis_runs,
+        1..2,
+        keep_all,
+        paragraph,
+    )
+    .expect("second analysis style must intern");
+    append_analysis_run(
+        &mut analysis_styles,
+        &mut analysis_runs,
+        2..3,
+        normal,
+        paragraph,
+    )
+    .expect("repeated analysis style must intern");
+    assert_eq!(analysis_styles, [normal, keep_all]);
+    assert_eq!(analysis_runs[0].style().index(), 0);
+    assert_eq!(analysis_runs[1].style().index(), 1);
+    assert_eq!(analysis_runs[2].style().index(), 0);
+
     let mut shaping_styles = Vec::new();
     let mut shaping_runs = Vec::new();
     append_shaping_run(

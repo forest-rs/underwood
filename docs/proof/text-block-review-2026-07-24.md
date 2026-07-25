@@ -5,7 +5,7 @@
 Design-0012 is ready to land after review fixes. `TextBlock` is a façade over
 the real one-paragraph document path, intrinsic constraints reach Parley's
 actual break-sensitive formation, metrics come from prepared line facts, and
-cache budgets coordinate geometry with backend physics. The wind tunnel uses
+cache budgets coordinate geometry with backend preparation. The wind tunnel uses
 only public APIs and makes identity-local shaping cost explicit.
 
 Good catch: reviewing failure atomicity exposed a backend-retention leak that
@@ -13,7 +13,7 @@ the success-path churn proof could not see.
 
 ## Must fix
 
-### Failed first preparation could strand backend physics
+### Failed first preparation could strand backend state
 
 `ParagraphFormation::form` may allocate a retained backend entry before
 returning an error, and validation or geometry lowering can fail after a
@@ -53,7 +53,7 @@ global residency.
 ### Let the first Overstory consumer decide selective materialization
 
 The retained wind-tunnel pass rematerializes 2,048 unchanged full scenes in
-about 19 ms on the reference machine, despite performing no text physics.
+about 19 ms on the reference machine, despite performing no text preparation.
 That is evidence against preparing every unchanged label every frame, but not
 yet evidence for a second output shape: a retained UI can keep the already
 owned `SceneOutput`.

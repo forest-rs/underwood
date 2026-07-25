@@ -16,14 +16,15 @@ use underwood::adapter::{
     PreparedParagraph, PreparedRun,
 };
 use underwood::{
-    BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId, CompositionUpdate,
-    ComputedInlineStyle, Document, DocumentId, EditErrorKind, EditableSurface,
+    AnalysisStyle, BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId,
+    CompositionUpdate, ComputedInlineStyle, Document, DocumentId, EditErrorKind, EditableSurface,
     EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
-    InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole,
-    ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
-    SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
-    SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
-    TextSelectionMode, Vec2,
+    InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, OverflowWrap, PaintSlot, PaintTable,
+    ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, Rect,
+    RegionAttemptOutcome, RegionFlow, ResolvedDirection, SceneRequest, SelectionErrorKind,
+    ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity,
+    TextBlock, TextConstraint, TextMovement, TextScene, TextSelectionMode, TextSpacing,
+    TextWrapMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 use underwood::{Language, Script};
 
@@ -32,14 +33,18 @@ use crate::font::{read_u16, read_u32};
 use crate::interaction::{collect_analysis_units, prepared_cursor_movements};
 use crate::line_break::{choose_line, collect_logical_clusters};
 use crate::lowering::checked_source_range;
-use crate::shaping::{analyze_text, split_item_after};
+use crate::shaping::{analyze_text, analyze_text_with_styles, split_item_after};
 
+mod alignment;
+mod cjk_line_break;
 mod editing;
 mod font_and_analysis;
 mod interaction;
 mod intrinsic_and_cache;
 mod line_break;
+mod line_former;
 mod paint;
+mod region_flow;
 
 const LATIN_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
@@ -55,11 +60,13 @@ impl ParagraphFormation for AnalysisCursorProof {
         input: underwood::adapter::ParagraphInput<'_>,
         _constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, underwood::adapter::PreparationError> {
-        let analysis = analyze_text(
+        let analysis = analyze_text_with_styles(
             &mut parley_engine::Analyzer::new(),
             input.text(),
             input.paragraph_style().base_direction(),
-        );
+            input.analysis_styles(),
+            input.analysis_runs(),
+        )?;
         let units = collect_analysis_units(input.text(), &analysis)?;
         let mut prepared_units = Vec::with_capacity(units.len());
         let mut glyphs = Vec::with_capacity(units.len());
@@ -120,8 +127,13 @@ impl ParagraphFormation for AnalysisCursorProof {
             [run],
         )?;
         let movements = prepared_cursor_movements(core::slice::from_ref(&line), source.end)?;
-        let paragraph =
-            PreparedParagraph::try_new(input.paragraph(), source.end, [line], movements)?;
+        let paragraph = PreparedParagraph::try_new(
+            input.paragraph(),
+            source.end,
+            ResolvedDirection::Ltr,
+            [line],
+            movements,
+        )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(
@@ -229,6 +241,10 @@ fn fixture_engine() -> LayoutEngine {
 }
 
 fn fixture_engine_with_budget(budget: usize) -> LayoutEngine {
+    fixture_engine_with_budgets(budget, 0)
+}
+
+fn fixture_engine_with_budgets(budget: usize, shared_preparation_bytes: usize) -> LayoutEngine {
     let fonts = FontSet::try_from_fonts([
         Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
         Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
@@ -236,7 +252,10 @@ fn fixture_engine_with_budget(budget: usize) -> LayoutEngine {
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
     .expect("Arabic fallback is valid");
-    LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(budget))
+    LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(budget).with_shared_preparation_bytes(shared_preparation_bytes),
+    )
 }
 
 fn fixture_document(text: &str, line_height: f32) -> (Document, StyleMap, PaintTable) {

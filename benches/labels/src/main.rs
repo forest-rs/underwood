@@ -8,15 +8,52 @@ use std::time::{Duration, Instant};
 
 use underwood::{
     BlockRequest, Brush, CacheBudget, Color, ComputedInlineStyle, DocumentId, FiniteWidth,
-    InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, SceneOutput, ShapingStyle, TextBlock,
-    TextConstraint,
+    FloatSide, FlowRegion, InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ParagraphStyle,
+    ProjectedText, ProjectionBuilder, Rect, RegionFloat, RegionFlow, SceneOutput, ShapingStyle,
+    Size, TextAlignment, TextBlock, TextConstraint, WhitespaceCollapse,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 const LABELS: usize = 2_048;
 const CHURN_BUDGET: usize = 64;
+const SHARED_PREPARATION_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut arguments = std::env::args().skip(1);
+    let Some(scenario) = arguments.next() else {
+        return run_suite();
+    };
+    if scenario == "--help" || scenario == "-h" {
+        println!(
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+        );
+        return Ok(());
+    }
+    let rounds = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(100);
+    if rounds == 0 {
+        return Err("rounds must be greater than zero".into());
+    }
+    let labels = arguments
+        .next()
+        .map(|value| value.parse::<usize>())
+        .transpose()?
+        .unwrap_or(LABELS);
+    if labels == 0 {
+        return Err("labels must be greater than zero".into());
+    }
+    if arguments.next().is_some() {
+        return Err("expected at most a scenario, round count, and label count".into());
+    }
+    let result = run_profile(&scenario, rounds, labels);
+    hold_for_profiler()?;
+    result
+}
+
+fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let style = ComputedInlineStyle::new(
         ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 15.0)?,
         InlineFlowStyle::default(),
@@ -56,13 +93,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
                 )
                 .expect("retained unique label must prepare");
-            assert_no_physics(&output);
+            assert_no_preparation_work(&output);
             black_box(output.scene().fragments().len());
         }
     });
 
     let mut constrained_line_reshapes = 0_usize;
     let mut constrained_line_paragraphs = 0_usize;
+    let mut constrained_line_candidates = 0_usize;
+    let mut constrained_rejected_candidates = 0_usize;
     let constrained_unique = measure(|| {
         for label in &labels {
             let output = layout
@@ -100,6 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 constrained_line_reshapes.saturating_add(output.work().line_reshapes());
             constrained_line_paragraphs =
                 constrained_line_paragraphs.saturating_add(output.work().line_shape().paragraphs());
+            constrained_line_candidates =
+                constrained_line_candidates.saturating_add(output.work().line_candidates());
+            constrained_rejected_candidates = constrained_rejected_candidates
+                .saturating_add(output.work().rejected_line_candidates());
             black_box(output.scene().lines().len());
         }
     });
@@ -193,7 +236,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
                 )
                 .expect("retained repeated text must prepare");
-            assert_no_physics(&output);
+            assert_no_preparation_work(&output);
         }
     });
     for label in &identical {
@@ -270,7 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     report("text_block_retained_unique", LABELS, retained_unique);
     report("text_block_constrained_unique", LABELS, constrained_unique);
     println!(
-        "text_block_constrained_line_work\tparagraphs={constrained_line_paragraphs}\tline_reshapes={constrained_line_reshapes}"
+        "text_block_constrained_line_work\tparagraphs={constrained_line_paragraphs}\tline_reshapes={constrained_line_reshapes}\tcandidates={constrained_line_candidates}\trejected_candidates={constrained_rejected_candidates}"
     );
     report("text_block_localized_edit", 1, localized_edit);
     report("text_block_explicit_release", LABELS, release);
@@ -285,8 +328,1010 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn run_profile(
+    scenario: &str,
+    rounds: usize,
+    labels: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 15.0)?,
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::from_rgb8(0x20, 0x24, 0x2b))]);
+    match scenario {
+        "setup-identical" | "s0" => profile_setup_identical(rounds, labels),
+        "setup-identity" | "s1" => profile_setup_identity(rounds, labels),
+        "setup-cross-identical" | "x0" => {
+            profile_setup_cross_identity("setup-cross-identical", rounds, labels, false)
+        }
+        "setup-cross-distinct" | "x2" => {
+            profile_setup_cross_identity("setup-cross-distinct", rounds, labels, true)
+        }
+        "setup-shared-hit" | "y0" => profile_setup_shared_hit(rounds, labels, &style, &paint),
+        "primed-identical" | "p0" => {
+            profile_primed_identical("primed-identical", rounds, labels, &style, &paint, false)
+        }
+        "primed-paint" | "p1" => {
+            profile_primed_identical("primed-paint", rounds, labels, &style, &paint, true)
+        }
+        "primed-unique" | "p2" => profile_primed_unique(rounds, labels, &style, &paint),
+        "primed-region" | "p3" => profile_primed_region(rounds, labels, &style, &paint),
+        "primed-adjustment" | "p4" => profile_primed_adjustment(rounds, labels, &style, &paint),
+        "cold-identical" | "c0" => {
+            profile_cold_identical("cold-identical", rounds, labels, &style, &paint)
+        }
+        "cross-identical" | "x1" => {
+            profile_cross_identity("cross-identical", rounds, labels, &style, &paint, false)
+        }
+        "cross-distinct" | "x3" => {
+            profile_cross_identity("cross-distinct", rounds, labels, &style, &paint, true)
+        }
+        "shared-hit" | "y1" => profile_shared_hit(rounds, labels, &style, &paint),
+        "retained-identical" | "r0" => profile_retained_identical(rounds, labels, &style, &paint),
+        "traced-retained" | "t0" => profile_traced_retained(rounds, labels, &style, &paint),
+        "retained-adjustment" | "r1" => profile_retained_adjustment(rounds, labels, &style, &paint),
+        "paint-change" | "a0" => profile_paint_change(rounds, labels, &style, &paint),
+        "alignment-churn" | "a1" => profile_alignment_churn(rounds, labels, &style, &paint, false),
+        "justification-churn" | "a2" => {
+            profile_alignment_churn(rounds, labels, &style, &paint, true)
+        }
+        "localized-edit" | "e0" => profile_localized_edit(rounds, labels, &style, &paint),
+        "interaction-materialization" | "i0" => profile_cold_identical(
+            "interaction-materialization",
+            rounds,
+            labels,
+            &style,
+            &paint,
+        ),
+        "width-churn" | "w0" => profile_width_churn("width-churn", rounds, labels, &style, &paint),
+        "region-ready" | "g0" => {
+            profile_width_churn("region-ready", rounds, labels, &style, &paint)
+        }
+        "region-churn" | "g1" => profile_region_churn(rounds, labels, &style, &paint),
+        "identity-churn" | "h0" => profile_identity_churn(rounds, labels, &style, &paint),
+        "projection-identity-setup" | "q0" => {
+            profile_projection_setup("projection-identity-setup", rounds, labels, "stable label")
+        }
+        "projection-identity" | "q1" => profile_projection_identity(rounds, labels),
+        "projection-collapse-setup" | "q2" => {
+            profile_projection_setup("projection-collapse-setup", rounds, labels, " \t\r\n")
+        }
+        "projection-collapse" | "q3" => profile_projection_collapse(rounds, labels),
+        "projection-expansion-setup" | "q4" => {
+            profile_projection_setup("projection-expansion-setup", rounds, labels, "İ")
+        }
+        "projection-expansion" | "q5" => profile_projection_expansion(rounds, labels),
+        _ => Err(format!("unknown scenario: {scenario}").into()),
+    }
+}
+
+fn profile_projection_setup(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    source: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec![source.to_string(); operations];
+    black_box(sources);
+    report_profile(name, rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_projection_identity(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec!["stable label".to_string(); operations];
+    let elapsed = measure(|| {
+        for source in sources {
+            let projection = ProjectedText::identity(source).expect("identity source is valid");
+            assert!(
+                projection.is_identity(),
+                "identity scenario must not materialize presentation text"
+            );
+            assert_eq!(
+                projection.segments().len(),
+                1,
+                "identity scenario must store one relation run"
+            );
+            black_box(projection);
+        }
+    });
+    report_profile("projection-identity", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_projection_collapse(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec![" \t\r\n".to_string(); operations];
+    let elapsed = measure(|| {
+        for source in sources {
+            let projection = ProjectedText::from_whitespace(source, WhitespaceCollapse::Collapse)
+                .expect("collapse source is valid");
+            assert_eq!(
+                projection.text(),
+                " ",
+                "dense whitespace must collapse to one space"
+            );
+            assert_eq!(
+                projection.segments().len(),
+                1,
+                "dense whitespace must store one collapsed run"
+            );
+            black_box(projection);
+        }
+    });
+    report_profile("projection-collapse", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_projection_expansion(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("projection operation count overflowed")?;
+    let sources = vec!["İ".to_string(); operations];
+    let elapsed = measure(|| {
+        for source in sources {
+            let mut builder = ProjectionBuilder::new(source).expect("expansion source is valid");
+            builder
+                .push_replacement(2, "i\u{307}")
+                .expect("one-to-many expansion is valid");
+            let projection = builder.finish().expect("expansion source is covered");
+            assert_eq!(
+                projection.text(),
+                "i\u{307}",
+                "expansion must retain the requested presentation scalars"
+            );
+            assert_eq!(
+                projection.segments().len(),
+                1,
+                "one expansion must store one replacement run"
+            );
+            black_box(projection);
+        }
+    });
+    report_profile("projection-expansion", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_setup_identical(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    black_box((&labels, &layout));
+    report_profile("setup-identical", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_setup_identity(
+    rounds: usize,
+    label_count: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(CHURN_BUDGET),
+    );
+    black_box(&layout);
+    report_profile("setup-identity", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_setup_cross_identity(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    distinct_text: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = if distinct_text {
+        distinct_labels_with_count(label_count)?
+    } else {
+        identical_labels_with_count(label_count)?
+    };
+    let layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
+    );
+    black_box((&labels, &layout));
+    report_profile(name, rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_setup_shared_hit(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if label_count < 2 {
+        return Err("shared-hit scenarios require at least two labels".into());
+    }
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
+    );
+    for _ in 0..rounds {
+        layout.clear_cache();
+        layout.prepare_block(
+            &labels[0].snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    black_box((&labels, &layout));
+    report_profile("setup-shared-hit", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_shared_hit(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if label_count < 2 {
+        return Err("shared-hit scenarios require at least two labels".into());
+    }
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
+    );
+    let mut elapsed = Duration::ZERO;
+    for _ in 0..rounds {
+        layout.clear_cache();
+        let seed = layout.prepare_block(
+            &labels[0].snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+        assert_eq!(
+            seed.work().shape().paragraphs(),
+            1,
+            "each cleared round must seed one fresh prepared value"
+        );
+        elapsed += measure(|| {
+            for label in &labels[1..] {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("eligible identical identity must share preparation");
+                assert_eq!(
+                    output.work().shared_preparations(),
+                    1,
+                    "every non-seed identical identity must hit shared preparation"
+                );
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    0,
+                    "a shared hit must perform no canonical shaping"
+                );
+                assert_eq!(
+                    output.work().flow().paragraphs(),
+                    0,
+                    "a shared hit must perform no line formation"
+                );
+                assert_eq!(
+                    output.work().geometry().paragraphs(),
+                    1,
+                    "each consumer must still build its own geometry"
+                );
+                black_box(output.scene().metrics());
+            }
+        });
+    }
+    let operations = rounds
+        .checked_mul(label_count - 1)
+        .ok_or("shared-hit operation count overflowed")?;
+    report("shared-hit", operations, elapsed);
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        let cache = layout.cache_diagnostics();
+        println!(
+            "shared-hit_work\toperations={operations}\thits={}\tmisses={}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
+            cache.shared_preparation_hits(),
+            cache.shared_preparation_misses(),
+            cache.shared_preparation_entries(),
+            cache.shared_preparation_resident_bytes(),
+            cache.shared_preparation_peak_bytes()
+        );
+    }
+    Ok(())
+}
+
+fn profile_primed_identical(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    include_alternate_paint: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let alternate_paint = include_alternate_paint
+        .then(|| PaintTable::from_brushes([Brush::Solid(Color::from_rgb8(0x74, 0x48, 0xe8))]));
+    black_box((&labels, &layout, alternate_paint));
+    report_profile(name, rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_primed_unique(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    black_box((&labels, &layout));
+    report_profile("primed-unique", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_primed_region(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let flows = region_flows()?;
+    black_box((&labels, &layout, flows));
+    report_profile("primed-region", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_primed_adjustment(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = adjustment_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let flow = adjustment_flow()?;
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint).with_region_flow(&flow),
+        )?;
+    }
+    black_box((&labels, &layout, flow));
+    report_profile("primed-adjustment", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_cold_identical(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            layout.clear_cache();
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("cold identical label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    1,
+                    "cleared identities must shape exactly once"
+                );
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile(name, rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_cross_identity(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    distinct_text: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = if distinct_text {
+        distinct_labels_with_count(label_count)?
+    } else {
+        identical_labels_with_count(label_count)?
+    };
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count).with_shared_preparation_bytes(SHARED_PREPARATION_BYTES),
+    );
+    let mut analyzed = 0_usize;
+    let mut shaped = 0_usize;
+    let mut formed = 0_usize;
+    let mut shared = 0_usize;
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            layout.clear_cache();
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("cross-identity label must prepare");
+                analyzed += output.work().analysis().paragraphs();
+                shaped += output.work().shape().paragraphs();
+                formed += output.work().flow().paragraphs();
+                shared += output.work().shared_preparations();
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("cross-identity operation count overflowed")?;
+    if distinct_text {
+        assert_eq!(
+            (analyzed, shaped, formed, shared),
+            (operations, operations, operations, 0),
+            "distinct text must not cross-reuse preparation"
+        );
+    } else {
+        assert_eq!(
+            (analyzed, shaped, formed, shared),
+            (rounds, rounds, rounds, operations.saturating_sub(rounds)),
+            "each cleared identical round must prepare once and share every remaining identity"
+        );
+    }
+    report_profile(name, rounds, label_count, elapsed);
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        let cache = layout.cache_diagnostics();
+        println!(
+            "{name}_work\toperations={operations}\tanalyzed={analyzed}\tshaped={shaped}\tformed={formed}\tshared={shared}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
+            cache.shared_preparation_entries(),
+            cache.shared_preparation_resident_bytes(),
+            cache.shared_preparation_peak_bytes()
+        );
+    }
+    Ok(())
+}
+
+fn profile_retained_identical(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("retained identical label must prepare");
+                assert_no_preparation_work(&output);
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("retained-identical", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_traced_retained(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let mut exact_reuses = 0_usize;
+    let mut last_scene_bytes = 0_usize;
+    let mut last_cache_bytes = 0_usize;
+    let mut last_scratch_bytes = 0_usize;
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_preparation_trace(),
+                    )
+                    .expect("traced retained label must prepare");
+                assert_no_preparation_work(&output);
+                let trace = output.trace().expect("trace was requested");
+                exact_reuses = exact_reuses.saturating_add(trace.reuse().exact_geometry_reuses());
+                last_scene_bytes = trace.memory().scene_output_capacity_bytes();
+                last_cache_bytes = trace.memory().cache_after().scene_cache_accounted_bytes();
+                last_scratch_bytes = trace.memory().scratch_capacity_after();
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("traced operation count overflowed")?;
+    assert_eq!(
+        exact_reuses, operations,
+        "every traced stable identity must report exact geometry reuse"
+    );
+    report("traced-retained", operations, elapsed);
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        println!(
+            "traced-retained_memory\toperations={operations}\tscene_output_bytes={last_scene_bytes}\tscene_cache_bytes={last_cache_bytes}\tscratch_bytes={last_scratch_bytes}"
+        );
+    }
+    Ok(())
+}
+
+fn profile_retained_adjustment(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = adjustment_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let flow = adjustment_flow()?;
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint).with_region_flow(&flow),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_region_flow(&flow),
+                    )
+                    .expect("retained adjustment fixture must prepare");
+                assert_no_preparation_work(&output);
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("retained-adjustment", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_paint_change(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    original_paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, original_paint),
+        )?;
+    }
+    let alternate_paint =
+        PaintTable::from_brushes([Brush::Solid(Color::from_rgb8(0x74, 0x48, 0xe8))]);
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let paint = if round.is_multiple_of(2) {
+                &alternate_paint
+            } else {
+                original_paint
+            };
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("paint-only label must prepare");
+                assert_no_preparation_work(&output);
+                black_box(output.scene().fragments().len());
+            }
+        }
+    });
+    report_profile("paint-change", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_alignment_churn(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    justify: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = adjustment_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let flow = adjustment_flow()?;
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint).with_region_flow(&flow),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let alignment = if justify {
+                if round.is_multiple_of(2) {
+                    TextAlignment::Justify
+                } else {
+                    TextAlignment::Start
+                }
+            } else if round.is_multiple_of(2) {
+                TextAlignment::Center
+            } else {
+                TextAlignment::End
+            };
+            let paragraph_style = ParagraphStyle::DEFAULT.with_alignment(alignment);
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_paragraph_style(paragraph_style)
+                            .with_region_flow(&flow),
+                    )
+                    .expect("adjustment-only label must prepare");
+                assert_adjustment_only(&output);
+                if alignment == TextAlignment::Justify {
+                    assert!(
+                        output.scene().lines()[0]
+                            .adjustment()
+                            .opportunity_expansion()
+                            > 0.0,
+                        "the wind tunnel must execute real Western justification"
+                    );
+                }
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile(
+        if justify {
+            "justification-churn"
+        } else {
+            "alignment-churn"
+        },
+        rounds,
+        label_count,
+        elapsed,
+    );
+    Ok(())
+}
+
+fn profile_localized_edit(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let text = if round.is_multiple_of(2) {
+                "Save edited changes"
+            } else {
+                "Save changes"
+            };
+            for label in &mut labels {
+                label.set_text(text).expect("profile edit must publish");
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("edited label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    1,
+                    "each changed label must reshape exactly once"
+                );
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("localized-edit", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_width_churn(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let widths = [FiniteWidth::new(96.0)?, FiniteWidth::new(132.0)?];
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let constraint = TextConstraint::Wrap(widths[round % widths.len()]);
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(constraint, style, paint),
+                    )
+                    .expect("width-churn label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    0,
+                    "width churn must retain canonical shaping"
+                );
+                assert_eq!(
+                    output.work().line_candidates(),
+                    output.work().accepted_line_candidates()
+                        + output.work().rejected_line_candidates(),
+                    "every proposed line candidate must be accepted or visibly rejected"
+                );
+                black_box(output.scene().lines().len());
+            }
+        }
+    });
+    report_profile(name, rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_region_churn(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let flows = region_flows()?;
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let flow = &flows[round % flows.len()];
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_region_flow(flow),
+                    )
+                    .expect("region-churn label must prepare");
+                assert_eq!(
+                    output.work().analysis().paragraphs(),
+                    0,
+                    "region churn must retain analysis"
+                );
+                assert_eq!(
+                    output.work().font_selection().paragraphs(),
+                    0,
+                    "region churn must retain selected fonts"
+                );
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    0,
+                    "region churn must retain canonical shaping"
+                );
+                assert_eq!(
+                    output.work().flow().paragraphs(),
+                    1,
+                    "region churn must reform exactly one paragraph"
+                );
+                let transcript = output
+                    .region_transcript()
+                    .expect("region churn must publish a transcript");
+                assert_eq!(
+                    transcript
+                        .replay(flow)
+                        .expect("region transcript must replay"),
+                    transcript.end(),
+                    "replay must reach the recorded cursor"
+                );
+                black_box((output.scene().lines().len(), transcript.attempts().len()));
+            }
+        }
+    });
+    report_profile("region-churn", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_identity_churn(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(CHURN_BUDGET),
+    );
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            for index in 0..label_count {
+                let label = TextBlock::plain(
+                    identity(
+                        u64::try_from(round).unwrap_or(u64::MAX).saturating_add(10),
+                        index,
+                    ),
+                    "Transient identical label",
+                )
+                .expect("identity-churn block must initialize");
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                    )
+                    .expect("identity-churn label must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    1,
+                    "each new identity must shape once before shared reuse exists"
+                );
+                assert!(
+                    layout.cache_diagnostics().current_entries() <= CHURN_BUDGET,
+                    "identity churn must remain within the retained budget"
+                );
+                black_box(output.scene().fragments().len());
+            }
+        }
+    });
+    report_profile("identity-churn", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn report_profile(name: &str, rounds: usize, labels: usize, elapsed: Duration) {
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_some() {
+        return;
+    }
+    let operations = labels.saturating_mul(rounds);
+    println!(
+        "{name}\tprofile=isolated\tmachine=local\trounds={rounds}\tlabels={labels}\toperations={operations}\ttotal_ns={}\tns_per_operation={}",
+        elapsed.as_nanos(),
+        elapsed.as_nanos() / operations as u128
+    );
+}
+
+fn hold_for_profiler() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(seconds) = std::env::var_os("UNDERWOOD_PROFILE_HOLD_SECS") else {
+        return Ok(());
+    };
+    let seconds = seconds
+        .to_str()
+        .ok_or("UNDERWOOD_PROFILE_HOLD_SECS must be valid UTF-8")?
+        .parse::<u64>()?;
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        eprintln!("holding process for profiler: {seconds}s");
+    }
+    std::thread::sleep(Duration::from_secs(seconds));
+    Ok(())
+}
+
 fn unique_labels() -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
-    (0..LABELS)
+    unique_labels_with_count(LABELS)
+}
+
+fn unique_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
         .map(|index| {
             TextBlock::plain(
                 identity(1, index),
@@ -302,8 +1347,35 @@ fn unique_labels() -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
 }
 
 fn identical_labels() -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
-    (0..LABELS)
+    identical_labels_with_count(LABELS)
+}
+
+fn identical_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
         .map(|index| TextBlock::plain(identity(2, index), "Save changes").map_err(Into::into))
+        .collect()
+}
+
+fn distinct_labels_with_count(count: usize) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
+        .map(|index| {
+            let text = format!("Distinct label {index:08}");
+            TextBlock::plain(identity(5, index), &text).map_err(Into::into)
+        })
+        .collect()
+}
+
+fn adjustment_labels_with_count(
+    count: usize,
+) -> Result<Vec<TextBlock>, Box<dyn std::error::Error>> {
+    (0..count)
+        .map(|index| {
+            TextBlock::plain(
+                identity(4, index),
+                "Save the carefully retained document changes now",
+            )
+            .map_err(Into::into)
+        })
         .collect()
 }
 
@@ -332,7 +1404,68 @@ fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {
     )?)
 }
 
-fn assert_no_physics(output: &SceneOutput) {
+fn region_flows() -> Result<[RegionFlow; 2], Box<dyn std::error::Error>> {
+    let exclusion = FlowRegion::new(Rect::new(0.0, 0.0, 132.0, 240.0))?
+        .with_exclusions([Rect::new(0.0, 0.0, 28.0, 42.0)])?;
+    let floated = FlowRegion::new(Rect::new(0.0, 0.0, 96.0, 120.0))?.with_floats([
+        RegionFloat::new(FloatSide::Left, 0.0, Size::new(24.0, 36.0))?,
+        RegionFloat::new(FloatSide::Right, 48.0, Size::new(20.0, 42.0))?,
+    ])?;
+    let second_column = FlowRegion::new(Rect::new(116.0, 0.0, 212.0, 160.0))?;
+    Ok([
+        RegionFlow::new([exclusion])?,
+        RegionFlow::new([floated, second_column])?,
+    ])
+}
+
+fn adjustment_flow() -> Result<RegionFlow, Box<dyn std::error::Error>> {
+    Ok(RegionFlow::rectangle(Rect::new(0.0, 0.0, 132.0, 240.0))?)
+}
+
+fn assert_adjustment_only(output: &SceneOutput) {
+    assert_eq!(
+        output.work().analysis().paragraphs(),
+        0,
+        "adjustment-only work must retain analysis"
+    );
+    assert_eq!(
+        output.work().itemization().paragraphs(),
+        0,
+        "adjustment-only work must retain itemization"
+    );
+    assert_eq!(
+        output.work().font_selection().paragraphs(),
+        0,
+        "adjustment-only work must retain font selection"
+    );
+    assert_eq!(
+        output.work().shape().paragraphs(),
+        0,
+        "adjustment-only work must retain canonical shaping"
+    );
+    assert_eq!(
+        output.work().line_shape().paragraphs(),
+        0,
+        "adjustment-only work must retain accepted line shaping"
+    );
+    assert_eq!(
+        output.work().flow().paragraphs(),
+        0,
+        "adjustment-only work must retain formation"
+    );
+    assert_eq!(
+        output.work().adjustment().paragraphs(),
+        1,
+        "adjustment-only work must replace one accepted-slot adjustment"
+    );
+    assert_eq!(
+        output.work().geometry().paragraphs(),
+        1,
+        "adjustment-only work must rebuild one geometry projection"
+    );
+}
+
+fn assert_no_preparation_work(output: &SceneOutput) {
     assert_eq!(
         output.work().analysis().paragraphs(),
         0,
@@ -362,6 +1495,11 @@ fn assert_no_physics(output: &SceneOutput) {
         output.work().flow().paragraphs(),
         0,
         "retained text must reuse formation"
+    );
+    assert_eq!(
+        output.work().adjustment().paragraphs(),
+        0,
+        "retained text must reuse accepted-slot adjustment"
     );
     assert_eq!(
         output.work().geometry().paragraphs(),

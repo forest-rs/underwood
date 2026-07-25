@@ -36,7 +36,7 @@ Consequences:
 - line baselines ignore actual font ascent/descent;
 - mixed bidi is flattened before line ranges are known;
 - no chosen break can trigger bounded reshaping;
-- the scene module silently owns text physics.
+- the scene module silently owns text analysis, shaping, and breaking.
 
 ## Available Core evidence
 

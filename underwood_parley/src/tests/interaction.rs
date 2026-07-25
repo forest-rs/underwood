@@ -37,6 +37,24 @@ fn scene_movement_crosses_semantic_paragraph_boundaries() {
         .prepare(&document.snapshot(), &request)
         .expect("multi-paragraph interaction must prepare");
     let scene = output.scene();
+    let start = scene
+        .start_position()
+        .expect("a nonempty document scene has one logical start");
+    let document_end = scene
+        .end_position()
+        .expect("a nonempty document scene has one logical end");
+    assert_eq!(start.text(), first);
+    assert_eq!(start.byte(), 0);
+    assert_eq!(start.affinity(), TextAffinity::Downstream);
+    assert_eq!(document_end.text(), second);
+    assert_eq!(document_end.byte(), 3);
+    assert_eq!(document_end.affinity(), TextAffinity::Upstream);
+    let second_start = scene
+        .next_word_position(&start)
+        .expect("word movement crosses the paragraph boundary");
+    assert_eq!((second_start.text(), second_start.byte()), (second, 0));
+    assert_eq!(scene.previous_word_position(&second_start), Some(start));
+
     let end = *scene
         .hit_test_closest(Point::new(10_000.0, scene.lines()[0].bounds().center().y))
         .expect("first paragraph end must resolve")
@@ -56,6 +74,156 @@ fn scene_movement_crosses_semantic_paragraph_boundaries() {
             second
         );
     }
+}
+
+#[test]
+fn represented_positions_preserve_affinity_and_reject_non_carets() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"represented-pos1"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    let first = edit
+        .append_text(paragraph, InlineRole::TEXT, "ab")
+        .expect("first leaf is valid");
+    let second = edit
+        .append_text(paragraph, InlineRole::EMPHASIS, "é")
+        .expect("second leaf is valid");
+    edit.commit().expect("fixture edit is valid");
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let output = fixture_engine()
+        .prepare(&document.snapshot(), &request)
+        .expect("multi-leaf positions must prepare");
+    let scene = output.scene();
+
+    let first_end = scene
+        .position_at(first, 2)
+        .expect("the first leaf end is a represented caret");
+    let second_start = scene
+        .position_at(second, 0)
+        .expect("the second leaf start is a represented caret");
+    assert_eq!(first_end.affinity(), TextAffinity::Upstream);
+    assert_eq!(second_start.affinity(), TextAffinity::Downstream);
+    assert_ne!(first_end, second_start);
+    assert!(
+        scene.position_at(second, 1).is_none(),
+        "an interior UTF-8 byte is not a represented caret"
+    );
+
+    let foreign = TextBlock::plain(DocumentId::from_bytes(*b"foreign-position"), "x")
+        .expect("foreign block is valid")
+        .snapshot()
+        .text_id();
+    assert!(
+        scene.position_at(foreign, 0).is_none(),
+        "a foreign leaf cannot resolve in this scene"
+    );
+}
+
+#[test]
+fn logical_word_positions_follow_analysis_across_bidi_and_collapsed_leaves() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"word-position-01"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    let first = edit
+        .append_text(paragraph, InlineRole::TEXT, "one \t")
+        .expect("first leaf is valid");
+    let second = edit
+        .append_text(paragraph, InlineRole::EMPHASIS, "\r\n مرحبا two")
+        .expect("second leaf is valid");
+    edit.commit().expect("fixture edit is valid");
+
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let mut styles = StyleMap::new(style.clone()).with_default_paragraph_style(
+        ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
+    );
+    styles.set(first, style.clone());
+    styles.set(second, style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let output = fixture_engine()
+        .prepare(&document.snapshot(), &request)
+        .expect("collapsed mixed-bidi words must prepare");
+    let scene = output.scene();
+
+    let one = scene
+        .position_at(first, 0)
+        .expect("first word start is represented");
+    let arabic = scene
+        .next_word_position(&one)
+        .expect("the next logical word is Arabic");
+    let two = scene
+        .next_word_position(&arabic)
+        .expect("the next logical word follows Arabic");
+    assert_eq!((arabic.text(), arabic.byte()), (second, 3));
+    assert_eq!((two.text(), two.byte()), (second, 14));
+    assert_eq!(
+        scene
+            .previous_word_position(&two)
+            .expect("previous logical word returns to Arabic"),
+        arabic
+    );
+    assert_eq!(
+        scene
+            .previous_word_position(&arabic)
+            .expect("previous logical word crosses collapsed leaves"),
+        one
+    );
+    assert_eq!(scene.previous_word_position(&one), Some(one));
+    let end = scene.end_position().expect("scene end is represented");
+    assert_eq!(scene.next_word_position(&two), Some(end));
+    assert_eq!(scene.next_word_position(&end), Some(end));
+}
+
+#[test]
+fn split_leaf_grapheme_has_no_fabricated_interior_position() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"split-position01"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    let base = edit
+        .append_text(paragraph, InlineRole::TEXT, "e")
+        .expect("base leaf is valid");
+    let mark = edit
+        .append_text(paragraph, InlineRole::EMPHASIS, "\u{301}")
+        .expect("mark leaf is valid");
+    edit.commit().expect("fixture edit is valid");
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let output = fixture_engine()
+        .prepare(&document.snapshot(), &request)
+        .expect("split grapheme must prepare");
+    let scene = output.scene();
+
+    assert!(scene.position_at(base, 0).is_some());
+    assert!(scene.position_at(mark, 2).is_some());
+    assert!(
+        scene.position_at(base, 1).is_none() && scene.position_at(mark, 0).is_none(),
+        "a semantic leaf seam inside one grapheme is not a caret boundary"
+    );
 }
 
 #[test]
@@ -130,6 +298,94 @@ fn interaction_map_groups_combining_source_and_keeps_whitespace() {
             "source-complete graphemes and whitespace must remain hittable for {text:?}: {hits:?}"
         );
     }
+}
+
+#[test]
+fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_owner() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"collapse-leaves1"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("fixture paragraph is valid");
+    let first = edit
+        .append_text(paragraph, InlineRole::TEXT, "a ")
+        .expect("first leaf is valid");
+    let second = edit
+        .append_text(paragraph, InlineRole::EMPHASIS, "\t\r\n b")
+        .expect("second leaf is valid");
+    edit.commit().expect("fixture edit is valid");
+
+    let first_style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let mut styles = StyleMap::new(first_style.clone()).with_default_paragraph_style(
+        ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
+    );
+    styles.set(first, first_style.clone());
+    styles.set(second, first_style.with_paint(PaintSlot::new(1)));
+    let paint = PaintTable::from_brushes([
+        Brush::Solid(Color::BLACK),
+        Brush::Solid(Color::from_rgb8(0xff, 0x00, 0x00)),
+    ]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let output = fixture_engine()
+        .prepare(&document.snapshot(), &request)
+        .expect("cross-leaf whitespace collapse must prepare");
+    let scene = output.scene();
+    let line = &scene.lines()[0];
+    let y = line.bounds().center().y;
+
+    let mut collapsed_hits = Vec::new();
+    let mut x = line.bounds().x0;
+    while x <= line.bounds().x1 {
+        if let Some(hit) = scene.hit_test(Point::new(x, y))
+            && hit.source().sources().len() == 2
+        {
+            if collapsed_hits
+                .last()
+                .is_none_or(|position| position != hit.position())
+            {
+                collapsed_hits.push(*hit.position());
+            }
+            assert_eq!(hit.source().sources()[0].text(), first);
+            assert_eq!(hit.source().sources()[0].bytes(), 1..2);
+            assert_eq!(hit.source().sources()[1].text(), second);
+            assert_eq!(hit.source().sources()[1].bytes(), 0..4);
+        }
+        x += 0.05;
+    }
+    assert_eq!(
+        collapsed_hits.len(),
+        2,
+        "one collapsed presentation space must expose its two authored sides"
+    );
+
+    let selection = scene
+        .selection(
+            &collapsed_hits[0],
+            &collapsed_hits[1],
+            TextSelectionMode::Logical,
+        )
+        .expect("the collapsed unit must be selectable");
+    assert_eq!(selection.ranges().len(), 2);
+    assert_eq!(selection.ranges()[0].text(), first);
+    assert_eq!(selection.ranges()[0].bytes(), 1..2);
+    assert_eq!(selection.ranges()[1].text(), second);
+    assert_eq!(selection.ranges()[1].bytes(), 0..4);
+
+    let collapsed_fragment = scene
+        .fragments()
+        .iter()
+        .find(|fragment| fragment.sources().count() == 2)
+        .expect("the collapsed space must retain both source leaves");
+    assert_eq!(
+        collapsed_fragment.paint(),
+        PaintSlot::new(0),
+        "the first authored contributor owns transformed style and paint"
+    );
 }
 
 #[test]

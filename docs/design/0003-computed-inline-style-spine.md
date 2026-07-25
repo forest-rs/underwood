@@ -230,7 +230,7 @@ following:
 - a line-height-only change rebuilds flow/geometry without analysis,
   itemization, or shaping;
 - a brush-only change performs paint work without rebuilding flow or text
-  physics;
+  shaping;
 - the CPU visual proof turns these facts into a compelling variable-type
   specimen rather than a synthetic diagram.
 

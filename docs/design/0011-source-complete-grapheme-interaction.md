@@ -69,7 +69,7 @@ flags once, groups shaped records into paragraph-local interaction units, and
 preserves each record as a visual/semantic slice of that unit. Underwood
 projects the contiguous paragraph range into all leaf-local sources.
 
-Choose C. It keeps Unicode physics in Parley, semantic projection in Underwood,
+Choose C. It keeps Unicode analysis in Parley, semantic projection in Underwood,
 and platform gesture policy above both.
 
 ## Plumbing

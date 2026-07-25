@@ -14,9 +14,13 @@ publish = false
 [dependencies]
 imaging.workspace = true
 imaging_vello_cpu.workspace = true
+png.workspace = true
 softbuffer.workspace = true
 underwood.workspace = true
-underwood_parley = { workspace = true, features = ["system-fonts"] }
+underwood_parley = { workspace = true, features = [
+  "complex-scripts",
+  "system-fonts",
+] }
 winit.workspace = true
 
 [lints]

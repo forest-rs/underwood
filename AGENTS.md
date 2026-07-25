@@ -26,7 +26,7 @@ capabilities are named honestly and are never presented as done.
 
 This repository owns Underwood's semantic document, transactional editing,
 preparation, flow, and renderer-neutral scene contracts; it explicitly does not
-own text shaping physics, toolkit interaction policy, task execution, or pixel
+own text shaping, toolkit interaction policy, task execution, or pixel
 production.
 
 The tooling-only `xtask` crate owns repository policy validation; it explicitly

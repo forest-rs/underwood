@@ -10,7 +10,11 @@ repository.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+allocation-counting = ["dep:allocation-counter"]
+
 [dependencies]
+allocation-counter = { version = "0.8.1", optional = true }
 underwood.workspace = true
 underwood_parley.workspace = true
 

@@ -11,9 +11,17 @@ diagnostics. It covers:
 
 - thousands of stable unique labels;
 - thousands of distinct labels sharing identical text and style;
+- matched cold runs of distinct identities with identical versus distinct
+  text, including exact analysis, shaping, and formation counts;
 - one localized text change among stable siblings;
 - max-content and constrained-width changes;
 - explicit destruction and budget-driven cache churn.
+- compact projection identity, dense whitespace collapse, and one-to-many
+  expansion without per-byte maps.
+- real exclusion, float, and multi-column region churn with replayable exact
+  slot transcripts.
+- retained alignment and Western-justification churn over fixed accepted
+  region slots.
 
 Deterministic `WorkReport`, intrinsic-metric, and cache assertions are the
 correctness proof. Machine-local elapsed time is supporting evidence only. A
@@ -24,6 +32,20 @@ Run the optimized wind tunnel with:
 
 ```sh
 cargo run --profile wind-tunnel -p underwood_label_benchmark
+```
+
+Isolate the pre-region formation baseline and real region churn with:
+
+```sh
+cargo build --release -p underwood_label_benchmark
+target/release/underwood_label_benchmark region-ready 200 512
+target/release/underwood_label_benchmark region-churn 200 512
+target/release/underwood_label_benchmark retained-adjustment 200 512
+target/release/underwood_label_benchmark alignment-churn 200 512
+target/release/underwood_label_benchmark justification-churn 200 512
+target/release/underwood_label_benchmark cross-identical 200 512
+target/release/underwood_label_benchmark cross-distinct 200 512
+benches/labels/profile-allocations.sh
 ```
 
 The fonts are included from the repository's audited example fixtures.

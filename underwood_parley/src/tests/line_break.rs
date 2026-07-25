@@ -249,6 +249,250 @@ fn width_reshapes_committed_lines_while_line_height_reuses_them() {
 }
 
 #[test]
+fn all_line_height_bases_recompute_metrics_without_reshaping() {
+    let (document, base_styles, paint) = fixture_document("Metrics", 1.0);
+    let base = base_styles.default_style().clone();
+    let metrics = StyleMap::new(base.clone().with_inline_flow(InlineFlowStyle::new(
+        LineHeight::metrics_relative(1.0).expect("metrics-relative height is valid"),
+    )));
+    let font_relative = StyleMap::new(base.clone().with_inline_flow(InlineFlowStyle::new(
+        LineHeight::font_size_relative(2.0).expect("font-relative height is valid"),
+    )));
+    let absolute = StyleMap::new(base.with_inline_flow(InlineFlowStyle::new(
+        LineHeight::absolute(50.0).expect("absolute height is valid"),
+    )));
+    let mut engine = fixture_engine();
+    let constraint = TextConstraint::MaxContent;
+
+    let metrics_output = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &metrics, &paint),
+        )
+        .expect("metrics-relative line height prepares");
+    let metrics_height = metrics_output.scene().lines()[0].bounds().height();
+    assert!(metrics_height > 0.0);
+
+    let font_output = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &font_relative, &paint),
+        )
+        .expect("font-size-relative line height prepares");
+    assert_eq!(font_output.scene().lines()[0].bounds().height(), 40.0);
+    assert_eq!(font_output.work().analysis().paragraphs(), 0);
+    assert_eq!(font_output.work().font_selection().paragraphs(), 0);
+    assert_eq!(font_output.work().shape().paragraphs(), 0);
+    assert_eq!(font_output.work().line_shape().paragraphs(), 0);
+
+    let absolute_output = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &absolute, &paint),
+        )
+        .expect("absolute line height prepares");
+    assert_eq!(absolute_output.scene().lines()[0].bounds().height(), 50.0);
+    assert_eq!(absolute_output.work().analysis().paragraphs(), 0);
+    assert_eq!(absolute_output.work().font_selection().paragraphs(), 0);
+    assert_eq!(absolute_output.work().shape().paragraphs(), 0);
+    assert_eq!(absolute_output.work().line_shape().paragraphs(), 0);
+}
+
+#[test]
+fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
+    let (document, plain_styles, paint) = fixture_document("office word", 1.2);
+    let plain_style = plain_styles.default_style().clone();
+    let tracked =
+        StyleMap::new(plain_style.clone().with_inline_flow(
+            InlineFlowStyle::default().with_spacing(
+                TextSpacing::new(2.0, 3.0).expect("tracked spacing values are valid"),
+            ),
+        ));
+    let wider = StyleMap::new(
+        plain_style.with_inline_flow(
+            InlineFlowStyle::default()
+                .with_spacing(TextSpacing::new(4.0, 3.0).expect("wider spacing values are valid")),
+        ),
+    );
+    let mut engine = fixture_engine();
+    let constraint = TextConstraint::MaxContent;
+    let plain = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &plain_styles, &paint),
+        )
+        .expect("plain shaping prepares");
+    let plain_width = plain.scene().lines()[0].bounds().width();
+    let plain_glyphs: usize = plain
+        .scene()
+        .fragments()
+        .iter()
+        .map(|fragment| fragment.glyphs().len())
+        .sum();
+
+    let tracked_output = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &tracked, &paint),
+        )
+        .expect("tracked shaping prepares");
+    let tracked_glyphs: usize = tracked_output
+        .scene()
+        .fragments()
+        .iter()
+        .map(|fragment| fragment.glyphs().len())
+        .sum();
+    assert_eq!(tracked_output.work().analysis().paragraphs(), 0);
+    assert_eq!(tracked_output.work().font_selection().paragraphs(), 0);
+    assert_eq!(tracked_output.work().shape().paragraphs(), 1);
+    assert!(tracked_output.scene().lines()[0].bounds().width() > plain_width);
+    assert!(
+        tracked_glyphs > plain_glyphs,
+        "default optional ligatures must be disabled when tracking is nonzero"
+    );
+
+    let wider_output = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &wider, &paint),
+        )
+        .expect("changing a nonzero spacing amount prepares");
+    assert_eq!(wider_output.work().analysis().paragraphs(), 0);
+    assert_eq!(wider_output.work().font_selection().paragraphs(), 0);
+    assert_eq!(wider_output.work().shape().paragraphs(), 0);
+    assert!(
+        wider_output.scene().lines()[0].bounds().width()
+            > tracked_output.scene().lines()[0].bounds().width(),
+        "advance-only changes must reach geometry without reshaping"
+    );
+
+    let wider_words = StyleMap::new(
+        wider.default_style().clone().with_inline_flow(
+            InlineFlowStyle::default()
+                .with_spacing(TextSpacing::new(4.0, 6.0).expect("word spacing values are valid")),
+        ),
+    );
+    let wider_words_output = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(constraint, &wider_words, &paint),
+        )
+        .expect("changing only word spacing prepares");
+    assert_eq!(wider_words_output.work().analysis().paragraphs(), 0);
+    assert_eq!(wider_words_output.work().font_selection().paragraphs(), 0);
+    assert_eq!(wider_words_output.work().shape().paragraphs(), 0);
+    assert!(
+        wider_words_output.scene().lines()[0].bounds().width()
+            > wider_output.scene().lines()[0].bounds().width(),
+        "word spacing must adjust retained separator advances"
+    );
+
+    let (arabic_document, arabic_plain, _) = fixture_document("سلام", 1.2);
+    let arabic_tracked = StyleMap::new(
+        arabic_plain.default_style().clone().with_inline_flow(
+            InlineFlowStyle::default()
+                .with_spacing(TextSpacing::new(8.0, 0.0).expect("Arabic tracking value is valid")),
+        ),
+    );
+    let mut arabic_engine = fixture_engine();
+    let plain = arabic_engine
+        .prepare(
+            &arabic_document.snapshot(),
+            &SceneRequest::new(constraint, &arabic_plain, &paint),
+        )
+        .expect("plain Arabic prepares");
+    let plain_glyphs: Vec<_> = plain
+        .scene()
+        .fragments()
+        .iter()
+        .flat_map(|fragment| fragment.glyphs())
+        .map(|glyph| glyph.id())
+        .collect();
+    let tracked = arabic_engine
+        .prepare(
+            &arabic_document.snapshot(),
+            &SceneRequest::new(constraint, &arabic_tracked, &paint),
+        )
+        .expect("tracked Arabic prepares");
+    let tracked_glyphs: Vec<_> = tracked
+        .scene()
+        .fragments()
+        .iter()
+        .flat_map(|fragment| fragment.glyphs())
+        .map(|glyph| glyph.id())
+        .collect();
+    assert_eq!(tracked_glyphs, plain_glyphs);
+    assert_eq!(
+        tracked.scene().lines()[0].bounds().width(),
+        plain.scene().lines()[0].bounds().width()
+    );
+}
+
+#[test]
+fn wrap_and_overflow_policy_reach_product_formation() {
+    let text = "supercalifragilistic";
+    let (document, normal_styles, paint) = fixture_document(text, 1.2);
+    let base = normal_styles.default_style().clone();
+    let anywhere =
+        StyleMap::new(base.clone().with_inline_flow(
+            InlineFlowStyle::default().with_overflow_wrap(OverflowWrap::Anywhere),
+        ));
+    let break_word =
+        StyleMap::new(base.clone().with_inline_flow(
+            InlineFlowStyle::default().with_overflow_wrap(OverflowWrap::BreakWord),
+        ));
+    let no_wrap = StyleMap::new(
+        base.with_inline_flow(InlineFlowStyle::default().with_text_wrap_mode(TextWrapMode::NoWrap)),
+    );
+    let narrow =
+        TextConstraint::Wrap(FiniteWidth::new(30.0).expect("fixture width is finite and positive"));
+    let mut engine = fixture_engine();
+
+    let normal = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(narrow, &normal_styles, &paint),
+        )
+        .expect("normal overflow prepares");
+    assert_eq!(normal.scene().lines().len(), 1);
+
+    let emergency = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(narrow, &anywhere, &paint),
+        )
+        .expect("anywhere overflow prepares");
+    assert!(emergency.scene().lines().len() > 1);
+    assert_eq!(emergency.work().analysis().paragraphs(), 0);
+    assert_eq!(emergency.work().shape().paragraphs(), 0);
+
+    let no_wrap_output = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(narrow, &no_wrap, &paint),
+        )
+        .expect("no-wrap prepares");
+    assert_eq!(no_wrap_output.scene().lines().len(), 1);
+    assert_eq!(no_wrap_output.work().analysis().paragraphs(), 0);
+    assert_eq!(no_wrap_output.work().shape().paragraphs(), 0);
+
+    let anywhere_min = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MinContent, &anywhere, &paint),
+        )
+        .expect("anywhere min-content prepares");
+    let break_word_min = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MinContent, &break_word, &paint),
+        )
+        .expect("break-word min-content prepares");
+    assert!(anywhere_min.scene().lines().len() > 1);
+    assert_eq!(break_word_min.scene().lines().len(), 1);
+}
+
+#[test]
 fn legal_zero_width_break_reshapes_an_arabic_join() {
     let text = "سل\u{200b}ام";
     let break_at = u32::try_from(text.find("ام").expect("break suffix is present"))
@@ -380,6 +624,16 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
     assert!(
         output.work().line_reshapes() >= 3,
         "rejected candidate, accepted candidate, and remainder must be visible work"
+    );
+    assert_eq!(
+        output.work().rejected_line_candidates(),
+        1,
+        "the failed line-final fit must be observable independently of shaping"
+    );
+    assert_eq!(
+        output.work().line_candidates(),
+        output.work().accepted_line_candidates() + 1,
+        "the retry is the only rejected candidate"
     );
 }
 

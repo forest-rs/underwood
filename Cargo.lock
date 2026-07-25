@@ -22,6 +22,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocation-counter"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "beb9e990c0a33699f1984d85a6abead615ccc72dd8130bf3e15dcabe2ca149c9"
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -445,7 +451,7 @@ dependencies = [
 [[package]]
 name = "fontique"
 version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=97b874719f810c375025f3fa727b245530a87f9f#97b874719f810c375025f3fa727b245530a87f9f"
 dependencies = [
  "hashbrown",
  "linebender_resource_handle",
@@ -1331,12 +1337,12 @@ dependencies = [
 [[package]]
 name = "parlance"
 version = "0.1.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=97b874719f810c375025f3fa727b245530a87f9f#97b874719f810c375025f3fa727b245530a87f9f"
 
 [[package]]
 name = "parley"
 version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=97b874719f810c375025f3fa727b245530a87f9f#97b874719f810c375025f3fa727b245530a87f9f"
 dependencies = [
  "fontique",
  "hashbrown",
@@ -1349,7 +1355,7 @@ dependencies = [
 [[package]]
 name = "parley_data"
 version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=97b874719f810c375025f3fa727b245530a87f9f#97b874719f810c375025f3fa727b245530a87f9f"
 dependencies = [
  "icu_properties",
 ]
@@ -1357,12 +1363,12 @@ dependencies = [
 [[package]]
 name = "parley_dev"
 version = "0.0.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=97b874719f810c375025f3fa727b245530a87f9f#97b874719f810c375025f3fa727b245530a87f9f"
 
 [[package]]
 name = "parley_engine"
 version = "0.11.0"
-source = "git+https://github.com/waywardmonkeys/parley.git?rev=9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb#9c41a4d0b9aa1aae7b8fdad8cf31728c9c3476bb"
+source = "git+https://github.com/waywardmonkeys/parley.git?rev=97b874719f810c375025f3fa727b245530a87f9f#97b874719f810c375025f3fa727b245530a87f9f"
 dependencies = [
  "fontique",
  "harfrust",
@@ -2103,6 +2109,7 @@ version = "0.0.1"
 name = "underwood_semantic_scene_benchmark"
 version = "0.0.1"
 dependencies = [
+ "allocation-counter",
  "underwood",
  "underwood_parley",
 ]
@@ -2113,6 +2120,7 @@ version = "0.0.1"
 dependencies = [
  "imaging",
  "imaging_vello_cpu",
+ "png",
  "softbuffer",
  "underwood",
  "underwood_parley",

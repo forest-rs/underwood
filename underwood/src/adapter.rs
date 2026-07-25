@@ -9,10 +9,12 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
+use core::mem::size_of;
 use core::ops::Range;
 
 use crate::{
-    Affine, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId, ParagraphStyle, Rect,
+    Affine, AnalysisStyle, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId,
+    ParagraphStyle, Rect, RegionCursor, RegionFlow, RegionTranscript, ResolvedDirection,
     ShapingStyle, TextConstraint, Vec2,
 };
 
@@ -24,9 +26,9 @@ mod prepared;
 
 pub use error::{PreparationError, PreparationErrorKind};
 pub use formation::{
-    FormationWork, InlineFlowRun, InlineFlowStyleId, LineShapingWork, PaintRun,
-    ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput, ShapingRun,
-    ShapingStyleId,
+    AnalysisRun, AnalysisStyleId, FormationWork, InlineFlowRun, InlineFlowStyleId, LineShapingWork,
+    PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput,
+    ShapingRun, ShapingStyleId,
 };
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedCaret, PreparedClusterSide,
@@ -34,6 +36,7 @@ pub use interaction::{
     TextAffinity,
 };
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
+pub(crate) use prepared::PreparedParagraphFacts;
 pub use prepared::{FontSynthesis, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun};
 
 #[cfg(test)]

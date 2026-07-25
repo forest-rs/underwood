@@ -15,6 +15,8 @@ mod composition;
 mod document;
 mod editable;
 mod error;
+mod projection;
+mod region;
 mod scene;
 mod selection;
 mod style;
@@ -39,21 +41,30 @@ pub use error::{
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
 pub use parlance::{
     BaseDirection, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
-    FontWidth, GenericFamily, Language, Script, Tag,
+    FontWidth, GenericFamily, Language, OverflowWrap, Script, Tag, TextWrapMode, WordBreak,
 };
 pub use peniko::{Brush, Color, FontData};
+pub use projection::{
+    ProjectedText, ProjectionBuilder, ProjectionError, ProjectionErrorKind, ProjectionKind,
+    ProjectionSegment, ProjectionSegments, WhitespaceCollapse,
+};
+pub use region::{
+    FloatSide, FlowRegion, LineSlot, RegionAttempt, RegionAttemptOutcome, RegionCursor,
+    RegionFloat, RegionFlow, RegionTranscript,
+};
 pub use scene::{
     CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
-    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,
-    SceneCompositionRect, SceneFragment, SceneFragmentId, SceneGlyph, SceneGlyphInstanceId,
-    SceneLine, SceneOutput, SceneSelectionRect, SemanticFragment, StageWork, TextHit, TextMetrics,
-    TextScene, WorkReport,
+    LineAdjustment, PreparationMemory, PreparationReuse, PreparationTrace, ProjectedTextPosition,
+    ProjectedTextRange, ProjectedTextSource, SceneCaret, SceneCompositionRect, SceneFragment,
+    SceneFragmentId, SceneGlyph, SceneGlyphInstanceId, SceneLine, SceneOutput, SceneSelectionRect,
+    SemanticFragment, StageWork, TextHit, TextMetrics, TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
     SnapshotTextUnit, TextMovement, TextSelectionMode,
 };
 pub use style::{
-    ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, PaintSlot, PaintTable,
-    ParagraphStyle, SceneRequest, ShapingStyle, StyleMap, TextConstraint,
+    AnalysisStyle, ComputedInlineStyle, FiniteWidth, InlineFlowStyle, LineHeight, LineHeightBasis,
+    PaintSlot, PaintTable, ParagraphStyle, ResolvedDirection, SceneRequest, ShapingStyle, StyleMap,
+    TextAlignment, TextConstraint, TextSpacing,
 };

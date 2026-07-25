@@ -1,5 +1,321 @@
 # Underwood execution plans
 
+## Reusable text preparation and region-aware line layout
+
+**Status:** Complete — protected PR #29 matrix green 2026-07-25
+
+**Beads:** `und-oh0.13` and its dependency-ordered children
+
+### Goal
+
+Build a source-complete, reusable preparation pipeline over Parley Engine
+facts, then use it to deliver whitespace processing, resumable line
+formation, region filling, paragraph style fidelity, alignment,
+justification, preparation tracing, allocation proof, and the region-aware
+living page without creating another all-owning text layout object.
+
+### Fence
+
+Reusable kernels own explicit projected-text, shaped-fact, line-candidate,
+region-slot, and line-adjustment transformations. Underwood owns their
+composition with immutable documents, retained invalidation, semantic
+identity, editing, portable scenes, and product proof. Neither layer owns
+toolkit behavior or pixel production.
+
+### Non-goals
+
+- No high-level Parley production dependency in foundational crates.
+- No CSS parser, cascade, browser formatting context, or universal
+  script-justification claim. CSS Text computed semantics remain a positive
+  conformance source.
+- No Overstory widget or prepared-output retention policy.
+- No production dependency, `unsafe`, or foundational API choice without its
+  human gate.
+- No placeholder transformation or benchmark-only substitute for the public
+  path.
+
+### Steps
+
+1. Use Underwood `faa19ead16054d52d4d921de469a8f28993b6767` and Overstory
+   `75e22e5d0c4141767d131d237e781bc5ee1ac16f` as executable consumer
+   checkpoints, ratify Design-0014 and ADR-0005, and freeze only the stage
+   ownership and evidence requirements. Treat companion patches as evidence
+   rather than an API to copy.
+2. Extend the existing public-path wind tunnels with isolated release CPU
+   profiles, allocation counts and bytes, retained-capacity reporting, and
+   region churn, plus identical/distinct label and creation/destruction
+   workloads before optimizing.
+3. Implement and prove compact projected text with composed authored-source
+   mappings, real preserved/collapsed whitespace, and one-to-many replacement
+   coverage across semantic style boundaries.
+4. Replace the current private formation loop with an extraction-ready,
+   resumable line-candidate kernel over public Parley Engine facts while
+   preserving line-final shaping and fit-changing retry.
+5. Carry `LineHeight::{MetricsRelative, FontSizeRelative, Absolute}`, letter
+   spacing, word spacing, `WordBreak`, `OverflowWrap`, and wrap policy through
+   their owning stages with exact invalidation.
+6. Design and prove explicitly budgeted cross-identity reuse for immutable
+   preparation facts. Rebind document, revision, semantic, interaction, paint,
+   and placement identity for every consumer.
+7. Add empty and system-only font-catalog construction, stable family-name
+   observation, and shared-backing clone proof without creating another
+   application font universe.
+8. Introduce the concrete line-slot and region-cursor protocol; prove
+   rectangles, exclusions, floats, columns, height retry, and deterministic
+   replay.
+9. Implement direction-aware start/end plus left/right/center alignment and
+   explicit Western justification adjustments within accepted slots. Prove
+   that glyphs, carets, hits, selections, semantics, and line bounds move
+   together.
+10. Add calm editable-block scene endpoints, represented-caret resolution,
+   logical word movement from retained analysis, and revision-rebound
+   replacement. Gate a single-line editor façade on remaining call-site
+   ceremony.
+11. Prove CJK line breaking and document the exact boundary between current
+   Unicode support, dictionary data, word-break policy, and future CJK
+   justification.
+12. Publish the first-class preparation trace, integrate measured scratch and
+   cache counters, and decide separately whether Spoor earns a production
+   dependency.
+13. Product-prove the complete path through a compelling region-aware living
+   page and guided diagnostic modes.
+14. Retire the nonstandard catch-all preparation metaphor from live code and
+   normative architecture. Name analysis, shaping, prepared facts, formation,
+   adjustment, geometry, and caches according to their actual stage.
+15. Run adversarial architecture, correctness, performance, accessibility,
+   PDF, portability, and real-vs-mirage review; land coherent protected
+   changes with complete proof records.
+
+### Progress
+
+- Steps 1–4 and the independent shared-font-catalog part of step 7 are landed
+  and protected.
+- Step 5 is implemented through the real public scene path. Underwood consumes
+  Unicode `Joining_Type` from the small Parley Engine integration commit
+  `97b874719f810c375025f3fa727b245530a87f9f`; no script table or new production
+  dependency was added.
+- The exact Overstory computed-style and editable-control lowering type-checks
+  after its disposable consumer proof uses one Parlance type universe and
+  applies two stale presentation-pattern fixes. The branch's 25 non-alignment
+  TextInput tests pass against this Underwood worktree. Its three original
+  integration failures remain in Overstory lowering and retention policy; they
+  no longer expose missing Underwood editing primitives.
+- Chromium-recorded first-line cases are recorded for the step 11 CJK and
+  CSS-profile corpus. They remain browser-compatibility evidence rather than a
+  Unicode oracle.
+- Step 8 is implemented through the public document, composition, and
+  `TextBlock` paths. Exact exclusion, float, and column slots are replayable;
+  height rejection restores text traversal; mixed-bidi interaction geometry
+  and retained invalidation are product-proven. The measured local cost is
+  recorded in `docs/proof/region-flow-review-2026-07-25.md`.
+- Step 9 is implemented through the same public paths. Logical and physical
+  alignment consume accepted slots and retained analysis direction; Western
+  U+0020 expansion moves paint, hits, carets, selections, semantics,
+  compositions, visual output, and PDF geometry together without repeating
+  analysis, shaping, or formation. Measurements and exact limits are recorded in
+  `docs/proof/line-adjustment-review-2026-07-25.md`.
+- Step 6 has a matched before-state wind tunnel and the approved cache from
+  `docs/design/0016-cross-identity-preparation-cache.md` is implemented.
+  Design-0016 was approved on 2026-07-25. The owner is `LayoutEngine`; the value
+  is immutable paragraph-local
+  prepared facts; every consumer rebuilds identity-bound geometry; retention
+  is a separately opt-in byte-budgeted LRU; backend participation is
+  default-off and epoch-scoped. Exact identity, invalidation, collision,
+  composition, region-rebinding, byte-budget, eviction, oversized-entry, and
+  release laws are protected. The measured result is recorded in
+  `docs/proof/cross-identity-preparation-cache-2026-07-25.md`.
+- Step 14 is complete. Live identifiers, rustdoc, examples, benchmarks, and
+  normative architecture now name analysis, shaping, prepared facts,
+  formation, adjustment, geometry, or cache state according to ownership.
+  The deliberately preserved historical symbol references are recorded in
+  `docs/proof/preparation-terminology-review-2026-07-25.md`.
+- Step 10 is complete. `TextScene` exposes complete-scene logical endpoints,
+  represented leaf-local caret resolution, and logical word movement from
+  retained adapter analysis. `TextBlock` exposes its stable leaf identity,
+  current text, and atomic selection replacement with post-publication
+  selections. The parked Overstory editor call site compiles without duplicate
+  navigation or transaction logic; the exact traps and remaining consumer
+  work are recorded in
+  `docs/proof/editable-text-block-operations-2026-07-25.md`.
+- Step 11 is complete for line breaking. The deterministic corpus covers
+  Japanese kinsoku punctuation, kana, iteration marks, ideographic space,
+  Chinese, Korean, mixed Latin/CJK, emoji ZWJ sequences, mandatory breaks, and
+  all three authored `WordBreak` values through analysis and reusable
+  formation. A native-fallback product trap reaches the public scene path.
+  Parley Engine's compiled dictionary data is exposed as an explicit
+  non-default feature with its binary cost measured. Locale tailoring, CJK
+  justification, and dictionary-quality CJK word navigation remain separate
+  claims; the precedence-merged Parley boundary fact blocking the latter is
+  tracked by `und-oh0.2.11`. Exact results are recorded in
+  `docs/proof/cjk-line-breaking-review-2026-07-25.md`.
+- Step 12 is complete. `WorkReport` remains the always-on stage ledger while
+  opt-in `PreparationTrace` explains cold, exact, shared, adapter,
+  invalidation, candidate, region, output-capacity, scratch-growth, and cache
+  residency facts. Host tooling owns separate prepare/render time and process
+  allocation evidence. The matched label wind tunnel measures tracing at
+  0.14–0.22% over the retained path on this host after cache-byte accounting
+  was made incremental. Spoor remains the independently gated `und-oh0.14`;
+  exact results are recorded in
+  `docs/proof/preparation-trace-review-2026-07-25.md`.
+- Step 13 is complete. One semantic document now traverses a rejected probe,
+  padded hero float, responsive bounded columns, and a real exclusion while
+  preserving whitespace source mapping, mixed-script interaction, CJK line
+  policy, variable/OpenType styling, editing, and retained diagnostics. The
+  native release page and bundled-font headless snapshot consume the same
+  public path; exact product findings and non-claims are recorded in
+  `docs/proof/region-aware-living-page-review-2026-07-25.md`.
+- The committed-tree allocation audit exposed a separate retained-lifecycle
+  problem: unchanged values are rebuilt and deep-compared, then retained
+  records are deep-copied into each output. Its matched 1,000-paragraph
+  baseline and proposed correction now live in the sibling campaign
+  `und-oh0.13.17`; they do not extend this campaign's finish line. The
+  preparation trace remains neutral before-state evidence for that later work.
+- Step 15 is complete. The Must findings—finite
+  visible-region exhaustion, language-mismatched Han proof fonts, stale
+  migration/proof wording, and the last current proof-prose use of the retired
+  preparation metaphor—are resolved. The aggregate measured judgment and
+  exact non-claims are recorded in
+  `docs/proof/reusable-text-tools-campaign-review-2026-07-25.md`. GitHub Actions
+  run `30164191394` passed the eight-job protected matrix in PR #29.
+
+### Risks and controls
+
+- **Architecture without product:** whitespace collapse and the living page are
+  required real consumers.
+- **Premature public vocabulary:** schematic records remain private until the
+  representation wind tunnel and human API gate pass.
+- **Second shaping engine:** kernels consume only public Parley Engine facts
+  and never copy HarfRust behavior.
+- **Line-layout regression:** Arabic, ligature, bidi, CRLF, intrinsic,
+  fit-changing, and grapheme traps remain blocking.
+- **Region monolith:** slot providers own geometry and float policy; the former
+  owns candidates and checkpoints only.
+- **Memory optimism:** scratch changes require allocation and wall-time
+  before/after evidence on the same workloads.
+- **Style mismatch:** the final Overstory analysis is an explicit input before
+  paragraph styles freeze.
+- **Prototype anchoring:** Overstory companion code contributes traps and call
+  sites, not a representation to copy.
+- **Identity-poisoned reuse:** shared cache entries contain only immutable
+  identity-free facts; churn tests enforce an explicit memory budget.
+- **Partial alignment:** every spatial record and interaction path is compared
+  after offsets and adjustment.
+- **Duplicate navigation:** word movement consumes retained Parley Engine
+  analysis facts rather than another Unicode segmenter.
+- **Duplicate font discovery:** catalog construction and cloning prove shared
+  backing and one discovery pass.
+- **Conformance overclaim:** CJK, Western justification, and Arabic
+  justification keep separate proof status.
+
+### Completion
+
+The campaign is complete when one real public path demonstrates every stage,
+source mappings remain exact under real collapse, line formation is reusable
+and reversible, regions and alignment consume accepted slots, known style gaps
+are closed, identical labels reuse eligible preparation without sharing
+identity, editable blocks and font catalogs satisfy the exact Overstory
+call-site invariants, CPU and memory costs are observable and bounded, CJK
+limits are executable rather than anecdotal, the living page depends on the
+work, and all local and protected remote gates are green.
+
+## Retained O(change) preparation and scene lifecycle
+
+**Status:** Proposed — sibling campaign; Design-0017 awaits architecture approval
+
+**Beads:** `und-oh0.13.17` and its dependency-ordered children
+
+### Goal
+
+Replace rebuild-and-deep-compare cache validation, deep-copy scene
+publication, repeated adapter lowering, whole-document edit staging, and
+allocation-heavy common-case records with a coherent retained lifecycle.
+Exact repeats should be O(1), and localized edits should touch changed
+paragraph facts plus a sublinear scene-spine update.
+
+### Fence
+
+This campaign is informed by the preparation trace but is not part of the
+reusable text-tools completion gate. It must not begin foundational
+implementation until Design-0017 and its public traversal migration are
+approved.
+
+### Measured baseline
+
+At 1,000 paragraphs an exact retained prepare performs 666,167 allocation
+calls and requests 163,571,752 bytes; one-byte edit staging performs 1,015
+calls; and preparation of that localized edit performs 666,807 calls. Exact
+results and instrument limits are recorded in
+`docs/proof/retained-lifecycle-baseline-2026-07-25.md`.
+
+### Work laws
+
+- An exact repeated `(snapshot, request)` may return the previously published
+  immutable scene handle in O(1), with no projection, adapter, geometry, or
+  record allocation.
+- A localized text edit performs document staging, projection, preparation,
+  geometry, and publication work proportional to the changed paragraph plus a
+  sublinear persistent-scene-spine update. It does not touch unchanged sibling
+  paragraph records.
+- A paint-only change rebinds paint without repeating text projection,
+  analysis, shaping, formation, or identity-bound interaction geometry.
+- A global width, region, or style-policy change may visit every affected
+  paragraph; the trace must say why and distinguish required formation work
+  from avoidable value reconstruction.
+- Cache eligibility uses stable provenance plus facet generations or immutable
+  compiled-snapshot identity. A naked generation counter shared by unrelated
+  values is not a valid key.
+- Revision and epoch identity live at the scene/publication boundary. Cached
+  paragraph-local records do not rewrite document identity on every hit;
+  checked public queries mint or validate stamped positions at the boundary.
+- Allocation counts and bytes are external wind-tunnel evidence. Core
+  diagnostics report deterministic work, capacities, cache residency, and
+  growth without pretending to observe process allocations or wall time.
+
+### Ownership
+
+`LayoutEngine` owns request invalidation, paragraph-segment reuse, the
+persistent scene spine, and immutable scene publication. The Parley adapter
+owns retained analyzed, shaped, formed, and lowered facts plus its scratch
+workspaces. `Document` owns immutable publication and copy-on-write edit
+staging.
+
+### Execution order
+
+1. Ratify the cache-key and persistent-scene representation against the work
+   laws, including downstream-origin changes when paragraph height changes.
+2. Add provenance-qualified preflight keys and skip projection construction
+   on retained hits.
+3. Return the exact prior scene on exact repeats, then introduce shared
+   paragraph-local segments and a persistent scene spine.
+4. Retain adapter lowering output and add engine-owned scratch.
+5. Make document staging copy-on-write and mutate each touched leaf once.
+6. Compact common-case source, paint, and interaction records with matched
+   before/after allocation and query evidence.
+
+The proposed representation and public migration are recorded in
+`docs/design/0017-retained-scene-lifecycle.md`.
+
+### Risks and controls
+
+- **Arc optimism:** shared paragraph records are not sufficient if every
+  prepare still rebuilds a flat document vector or eagerly rewrites downstream
+  origins.
+- **Generation collision:** every fast key is provenance-qualified or comes
+  from an immutable compiled snapshot.
+- **Cache pinning:** shared publication must remain explicitly budgeted and
+  observable.
+- **Hidden materialization:** flat convenience collection must remain an
+  explicit cold-path operation rather than the default traversal API.
+
+### Completion
+
+Matched 64- and 1,000-paragraph public-path wind tunnels prove exact-repeat and
+localized-edit work laws; unchanged records are shared rather than copied;
+adapter hits do not re-lower; one-byte edits do not clone untouched paragraph
+or leaf storage; common records avoid per-glyph allocation; and the full Rust
+1.88, `no_std`, formatting, lint, test, documentation, repository, and
+protected-remote gates pass.
+
 ## Module boundaries and Parley Engine convergence
 
 **Status:** Complete — protected implementation and proof landed
@@ -144,7 +460,7 @@ font-resource integration policy.
 ### Completion
 
 The campaign is complete when thousands of blocks execute through the public
-path with exact intrinsic metrics, stable work performs no repeated physics,
+path with exact intrinsic metrics, stable work repeats no text preparation,
 width changes perform only required formation, edit work stays local,
 destroyed/budget-evicted blocks release both cache layers, measured evidence is
 checked in, all callers migrate, and every local and protected remote gate is
@@ -532,8 +848,8 @@ same change.
 
 1. Ratify `docs/design/0005-retained-parley-shaped-text.md` against exact
    Parley main and update the existing dependency pins together.
-2. Replace `PhysicsRun`, `PhysicsGlyph`, and callback copy-out with one reusable
-   `ShapedText` plus the minimal script sidecar.
+2. Replace the callback-owned run/glyph copies with one reusable `ShapedText`
+   plus the minimal script sidecar.
 3. Lower Parley's cluster storage into portable prepared glyphs with explicit
    ligature, RTL, UTF-8, and control-only source laws.
 4. Preserve public invalidation/work behavior and migrate the private seam
@@ -599,7 +915,7 @@ exists.
 3. Add a high-level Parley oracle to the private seam experiment for legal and
    mandatory breaks, CRLF, overflow, bidi line ranges, and line metrics.
 4. Implement retained Core-backed line formation in `underwood_parley`, remove
-   text physics from scene construction, and prove width-only reuse.
+   text preparation from scene construction, and prove width-only reuse.
 5. Exercise and record the break-sensitive case against the upstream bounded
    reshape seam; do not close or land the campaign with a counterfeit local
    substitute.
@@ -797,7 +1113,7 @@ hit testing synchronously.
 
 ### Fence
 
-Parley owns paragraph-local cluster, bidi, caret-affinity, and cursor physics;
+Parley owns paragraph-local cluster, bidi, caret-affinity, and cursor facts;
 Underwood owns revision-bound semantic positions, selection geometry,
 transactions, source projection, revisioned editable surfaces, composition
 epochs, and retained work; the showcase owns native gestures, keyboard/IME
@@ -836,7 +1152,7 @@ retained TextScene -> imaging -> live native proof
    paragraph formation across preedit churn and cancel.
 4. Translate native pointer, keyboard, and Winit IME events in the showcase;
    render selection, caret, and composition overlays without changing text
-   physics or moving host policy into core.
+   preparation or moving host policy into core.
 5. Add exact semantic hover, press cancellation, and activation through a
    showcase-owned `SemanticId` action registry; hand a URL-shaped request to the
    host without stabilizing a permanent core link schema or launching a browser.

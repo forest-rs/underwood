@@ -17,6 +17,7 @@ const PARAGRAPHS: usize = 64;
 const COLD_ITERATIONS: usize = 20;
 const RETAINED_ITERATIONS: usize = 200;
 const MUTATION_ITERATIONS: usize = 100;
+const PROFILE_PARAGRAPHS: usize = 1_000;
 
 struct DocumentFixture {
     document: Document,
@@ -32,7 +33,41 @@ struct LineFixture {
     paint: PaintTable,
 }
 
+struct EventMeasurement {
+    elapsed: Duration,
+    #[cfg(feature = "allocation-counting")]
+    allocations: allocation_counter::AllocationInfo,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut arguments = std::env::args().skip(1);
+    if let Some(scenario) = arguments.next() {
+        if scenario == "--help" || scenario == "-h" {
+            println!(
+                "usage: underwood_semantic_scene_benchmark [setup-retained|retained|setup-edit|edit-staging|localized-prepare|localized-edit] [paragraphs]"
+            );
+            return Ok(());
+        }
+        let paragraphs = arguments
+            .next()
+            .map(|value| value.parse::<usize>())
+            .transpose()?
+            .unwrap_or(PROFILE_PARAGRAPHS);
+        if paragraphs == 0 {
+            return Err("paragraphs must be greater than zero".into());
+        }
+        if arguments.next().is_some() {
+            return Err("expected at most a scenario and paragraph count".into());
+        }
+        let result = run_profile(&scenario, paragraphs);
+        signal_profile_ready()?;
+        hold_for_profiler()?;
+        return result;
+    }
+    run_suite()
+}
+
+fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let fonts = fonts()?;
     let fixture = document_fixture()?;
     let snapshot = fixture.document.snapshot();
@@ -238,12 +273,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn document_fixture() -> Result<DocumentFixture, Box<dyn std::error::Error>> {
+    document_fixture_with_paragraphs(PARAGRAPHS)
+}
+
+fn document_fixture_with_paragraphs(
+    paragraphs: usize,
+) -> Result<DocumentFixture, Box<dyn std::error::Error>> {
     let mut document = Document::new(DocumentId::from_bytes(*b"und-benchmark-01"));
     let mut edit = document.edit();
     let first = edit.append_paragraph(ParagraphRole::BODY)?;
     let first_prefix = edit.append_text(first, InlineRole::TEXT, "proof / ")?;
     let edited_text = edit.append_text(first, InlineRole::EMPHASIS, "office مرحبا بالعالم")?;
-    for index in 1..PARAGRAPHS {
+    for index in 1..paragraphs {
         let paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
         let text = if index & 1 == 0 {
             "Retained sibling office affinity"
@@ -277,6 +318,212 @@ fn document_fixture() -> Result<DocumentFixture, Box<dyn std::error::Error>> {
         dark,
         light,
     })
+}
+
+fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::error::Error>> {
+    let fonts = fonts()?;
+    let mut fixture = document_fixture_with_paragraphs(paragraphs)?;
+    let width = FiniteWidth::new(420.0)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(paragraphs),
+    );
+    let snapshot = fixture.document.snapshot();
+    let request = SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
+    let primed = layout.prepare(&snapshot, &request)?;
+    assert_eq!(
+        primed.work().shape().paragraphs(),
+        paragraphs,
+        "the profile fixture must prime every paragraph"
+    );
+
+    let event = match scenario {
+        "setup-retained" | "s0" => None,
+        "retained" | "r0" => {
+            let (output, measurement) = measure_event(|| layout.prepare(&snapshot, &request));
+            let output = output?;
+            assert_no_preparation_work(&output, paragraphs);
+            black_box(output);
+            Some(measurement)
+        }
+        "setup-edit" | "s1" | "edit-staging" | "d0" | "localized-prepare" | "p0"
+        | "localized-edit" | "e0" => {
+            let position = primed
+                .scene()
+                .position_at(fixture.edited_text, 1)
+                .ok_or("the one-byte insertion point must be represented")?;
+            let selection = primed.scene().collapsed_selection(&position)?;
+            let selections = primed.scene().selection_set([selection])?;
+            match scenario {
+                "setup-edit" | "s1" => {
+                    black_box(selections);
+                    None
+                }
+                "edit-staging" | "d0" => {
+                    let (replacement, measurement) =
+                        measure_event(|| fixture.document.replace_selections(&selections, "x"));
+                    let replacement = replacement?;
+                    assert_eq!(
+                        replacement.publication().changes().paragraphs().len(),
+                        1,
+                        "one-byte insertion must publish one changed paragraph"
+                    );
+                    black_box(replacement);
+                    Some(measurement)
+                }
+                "localized-prepare" | "p0" => {
+                    let replacement = fixture.document.replace_selections(&selections, "x")?;
+                    let (output, measurement) = measure_event(|| {
+                        layout.prepare(replacement.publication().snapshot(), &request)
+                    });
+                    let output = output?;
+                    assert_eq!(
+                        output.work().shape().paragraphs(),
+                        1,
+                        "one-byte insertion must reshape exactly one paragraph"
+                    );
+                    assert_eq!(
+                        output.work().reused_paragraphs(),
+                        paragraphs.saturating_sub(1),
+                        "one-byte insertion must reuse every unchanged sibling"
+                    );
+                    black_box((replacement, output));
+                    Some(measurement)
+                }
+                "localized-edit" | "e0" => {
+                    let (result, measurement) = measure_event(|| {
+                        let replacement = fixture.document.replace_selections(&selections, "x")?;
+                        let output =
+                            layout.prepare(replacement.publication().snapshot(), &request)?;
+                        Ok::<_, Box<dyn std::error::Error>>((replacement, output))
+                    });
+                    let (replacement, output) = result?;
+                    assert_eq!(
+                        output.work().shape().paragraphs(),
+                        1,
+                        "one-byte insertion must reshape exactly one paragraph"
+                    );
+                    assert_eq!(
+                        output.work().reused_paragraphs(),
+                        paragraphs.saturating_sub(1),
+                        "one-byte insertion must reuse every unchanged sibling"
+                    );
+                    black_box((replacement, output));
+                    Some(measurement)
+                }
+                _ => unreachable!("the outer match admits only edit scenarios"),
+            }
+        }
+        _ => {
+            return Err(format!("unknown profile scenario: {scenario}").into());
+        }
+    };
+
+    black_box((&fixture, &layout, &snapshot, &request, &primed));
+    if let Some(measurement) = event {
+        report_profile_event(scenario, paragraphs, &measurement);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "allocation-counting")]
+fn measure_event<T>(operation: impl FnOnce() -> T) -> (T, EventMeasurement) {
+    let mut result = None;
+    let start = Instant::now();
+    let allocations = allocation_counter::measure(|| {
+        result = Some(operation());
+    });
+    let elapsed = start.elapsed();
+    let Some(result) = result else {
+        unreachable!("the measured operation always stores its result");
+    };
+    (
+        result,
+        EventMeasurement {
+            elapsed,
+            allocations,
+        },
+    )
+}
+
+#[cfg(not(feature = "allocation-counting"))]
+fn measure_event<T>(operation: impl FnOnce() -> T) -> (T, EventMeasurement) {
+    let start = Instant::now();
+    let result = operation();
+    let elapsed = start.elapsed();
+    (result, EventMeasurement { elapsed })
+}
+
+#[cfg(feature = "allocation-counting")]
+fn report_profile_event(scenario: &str, paragraphs: usize, measurement: &EventMeasurement) {
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        println!(
+            "{scenario}\tprofile=isolated\tparagraphs={paragraphs}\ttotal_ns={}\tallocation_calls={}\tallocated_bytes={}\tpeak_live_allocations={}\tpeak_live_bytes={}\tnet_live_allocations={}\tnet_live_bytes={}",
+            measurement.elapsed.as_nanos(),
+            measurement.allocations.count_total,
+            measurement.allocations.bytes_total,
+            measurement.allocations.count_max,
+            measurement.allocations.bytes_max,
+            measurement.allocations.count_current,
+            measurement.allocations.bytes_current,
+        );
+    }
+}
+
+#[cfg(not(feature = "allocation-counting"))]
+fn report_profile_event(scenario: &str, paragraphs: usize, measurement: &EventMeasurement) {
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        println!(
+            "{scenario}\tprofile=isolated\tparagraphs={paragraphs}\ttotal_ns={}",
+            measurement.elapsed.as_nanos(),
+        );
+    }
+}
+
+fn assert_no_preparation_work(output: &underwood::SceneOutput, paragraphs: usize) {
+    assert_eq!(
+        output.work().analysis().paragraphs(),
+        0,
+        "unchanged preparation must reuse analysis"
+    );
+    assert_eq!(
+        output.work().shape().paragraphs(),
+        0,
+        "unchanged preparation must reuse shaping"
+    );
+    assert_eq!(
+        output.work().flow().paragraphs(),
+        0,
+        "unchanged preparation must reuse flow"
+    );
+    assert_eq!(
+        output.work().reused_paragraphs(),
+        paragraphs,
+        "unchanged preparation must report every paragraph reused"
+    );
+}
+
+fn hold_for_profiler() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(seconds) = std::env::var_os("UNDERWOOD_PROFILE_HOLD_SECS") else {
+        return Ok(());
+    };
+    let seconds = seconds
+        .to_str()
+        .ok_or("UNDERWOOD_PROFILE_HOLD_SECS must be valid UTF-8")?
+        .parse::<u64>()?;
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
+        eprintln!("holding process for profiler: {seconds}s");
+    }
+    std::thread::sleep(Duration::from_secs(seconds));
+    Ok(())
+}
+
+fn signal_profile_ready() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(path) = std::env::var_os("UNDERWOOD_PROFILE_READY_FILE") else {
+        return Ok(());
+    };
+    std::fs::write(path, b"ready\n")?;
+    Ok(())
 }
 
 fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {

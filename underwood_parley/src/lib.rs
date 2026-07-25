@@ -5,13 +5,17 @@
 #![doc = include_str!("../README.md")]
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 mod engine;
 mod font;
 mod interaction;
 mod line_break;
+mod line_former;
 mod lowering;
 mod shaping;
+mod spacing;
 mod validation;
 
 pub use engine::ParleyParagraphEngine;

@@ -60,7 +60,7 @@ The executable corpus covers:
 Canonical paragraph shaping and line-final shaping are separate observable
 stages:
 
-- `WorkReport::shape` and `font_selection` describe canonical physics;
+- `WorkReport::shape` and `font_selection` describe canonical shaping;
 - `WorkReport::line_shape` and `line_font_resolution` describe committed and
   rejected line candidates. Line formation reuses the canonical font choice
   rather than querying Fontique again;

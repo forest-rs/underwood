@@ -6,7 +6,7 @@ editing platform for Rust.
 It owns semantic documents, stable positions, layered annotations, computed
 style, projection, incremental flow, transactions, inline objects, semantic
 mapping, and renderer-neutral prepared text scenes. Parley owns text shaping
-physics. Overstory is the flagship experience layer.
+and Unicode analysis. Overstory is the flagship experience layer.
 
 > Parley shapes the text. Underwood makes it a document. Overstory makes it an
 > experience.
@@ -24,7 +24,7 @@ Parley geometry for both event-feed and host-driven protocol shapes. Retained
 `TextBlock`s now give labels a borrowed-style, single-paragraph façade over
 that same engine; explicit min/max/constrained formation reports exact size
 and baselines, while coordinated budgets and release keep geometry and Parley
-physics caches bounded. The complete architecture is
+preparation caches bounded. The complete architecture is
 [specified in the handover](UNDERWOOD_HANDOVER.md). Design-0002 approved the
 first pre-stable public slice and its exact dependency fence: `underwood` owns
 the `no_std + alloc` document, flow, and scene path, while `underwood_parley`
@@ -53,15 +53,21 @@ Underwood output.
 
 ![Underwood visual proof](examples/visual-proof/snapshots/underwood-visual-proof.png)
 
-The external `examples/showcase` host presents one real semantic heading/body
-document in a native resizable window. Resizing drives retained finite-width
-formation; Space performs a local edit; `P` changes paint without repeating
-text physics; `A` animates the Roboto Flex weight axis; and `G` reveals legal
-line and baseline evidence. Run the optimized meeting demo with:
+The external `examples/showcase` host presents one editable semantic document
+as a native region-aware living page. It visibly traverses a rejected probe,
+padded float, responsive columns, and an exclusion while preserving mixed
+Latin/Arabic interaction, CJK line policy, whitespace source mapping,
+OpenType features, and variable-font styling. `F4` cycles public scene and flow
+diagnostics; the title separates preparation from rendering time and reports
+invalidation and retained-memory evidence. Run the optimized showcase with:
 
 ```sh
 cargo run --release -p underwood_showcase
 ```
+
+Its bundled-font 1100×800 rendering is deterministic and pixel-tested:
+
+![Underwood living page](examples/showcase/snapshots/underwood-living-page.png)
 
 The external `underwood_pdf` adapter lowers that same public prepared-scene
 contract through Krilla without moving PDF policy into the foundational

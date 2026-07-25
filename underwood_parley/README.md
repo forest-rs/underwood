@@ -13,14 +13,44 @@ Fontconfig loading so compiling the optional feature does not require
 Fontconfig development headers; if the runtime library is absent, no system
 fallback is added.
 
+The optional `complex-scripts` feature selects Parley Engine's compiled
+ICU4X dictionary data for Chinese/Japanese word segmentation and
+context-dependent line and word segmentation in Khmer, Lao, Myanmar, and
+Thai. It is intentionally not a default: ordinary Unicode CJK line
+opportunities and `WordBreak::{Normal, BreakAll, KeepAll}` remain available
+without it, while dictionary-sensitive segmentation and Southeast Asian
+breaking require the explicit data cost. Parley Engine currently merges
+overlapping word and line boundaries into one line-boundary fact, so Underwood
+does not yet claim dictionary-quality CJK word navigation even when this
+feature is enabled.
+
+`FontSet::empty` supports missing-font proofs and system-font-only hosts.
+`FontSet::registered_family_names` reports only sorted, deduplicated embedded
+families, so the result is stable across machines. Registered bytes always use
+shared blob backing. Enabling the explicit `std` feature additionally gives
+Fontique's collection and source cache synchronized shared backing; the
+`system-fonts` feature implies it. This makes clones suitable for constructing
+many UI-local paragraph engines without catalog copies, font re-registration,
+or repeated file loads. Default `no_std + alloc` builds retain shared font bytes
+but clone Fontique's catalog records locally because Fontique's synchronized
+stores require `std`.
+
+All generic-family and fallback configuration must be completed before a
+`FontSet` is cloned into paragraph engines. The set is then an application
+resource snapshot: per-engine analyzers, shapers, query state, and paragraph
+caches remain local, while the font universe stays coherent.
+
 Implementation ownership is deliberately private and narrow:
 
-- `engine` coordinates paragraph identities, invalidation, and retained physics;
+- `engine` coordinates paragraph identities, invalidation, and retained preparation;
 - `font` owns immutable Fontique catalog construction and validation;
 - `shaping` projects Underwood styles into Parley analysis, itemization, font
   selection, initial shaping, and line-final shaping with retained fonts;
-- `line_break` owns intrinsic/constrained line-formation policy, metrics, and
-  line-local bidi ordering;
+- `line_former` owns reversible candidates, fit checks, retries, and
+  checkpoints over Parley Engine cluster facts without importing Underwood
+  document or scene types;
+- `line_break` adapts Underwood constraints and line metrics to that reusable
+  kernel, then owns line-local bidi ordering;
 - `lowering` produces portable glyph, source, synthesis, and paint records;
 - `interaction` produces source-complete grapheme units and cursor movement;
 - `validation` rejects incomplete or non-canonical adapter inputs.
@@ -33,18 +63,21 @@ The adapter owns analysis and shaping scratch, retains Parley Engine's native
 portable formed-line records without maintaining a second shaped-run model.
 `ParleyParagraphEngine::new(fonts)` is infallible; Unicode analysis data comes
 from the pinned Parley Engine implementation rather than an empty configuration
-placeholder. Paragraph physics are indexed by stable paragraph identity, and
+placeholder. Paragraph preparation is indexed by stable paragraph identity, and
 Underwood's cache release and budget eviction propagate into this adapter so
 dead blocks do not leave shaped text retained here.
 Parley Engine boundary classes select legal and mandatory breaks. Explicit
 max-content formation ignores soft opportunities, min-content formation
 commits each legal opportunity through line-final re-itemization and shaping,
 and constrained formation greedily fits a validated finite width. If a
-line-final shape no longer fits, Underwood backs up to the preceding legal
-opportunity and reports every attempted line shape. A single unwrapped line
-reuses the retained canonical shape. Line boxes use the selected fonts' scaled
-metrics, and each line's runs are reordered visually only after its logical
-source range is fixed. Paint
+line-final shape no longer fits, the line former rejects that candidate and
+backs up to the preceding legal opportunity without advancing its traversal
+cursor. Checkpoints restore both traversal and caller-owned provisional output.
+Candidate, rejection, and restoration counts remain transient call work rather
+than retained cache state. A single unwrapped line reuses the retained
+canonical shape. Line boxes use the selected fonts' scaled metrics, and each
+line's runs are reordered visually only after its logical source range is
+fixed. Paint
 boundaries remain source and clip metadata rather than shaping inputs. Complete
 Underwood shaping runs supply family, weight, width, style, font size,
 language, OpenType features, and variable-font coordinates.
@@ -78,6 +111,15 @@ therefore project exact semantic hits and caret stops without reconstructing
 bidi direction from glyphs or using ink clips as interaction geometry. Soft
 wraps retain both affinities for their shared logical boundary, and mandatory
 break endpoints can occupy distinct lines.
+
+The adapter publishes Parley Engine's resolved paragraph direction rather than
+asking Underwood to repeat first-strong analysis. Ordinary U+0020 interaction
+units are marked as Western justification opportunities only when their
+resolved shaping script is Latin, Greek, or Cyrillic. Underwood applies
+alignment and eligible-space expansion after the line source boundary and
+exact region slot are fixed; this adapter never mutates retained canonical
+shaping for alignment. Arabic and CJK expansion remain explicitly outside this
+Western strategy.
 
 Paint coverage records source-to-paint ownership, not universal glyph ink. A
 glyph wholly owned by one paint run lowers without a per-glyph clip, leaving

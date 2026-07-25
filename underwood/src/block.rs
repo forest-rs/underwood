@@ -5,7 +5,7 @@
 
 use crate::{
     ComputedInlineStyle, Document, DocumentId, DocumentSnapshot, EditError, InlineRole, PaintTable,
-    ParagraphRole, ParagraphStyle, TextConstraint, TextId,
+    ParagraphRole, ParagraphStyle, SnapshotTextSelectionSet, TextConstraint, TextId,
 };
 
 /// Mutable retained single-paragraph text content.
@@ -45,6 +45,14 @@ impl TextBlock {
         }
     }
 
+    /// Returns the complete current plain text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        self.document
+            .text(self.text)
+            .expect("TextBlock retains its single text leaf")
+    }
+
     /// Replaces the complete plain text and atomically publishes one revision.
     ///
     /// Setting the current value again performs no publication.
@@ -56,6 +64,21 @@ impl TextBlock {
         edit.replace_text(self.text, text)?;
         edit.commit()?;
         Ok(())
+    }
+
+    /// Atomically replaces every independent selection and returns rebound carets.
+    ///
+    /// The selection set must belong to the block's current revision. Each
+    /// independent selection receives one insertion even when a visual bidi
+    /// selection contains several logical ranges. The returned collapsed
+    /// selections belong to the newly published revision.
+    pub fn replace_selections(
+        &mut self,
+        selections: &SnapshotTextSelectionSet,
+        replacement: &str,
+    ) -> Result<SnapshotTextSelectionSet, EditError> {
+        let replacement = self.document.replace_selections(selections, replacement)?;
+        Ok(replacement.into_parts().1)
     }
 }
 
@@ -81,6 +104,12 @@ impl TextBlockSnapshot {
             .expect("TextBlock snapshots retain their single text leaf")
     }
 
+    /// Returns the stable text-leaf identity represented by this block.
+    #[must_use]
+    pub const fn text_id(&self) -> TextId {
+        self.text
+    }
+
     pub(crate) const fn document(&self) -> &DocumentSnapshot {
         &self.document
     }
@@ -93,6 +122,8 @@ pub struct BlockRequest<'a> {
     pub(crate) style: &'a ComputedInlineStyle,
     pub(crate) paint: &'a PaintTable,
     pub(crate) paragraph_style: ParagraphStyle,
+    pub(crate) region_flow: Option<&'a crate::RegionFlow>,
+    pub(crate) trace: bool,
 }
 
 impl<'a> BlockRequest<'a> {
@@ -108,6 +139,8 @@ impl<'a> BlockRequest<'a> {
             style,
             paint,
             paragraph_style: ParagraphStyle::DEFAULT,
+            region_flow: None,
+            trace: false,
         }
     }
 
@@ -116,6 +149,36 @@ impl<'a> BlockRequest<'a> {
     pub const fn with_paragraph_style(mut self, style: ParagraphStyle) -> Self {
         self.paragraph_style = style;
         self
+    }
+
+    /// Returns a block request that fills exact slots from a region flow.
+    ///
+    /// Region slots replace the single wrapping width. Intrinsic block
+    /// measurement continues to use [`Self::new`] without regions.
+    #[must_use]
+    pub fn with_region_flow(mut self, region_flow: &'a crate::RegionFlow) -> Self {
+        self.constraint = TextConstraint::Wrap(crate::FiniteWidth(region_flow.max_inline_size()));
+        self.region_flow = Some(region_flow);
+        self
+    }
+
+    /// Returns the exact region policy, when one was requested.
+    #[must_use]
+    pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
+        self.region_flow
+    }
+
+    /// Returns a request that records deterministic preparation diagnostics.
+    #[must_use]
+    pub const fn with_preparation_trace(mut self) -> Self {
+        self.trace = true;
+        self
+    }
+
+    /// Returns whether detailed preparation tracing was requested.
+    #[must_use]
+    pub const fn preparation_trace(self) -> bool {
+        self.trace
     }
 }
 

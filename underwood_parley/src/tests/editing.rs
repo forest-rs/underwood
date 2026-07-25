@@ -4,6 +4,91 @@
 use super::*;
 
 #[test]
+fn empty_text_block_exposes_one_stable_scene_position() {
+    let block = TextBlock::plain(DocumentId::from_bytes(*b"empty-nav-block1"), "")
+        .expect("empty fixture block is valid");
+    let snapshot = block.snapshot();
+    let text = snapshot.text_id();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = BlockRequest::new(TextConstraint::MaxContent, &style, &paint);
+    let output = fixture_engine()
+        .prepare_block(&snapshot, &request)
+        .expect("empty block must prepare");
+    let scene = output.scene();
+
+    let position = scene
+        .position_at(text, 0)
+        .expect("empty text has one represented caret");
+    assert_eq!(scene.start_position(), Some(position));
+    assert_eq!(scene.end_position(), Some(position));
+    assert_eq!(scene.previous_word_position(&position), Some(position));
+    assert_eq!(scene.next_word_position(&position), Some(position));
+}
+
+#[test]
+fn text_block_replacement_returns_selections_for_the_published_revision() {
+    let mut block = TextBlock::plain(DocumentId::from_bytes(*b"block-selection1"), "alpha beta")
+        .expect("fixture block is valid");
+    assert_eq!(block.text(), "alpha beta");
+    let first_snapshot = block.snapshot();
+    let text = first_snapshot.text_id();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = BlockRequest::new(TextConstraint::MaxContent, &style, &paint);
+    let mut engine = fixture_engine();
+    let first = engine
+        .prepare_block(&first_snapshot, &request)
+        .expect("fixture block must prepare");
+    let scene = first.scene();
+    let alpha_start = scene
+        .position_at(text, 0)
+        .expect("alpha start is represented");
+    let alpha_end = scene
+        .position_at(text, 5)
+        .expect("alpha end is represented");
+    let selected = scene
+        .selection(&alpha_start, &alpha_end, TextSelectionMode::Logical)
+        .and_then(|selection| scene.selection_set([selection]))
+        .expect("alpha forms one valid selection");
+
+    let rebound = block
+        .replace_selections(&selected, "A")
+        .expect("block replacement must publish atomically");
+    assert_eq!(block.text(), "A beta");
+    assert_eq!(first_snapshot.text(), "alpha beta");
+    assert_eq!(block.snapshot().text_id(), text);
+    assert_ne!(rebound.revision(), selected.revision());
+    let primary = rebound.primary().expect("replacement returns one caret");
+    assert!(primary.is_collapsed());
+    assert_eq!(primary.extent().text(), text);
+    assert_eq!(primary.extent().byte(), 1);
+
+    assert!(
+        scene.next_word_position(primary.extent()).is_none(),
+        "the old scene must reject a position rebound to the new revision"
+    );
+    let current = engine
+        .prepare_block(&block.snapshot(), &request)
+        .expect("published replacement must prepare");
+    assert_eq!(current.scene().revision(), rebound.revision());
+    assert!(
+        current.scene().caret(primary.extent()).is_some(),
+        "the returned caret must resolve directly in the published scene"
+    );
+}
+
+#[test]
 fn visual_bidi_selection_retains_disjoint_ranges_and_set_ownership() {
     let text = "abc مرحبا XYZ";
     let arabic_start =
@@ -434,7 +519,7 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     assert_eq!(
         committed_update.work().shape().paragraphs(),
         0,
-        "the committed publication can reuse physics already formed for the identical preedit"
+        "the committed publication can reuse preparation already formed for the identical preedit"
     );
     assert_eq!(committed_update.work().geometry().paragraphs(), 1);
     assert_eq!(committed_update.work().reused_paragraphs(), 2);

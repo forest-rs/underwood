@@ -22,11 +22,12 @@ The first draft public slice is deliberately complete end to end:
   constraint-only changes; wrapped constraint changes expose their separate
   line-final shaping work;
   an explicit [`CacheBudget`] bounds retained geometry and coordinated backend
-  state, while release operations and [`CacheDiagnostics`] expose lifecycle
-  facts to hosts;
+  state and can separately bound exact identity-free preparation shared by
+  equivalent labels, while release operations and [`CacheDiagnostics`] expose
+  lifecycle facts to hosts;
 - [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
   and font-derived metrics behind the paragraph-engine boundary instead of
-  hiding text physics in scene construction; formed lines retain complete
+  hiding text preparation in scene construction; formed lines retain complete
   source slices across semantic leaves and distinguish real glyphs from
   intentionally unrendered controls;
 - [`ComputedInlineStyle`] keeps [`ShapingStyle`], [`InlineFlowStyle`], and
@@ -40,7 +41,9 @@ The first draft public slice is deliberately complete end to end:
   explicit partial-paint clips, source mapping, exact shaped-cluster hits and
   carets (including whitespace, ligature
   components, bidi affinities, and empty editable leaves), revision-bound
-  logical and visual selection sets, and semantic observations;
+  logical and visual selection sets, complete-scene endpoints, represented
+  leaf-local positions, logical word movement from retained analysis, and
+  semantic observations;
 - document IDs are opaque and document-scoped, while [`SnapshotTextRange`] and
   [`SnapshotTextPosition`] values are dense observations valid only for their
   named revision.
@@ -129,7 +132,7 @@ use underwood_parley::ParleyParagraphEngine;
 
 let mut layout = LayoutEngine::new(
     ParleyParagraphEngine::new(fonts),
-    CacheBudget::new(4_096),
+    CacheBudget::new(4_096).with_shared_preparation_bytes(8 * 1024 * 1024),
 );
 let mut label =
     TextBlock::plain(DocumentId::from_bytes(*b"save-label-00001"), "Save")?;
@@ -144,6 +147,42 @@ label.set_text("Open")?;
 layout.release_document(label.id());
 ```
 
+The same façade also exposes just enough revision-correct editing for a
+toolkit-owned text control. It does not own keyboard bindings, focus, IME
+policy, or widget state:
+
+```rust,ignore
+use underwood::TextSelectionMode;
+
+let snapshot = label.snapshot();
+let output = layout.prepare_block(
+    &snapshot,
+    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint),
+)?;
+let scene = output.scene();
+let text = snapshot.text_id();
+let start = scene.position_at(text, 0).unwrap();
+let end = scene.position_at(text, 4).unwrap();
+let selected = scene.selection(&start, &end, TextSelectionMode::Logical)?;
+let selected = scene.selection_set([selected])?;
+
+let rebound = label.replace_selections(&selected, "Open")?;
+assert_eq!(label.text(), "Open");
+let current = layout.prepare_block(
+    &label.snapshot(),
+    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint),
+)?;
+assert_eq!(rebound.revision(), current.scene().revision());
+```
+
+The shared-preparation budget is opt-in and independent of the retained
+geometry entry budget. An exact hit skips backend analysis, font selection,
+shaping, and line formation, then rebuilds current document, revision,
+semantic, interaction, paint, and geometry identity. `release_document`
+releases identity-bound entries but preserves useful shared facts;
+`clear_cache` releases both. The byte diagnostics are deterministic retention
+charges, not allocator-exact heap measurements.
+
 [`TextConstraint::MaxContent`] suppresses soft wrapping while preserving
 mandatory breaks. [`TextConstraint::MinContent`] commits every legal soft
 break through line-final shaping, and
@@ -152,27 +191,112 @@ break through line-final shaping, and
 optional first/last baselines. Empty blocks have zero width, their resolved
 line height, and no text baseline.
 
+Line formation is observable independently of shaping.
+[`WorkReport::line_candidates`] counts proposed candidates,
+[`WorkReport::rejected_line_candidates`] exposes fit-changing retries, and
+[`WorkReport::line_checkpoint_restores`] records rewinds of traversal and
+provisional output. These counters are actual work from the current call;
+they are not retained paragraph preparation.
+
 `ComputedInlineStyle` clones share the owned family, feature, and variation
 arrays. `BlockRequest` goes further and borrows one caller-owned style, so any
 number of labels can reuse the same style and paint table without rebuilding
 authored font requests.
 
-`ParagraphStyle` keeps paragraph base direction out of inline font style.
-Automatic direction remains the default; explicit LTR and RTL values are
-available for markup, host, and authoring semantics which cannot be inferred
-from first-strong text:
+`ParagraphStyle` keeps paragraph base direction and accepted-slot alignment
+out of inline font style. Automatic direction and logical-start alignment
+remain the defaults; explicit LTR/RTL and physical or logical alignment values
+are available for markup, host, and authoring semantics:
 
 ```rust,ignore
-use underwood::{BaseDirection, ParagraphStyle};
+use underwood::{BaseDirection, ParagraphStyle, TextAlignment};
 
 styles.set_paragraph_style(
     paragraph,
-    ParagraphStyle::new(BaseDirection::Rtl),
+    ParagraphStyle::new(BaseDirection::Rtl)
+        .with_alignment(TextAlignment::Start),
 );
 ```
 
 Changing paragraph direction invalidates Unicode analysis for that paragraph.
-Changing only line height reuses accepted line glyphs and recomputes metrics.
+Changing only alignment reuses analysis, selected fonts, canonical shaping,
+line-final shaping, and accepted source boundaries; it recomputes immutable
+line adjustment and scene geometry. `Start` and `End` consume the paragraph
+direction already resolved by Unicode analysis. `Justify` expands explicit
+Western inter-word spaces on eligible soft-wrapped lines; final and mandatory
+lines remain start-aligned, and CJK and Arabic strategies remain separate.
+[`SceneLine::adjustment`] exposes the exact offset, hanging trailing
+whitespace, and per-opportunity expansion. Changing only line height reuses
+accepted line glyphs and recomputes metrics.
+
+Computed text policy is partitioned by the earliest preparation stage it can
+change. A host can lower its resolved style without constructing CSS or widget
+objects in Underwood:
+
+```rust,ignore
+use underwood::{
+    AnalysisStyle, ComputedInlineStyle, InlineFlowStyle, LineHeight,
+    OverflowWrap, PaintSlot, TextSpacing, TextWrapMode, WordBreak,
+};
+
+let flow = InlineFlowStyle::new(LineHeight::metrics_relative(1.1)?)
+    .with_spacing(TextSpacing::new(0.5, 2.0)?)
+    .with_overflow_wrap(OverflowWrap::Anywhere)
+    .with_text_wrap_mode(TextWrapMode::Wrap);
+let style = ComputedInlineStyle::new(shaping, flow, PaintSlot::new(0))
+    .with_analysis(AnalysisStyle::new(WordBreak::Normal));
+```
+
+`WordBreak` participates in Unicode analysis. Wrap and emergency-break policy
+participate in line formation. Line-height changes recompute metrics. A
+nonzero letter-spacing transition may reshape with retained fonts to disable
+optional ligatures; changing only a nonzero spacing amount adjusts retained
+advances without another font query.
+
+## Source-complete text projection
+
+[`ProjectedText`] is a small `no_std + alloc` transformation kernel independent
+of documents, scenes, paint, and paragraph engines. It retains authored UTF-8,
+presentation UTF-8, and compact monotonic relation runs for identity,
+replacement, collapse, omission, and insertion. Position lookup uses explicit
+[`TextAffinity`] at ambiguous transformed boundaries.
+
+Identity projection keeps one string allocation rather than cloning it.
+Custom transformations use [`ProjectionBuilder`], which rejects incomplete
+source coverage and invalid UTF-8 boundaries:
+
+```rust
+use underwood::{ProjectedText, ProjectionBuilder, TextAffinity};
+
+let mut builder = ProjectionBuilder::new("İ")?;
+builder.push_replacement(2, "i\u{307}")?;
+let projected = builder.finish()?;
+
+assert_eq!(projected.text(), "i\u{307}");
+assert_eq!(projected.source_range(0..1)?, 0..2);
+assert_eq!(
+    projected.source_position(1, TextAffinity::Downstream)?,
+    0,
+);
+# Ok::<(), underwood::ProjectionError>(())
+```
+
+The document preparation path uses this same kernel. Whitespace preservation
+remains the default. A host opts into paragraph-stream collapse with:
+
+```rust
+use underwood::{ParagraphStyle, WhitespaceCollapse};
+
+let paragraph_style = ParagraphStyle::DEFAULT
+    .with_whitespace_collapse(WhitespaceCollapse::Collapse);
+```
+
+Collapse recognizes space, tab, carriage return, line feed, and form feed,
+turning each maximal run into one ASCII space without trimming line edges.
+State crosses inline leaf boundaries. The first authored contributor owns the
+collapsed unit's style and semantic identity, while hits, selections, edits,
+accessibility records, and renderer/export provenance retain every
+contributing leaf-local range.
 
 ## Composition epochs and editable surfaces
 
