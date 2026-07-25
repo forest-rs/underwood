@@ -100,6 +100,7 @@ impl FontSynthesis {
 /// One source-complete line with backend-derived metrics and visual runs.
 #[derive(Clone, Debug)]
 pub struct PreparedLine {
+    slot: Option<crate::LineSlot>,
     source: Range<u32>,
     break_reason: LineBreakReason,
     advance: f64,
@@ -124,6 +125,37 @@ impl PreparedLine {
         units: impl IntoIterator<Item = PreparedInteractionUnit>,
         runs: impl IntoIterator<Item = PreparedRun>,
     ) -> Result<Self, PreparationError> {
+        Self::try_new_in_slot(
+            None,
+            source,
+            break_reason,
+            advance,
+            baseline,
+            height,
+            content_ascent,
+            content_descent,
+            units,
+            runs,
+        )
+    }
+
+    /// Validates and owns one formed line accepted into an exact region slot.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors complete portable line data"
+    )]
+    pub fn try_new_in_slot(
+        slot: Option<crate::LineSlot>,
+        source: Range<u32>,
+        break_reason: LineBreakReason,
+        advance: f64,
+        baseline: f64,
+        height: f64,
+        content_ascent: f64,
+        content_descent: f64,
+        units: impl IntoIterator<Item = PreparedInteractionUnit>,
+        runs: impl IntoIterator<Item = PreparedRun>,
+    ) -> Result<Self, PreparationError> {
         if source.start > source.end
             || !advance.is_finite()
             || advance < 0.0
@@ -136,6 +168,7 @@ impl PreparedLine {
             || content_ascent < 0.0
             || !content_descent.is_finite()
             || content_descent < 0.0
+            || slot.is_some_and(|slot| height > slot.block_size())
         {
             return Err(PreparationError::invalid_output());
         }
@@ -182,6 +215,7 @@ impl PreparedLine {
             return Err(PreparationError::invalid_output());
         }
         Ok(Self {
+            slot,
             source,
             break_reason,
             advance,
@@ -192,6 +226,12 @@ impl PreparedLine {
             units,
             runs,
         })
+    }
+
+    /// Returns the exact accepted region slot, when region flow was requested.
+    #[must_use]
+    pub const fn slot(&self) -> Option<crate::LineSlot> {
+        self.slot
     }
 
     /// Returns the paragraph-local source range, including a terminating control.

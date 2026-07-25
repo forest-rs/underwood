@@ -93,6 +93,7 @@ pub struct BlockRequest<'a> {
     pub(crate) style: &'a ComputedInlineStyle,
     pub(crate) paint: &'a PaintTable,
     pub(crate) paragraph_style: ParagraphStyle,
+    pub(crate) region_flow: Option<&'a crate::RegionFlow>,
 }
 
 impl<'a> BlockRequest<'a> {
@@ -108,6 +109,7 @@ impl<'a> BlockRequest<'a> {
             style,
             paint,
             paragraph_style: ParagraphStyle::DEFAULT,
+            region_flow: None,
         }
     }
 
@@ -116,6 +118,23 @@ impl<'a> BlockRequest<'a> {
     pub const fn with_paragraph_style(mut self, style: ParagraphStyle) -> Self {
         self.paragraph_style = style;
         self
+    }
+
+    /// Returns a block request that fills exact slots from a region flow.
+    ///
+    /// Region slots replace the single wrapping width. Intrinsic block
+    /// measurement continues to use [`Self::new`] without regions.
+    #[must_use]
+    pub fn with_region_flow(mut self, region_flow: &'a crate::RegionFlow) -> Self {
+        self.constraint = TextConstraint::Wrap(crate::FiniteWidth(region_flow.max_inline_size()));
+        self.region_flow = Some(region_flow);
+        self
+    }
+
+    /// Returns the exact region policy, when one was requested.
+    #[must_use]
+    pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
+        self.region_flow
     }
 }
 

@@ -4,6 +4,7 @@
 use alloc::vec;
 
 use parley_engine::{Boundary, shape::Whitespace};
+use underwood::{FlowRegion, Rect, RegionFlow};
 
 use crate::line_former::*;
 
@@ -168,6 +169,86 @@ fn a_too_short_slot_rejects_without_advancing() {
     );
     assert!(!former.is_done());
     assert_eq!(former.work().rejected, 1);
+}
+
+#[test]
+fn height_rejection_retries_the_same_text_in_the_next_region_slot() {
+    let clusters = [
+        cluster(0, Boundary::None, 'a'),
+        cluster(1, Boundary::None, ' '),
+        cluster(2, Boundary::Line, 'b'),
+    ];
+    let flow = RegionFlow::new([
+        FlowRegion::new(Rect::new(0.0, 0.0, 8.0, 5.0)).expect("first region is valid"),
+        FlowRegion::new(Rect::new(20.0, 0.0, 28.0, 20.0)).expect("second region is valid"),
+    ])
+    .expect("region flow is valid");
+    let mut cursor = flow.cursor();
+    let first_slot = flow.slot(cursor).expect("first slot exists");
+    let mut former = LineFormer::new(
+        &clusters,
+        FormationConstraint::Wrap(first_slot.inline_size()),
+    )
+    .expect("fixture facts are valid");
+    let mut output = vec!["earlier"];
+    let checkpoint = former.checkpoint(output.len());
+    let candidate = former
+        .candidate()
+        .expect("candidate selection succeeds")
+        .expect("candidate exists");
+    output.push("provisional");
+    assert_eq!(
+        former
+            .commit(
+                candidate,
+                LineMeasurements {
+                    advance: 6.0,
+                    height: 10.0,
+                },
+                LineLimits {
+                    max_advance: Some(first_slot.inline_size()),
+                    max_height: Some(first_slot.block_size()),
+                },
+            )
+            .expect("height evaluation succeeds"),
+        CommitOutcome::SlotRejected
+    );
+    former
+        .restore(checkpoint, &mut output)
+        .expect("text and provisional output restore together");
+    cursor = flow
+        .reject(cursor, first_slot)
+        .expect("rejected slot advances region geometry");
+
+    let second_slot = flow.slot(cursor).expect("second slot exists");
+    former
+        .set_constraint(FormationConstraint::Wrap(second_slot.inline_size()))
+        .expect("slot width is a valid constraint");
+    assert_eq!(
+        former
+            .candidate()
+            .expect("retry selection succeeds")
+            .expect("retry candidate exists"),
+        candidate
+    );
+    assert_eq!(
+        former
+            .commit(
+                candidate,
+                LineMeasurements {
+                    advance: 6.0,
+                    height: 10.0,
+                },
+                LineLimits {
+                    max_advance: Some(second_slot.inline_size()),
+                    max_height: Some(second_slot.block_size()),
+                },
+            )
+            .expect("retry evaluation succeeds"),
+        CommitOutcome::Accepted(CandidateOverflow::None)
+    );
+    assert_eq!(output, ["earlier"]);
+    assert!(former.is_done());
 }
 
 #[test]

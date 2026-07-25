@@ -21,10 +21,11 @@ use crate::{
     CompositionErrorKind, CompositionId, CompositionSession, CompositionUpdate,
     ComputedInlineStyle, Document, DocumentId, EditableSurface, EditableSurfaceElement,
     FiniteWidth, FontData, FontFamily, InlineFlowStyle, InlineRole, PaintSlot, PaintTable,
-    ParagraphRole, ParagraphStyle, Point, ProjectedTextSource, Rect, SceneErrorKind, SceneRequest,
-    ShapingStyle, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
-    SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextConstraint,
-    TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
+    ParagraphRole, ParagraphStyle, Point, ProjectedTextSource, Rect, RegionAttempt,
+    RegionAttemptOutcome, RegionFlow, RegionTranscript, SceneErrorKind, SceneRequest, ShapingStyle,
+    SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
+    StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextConstraint, TextId, TextMovement,
+    TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 
 #[derive(Debug)]
@@ -289,6 +290,59 @@ impl ParagraphFormation for RetainingInvalidAdapter {
     }
 }
 
+#[derive(Debug)]
+struct MismatchedEmptyRegionAdapter;
+
+impl ParagraphFormation for MismatchedEmptyRegionAdapter {
+    fn form(
+        &mut self,
+        input: ParagraphInput<'_>,
+        constraints: ParagraphConstraints,
+    ) -> Result<ParagraphFormationOutput, PreparationError> {
+        if !input.text().is_empty() {
+            return Err(PreparationError::invalid_output());
+        }
+        let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
+        let movements = [PreparedCursorMovement::new(
+            position,
+            PreparedCaret::try_new(0, 0.0)?,
+            None,
+            None,
+            None,
+            None,
+        )];
+        let paragraph = PreparedParagraph::try_new(input.paragraph(), 0, [], movements)?;
+        let flow = constraints
+            .region_flow()
+            .ok_or_else(PreparationError::invalid_output)?;
+        let cursor = constraints
+            .region_cursor()
+            .ok_or_else(PreparationError::invalid_output)?;
+        let slot = flow
+            .slot(cursor)
+            .ok_or_else(PreparationError::invalid_output)?;
+        let wrong_height = constraints.empty_line_height() / 2.0;
+        let attempt = RegionAttempt::try_new(
+            input.paragraph(),
+            0..0,
+            slot,
+            wrong_height,
+            RegionAttemptOutcome::Accepted,
+        )
+        .map_err(|_| PreparationError::invalid_output())?;
+        let end = flow
+            .accept(cursor, slot, wrong_height)
+            .map_err(|_| PreparationError::invalid_output())?;
+        let transcript = RegionTranscript::try_new(flow, cursor, end, [attempt])
+            .map_err(|_| PreparationError::invalid_output())?;
+        Ok(ParagraphFormationOutput::in_regions(
+            paragraph,
+            FormationWork::default(),
+            transcript,
+        ))
+    }
+}
+
 #[test]
 fn invalid_first_output_releases_untracked_backend_state() {
     let (document, styles, paint) = one_leaf_document(*b"scene-test-doc13", "é");
@@ -312,6 +366,50 @@ fn invalid_first_output_releases_untracked_backend_state() {
         Some(0),
         "invalid output must release backend state with no geometry owner"
     );
+}
+
+#[test]
+fn region_request_rejects_an_adapter_that_ignores_exact_slots() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-test-doc14", "region");
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let flow = RegionFlow::rectangle(Rect::new(40.0, 20.0, 140.0, 100.0)).expect("region is valid");
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
+        &styles,
+        &paint,
+    )
+    .with_region_flow(&flow);
+    let error = layout
+        .prepare(&document.snapshot(), &request)
+        .expect_err("an adapter must return exact slots and a replayable transcript");
+
+    assert_eq!(error.kind(), SceneErrorKind::Flow);
+}
+
+#[test]
+fn empty_region_output_rejects_a_cursor_height_that_disagrees_with_geometry() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-test-doc15", "");
+    let flow = RegionFlow::rectangle(Rect::new(40.0, 20.0, 140.0, 100.0)).expect("region is valid");
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
+        &styles,
+        &paint,
+    )
+    .with_region_flow(&flow);
+    let error = LayoutEngine::new(MismatchedEmptyRegionAdapter, CacheBudget::new(32))
+        .prepare(&document.snapshot(), &request)
+        .expect_err("flow cursor and empty geometry must consume the same height");
+
+    assert_eq!(error.kind(), SceneErrorKind::Flow);
 }
 
 #[test]

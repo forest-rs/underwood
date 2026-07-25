@@ -16,6 +16,8 @@ diagnostics. It covers:
 - explicit destruction and budget-driven cache churn.
 - compact projection identity, dense whitespace collapse, and one-to-many
   expansion without per-byte maps.
+- real exclusion, float, and multi-column region churn with replayable exact
+  slot transcripts.
 
 Deterministic `WorkReport`, intrinsic-metric, and cache assertions are the
 correctness proof. Machine-local elapsed time is supporting evidence only. A
@@ -26,6 +28,15 @@ Run the optimized wind tunnel with:
 
 ```sh
 cargo run --profile wind-tunnel -p underwood_label_benchmark
+```
+
+Isolate the pre-region formation baseline and real region churn with:
+
+```sh
+cargo build --release -p underwood_label_benchmark
+target/release/underwood_label_benchmark region-ready 200 512
+target/release/underwood_label_benchmark region-churn 200 512
+benches/labels/profile-allocations.sh
 ```
 
 The fonts are included from the repository's audited example fixtures.

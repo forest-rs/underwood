@@ -57,6 +57,7 @@ setup-identity s1
 primed-identical p0
 primed-paint p1
 primed-unique p2
+primed-region p3
 cold-identical c0
 retained-identical r0
 paint-change a0
@@ -64,6 +65,7 @@ localized-edit e0
 interaction-materialization i0
 width-churn w0
 region-ready g0
+region-churn g1
 identity-churn h0
 projection-identity-setup q0
 projection-identity q1
@@ -104,6 +106,9 @@ awk '
         print "region-ready", \
             calls["region-ready"] - calls["primed-unique"], \
             bytes["region-ready"] - bytes["primed-unique"]
+        print "region-churn", \
+            calls["region-churn"] - calls["primed-region"], \
+            bytes["region-churn"] - bytes["primed-region"]
         print "identity-churn", \
             calls["identity-churn"] - calls["setup-identity"], \
             bytes["identity-churn"] - bytes["setup-identity"]

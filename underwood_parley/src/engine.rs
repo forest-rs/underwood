@@ -16,7 +16,9 @@ use underwood::adapter::{
     ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput,
     PreparationError, PreparedLine, PreparedParagraph, PreparedRun, ShapingRun,
 };
-use underwood::{AnalysisStyle, InlineFlowStyle, ParagraphId, ParagraphStyle, ShapingStyle};
+use underwood::{
+    AnalysisStyle, InlineFlowStyle, ParagraphId, ParagraphStyle, RegionTranscript, ShapingStyle,
+};
 
 use crate::font::FontSet;
 use crate::interaction::{collect_analysis_units, lower_visual_units, prepared_cursor_movements};
@@ -109,6 +111,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 cache.inline_flow_runs.clear();
                 cache.constraints = None;
                 cache.formed_lines.clear();
+                cache.region_transcript = None;
             } else {
                 self.cache.insert(
                     paragraph,
@@ -134,6 +137,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         inline_flow_runs: Vec::new(),
                         constraints: None,
                         formed_lines: Vec::new(),
+                        region_transcript: None,
                     },
                 );
             }
@@ -264,6 +268,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             )?;
             cache.logical_clusters = collect_logical_clusters(input.text(), &cache.shaped_text)?;
             cache.formed_lines.clear();
+            cache.region_transcript = None;
         }
         if shaped || spacing_changed || break_policy_changed {
             let cache = self
@@ -281,11 +286,14 @@ impl ParagraphFormation for ParleyParagraphEngine {
             .cache
             .get(&paragraph)
             .ok_or_else(PreparationError::invalid_output)?;
+        let constraints_match = physics.constraints.as_ref().is_some_and(|cached| {
+            paragraph_constraints_match(cached, &constraints, input.text().is_empty())
+        });
         let needs_formation = shaped
             || spacing_changed
             || line_height_changed
             || break_policy_changed
-            || physics.constraints != Some(constraints);
+            || !constraints_match;
         let mut line_work = LineFormationWork::default();
         if needs_formation {
             let cache = self
@@ -295,7 +303,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
             if !shaped
                 && !spacing_changed
                 && !break_policy_changed
-                && cache.constraints == Some(constraints)
+                && constraints.region_flow().is_none()
+                && constraints_match
             {
                 update_line_metrics(
                     input.text(),
@@ -313,14 +322,15 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 let interaction_units = &cache.interaction_units;
                 let joining_units = &cache.joining_units;
                 let formed_lines = &mut cache.formed_lines;
-                line_work = form_lines(
+                let (work, transcript) = form_lines(
+                    input.paragraph(),
                     input.text(),
                     shaped_text,
                     scripts,
                     logical_clusters,
                     input.inline_flow_styles(),
                     input.inline_flow_runs(),
-                    constraints,
+                    &constraints,
                     formed_lines,
                     |source| {
                         let mut output = shape_line(
@@ -344,8 +354,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         Ok(output)
                     },
                 )?;
+                line_work = work;
+                cache.region_transcript = transcript;
             }
-            cache.constraints = Some(constraints);
+            cache.constraints = Some(constraints.clone());
         }
         if flow_projection_changed {
             let cache = self
@@ -436,7 +448,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     prepared_glyphs,
                 )?);
             }
-            prepared_lines.push(PreparedLine::try_new(
+            prepared_lines.push(PreparedLine::try_new_in_slot(
+                plan.slot,
                 checked_source_range(&plan.source)?,
                 plan.reason,
                 plan.advance,
@@ -484,7 +497,12 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 LineShapingWork::default()
             },
         );
-        Ok(ParagraphFormationOutput::new(paragraph, work))
+        match physics.region_transcript.clone() {
+            Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
+                paragraph, work, transcript,
+            )),
+            None => Ok(ParagraphFormationOutput::new(paragraph, work)),
+        }
     }
 
     fn release(&mut self, paragraph: ParagraphId) {
@@ -523,6 +541,18 @@ struct PhysicsCache {
     inline_flow_runs: Vec<InlineFlowRun>,
     constraints: Option<ParagraphConstraints>,
     formed_lines: Vec<FormedLine>,
+    region_transcript: Option<RegionTranscript>,
+}
+
+fn paragraph_constraints_match(
+    left: &ParagraphConstraints,
+    right: &ParagraphConstraints,
+    empty: bool,
+) -> bool {
+    left.text() == right.text()
+        && left.region_flow() == right.region_flow()
+        && left.region_cursor() == right.region_cursor()
+        && (!empty || left.empty_line_height() == right.empty_line_height())
 }
 
 fn inline_flow_values_match(

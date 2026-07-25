@@ -270,11 +270,13 @@ impl core::error::Error for StyleError {}
 pub enum SceneErrorKind {
     /// The finite width is invalid.
     InvalidWidth,
+    /// Region, exclusion, float, or line-slot geometry is invalid.
+    InvalidRegion,
     /// Paragraph preparation failed.
     Preparation,
     /// Prepared source ranges do not cover valid snapshot text.
     SourceCoverage,
-    /// The first-slice flow algorithm could not produce finite geometry.
+    /// Region traversal or formed-line flow output was inconsistent.
     Flow,
     /// A style references an absent paint slot or text leaf.
     InvalidStyle,

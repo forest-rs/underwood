@@ -8,8 +8,9 @@ use std::time::{Duration, Instant};
 
 use underwood::{
     BlockRequest, Brush, CacheBudget, Color, ComputedInlineStyle, DocumentId, FiniteWidth,
-    InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ProjectedText, ProjectionBuilder,
-    SceneOutput, ShapingStyle, TextBlock, TextConstraint, WhitespaceCollapse,
+    FloatSide, FlowRegion, InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ProjectedText,
+    ProjectionBuilder, Rect, RegionFloat, RegionFlow, SceneOutput, ShapingStyle, Size, TextBlock,
+    TextConstraint, WhitespaceCollapse,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -23,7 +24,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|cold-identical|retained-identical|paint-change|localized-edit|interaction-materialization|width-churn|region-ready|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|primed-identical|primed-paint|primed-unique|primed-region|cold-identical|retained-identical|paint-change|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -347,6 +348,7 @@ fn run_profile(
             profile_primed_identical("primed-paint", rounds, labels, &style, &paint, true)
         }
         "primed-unique" | "p2" => profile_primed_unique(rounds, labels, &style, &paint),
+        "primed-region" | "p3" => profile_primed_region(rounds, labels, &style, &paint),
         "cold-identical" | "c0" => {
             profile_cold_identical("cold-identical", rounds, labels, &style, &paint)
         }
@@ -364,6 +366,7 @@ fn run_profile(
         "region-ready" | "g0" => {
             profile_width_churn("region-ready", rounds, labels, &style, &paint)
         }
+        "region-churn" | "g1" => profile_region_churn(rounds, labels, &style, &paint),
         "identity-churn" | "h0" => profile_identity_churn(rounds, labels, &style, &paint),
         "projection-identity-setup" | "q0" => {
             profile_projection_setup("projection-identity-setup", rounds, labels, "stable label")
@@ -556,6 +559,29 @@ fn profile_primed_unique(
     }
     black_box((&labels, &layout));
     report_profile("primed-unique", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_primed_region(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let flows = region_flows()?;
+    black_box((&labels, &layout, flows));
+    report_profile("primed-region", rounds, label_count, Duration::ZERO);
     Ok(())
 }
 
@@ -764,6 +790,73 @@ fn profile_width_churn(
     Ok(())
 }
 
+fn profile_region_churn(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = unique_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let flows = region_flows()?;
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let flow = &flows[round % flows.len()];
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_region_flow(flow),
+                    )
+                    .expect("region-churn label must prepare");
+                assert_eq!(
+                    output.work().analysis().paragraphs(),
+                    0,
+                    "region churn must retain analysis"
+                );
+                assert_eq!(
+                    output.work().font_selection().paragraphs(),
+                    0,
+                    "region churn must retain selected fonts"
+                );
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    0,
+                    "region churn must retain canonical shaping"
+                );
+                assert_eq!(
+                    output.work().flow().paragraphs(),
+                    1,
+                    "region churn must reform exactly one paragraph"
+                );
+                let transcript = output
+                    .region_transcript()
+                    .expect("region churn must publish a transcript");
+                assert_eq!(
+                    transcript
+                        .replay(flow)
+                        .expect("region transcript must replay"),
+                    transcript.end(),
+                    "replay must reach the recorded cursor"
+                );
+                black_box((output.scene().lines().len(), transcript.attempts().len()));
+            }
+        }
+    });
+    report_profile("region-churn", rounds, label_count, elapsed);
+    Ok(())
+}
+
 fn profile_identity_churn(
     rounds: usize,
     label_count: usize,
@@ -888,6 +981,20 @@ fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {
         None,
         ["Noto Kufi Arabic"],
     )?)
+}
+
+fn region_flows() -> Result<[RegionFlow; 2], Box<dyn std::error::Error>> {
+    let exclusion = FlowRegion::new(Rect::new(0.0, 0.0, 132.0, 240.0))?
+        .with_exclusions([Rect::new(0.0, 0.0, 28.0, 42.0)])?;
+    let floated = FlowRegion::new(Rect::new(0.0, 0.0, 96.0, 120.0))?.with_floats([
+        RegionFloat::new(FloatSide::Left, 0.0, Size::new(24.0, 36.0))?,
+        RegionFloat::new(FloatSide::Right, 48.0, Size::new(20.0, 42.0))?,
+    ])?;
+    let second_column = FlowRegion::new(Rect::new(116.0, 0.0, 212.0, 160.0))?;
+    Ok([
+        RegionFlow::new([exclusion])?,
+        RegionFlow::new([floated, second_column])?,
+    ])
 }
 
 fn assert_no_physics(output: &SceneOutput) {

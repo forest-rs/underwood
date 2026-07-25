@@ -138,20 +138,60 @@ impl<'a> ParagraphInput<'a> {
 }
 
 /// Validated paragraph formation constraints.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ParagraphConstraints {
     text: TextConstraint,
+    empty_line_height: f64,
+    region_flow: Option<RegionFlow>,
+    region_cursor: Option<RegionCursor>,
 }
 
 impl ParagraphConstraints {
-    pub(crate) const fn new(text: TextConstraint) -> Self {
-        Self { text }
+    pub(crate) const fn new(text: TextConstraint, empty_line_height: f64) -> Self {
+        Self {
+            text,
+            empty_line_height,
+            region_flow: None,
+            region_cursor: None,
+        }
+    }
+
+    pub(crate) fn in_regions(
+        text: TextConstraint,
+        empty_line_height: f64,
+        region_flow: RegionFlow,
+        region_cursor: RegionCursor,
+    ) -> Self {
+        Self {
+            text,
+            empty_line_height,
+            region_flow: Some(region_flow),
+            region_cursor: Some(region_cursor),
+        }
     }
 
     /// Returns the requested intrinsic or constrained formation mode.
     #[must_use]
-    pub const fn text(self) -> TextConstraint {
+    pub const fn text(&self) -> TextConstraint {
         self.text
+    }
+
+    /// Returns the deterministic line-box height for a paragraph with no text.
+    #[must_use]
+    pub const fn empty_line_height(&self) -> f64 {
+        self.empty_line_height
+    }
+
+    /// Returns immutable region policy when exact line slots replace one width.
+    #[must_use]
+    pub const fn region_flow(&self) -> Option<&RegionFlow> {
+        self.region_flow.as_ref()
+    }
+
+    /// Returns the cursor from which this paragraph must resume region flow.
+    #[must_use]
+    pub const fn region_cursor(&self) -> Option<RegionCursor> {
+        self.region_cursor
     }
 }
 
@@ -308,13 +348,32 @@ impl PaintRun {
 pub struct ParagraphFormationOutput {
     paragraph: PreparedParagraph,
     work: FormationWork,
+    region_transcript: Option<RegionTranscript>,
 }
 
 impl ParagraphFormationOutput {
     /// Pairs validated prepared data with actual backend work.
     #[must_use]
     pub const fn new(paragraph: PreparedParagraph, work: FormationWork) -> Self {
-        Self { paragraph, work }
+        Self {
+            paragraph,
+            work,
+            region_transcript: None,
+        }
+    }
+
+    /// Pairs prepared data with a replayable exact-region transcript.
+    #[must_use]
+    pub const fn in_regions(
+        paragraph: PreparedParagraph,
+        work: FormationWork,
+        region_transcript: RegionTranscript,
+    ) -> Self {
+        Self {
+            paragraph,
+            work,
+            region_transcript: Some(region_transcript),
+        }
     }
 
     /// Returns the prepared paragraph.
@@ -327,6 +386,12 @@ impl ParagraphFormationOutput {
     #[must_use]
     pub const fn work(&self) -> FormationWork {
         self.work
+    }
+
+    /// Returns exact region attempts and cursor transitions, when requested.
+    #[must_use]
+    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
+        self.region_transcript.as_ref()
     }
 }
 

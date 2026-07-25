@@ -954,6 +954,7 @@ pub struct SceneRequest<'a> {
     pub(crate) constraint: TextConstraint,
     pub(crate) styles: &'a StyleMap,
     pub(crate) paint: &'a PaintTable,
+    pub(crate) region_flow: Option<&'a crate::RegionFlow>,
 }
 
 impl<'a> SceneRequest<'a> {
@@ -964,6 +965,24 @@ impl<'a> SceneRequest<'a> {
             constraint,
             styles,
             paint,
+            region_flow: None,
         }
+    }
+
+    /// Returns a request that fills exact slots from an immutable region flow.
+    ///
+    /// Region slots replace the single wrapping width for line formation.
+    /// Intrinsic requests continue to use [`Self::new`] without regions.
+    #[must_use]
+    pub fn with_region_flow(mut self, region_flow: &'a crate::RegionFlow) -> Self {
+        self.constraint = TextConstraint::Wrap(FiniteWidth(region_flow.max_inline_size()));
+        self.region_flow = Some(region_flow);
+        self
+    }
+
+    /// Returns the exact region policy, when one was requested.
+    #[must_use]
+    pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
+        self.region_flow
     }
 }

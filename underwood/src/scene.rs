@@ -19,9 +19,10 @@ use crate::{
     Affine, AnalysisStyle, BlockRequest, CompositionError, CompositionErrorKind, CompositionId,
     CompositionSession, CompositionStart, DocumentRevision, DocumentSnapshot, FontData,
     InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId, ParagraphRole, ParagraphStyle,
-    Point, ProjectedText as TextProjection, ProjectionKind, ProjectionSegment, Rect, SceneError,
-    SceneErrorKind, SceneRequest, SelectionError, SelectionErrorKind, SemanticId, ShapingStyle,
-    Size, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
+    Point, ProjectedText as TextProjection, ProjectionKind, ProjectionSegment, Rect,
+    RegionAttemptOutcome, RegionCursor, RegionFlow, RegionTranscript, SceneError, SceneErrorKind,
+    SceneRequest, SelectionError, SelectionErrorKind, SemanticId, ShapingStyle, Size,
+    SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
     SnapshotTextUnit, StyleMap, TextBlockSnapshot, TextConstraint, TextId, TextMovement,
     TextSelectionMode, Vec2,
 };

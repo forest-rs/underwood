@@ -18,15 +18,25 @@ pub struct TextMetrics {
 
 impl TextMetrics {
     pub(super) fn from_lines<Source>(lines: &[SceneLine<Source>], height: f64) -> Self {
-        let width = lines.iter().map(SceneLine::advance).fold(0.0_f64, f64::max);
+        let mut min_x = 0.0_f64;
+        let mut max_x = 0.0_f64;
+        let mut min_y = 0.0_f64;
+        let mut max_y = height;
+        for line in lines {
+            let bounds = line.bounds();
+            min_x = min_x.min(bounds.x0);
+            max_x = max_x.max(bounds.x0 + line.advance());
+            min_y = min_y.min(bounds.y0);
+            max_y = max_y.max(bounds.y1);
+        }
         Self {
-            size: Size::new(width, height),
+            size: Size::new(max_x - min_x, max_y - min_y),
             first_baseline: lines.first().map(SceneLine::baseline),
             last_baseline: lines.last().map(SceneLine::baseline),
         }
     }
 
-    /// Returns maximum actual line advance and total block-axis extent.
+    /// Returns the request-space extent, including region offsets and gaps.
     #[must_use]
     pub const fn size(self) -> Size {
         self.size
@@ -92,6 +102,7 @@ pub enum ProjectedTextPosition {
 pub struct SceneOutput {
     pub(super) scene: TextScene,
     pub(super) work: WorkReport,
+    pub(super) region_transcript: Option<RegionTranscript>,
 }
 
 /// Immutable transient scene for one exact composition epoch.
@@ -99,6 +110,7 @@ pub struct SceneOutput {
 pub struct CompositionSceneOutput {
     pub(super) scene: CompositionScene,
     pub(super) work: WorkReport,
+    pub(super) region_transcript: Option<RegionTranscript>,
 }
 
 impl CompositionSceneOutput {
@@ -113,6 +125,12 @@ impl CompositionSceneOutput {
     pub const fn work(&self) -> &WorkReport {
         &self.work
     }
+
+    /// Returns replayable region attempts for this transient request.
+    #[must_use]
+    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
+        self.region_transcript.as_ref()
+    }
 }
 
 impl SceneOutput {
@@ -126,6 +144,12 @@ impl SceneOutput {
     #[must_use]
     pub const fn work(&self) -> &WorkReport {
         &self.work
+    }
+
+    /// Returns replayable region attempts for this request.
+    #[must_use]
+    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
+        self.region_transcript.as_ref()
     }
 }
 

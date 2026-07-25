@@ -218,8 +218,25 @@ pub(super) fn rebind_position(
 pub(super) fn build_geometry(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
+    region_transcript: Option<&RegionTranscript>,
 ) -> Result<CachedGeometry, SceneError> {
     let empty_line_height = projection.empty_line_height();
+    let empty_slot = region_transcript.and_then(|transcript| {
+        transcript.attempts().iter().rev().find_map(|attempt| {
+            (attempt.paragraph() == prepared.paragraph()
+                && attempt.source().is_empty()
+                && attempt.outcome() == RegionAttemptOutcome::Accepted)
+                .then_some(attempt.slot())
+        })
+    });
+    let empty_inline_start = empty_slot.map_or(0.0, crate::LineSlot::inline_start);
+    let empty_block_start = empty_slot.map_or(0.0, crate::LineSlot::block_start);
+    let empty_bounds = Rect::new(
+        empty_inline_start,
+        empty_block_start,
+        empty_inline_start,
+        empty_block_start + empty_line_height,
+    );
     let mut line_top = 0.0;
     let mut lines = Vec::new();
     let mut fragments = Vec::new();
@@ -230,8 +247,10 @@ pub(super) fn build_geometry(
     for line in prepared.lines() {
         let line_index = lines.len();
         let fragment_start = fragments.len();
-        let baseline = line_top + line.baseline();
-        let mut unit_x = 0.0_f64;
+        let inline_start = line.slot().map_or(0.0, crate::LineSlot::inline_start);
+        let current_line_top = line.slot().map_or(line_top, crate::LineSlot::block_start);
+        let baseline = current_line_top + line.baseline();
+        let mut unit_x = inline_start;
         for unit in line.units() {
             let paragraph_source = unit.source();
             let sources = projection.local_ranges(paragraph_source.clone())?;
@@ -255,7 +274,12 @@ pub(super) fn build_geometry(
                 |slice| Ok(slice.semantic_id),
             )?;
             let next_x = unit_x + unit.advance();
-            let bounds = Rect::new(unit_x, line_top, next_x, line_top + line.height());
+            let bounds = Rect::new(
+                unit_x,
+                current_line_top,
+                next_x,
+                current_line_top + line.height(),
+            );
             clusters.push(CachedCluster {
                 sources,
                 semantic_id,
@@ -281,14 +305,19 @@ pub(super) fn build_geometry(
                 semantic_id: projection.semantic_for_range(source)?,
                 sources: local_source,
                 hit_slices: Vec::new(),
-                bounds: Rect::new(0.0, line_top, 0.0, line_top + line.height()),
+                bounds: Rect::new(
+                    inline_start,
+                    current_line_top,
+                    inline_start,
+                    current_line_top + line.height(),
+                ),
                 line: line_index,
                 left: position,
                 right: position,
                 bidi_level: 0,
             });
         }
-        let mut x = 0.0_f64;
+        let mut x = inline_start;
         for run in line.runs() {
             let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
             for glyph in run.glyphs() {
@@ -333,10 +362,10 @@ pub(super) fn build_geometry(
         }
         lines.push(CachedLine {
             bounds: Rect::new(
-                0.0,
-                line_top,
-                line.advance().max(1.0),
-                line_top + line.height(),
+                inline_start,
+                current_line_top,
+                inline_start + line.advance().max(1.0),
+                current_line_top + line.height(),
             ),
             advance: line.advance(),
             sources: projection.local_ranges(line.source())?,
@@ -346,7 +375,7 @@ pub(super) fn build_geometry(
             content_ascent: line.content_ascent(),
             content_descent: line.content_descent(),
         });
-        line_top += line.height();
+        line_top = line_top.max(current_line_top + line.height());
     }
 
     if prepared.lines().is_empty()
@@ -359,7 +388,7 @@ pub(super) fn build_geometry(
             semantic_id: projection.semantic_for_range(0..0)?,
             sources,
             hit_slices: Vec::new(),
-            bounds: Rect::new(0.0, 0.0, 0.0, empty_line_height),
+            bounds: empty_bounds,
             line: 0,
             left: position,
             right: position,
@@ -413,7 +442,7 @@ pub(super) fn build_geometry(
             paragraph_role: None,
             inline_role: Some(span.role),
             source: Some(source),
-            bounds: bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, empty_line_height)),
+            bounds: bounds.unwrap_or(empty_bounds),
         });
     }
 
@@ -443,17 +472,17 @@ pub(super) fn build_geometry(
             SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
         })?;
         let line_bounds = lines.get(line).map(|line| line.bounds).unwrap_or(Rect::new(
-            0.0,
-            0.0,
-            1.0,
-            empty_line_height,
+            empty_bounds.x0,
+            empty_bounds.y0,
+            empty_bounds.x0 + 1.0,
+            empty_bounds.y1,
         ));
         carets.push(CachedCaret {
             position: movement.position,
             bounds: Rect::new(
-                caret.inline(),
+                line_bounds.x0 + caret.inline(),
                 line_bounds.y0,
-                caret.inline() + 1.0,
+                line_bounds.x0 + caret.inline() + 1.0,
                 line_bounds.y1,
             ),
         });
@@ -466,7 +495,7 @@ pub(super) fn build_geometry(
 
     Ok(CachedGeometry {
         height: if prepared.lines().is_empty() {
-            empty_line_height
+            empty_bounds.y1
         } else {
             line_top
         },

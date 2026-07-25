@@ -99,6 +99,11 @@ toolkit behavior or pixel production.
 - Chromium-recorded first-line cases are recorded for the step 11 CJK and
   CSS-profile corpus. They remain browser-compatibility evidence rather than a
   Unicode oracle.
+- Step 8 is implemented through the public document, composition, and
+  `TextBlock` paths. Exact exclusion, float, and column slots are replayable;
+  height rejection restores text traversal; mixed-bidi interaction geometry
+  and retained invalidation are product-proven. The measured local cost is
+  recorded in `docs/proof/region-flow-review-2026-07-25.md`.
 
 ### Risks and controls
 

@@ -20,10 +20,11 @@ use underwood::{
     CompositionUpdate, ComputedInlineStyle, Document, DocumentId, EditErrorKind, EditableSurface,
     EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
     InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, OverflowWrap, PaintSlot, PaintTable,
-    ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, SceneRequest,
-    SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
-    SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
-    TextSelectionMode, TextSpacing, TextWrapMode, Vec2, WhitespaceCollapse, WordBreak,
+    ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, Rect,
+    RegionAttemptOutcome, SceneRequest, SelectionErrorKind, ShapingStyle, SnapshotTextUnit,
+    StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint,
+    TextMovement, TextScene, TextSelectionMode, TextSpacing, TextWrapMode, Vec2,
+    WhitespaceCollapse, WordBreak,
 };
 use underwood::{Language, Script};
 
@@ -41,6 +42,7 @@ mod intrinsic_and_cache;
 mod line_break;
 mod line_former;
 mod paint;
+mod region_flow;
 
 const LATIN_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");

@@ -12,7 +12,10 @@ use core::ops::Range;
 
 use parley_engine::ShapedText;
 use underwood::adapter::{InlineFlowRun, LineBreakReason, ParagraphConstraints, PreparationError};
-use underwood::{InlineFlowStyle, OverflowWrap, TextConstraint, TextWrapMode};
+use underwood::{
+    InlineFlowStyle, LineSlot, OverflowWrap, ParagraphId, RegionAttempt, RegionAttemptOutcome,
+    RegionTranscript, TextConstraint, TextWrapMode,
+};
 
 use crate::line_former::{
     CandidateBreak, CommitOutcome, FormationConstraint, LineCandidate, LineFormer, LineFormerError,
@@ -31,6 +34,7 @@ pub(crate) struct LinePlan {
     pub(crate) height: f64,
     pub(crate) content_ascent: f64,
     pub(crate) content_descent: f64,
+    pub(crate) slot: Option<LineSlot>,
 }
 
 #[derive(Clone, Debug)]
@@ -66,22 +70,85 @@ pub(crate) struct RunPiece {
 }
 
 pub(crate) fn form_lines(
+    paragraph: ParagraphId,
     text: &str,
     canonical_text: &ShapedText,
     canonical_scripts: &[[u8; 4]],
     clusters: &[LogicalCluster],
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
-    constraints: ParagraphConstraints,
+    constraints: &ParagraphConstraints,
     lines: &mut Vec<FormedLine>,
     mut shape_line: impl FnMut(Range<usize>) -> Result<LineShapeOutput, PreparationError>,
-) -> Result<LineFormationWork, PreparationError> {
+) -> Result<(LineFormationWork, Option<RegionTranscript>), PreparationError> {
     lines.clear();
     if text.is_empty() {
-        return Ok(LineFormationWork::default());
+        let transcript = match (constraints.region_flow(), constraints.region_cursor()) {
+            (Some(flow), Some(start)) => {
+                let mut cursor = start;
+                let mut attempts = Vec::new();
+                let mut work = LineFormationWork::default();
+                loop {
+                    let slot = flow
+                        .slot(cursor)
+                        .ok_or_else(PreparationError::invalid_output)?;
+                    work.candidates = work.candidates.saturating_add(1);
+                    let outcome = if constraints.empty_line_height() <= slot.block_size() {
+                        RegionAttemptOutcome::Accepted
+                    } else {
+                        work.rejected_candidates = work.rejected_candidates.saturating_add(1);
+                        RegionAttemptOutcome::HeightRejected
+                    };
+                    attempts.push(
+                        RegionAttempt::try_new(
+                            paragraph,
+                            0..0,
+                            slot,
+                            constraints.empty_line_height(),
+                            outcome,
+                        )
+                        .map_err(|_| PreparationError::invalid_output())?,
+                    );
+                    match outcome {
+                        RegionAttemptOutcome::Accepted => {
+                            cursor = flow
+                                .accept(cursor, slot, constraints.empty_line_height())
+                                .map_err(|_| PreparationError::invalid_output())?;
+                            let transcript =
+                                RegionTranscript::try_new(flow, start, cursor, attempts)
+                                    .map_err(|_| PreparationError::invalid_output())?;
+                            return Ok((work, Some(transcript)));
+                        }
+                        RegionAttemptOutcome::HeightRejected => {
+                            cursor = flow
+                                .reject(cursor, slot)
+                                .map_err(|_| PreparationError::invalid_output())?;
+                        }
+                    }
+                }
+            }
+            (None, None) => None,
+            _ => return Err(PreparationError::invalid_output()),
+        };
+        return Ok((LineFormationWork::default(), transcript));
     }
     if clusters.is_empty() {
         return Err(PreparationError::invalid_output());
+    }
+
+    if constraints.region_flow().is_some() {
+        return form_region_lines(
+            paragraph,
+            text,
+            canonical_text,
+            canonical_scripts,
+            clusters,
+            inline_flow_styles,
+            inline_flow_runs,
+            constraints,
+            lines,
+            shape_line,
+        );
     }
 
     let constraint = formation_constraint(constraints.text());
@@ -102,6 +169,7 @@ pub(crate) fn form_lines(
             first_candidate.clusters(),
             line_break_reason(first_candidate.reason()),
             first_candidate.canonical_advance(),
+            None,
             None,
         )?;
         match former
@@ -127,7 +195,7 @@ pub(crate) fn form_lines(
         });
         let mut work = LineFormationWork::default();
         record_former_work(&mut work, former.work());
-        return Ok(work);
+        return Ok((work, None));
     }
 
     let mut work = LineFormationWork::default();
@@ -165,6 +233,7 @@ pub(crate) fn form_lines(
                 0..formed_clusters.len(),
                 line_break_reason(candidate.reason()),
                 advance,
+                None,
                 None,
             )?;
             if scripts.len() != shaped_text.runs().len() {
@@ -219,13 +288,232 @@ pub(crate) fn form_lines(
                 LineBreakReason::End,
                 0.0,
                 Some(&previous),
+                None,
             )?,
             shaped_text: ShapedText::new(),
             scripts: Vec::new(),
         });
     }
     record_former_work(&mut work, former.work());
-    Ok(work)
+    Ok((work, None))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keeps region policy beside the existing complete formation inputs"
+)]
+fn form_region_lines(
+    paragraph: ParagraphId,
+    text: &str,
+    canonical_text: &ShapedText,
+    canonical_scripts: &[[u8; 4]],
+    clusters: &[LogicalCluster],
+    inline_flow_styles: &[InlineFlowStyle],
+    inline_flow_runs: &[InlineFlowRun],
+    constraints: &ParagraphConstraints,
+    lines: &mut Vec<FormedLine>,
+    mut shape_line: impl FnMut(Range<usize>) -> Result<LineShapeOutput, PreparationError>,
+) -> Result<(LineFormationWork, Option<RegionTranscript>), PreparationError> {
+    let flow = constraints
+        .region_flow()
+        .ok_or_else(PreparationError::invalid_output)?;
+    let start = constraints
+        .region_cursor()
+        .ok_or_else(PreparationError::invalid_output)?;
+    let mut cursor = start;
+    let first_slot = flow
+        .slot(cursor)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let mut former = LineFormer::new(
+        clusters,
+        FormationConstraint::Wrap(first_slot.inline_size()),
+    )
+    .map_err(map_former_error)?;
+    let mut work = LineFormationWork::default();
+    let mut attempts = Vec::new();
+
+    'slots: while !former.is_done() {
+        let slot = flow
+            .slot(cursor)
+            .ok_or_else(PreparationError::invalid_output)?;
+        former
+            .set_constraint(FormationConstraint::Wrap(slot.inline_size()))
+            .map_err(map_former_error)?;
+        let checkpoint = former.checkpoint(lines.len());
+        let mut candidate = former
+            .candidate()
+            .map_err(map_former_error)?
+            .ok_or_else(PreparationError::invalid_output)?;
+        loop {
+            validate_candidate(candidate)?;
+            let source = candidate.source();
+            let uses_canonical = candidate.clusters() == (0..clusters.len())
+                && candidate.reason() == CandidateBreak::End;
+            let (shaped_text, scripts, resolved_clusters, shaped_glyphs) = if uses_canonical {
+                (canonical_text.clone(), canonical_scripts.to_vec(), 0, 0)
+            } else {
+                let output = shape_line(source.clone())?;
+                (
+                    output.shaped_text,
+                    output.scripts,
+                    output.resolved_clusters,
+                    output.shaped_glyphs,
+                )
+            };
+            if !uses_canonical {
+                work.reshapes = work.reshapes.saturating_add(1);
+                work.resolved_clusters = work.resolved_clusters.saturating_add(resolved_clusters);
+                work.shaped_runs = work
+                    .shaped_runs
+                    .saturating_add(u32::try_from(shaped_text.runs().len()).unwrap_or(u32::MAX));
+                work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
+            }
+            let formed_clusters = collect_logical_clusters(text, &shaped_text)?;
+            if formed_clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
+                || formed_clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
+            {
+                return Err(PreparationError::invalid_output());
+            }
+            let advance = formed_clusters.iter().map(|cluster| cluster.advance).sum();
+            let plan = make_line_plan(
+                &shaped_text,
+                &formed_clusters,
+                inline_flow_styles,
+                inline_flow_runs,
+                0..formed_clusters.len(),
+                line_break_reason(candidate.reason()),
+                advance,
+                None,
+                Some(slot),
+            )?;
+            if scripts.len() != shaped_text.runs().len() {
+                return Err(PreparationError::invalid_output());
+            }
+            match former
+                .commit(
+                    candidate,
+                    LineMeasurements {
+                        advance: plan.advance,
+                        height: plan.height,
+                    },
+                    LineLimits {
+                        max_advance: Some(slot.inline_size()),
+                        max_height: Some(slot.block_size()),
+                    },
+                )
+                .map_err(map_former_error)?
+            {
+                CommitOutcome::Accepted(_) => {
+                    attempts.push(
+                        RegionAttempt::try_new(
+                            paragraph,
+                            checked_source(&plan.source)?,
+                            slot,
+                            plan.height,
+                            RegionAttemptOutcome::Accepted,
+                        )
+                        .map_err(|_| PreparationError::invalid_output())?,
+                    );
+                    cursor = flow
+                        .accept(cursor, slot, plan.height)
+                        .map_err(|_| PreparationError::invalid_output())?;
+                    lines.push(FormedLine {
+                        plan,
+                        shaped_text,
+                        scripts,
+                    });
+                    continue 'slots;
+                }
+                CommitOutcome::Retry(retry) => candidate = retry,
+                CommitOutcome::SlotRejected => {
+                    attempts.push(
+                        RegionAttempt::try_new(
+                            paragraph,
+                            checked_source(&plan.source)?,
+                            slot,
+                            plan.height,
+                            RegionAttemptOutcome::HeightRejected,
+                        )
+                        .map_err(|_| PreparationError::invalid_output())?,
+                    );
+                    former
+                        .restore(checkpoint, lines)
+                        .map_err(map_former_error)?;
+                    cursor = flow
+                        .reject(cursor, slot)
+                        .map_err(|_| PreparationError::invalid_output())?;
+                    continue 'slots;
+                }
+            }
+        }
+    }
+
+    if former.needs_terminal_empty_line() {
+        let previous = lines
+            .last()
+            .map(|line| line.plan.clone())
+            .ok_or_else(PreparationError::invalid_output)?;
+        loop {
+            let slot = flow
+                .slot(cursor)
+                .ok_or_else(PreparationError::invalid_output)?;
+            let plan = make_line_plan(
+                canonical_text,
+                clusters,
+                inline_flow_styles,
+                inline_flow_runs,
+                clusters.len()..clusters.len(),
+                LineBreakReason::End,
+                0.0,
+                Some(&previous),
+                Some(slot),
+            )?;
+            let outcome = if plan.height <= slot.block_size() {
+                RegionAttemptOutcome::Accepted
+            } else {
+                RegionAttemptOutcome::HeightRejected
+            };
+            attempts.push(
+                RegionAttempt::try_new(
+                    paragraph,
+                    checked_source(&plan.source)?,
+                    slot,
+                    plan.height,
+                    outcome,
+                )
+                .map_err(|_| PreparationError::invalid_output())?,
+            );
+            match outcome {
+                RegionAttemptOutcome::Accepted => {
+                    cursor = flow
+                        .accept(cursor, slot, plan.height)
+                        .map_err(|_| PreparationError::invalid_output())?;
+                    lines.push(FormedLine {
+                        plan,
+                        shaped_text: ShapedText::new(),
+                        scripts: Vec::new(),
+                    });
+                    break;
+                }
+                RegionAttemptOutcome::HeightRejected => {
+                    cursor = flow
+                        .reject(cursor, slot)
+                        .map_err(|_| PreparationError::invalid_output())?;
+                }
+            }
+        }
+    }
+    record_former_work(&mut work, former.work());
+    let transcript = RegionTranscript::try_new(flow, start, cursor, attempts)
+        .map_err(|_| PreparationError::invalid_output())?;
+    Ok((work, Some(transcript)))
+}
+
+fn checked_source(source: &Range<usize>) -> Result<Range<u32>, PreparationError> {
+    Ok(
+        u32::try_from(source.start).map_err(|_| PreparationError::invalid_output())?
+            ..u32::try_from(source.end).map_err(|_| PreparationError::invalid_output())?,
+    )
 }
 
 fn formation_constraint(constraint: TextConstraint) -> FormationConstraint {
@@ -321,6 +609,7 @@ pub(crate) fn update_line_metrics(
             reason,
             advance,
             previous.as_ref(),
+            line.plan.slot,
         )?;
         previous = Some(line.plan.clone());
     }
@@ -418,6 +707,7 @@ fn make_line_plan(
     reason: LineBreakReason,
     advance: f64,
     empty_metrics: Option<&LinePlan>,
+    slot: Option<LineSlot>,
 ) -> Result<LinePlan, PreparationError> {
     if logical_range.is_empty() {
         let metrics = empty_metrics.ok_or_else(PreparationError::invalid_output)?;
@@ -431,6 +721,7 @@ fn make_line_plan(
             height: metrics.height,
             content_ascent: metrics.content_ascent,
             content_descent: metrics.content_descent,
+            slot,
         });
     }
 
@@ -476,6 +767,7 @@ fn make_line_plan(
         height: above + below,
         content_ascent,
         content_descent,
+        slot,
     })
 }
 

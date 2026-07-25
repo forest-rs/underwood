@@ -211,6 +211,10 @@ reformation path. It establishes the pre-region baseline for the same
 shape/formation/geometry work that region slots will later drive; it does not
 pretend that exclusion or column policy exists already.
 
+The implemented exclusion, float, and column result retains this historical
+baseline and compares real `region-churn` against it in
+`region-flow-review-2026-07-25.md`.
+
 The counts expose an important baseline rather than a success: even retained
 and paint-only calls allocate 247 times because they rematerialize an owned
 scene. Cold interaction construction allocates more than twice as often, and

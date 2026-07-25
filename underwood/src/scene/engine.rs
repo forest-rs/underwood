@@ -179,6 +179,9 @@ impl LayoutEngine {
         let mut texts = Vec::new();
         let mut semantics = Vec::new();
         let mut y_offset = 0.0;
+        let region_start = request.region_flow.map(RegionFlow::cursor);
+        let mut region_cursor = region_start;
+        let mut region_attempts = Vec::new();
 
         for paragraph in snapshot.paragraphs() {
             let projection = Projection::new(paragraph, request)?;
@@ -189,10 +192,16 @@ impl LayoutEngine {
                 paragraph,
                 &projection,
                 request.constraint,
+                request.region_flow,
+                region_cursor,
                 self.clock,
                 &mut work,
             )?;
-            self.record_access(CacheKind::Committed, access);
+            self.record_access(CacheKind::Committed, &access);
+            if let Some(transcript) = &access.region_transcript {
+                region_attempts.extend_from_slice(transcript.attempts());
+                region_cursor = Some(transcript.end());
+            }
             let geometry = &self
                 .cache
                 .get(&paragraph.id)
@@ -201,7 +210,11 @@ impl LayoutEngine {
             materialize_geometry(
                 geometry,
                 snapshot.revision(),
-                y_offset,
+                if request.region_flow.is_some() {
+                    0.0
+                } else {
+                    y_offset
+                },
                 &mut lines,
                 &mut fragments,
                 &mut clusters,
@@ -210,7 +223,11 @@ impl LayoutEngine {
                 &mut texts,
                 &mut semantics,
             );
-            y_offset += geometry.height;
+            if request.region_flow.is_none() {
+                y_offset += geometry.height;
+            } else {
+                y_offset = y_offset.max(geometry.height);
+            }
             self.enforce_budget();
         }
 
@@ -219,6 +236,16 @@ impl LayoutEngine {
             records: fragments.len(),
         };
         let metrics = TextMetrics::from_lines(&lines, y_offset);
+        let region_transcript = match (request.region_flow, region_start, region_cursor) {
+            (Some(flow), Some(start), Some(end)) => Some(RegionTranscript::try_new(
+                flow,
+                start,
+                end,
+                region_attempts,
+            )?),
+            (None, None, None) => None,
+            _ => return Err(SceneError::new(SceneErrorKind::Flow)),
+        };
         let output = SceneOutput {
             scene: TextScene {
                 document: snapshot.id(),
@@ -234,6 +261,7 @@ impl LayoutEngine {
                 semantics,
             },
             work,
+            region_transcript,
         };
         Ok(output)
     }
@@ -248,7 +276,11 @@ impl LayoutEngine {
             .with_default_paragraph_style(request.paragraph_style);
         self.prepare(
             snapshot.document(),
-            &SceneRequest::new(request.constraint, &styles, request.paint),
+            &match request.region_flow {
+                Some(flow) => SceneRequest::new(request.constraint, &styles, request.paint)
+                    .with_region_flow(flow),
+                None => SceneRequest::new(request.constraint, &styles, request.paint),
+            },
         )
     }
 
@@ -280,6 +312,9 @@ impl LayoutEngine {
         let mut movements = Vec::new();
         let mut semantics = Vec::new();
         let mut y_offset = 0.0;
+        let region_start = request.region_flow.map(RegionFlow::cursor);
+        let mut region_cursor = region_start;
+        let mut region_attempts = Vec::new();
 
         for paragraph in snapshot.paragraphs() {
             let transient = paragraph.id.index == target.paragraph;
@@ -298,6 +333,8 @@ impl LayoutEngine {
                         paragraph,
                         &projection,
                         request.constraint,
+                        request.region_flow,
+                        region_cursor,
                         self.clock,
                         &mut work,
                     )?,
@@ -311,12 +348,18 @@ impl LayoutEngine {
                         paragraph,
                         &projection,
                         request.constraint,
+                        request.region_flow,
+                        region_cursor,
                         self.clock,
                         &mut work,
                     )?,
                 )
             };
-            self.record_access(kind, access);
+            self.record_access(kind, &access);
+            if let Some(transcript) = &access.region_transcript {
+                region_attempts.extend_from_slice(transcript.attempts());
+                region_cursor = Some(transcript.end());
+            }
             let geometry = match kind {
                 CacheKind::Committed => self
                     .cache
@@ -331,7 +374,11 @@ impl LayoutEngine {
             materialize_projected_geometry(
                 geometry,
                 snapshot.revision(),
-                y_offset,
+                if request.region_flow.is_some() {
+                    0.0
+                } else {
+                    y_offset
+                },
                 &mut lines,
                 &mut fragments,
                 &mut clusters,
@@ -339,7 +386,11 @@ impl LayoutEngine {
                 &mut movements,
                 &mut semantics,
             );
-            y_offset += geometry.height;
+            if request.region_flow.is_none() {
+                y_offset += geometry.height;
+            } else {
+                y_offset = y_offset.max(geometry.height);
+            }
             self.enforce_budget();
         }
 
@@ -348,6 +399,16 @@ impl LayoutEngine {
             records: fragments.len(),
         };
         let metrics = TextMetrics::from_lines(&lines, y_offset);
+        let region_transcript = match (request.region_flow, region_start, region_cursor) {
+            (Some(flow), Some(start), Some(end)) => Some(RegionTranscript::try_new(
+                flow,
+                start,
+                end,
+                region_attempts,
+            )?),
+            (None, None, None) => None,
+            _ => return Err(SceneError::new(SceneErrorKind::Flow)),
+        };
         let output = CompositionSceneOutput {
             scene: CompositionScene {
                 document: snapshot.id(),
@@ -364,6 +425,7 @@ impl LayoutEngine {
                 semantics,
             },
             work,
+            region_transcript,
         };
         Ok(output)
     }
@@ -416,7 +478,7 @@ impl LayoutEngine {
         }
     }
 
-    fn record_access(&mut self, kind: CacheKind, access: CacheAccess) {
+    fn record_access(&mut self, kind: CacheKind, access: &CacheAccess) {
         if let Some(previous) = access.previous_use {
             self.recency.remove(&(previous, kind, access.paragraph));
             self.cache_work.hits += 1;
@@ -464,11 +526,12 @@ impl LayoutEngine {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct CacheAccess {
     paragraph: ParagraphId,
     previous_use: Option<u64>,
     current_use: u64,
+    region_transcript: Option<RegionTranscript>,
 }
 
 fn prepare_paragraph_geometry(
@@ -477,13 +540,19 @@ fn prepare_paragraph_geometry(
     paragraph: &Paragraph,
     projection: &Projection<'_>,
     constraint: TextConstraint,
+    region_flow: Option<&RegionFlow>,
+    region_cursor: Option<RegionCursor>,
     current_use: u64,
     work: &mut WorkReport,
 ) -> Result<CacheAccess, SceneError> {
     let formation_matches = cache.get(&paragraph.id).is_some_and(|entry| {
-        entry
-            .formation_key
-            .matches(paragraph.version, projection, constraint)
+        entry.formation_key.matches(
+            paragraph.version,
+            projection,
+            constraint,
+            region_flow,
+            region_cursor,
+        )
     });
     let paint_matches = cache
         .get(&paragraph.id)
@@ -502,6 +571,7 @@ fn prepare_paragraph_geometry(
             paragraph: paragraph.id,
             previous_use,
             current_use,
+            region_transcript: entry.region_transcript.clone(),
         });
     }
 
@@ -512,7 +582,22 @@ fn prepare_paragraph_geometry(
         .collect();
     let text_len = u32::try_from(projection.mapping.text().len())
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
-    let constraints = ParagraphConstraints::new(constraint);
+    let constraints = match (region_flow, region_cursor) {
+        (Some(flow), Some(cursor)) => ParagraphConstraints::in_regions(
+            constraint,
+            projection.empty_line_height(),
+            flow.clone(),
+            cursor,
+        ),
+        (None, None) => ParagraphConstraints::new(constraint, projection.empty_line_height()),
+        _ => {
+            release_untracked_backend(paragraphs, cache, paragraph.id);
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::Flow,
+                paragraph.id,
+            ));
+        }
+    };
     let output = match paragraphs.form(
         ParagraphInput::new(
             paragraph.id,
@@ -545,11 +630,41 @@ fn prepare_paragraph_geometry(
         release_untracked_backend(paragraphs, cache, paragraph.id);
         return Err(error);
     }
+    let region_transcript = match (region_flow, region_cursor, output.region_transcript()) {
+        (Some(flow), Some(cursor), Some(transcript))
+            if transcript.start() == cursor
+                && transcript.replay(flow) == Ok(transcript.end())
+                && region_output_matches(output.paragraph(), transcript, projection) =>
+        {
+            Some(transcript.clone())
+        }
+        (None, None, None) => None,
+        _ => {
+            release_untracked_backend(paragraphs, cache, paragraph.id);
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::Flow,
+                paragraph.id,
+            ));
+        }
+    };
+    let slots_match = output
+        .paragraph()
+        .lines()
+        .iter()
+        .all(|line| line.slot().is_some() == region_flow.is_some());
+    if !slots_match {
+        release_untracked_backend(paragraphs, cache, paragraph.id);
+        return Err(SceneError::for_paragraph(
+            SceneErrorKind::Flow,
+            paragraph.id,
+        ));
+    }
     record_formation_work(work, output.work());
     if projection.mapping.text().is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
-    let geometry = match build_geometry(output.paragraph(), projection) {
+    let geometry = match build_geometry(output.paragraph(), projection, region_transcript.as_ref())
+    {
         Ok(geometry) => geometry,
         Err(error) => {
             release_untracked_backend(paragraphs, cache, paragraph.id);
@@ -568,6 +683,8 @@ fn prepare_paragraph_geometry(
         projection.inline_flow_runs.clone(),
         projection.paragraph_style,
         constraint,
+        region_flow.cloned(),
+        region_cursor,
         projection.empty_line_height_key(),
         projection,
     );
@@ -576,6 +693,7 @@ fn prepare_paragraph_geometry(
         entry.last_used = current_use;
         entry.formation_key = formation_key;
         entry.paint_runs = projection.paint_runs.clone();
+        entry.region_transcript = region_transcript.clone();
         entry.geometry = geometry;
         previous_use
     } else {
@@ -585,6 +703,7 @@ fn prepare_paragraph_geometry(
                 last_used: current_use,
                 formation_key,
                 paint_runs: projection.paint_runs.clone(),
+                region_transcript: region_transcript.clone(),
                 geometry,
             },
         );
@@ -594,6 +713,7 @@ fn prepare_paragraph_geometry(
         paragraph: paragraph.id,
         previous_use,
         current_use,
+        region_transcript,
     })
 }
 
@@ -620,6 +740,8 @@ struct FormationKey {
     inline_flow_runs: Vec<InlineFlowRun>,
     paragraph_style: ParagraphStyle,
     constraint: ConstraintKey,
+    region_flow: Option<RegionFlow>,
+    region_cursor: Option<RegionCursor>,
     empty_line_height: u64,
 }
 
@@ -635,6 +757,8 @@ impl FormationKey {
         inline_flow_runs: Vec<InlineFlowRun>,
         paragraph_style: ParagraphStyle,
         constraint: TextConstraint,
+        region_flow: Option<RegionFlow>,
+        region_cursor: Option<RegionCursor>,
         empty_line_height: u64,
         projection: &Projection<'_>,
     ) -> Self {
@@ -650,6 +774,8 @@ impl FormationKey {
             inline_flow_runs,
             paragraph_style,
             constraint: ConstraintKey::from(constraint),
+            region_flow,
+            region_cursor,
             empty_line_height,
         }
     }
@@ -659,6 +785,8 @@ impl FormationKey {
         version: u64,
         projection: &Projection<'_>,
         constraint: TextConstraint,
+        region_flow: Option<&RegionFlow>,
+        region_cursor: Option<RegionCursor>,
     ) -> bool {
         self.version == version
             && self.text == projection.mapping.text()
@@ -676,6 +804,8 @@ impl FormationKey {
             && self.inline_flow_runs == projection.inline_flow_runs
             && self.paragraph_style == projection.paragraph_style
             && self.constraint == ConstraintKey::from(constraint)
+            && option_ref_eq(self.region_flow.as_ref(), region_flow)
+            && self.region_cursor == region_cursor
             && self.empty_line_height == projection.empty_line_height_key()
     }
 }
@@ -702,5 +832,54 @@ struct ParagraphCache {
     last_used: u64,
     formation_key: FormationKey,
     paint_runs: Vec<PaintRun>,
+    region_transcript: Option<RegionTranscript>,
     geometry: CachedGeometry,
+}
+
+fn option_ref_eq<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left == right,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn region_output_matches(
+    paragraph: &PreparedParagraph,
+    transcript: &RegionTranscript,
+    projection: &Projection<'_>,
+) -> bool {
+    if transcript.attempts().iter().any(|attempt| {
+        attempt.paragraph() != paragraph.paragraph()
+            || projection
+                .mapping
+                .text()
+                .get(attempt.source().start as usize..attempt.source().end as usize)
+                .is_none()
+    }) {
+        return false;
+    }
+    if paragraph.lines().is_empty() {
+        let mut accepted = transcript
+            .attempts()
+            .iter()
+            .filter(|attempt| attempt.outcome() == RegionAttemptOutcome::Accepted);
+        return projection.mapping.text().is_empty()
+            && accepted.next().is_some_and(|attempt| {
+                attempt.source().is_empty()
+                    && attempt.line_height() == projection.empty_line_height()
+            })
+            && accepted.next().is_none();
+    }
+    let mut accepted = transcript
+        .attempts()
+        .iter()
+        .filter(|attempt| attempt.outcome() == RegionAttemptOutcome::Accepted);
+    paragraph.lines().iter().all(|line| {
+        accepted.next().is_some_and(|attempt| {
+            line.source() == attempt.source()
+                && line.slot() == Some(attempt.slot())
+                && line.height() == attempt.line_height()
+        })
+    }) && accepted.next().is_none()
 }

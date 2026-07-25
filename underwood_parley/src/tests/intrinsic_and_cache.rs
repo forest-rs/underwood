@@ -80,6 +80,38 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
 }
 
 #[test]
+fn hit_area_padding_does_not_inflate_zero_advance_intrinsic_width() {
+    let (document, styles, paint) = fixture_document("\n", 1.0);
+    let output = fixture_engine()
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("mandatory break prepares");
+    let max_advance = output
+        .scene()
+        .lines()
+        .iter()
+        .map(|line| line.advance())
+        .fold(0.0_f64, f64::max);
+
+    assert_eq!(max_advance, 0.0);
+    assert!(
+        output
+            .scene()
+            .lines()
+            .iter()
+            .all(|line| line.bounds().width() >= 1.0),
+        "interaction geometry retains its minimum hit area"
+    );
+    assert_eq!(
+        output.scene().metrics().size().width,
+        max_advance,
+        "intrinsic measurement must use actual advance rather than padded bounds"
+    );
+}
+
+#[test]
 fn text_block_matches_document_path_and_empty_metrics_are_explicit() {
     let text = "office مرحبا";
     let (document, styles, paint) = fixture_document(text, 1.2);

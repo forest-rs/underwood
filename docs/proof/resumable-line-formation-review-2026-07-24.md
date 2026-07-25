@@ -2,10 +2,11 @@
 
 ## Status
 
-The rectangle product path now uses one allocation-free, resumable line-former
-kernel over retained Parley Engine cluster facts. The capability is measured.
-Regions, exclusions, floats, and columns remain separate work; this slice
-establishes the state and retry protocol they can reuse.
+The rectangle product path uses one allocation-free, resumable line-former
+kernel over retained Parley Engine cluster facts. This review records the
+measured extraction checkpoint. Regions, exclusions, floats, and columns were
+separate at that checkpoint and now consume the same state and retry protocol;
+see `region-flow-review-2026-07-25.md`.
 
 ## Ownership fence
 
@@ -166,10 +167,10 @@ must preserve this corpus and receive its own API migration.
 
 ## Deliberate limits and follow-ups
 
-- Rectangle formation supplies no finite block limit, so the product height
-  rejection path is exercised at the kernel boundary until region slots land.
 - Inline-item measurement, wrap policy, emergency breaking, spacing, and
-  complete line-height semantics belong to the computed-policy slice.
-- Slot transcripts, exclusions, floats, and columns belong to region flow.
+  complete line-height semantics belonged to the computed-policy slice and are
+  reviewed in `computed-text-policy-review-2026-07-25.md`.
+- Slot transcripts, exclusions, floats, columns, and product height rejection
+  are reviewed in `region-flow-review-2026-07-25.md`.
 - Alignment and justification consume accepted slots and trailing-whitespace
   facts; they do not mutate canonical shaping.

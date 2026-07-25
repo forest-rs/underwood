@@ -16,6 +16,7 @@ mod document;
 mod editable;
 mod error;
 mod projection;
+mod region;
 mod scene;
 mod selection;
 mod style;
@@ -46,6 +47,10 @@ pub use peniko::{Brush, Color, FontData};
 pub use projection::{
     ProjectedText, ProjectionBuilder, ProjectionError, ProjectionErrorKind, ProjectionKind,
     ProjectionSegment, ProjectionSegments, WhitespaceCollapse,
+};
+pub use region::{
+    FloatSide, FlowRegion, LineSlot, RegionAttempt, RegionAttemptOutcome, RegionCursor,
+    RegionFloat, RegionFlow, RegionTranscript,
 };
 pub use scene::{
     CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,

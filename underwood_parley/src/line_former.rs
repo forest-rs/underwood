@@ -154,11 +154,7 @@ impl<'a> LineFormer<'a> {
         constraint: FormationConstraint,
         cursor: usize,
     ) -> Result<Self, LineFormerError> {
-        let valid_constraint = match constraint {
-            FormationConstraint::Wrap(width) => width.is_finite() && width > 0.0,
-            FormationConstraint::MinContent | FormationConstraint::MaxContent => true,
-        };
-        if cursor > clusters.len() || !valid_constraint {
+        if cursor > clusters.len() || !valid_constraint(constraint) {
             return Err(LineFormerError::Facts);
         }
         Ok(Self {
@@ -180,6 +176,21 @@ impl<'a> LineFormer<'a> {
 
     pub(crate) const fn work(&self) -> LineFormerWork {
         self.work
+    }
+
+    /// Changes only the limits used to choose the next candidate.
+    ///
+    /// Traversal, prior-break state, and accumulated work remain intact so a
+    /// caller can retry the same text in a different region slot.
+    pub(crate) fn set_constraint(
+        &mut self,
+        constraint: FormationConstraint,
+    ) -> Result<(), LineFormerError> {
+        if !valid_constraint(constraint) {
+            return Err(LineFormerError::Facts);
+        }
+        self.constraint = constraint;
+        Ok(())
     }
 
     pub(crate) const fn checkpoint(&self, output_len: usize) -> LineCheckpoint {
@@ -294,6 +305,13 @@ impl<'a> LineFormer<'a> {
 
 fn valid_measurement(value: f64) -> bool {
     value.is_finite() && value >= 0.0
+}
+
+fn valid_constraint(constraint: FormationConstraint) -> bool {
+    match constraint {
+        FormationConstraint::Wrap(width) => width.is_finite() && width > 0.0,
+        FormationConstraint::MinContent | FormationConstraint::MaxContent => true,
+    }
 }
 
 fn valid_limit(value: Option<f64>) -> bool {
