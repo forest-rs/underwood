@@ -383,9 +383,10 @@ the campaign may revise or replace every provisional API.
 ## CJK line breaking
 
 The exact Parley Engine revision uses ICU4X line segmentation and already
-publishes `Normal`, `BreakAll`, and `KeepAll` word-break inputs. Underwood
-currently carries none of those authored values and does not enable Parley
-Engine's `complex-scripts` feature.
+publishes `Normal`, `BreakAll`, and `KeepAll` word-break inputs. Underwood now
+projects those authored values through its analysis-style partition and
+exposes Parley Engine's `complex-scripts` data as a non-default adapter
+feature.
 
 The campaign must distinguish:
 
@@ -401,6 +402,13 @@ Korean text, mixed Latin/CJK, emoji and ZWJ sequences, mandatory breaks, and
 all three word-break values. Failures name whether the missing owner is
 analysis data, policy projection, candidate formation, or future
 justification.
+
+The implemented proof also records an upstream representation limit: Parley
+Engine computes word and line boundaries separately but publishes one
+precedence-merged boundary value. Underwood can therefore consume the exact
+line fact but cannot yet distinguish a dictionary word boundary that overlaps
+a legal CJK line boundary. That word-navigation work is tracked separately;
+it does not weaken the line-breaking claim.
 
 ## Scratch, profiling, and memory
 

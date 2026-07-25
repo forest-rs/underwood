@@ -137,6 +137,17 @@ toolkit behavior or pixel production.
   navigation or transaction logic; the exact traps and remaining consumer
   work are recorded in
   `docs/proof/editable-text-block-operations-2026-07-25.md`.
+- Step 11 is complete for line breaking. The deterministic corpus covers
+  Japanese kinsoku punctuation, kana, iteration marks, ideographic space,
+  Chinese, Korean, mixed Latin/CJK, emoji ZWJ sequences, mandatory breaks, and
+  all three authored `WordBreak` values through analysis and reusable
+  formation. A native-fallback product trap reaches the public scene path.
+  Parley Engine's compiled dictionary data is exposed as an explicit
+  non-default feature with its binary cost measured. Locale tailoring, CJK
+  justification, and dictionary-quality CJK word navigation remain separate
+  claims; the precedence-merged Parley boundary fact blocking the latter is
+  tracked by `und-oh0.2.11`. Exact results are recorded in
+  `docs/proof/cjk-line-breaking-review-2026-07-25.md`.
 
 ### Risks and controls
 

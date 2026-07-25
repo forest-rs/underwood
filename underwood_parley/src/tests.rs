@@ -36,6 +36,7 @@ use crate::lowering::checked_source_range;
 use crate::shaping::{analyze_text, analyze_text_with_styles, split_item_after};
 
 mod alignment;
+mod cjk_line_break;
 mod editing;
 mod font_and_analysis;
 mod interaction;

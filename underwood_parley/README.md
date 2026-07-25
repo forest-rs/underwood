@@ -13,6 +13,17 @@ Fontconfig loading so compiling the optional feature does not require
 Fontconfig development headers; if the runtime library is absent, no system
 fallback is added.
 
+The optional `complex-scripts` feature selects Parley Engine's compiled
+ICU4X dictionary data for Chinese/Japanese word segmentation and
+context-dependent line and word segmentation in Khmer, Lao, Myanmar, and
+Thai. It is intentionally not a default: ordinary Unicode CJK line
+opportunities and `WordBreak::{Normal, BreakAll, KeepAll}` remain available
+without it, while dictionary-sensitive segmentation and Southeast Asian
+breaking require the explicit data cost. Parley Engine currently merges
+overlapping word and line boundaries into one line-boundary fact, so Underwood
+does not yet claim dictionary-quality CJK word navigation even when this
+feature is enabled.
+
 `FontSet::empty` supports missing-font proofs and system-font-only hosts.
 `FontSet::registered_family_names` reports only sorted, deduplicated embedded
 families, so the result is stable across machines. Registered bytes always use
