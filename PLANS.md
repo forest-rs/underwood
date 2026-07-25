@@ -2,7 +2,7 @@
 
 ## Reusable text preparation and region-aware line layout
 
-**Status:** Active — Design-0014 and ADR-0005 approved 2026-07-24
+**Status:** Complete — protected PR #29 matrix green 2026-07-25
 
 **Beads:** `und-oh0.13` and its dependency-ordered children
 
@@ -170,13 +170,13 @@ toolkit behavior or pixel production.
   baseline and proposed correction now live in the sibling campaign
   `und-oh0.13.17`; they do not extend this campaign's finish line. The
   preparation trace remains neutral before-state evidence for that later work.
-- Step 15 has completed local adversarial review. The Must findings—finite
+- Step 15 is complete. The Must findings—finite
   visible-region exhaustion, language-mismatched Han proof fonts, stale
   migration/proof wording, and the last current proof-prose use of the retired
   preparation metaphor—are resolved. The aggregate measured judgment and
   exact non-claims are recorded in
-  `docs/proof/reusable-text-tools-campaign-review-2026-07-25.md`. Protected
-  remote checks remain the final landing gate.
+  `docs/proof/reusable-text-tools-campaign-review-2026-07-25.md`. GitHub Actions
+  run `30164191394` passed the eight-job protected matrix in PR #29.
 
 ### Risks and controls
 

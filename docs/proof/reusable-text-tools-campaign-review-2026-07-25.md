@@ -36,8 +36,9 @@ Underwood is better for the project only where these extra invariants are
 required: source-complete native documents, retained multi-paragraph work,
 arbitrary region flow, portable scenes, and exact revisioned interaction. It
 is currently worse for inline objects, decorations, accessibility integration,
-pixel-grid presentation, complete editor convenience, implementation maturity,
-and steady-state document-scale allocation cost.
+fragmentable inline containers, pixel-grid presentation, complete editor
+convenience, implementation maturity, and steady-state document-scale
+allocation cost.
 
 The architectural bet is not that every distinction must remain downstream.
 Identity-free algorithms that genuinely depend only on public Parley Engine
@@ -86,11 +87,14 @@ important but belongs to a separately fenced claim:
 - `und-oh0.15` owns presentation-scale quantization and pixel-grid coherence;
   high-level Parley's vertical quantization is not inherited through
   `parley_engine`.
+- `und-oh0.16` separately owns atomic replaced objects and authored inline
+  containers that fragment with their text. Current `SceneFragment` records
+  are paint partitions, not that capability.
 
 ## Could improve
 
-- Add vertical writing, discretionary hyphenation, inline objects, pagination,
-  and scroll/virtualization policy only behind their own product consumers.
+- Add vertical writing, discretionary hyphenation, pagination, and
+  scroll/virtualization policy only behind their own product consumers.
 - Add native accessibility projection without moving host callback policy into
   Underwood.
 - Prototype the `und-oh0.15` presentation-scale quantization contract so
@@ -211,5 +215,8 @@ Clippy, workspace tests, rustdoc with warnings denied, Rust 1.88, bare-metal
 inspection, Beads lint and cycle detection, deterministic showcase snapshot,
 and release PDF generation.
 
-Protected remote checks remain the landing gate. Their pull request and run
-identifiers are recorded here before the epic is closed.
+GitHub Actions run `30164191394` passes the eight-job protected matrix for PR
+#29: Linux, macOS, and Windows Clippy/tests; Rust 1.88; rustdoc;
+formatting/text policy; repository policy; bare-metal `no_std`; and
+WebAssembly. The final metadata-only closure update must retain those gates
+before merge.
