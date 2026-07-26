@@ -6,6 +6,7 @@
 //! This module owns cache identity, lifetime, and preparation sequencing; it
 //! explicitly does not own semantic projection or geometry construction.
 
+use super::residency::paragraph_bytes;
 use super::*;
 use core::mem::size_of;
 
@@ -102,6 +103,7 @@ pub struct CacheDiagnostics {
     composition_entries: usize,
     adapter_facts: Option<ParagraphFormationCacheDiagnostics>,
     scene_cache_accounted_bytes: usize,
+    scene_cache_residency: SceneResidencyBytes,
     peak_entries: usize,
     hits: usize,
     misses: usize,
@@ -163,6 +165,15 @@ impl CacheDiagnostics {
     #[must_use]
     pub const fn scene_cache_accounted_bytes(self) -> usize {
         self.scene_cache_accounted_bytes
+    }
+
+    /// Returns capability-category charges for retained scene segments.
+    ///
+    /// This is the scene-output subset of [`Self::scene_cache_accounted_bytes`];
+    /// cache keys and lookup metadata are included only in the latter.
+    #[must_use]
+    pub const fn scene_cache_residency(self) -> SceneResidencyBytes {
+        self.scene_cache_residency
     }
 
     /// Returns the highest observed resident geometry entry count.
@@ -912,6 +923,10 @@ impl LayoutEngine {
     #[must_use]
     pub fn cache_diagnostics(&self) -> CacheDiagnostics {
         let shared = self.shared_preparation.diagnostics();
+        let mut scene_cache_residency = SceneResidencyBytes::default();
+        for entry in self.cache.values().chain(self.composition_cache.values()) {
+            scene_cache_residency.add_assign(paragraph_bytes(&entry.segment));
+        }
         CacheDiagnostics {
             budget: self.budget.max_entries,
             composition_budget: self.budget.max_composition_entries,
@@ -919,6 +934,7 @@ impl LayoutEngine {
             composition_entries: self.composition_cache.len(),
             adapter_facts: self.paragraphs.retained_facts(),
             scene_cache_accounted_bytes: self.cache_work.scene_cache_accounted_bytes,
+            scene_cache_residency,
             peak_entries: self.cache_work.peak_entries,
             hits: self.cache_work.hits,
             misses: self.cache_work.misses,

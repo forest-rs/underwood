@@ -401,6 +401,19 @@ fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formatio
     assert_eq!(observed.len(), 2);
     assert!(observed[1].features().contains(SceneFeatures::EDITABLE));
     assert!(!observed[1].movements().is_empty());
+    drop(observed);
+
+    let smaller = layout
+        .prepare(&document.snapshot(), &display_request)
+        .expect("an editable resident segment satisfies a display request");
+    let paragraph = smaller
+        .scene()
+        .paragraph_residencies()
+        .next()
+        .expect("the fixture contains one paragraph");
+    assert_eq!(paragraph.requested(), SceneFeatures::DISPLAY);
+    assert_eq!(paragraph.resident(), SceneFeatures::EDITABLE);
+    assert!(paragraph.bytes().navigation() > 0);
 }
 
 #[test]

@@ -58,6 +58,25 @@ impl CompositionScene {
         &self.requested
     }
 
+    /// Returns the capability policy physically resident in this projection.
+    #[must_use]
+    pub fn resident_features(&self) -> &SceneFeaturePolicy {
+        &self.core.resident
+    }
+
+    /// Returns aggregate deterministic prepared-scene residency.
+    #[must_use]
+    pub fn residency(&self) -> SceneResidency {
+        SceneResidency::from_spine(&self.core.spine)
+    }
+
+    /// Iterates requested capabilities, resident capabilities, and byte
+    /// charges for every paragraph segment.
+    #[must_use]
+    pub fn paragraph_residencies(&self) -> SceneParagraphResidencies<'_> {
+        SceneParagraphResidencies::new(&self.requested, &self.core.spine)
+    }
+
     /// Returns unconditional renderer-facing display access.
     #[must_use]
     pub const fn display(&self) -> ProjectedSceneDisplay<'_> {
@@ -446,6 +465,25 @@ impl TextScene {
     #[must_use]
     pub const fn requested_features(&self) -> &SceneFeaturePolicy {
         &self.requested
+    }
+
+    /// Returns the capability policy physically resident in this scene.
+    #[must_use]
+    pub fn resident_features(&self) -> &SceneFeaturePolicy {
+        &self.core.resident
+    }
+
+    /// Returns aggregate deterministic prepared-scene residency.
+    #[must_use]
+    pub fn residency(&self) -> SceneResidency {
+        SceneResidency::from_spine(&self.core.spine)
+    }
+
+    /// Iterates requested capabilities, resident capabilities, and byte
+    /// charges for every paragraph segment.
+    #[must_use]
+    pub fn paragraph_residencies(&self) -> SceneParagraphResidencies<'_> {
+        SceneParagraphResidencies::new(&self.requested, &self.core.spine)
     }
 
     /// Returns unconditional renderer-facing display access.

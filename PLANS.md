@@ -367,7 +367,7 @@ split, and public facades now execute after the Design-0017 structural laws are
 real; they remain dependency-free and do not authorize `unsafe`, renderer
 policy, serialization, or a global arena.
 
-The first three Design-0018 implementation checkpoints are green. Requests carry
+The first four Design-0018 implementation checkpoints are green. Requests carry
 a normalized uniform-plus-sparse capability policy; display-only paragraphs
 physically omit nonrequested scene sidecars; the Parley adapter omits cursor
 movement lowering below selection; warm upgrades share immutable formation and
@@ -380,8 +380,13 @@ coalesces ordinary paint into run-sized fragments over flat glyph tables, and
 returns borrowed source-complete hit views. Matched release allocation traces
 show cold editable preparation falling from 316 calls / 112,090 bytes to 186
 calls / 75,634 bytes and repeated source-aware hit queries falling from two
-allocations to zero. Migration, executable evidence, and the remaining byte
-diagnostics and wind-tunnel work are recorded in
+allocations to zero. The fourth checkpoint adds requested-versus-resident
+category byte diagnostics and a checked 64/1,000/2,048 mixed-document tunnel:
+exact repeats remain 63–72 ns and allocation-free within profiler noise, one
+editable paragraph alone retains source and interaction sidecars, and one
+keystroke costs 176–184 allocations rather than scaling with its 63–2,047
+display siblings. Migration, executable evidence, and the remaining churn,
+corpus, Parley-comparison, and table-compaction work are recorded in
 `docs/proof/capability-scaled-scenes-progress-2026-07-26.md`.
 
 The five Design-0017 completion-audit slices are implemented and measured.

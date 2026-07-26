@@ -38,6 +38,7 @@ mod interaction;
 mod output;
 mod projection;
 mod records;
+mod residency;
 mod shared_cache;
 mod source_map;
 mod spine;
@@ -58,6 +59,9 @@ pub use output::{
 pub use records::{
     LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneGlyphInstanceId,
     SceneSelectionRect, TextHit,
+};
+pub use residency::{
+    ParagraphSceneResidency, SceneParagraphResidencies, SceneResidency, SceneResidencyBytes,
 };
 pub use views::{
     ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,

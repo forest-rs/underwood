@@ -7,10 +7,12 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use underwood::{
-    BlockRequest, Brush, CacheBudget, Color, ComputedInlineStyle, DocumentId, FiniteWidth,
-    FloatSide, FlowRegion, InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ParagraphStyle,
-    ProjectedText, ProjectionBuilder, Rect, RegionFloat, RegionFlow, SceneFeatures, SceneOutput,
-    ShapingStyle, Size, TextAlignment, TextBlock, TextConstraint, WhitespaceCollapse,
+    BlockRequest, Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId,
+    FiniteWidth, FloatSide, FlowRegion, InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot,
+    PaintTable, ParagraphId, ParagraphRole, ParagraphStyle, ProjectedText, ProjectionBuilder, Rect,
+    RegionFloat, RegionFlow, SceneFeaturePolicy, SceneFeatures, SceneOutput, SceneRequest,
+    SceneResidencyBytes, ShapingStyle, Size, StyleMap, TextAlignment, TextBlock, TextConstraint,
+    TextId, WhitespaceCollapse,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -30,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-paint-slot|primed-unique|primed-region|primed-adjustment|primed-hit-query|cold-identical|cold-selectable|cold-editable|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|paint-slot-churn|alignment-churn|justification-churn|localized-edit|hit-query|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-paint-slot|primed-unique|primed-region|primed-adjustment|primed-hit-query|primed-mixed-display|primed-mixed-editable|primed-editable-block|cold-identical|cold-accessible|cold-link|cold-selectable|cold-editable|upgrade-accessible|upgrade-link|upgrade-selectable|upgrade-editable|editable-to-display|mixed-upgrade|mixed-repeat|mixed-typing|editable-typing|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|paint-slot-churn|alignment-churn|justification-churn|localized-edit|hit-query|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -367,6 +369,15 @@ fn run_profile(
         "primed-hit-query" | "p6" => {
             profile_hit_query("primed-hit-query", rounds, labels, &style, &paint, false)
         }
+        "primed-mixed-display" | "m0" => {
+            profile_primed_mixed(rounds, labels, &style, &paint, false)
+        }
+        "primed-mixed-editable" | "m2" => {
+            profile_primed_mixed(rounds, labels, &style, &paint, true)
+        }
+        "primed-editable-block" | "b0" => {
+            profile_primed_editable_blocks(rounds, labels, &style, &paint)
+        }
         "cold-identical" | "c0" => profile_cold_capability(
             "cold-identical",
             rounds,
@@ -391,6 +402,59 @@ fn run_profile(
             &paint,
             SceneFeatures::EDITABLE,
         ),
+        "cold-accessible" | "i3" => profile_cold_capability(
+            "cold-accessible",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::ACCESSIBLE,
+        ),
+        "cold-link" | "i4" => profile_cold_capability(
+            "cold-link",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::DISPLAY.with_semantics().with_hit_testing(),
+        ),
+        "upgrade-accessible" | "u0" => profile_capability_upgrade(
+            "upgrade-accessible",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::ACCESSIBLE,
+        ),
+        "upgrade-link" | "u1" => profile_capability_upgrade(
+            "upgrade-link",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::DISPLAY.with_semantics().with_hit_testing(),
+        ),
+        "upgrade-selectable" | "u2" => profile_capability_upgrade(
+            "upgrade-selectable",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::SELECTABLE,
+        ),
+        "upgrade-editable" | "u3" => profile_capability_upgrade(
+            "upgrade-editable",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::EDITABLE,
+        ),
+        "editable-to-display" | "u4" => profile_editable_to_display(rounds, labels, &style, &paint),
+        "mixed-upgrade" | "m1" => profile_mixed_upgrade(rounds, labels, &style, &paint),
+        "mixed-repeat" | "m3" => profile_mixed_repeat(rounds, labels, &style, &paint),
+        "mixed-typing" | "m4" => profile_mixed_typing(rounds, labels, &style, &paint),
+        "editable-typing" | "b1" => profile_editable_typing(rounds, labels, &style, &paint),
         "cross-identical" | "x1" => {
             profile_cross_identity("cross-identical", rounds, labels, &style, &paint, false)
         }
@@ -837,6 +901,11 @@ fn profile_cold_capability(
         }
     });
     report_profile(name, rounds, label_count, elapsed);
+    report_residency(
+        name,
+        layout.cache_diagnostics().scene_cache_residency(),
+        label_count,
+    );
     Ok(())
 }
 
@@ -889,6 +958,381 @@ fn profile_hit_query(
     };
     black_box((&labels, &layout, &outputs));
     report_profile(name, rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_capability_upgrade(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    features: SceneFeatures,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("capability-upgrade operation count overflowed")?;
+    let labels = identical_labels_with_count(operations)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        retained_budget(operations),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for label in &labels {
+            let output = layout
+                .prepare_block(
+                    &label.snapshot(),
+                    &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                        .with_features(features),
+                )
+                .expect("warm capability upgrade must prepare");
+            assert_eq!(
+                output.work().analysis().paragraphs(),
+                0,
+                "warm capability upgrade must retain analysis"
+            );
+            assert_eq!(
+                output.work().font_selection().paragraphs(),
+                0,
+                "warm capability upgrade must retain selected fonts"
+            );
+            assert_eq!(
+                output.work().shape().paragraphs(),
+                0,
+                "warm capability upgrade must retain shaping"
+            );
+            assert_eq!(
+                output.work().flow().paragraphs(),
+                0,
+                "warm capability upgrade must retain line formation"
+            );
+            assert_eq!(
+                output.work().geometry().paragraphs(),
+                1,
+                "upgrade must build only the missing paragraph sidecars"
+            );
+            black_box(output.scene().residency());
+        }
+    });
+    report_profile(name, rounds, label_count, elapsed);
+    report_residency(
+        name,
+        layout.cache_diagnostics().scene_cache_residency(),
+        operations,
+    );
+    Ok(())
+}
+
+fn profile_editable_to_display(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let operations = rounds
+        .checked_mul(label_count)
+        .ok_or("capability-subset operation count overflowed")?;
+    let labels = identical_labels_with_count(operations)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        retained_budget(operations),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                .with_features(SceneFeatures::EDITABLE),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for label in &labels {
+            let output = layout
+                .prepare_block(
+                    &label.snapshot(),
+                    &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                )
+                .expect("editable segment must satisfy display request");
+            assert_no_preparation_work(&output);
+            let paragraph = output
+                .scene()
+                .paragraph_residencies()
+                .next()
+                .expect("block scene has one paragraph");
+            assert_eq!(
+                paragraph.requested(),
+                SceneFeatures::DISPLAY,
+                "the smaller handle must preserve its display-only request"
+            );
+            assert_eq!(
+                paragraph.resident(),
+                SceneFeatures::EDITABLE,
+                "a capability subset must reuse the editable resident segment"
+            );
+            black_box(paragraph.bytes());
+        }
+    });
+    report_profile("editable-to-display", rounds, label_count, elapsed);
+    report_residency(
+        "editable-to-display",
+        layout.cache_diagnostics().scene_cache_residency(),
+        operations,
+    );
+    Ok(())
+}
+
+fn profile_primed_mixed(
+    rounds: usize,
+    paragraph_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    editable: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = mixed_document(paragraph_count)?;
+    let styles = StyleMap::new(style.clone());
+    let mut layout = mixed_layout(paragraph_count)?;
+    let features = mixed_features(fixture.editor_paragraph, editable);
+    layout.prepare(
+        &fixture.document.snapshot(),
+        &SceneRequest::new(TextConstraint::MaxContent, &styles, paint)
+            .with_feature_policy(features),
+    )?;
+    black_box((&fixture, &styles, &layout));
+    report_profile(
+        if editable {
+            "primed-mixed-editable"
+        } else {
+            "primed-mixed-display"
+        },
+        rounds,
+        paragraph_count,
+        Duration::ZERO,
+    );
+    Ok(())
+}
+
+fn profile_mixed_upgrade(
+    rounds: usize,
+    paragraph_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if rounds != 1 {
+        return Err("mixed-upgrade measures one document upgrade; use one round".into());
+    }
+    let fixture = mixed_document(paragraph_count)?;
+    let styles = StyleMap::new(style.clone());
+    let mut layout = mixed_layout(paragraph_count)?;
+    let display = SceneRequest::new(TextConstraint::MaxContent, &styles, paint)
+        .with_feature_policy(mixed_features(fixture.editor_paragraph, false));
+    layout.prepare(&fixture.document.snapshot(), &display)?;
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, paint)
+        .with_feature_policy(mixed_features(fixture.editor_paragraph, true));
+    let mut prepared = None;
+    let elapsed = measure(|| {
+        let output = layout
+            .prepare(&fixture.document.snapshot(), &request)
+            .expect("mixed capability upgrade must prepare");
+        assert_eq!(
+            output.work().shape().paragraphs(),
+            0,
+            "mixed warm upgrade must retain shaping"
+        );
+        assert_eq!(
+            output.work().flow().paragraphs(),
+            0,
+            "mixed warm upgrade must retain line formation"
+        );
+        assert_eq!(
+            output.work().geometry().paragraphs(),
+            1,
+            "only the editor paragraph may gain sidecars"
+        );
+        prepared = Some(output);
+    });
+    let output = prepared.expect("measured upgrade publishes one output");
+    assert_mixed_residency(output.scene(), paragraph_count, fixture.editor_paragraph);
+    report_document_profile("mixed-upgrade", rounds, paragraph_count, elapsed);
+    report_residency(
+        "mixed-upgrade",
+        output.scene().residency().bytes(),
+        paragraph_count,
+    );
+    Ok(())
+}
+
+fn profile_mixed_repeat(
+    rounds: usize,
+    paragraph_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = mixed_document(paragraph_count)?;
+    let styles = StyleMap::new(style.clone());
+    let mut layout = mixed_layout(paragraph_count)?;
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, paint)
+        .with_feature_policy(mixed_features(fixture.editor_paragraph, true));
+    layout.prepare(&fixture.document.snapshot(), &request)?;
+    let elapsed = measure(|| {
+        for _ in 0..rounds {
+            let output = layout
+                .prepare(&fixture.document.snapshot(), &request)
+                .expect("mixed exact repeat must prepare");
+            assert_no_preparation_work(&output);
+            black_box(output.scene().metrics());
+        }
+    });
+    let output = layout.prepare(&fixture.document.snapshot(), &request)?;
+    assert_mixed_residency(output.scene(), paragraph_count, fixture.editor_paragraph);
+    report_document_profile("mixed-repeat", rounds, paragraph_count, elapsed);
+    report_residency(
+        "mixed-repeat",
+        output.scene().residency().bytes(),
+        paragraph_count,
+    );
+    Ok(())
+}
+
+fn profile_mixed_typing(
+    rounds: usize,
+    paragraph_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut fixture = mixed_document(paragraph_count)?;
+    let styles = StyleMap::new(style.clone());
+    let mut layout = mixed_layout(paragraph_count)?;
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, paint)
+        .with_feature_policy(mixed_features(fixture.editor_paragraph, true));
+    layout.prepare(&fixture.document.snapshot(), &request)?;
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let mut edit = fixture.document.edit();
+            edit.replace_text(
+                fixture.editor_text,
+                if round.is_multiple_of(2) {
+                    "Editable paragraph changed"
+                } else {
+                    "Editable paragraph"
+                },
+            )
+            .expect("typing edit must stage");
+            edit.commit().expect("typing edit must publish");
+            let output = layout
+                .prepare(&fixture.document.snapshot(), &request)
+                .expect("mixed typing must prepare");
+            assert_eq!(
+                output.work().analysis().paragraphs(),
+                1,
+                "typing must analyze only the edited paragraph"
+            );
+            assert_eq!(
+                output.work().shape().paragraphs(),
+                1,
+                "typing must shape only the edited paragraph"
+            );
+            assert_eq!(
+                output.work().geometry().paragraphs(),
+                1,
+                "typing must lower only the edited paragraph"
+            );
+            black_box(output.scene().metrics());
+        }
+    });
+    let output = layout.prepare(&fixture.document.snapshot(), &request)?;
+    assert_mixed_residency(output.scene(), paragraph_count, fixture.editor_paragraph);
+    report_document_profile("mixed-typing", rounds, paragraph_count, elapsed);
+    report_residency(
+        "mixed-typing",
+        output.scene().residency().bytes(),
+        paragraph_count,
+    );
+    Ok(())
+}
+
+fn profile_primed_editable_blocks(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        retained_budget(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                .with_features(SceneFeatures::EDITABLE),
+        )?;
+    }
+    black_box((&labels, &layout));
+    report_profile("primed-editable-block", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
+fn profile_editable_typing(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        retained_budget(label_count),
+    );
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                .with_features(SceneFeatures::EDITABLE),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            for label in &mut labels {
+                label
+                    .set_text(if round.is_multiple_of(2) {
+                        "Save changes now"
+                    } else {
+                        "Save changes"
+                    })
+                    .expect("editable block change must publish");
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_features(SceneFeatures::EDITABLE),
+                    )
+                    .expect("editable block typing must prepare");
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    1,
+                    "one editable block operation must shape one paragraph"
+                );
+                assert_eq!(
+                    output.work().geometry().paragraphs(),
+                    1,
+                    "one editable block operation must lower one paragraph"
+                );
+                black_box(output.scene().metrics());
+            }
+        }
+    });
+    report_profile("editable-typing", rounds, label_count, elapsed);
+    report_residency(
+        "editable-typing",
+        layout.cache_diagnostics().scene_cache_residency(),
+        label_count,
+    );
     Ok(())
 }
 
@@ -1494,6 +1938,36 @@ fn report_profile(name: &str, rounds: usize, labels: usize, elapsed: Duration) {
     );
 }
 
+fn report_document_profile(name: &str, rounds: usize, paragraphs: usize, elapsed: Duration) {
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_some() {
+        return;
+    }
+    println!(
+        "{name}\tprofile=isolated\tmachine=local\trounds={rounds}\tparagraphs={paragraphs}\toperations={rounds}\ttotal_ns={}\tns_per_operation={}",
+        elapsed.as_nanos(),
+        elapsed.as_nanos() / rounds as u128
+    );
+}
+
+fn report_residency(name: &str, bytes: SceneResidencyBytes, paragraphs: usize) {
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_some() {
+        return;
+    }
+    println!(
+        "{name}_residency\tparagraphs={paragraphs}\ttotal={}\tstructure={}\tlayout={}\tpaint={}\tsources={}\tsemantics={}\thit_testing={}\tselection={}\tnavigation={}\tnative_text_input={}",
+        bytes.total(),
+        bytes.structure(),
+        bytes.layout(),
+        bytes.paint(),
+        bytes.sources(),
+        bytes.semantics(),
+        bytes.hit_testing(),
+        bytes.selection(),
+        bytes.navigation(),
+        bytes.native_text_input(),
+    );
+}
+
 fn hold_for_profiler() -> Result<(), Box<dyn std::error::Error>> {
     let Some(seconds) = std::env::var_os("UNDERWOOD_PROFILE_HOLD_SECS") else {
         return Ok(());
@@ -1560,6 +2034,143 @@ fn adjustment_labels_with_count(
             .map_err(Into::into)
         })
         .collect()
+}
+
+struct MixedDocument {
+    document: Document,
+    editor_paragraph: ParagraphId,
+    editor_text: TextId,
+}
+
+fn mixed_document(paragraph_count: usize) -> Result<MixedDocument, Box<dyn std::error::Error>> {
+    let editor_index = paragraph_count / 2;
+    let mut document = Document::new(identity(8, paragraph_count));
+    let mut edit = document.edit();
+    let mut editor_paragraph = None;
+    let mut editor_text = None;
+    for index in 0..paragraph_count {
+        let paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
+        let text = edit.append_text(
+            paragraph,
+            InlineRole::TEXT,
+            if index == editor_index {
+                "Editable paragraph"
+            } else {
+                "Stable display paragraph"
+            },
+        )?;
+        if index == editor_index {
+            editor_paragraph = Some(paragraph);
+            editor_text = Some(text);
+        }
+    }
+    edit.commit()?;
+    Ok(MixedDocument {
+        document,
+        editor_paragraph: editor_paragraph.ok_or("mixed document has no editor paragraph")?,
+        editor_text: editor_text.ok_or("mixed document has no editor text")?,
+    })
+}
+
+fn mixed_features(editor: ParagraphId, editable: bool) -> SceneFeaturePolicy {
+    let features = SceneFeaturePolicy::uniform(SceneFeatures::DISPLAY);
+    if editable {
+        features.with_paragraph(editor, SceneFeatures::EDITABLE)
+    } else {
+        features
+    }
+}
+
+fn mixed_layout(paragraph_count: usize) -> Result<LayoutEngine, Box<dyn std::error::Error>> {
+    Ok(LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        retained_budget(paragraph_count),
+    ))
+}
+
+fn assert_mixed_residency(
+    scene: &underwood::TextScene,
+    paragraph_count: usize,
+    editor: ParagraphId,
+) {
+    assert_eq!(
+        scene.residency().paragraphs(),
+        paragraph_count,
+        "mixed residency must report every represented paragraph"
+    );
+    let mut display_paragraphs = 0_usize;
+    let mut editable_paragraphs = 0_usize;
+    for paragraph in scene.paragraph_residencies() {
+        if paragraph.paragraph() == editor {
+            editable_paragraphs += 1;
+            assert_eq!(
+                paragraph.requested(),
+                SceneFeatures::EDITABLE,
+                "the target paragraph must request the editing closure"
+            );
+            assert!(
+                paragraph.resident().contains(SceneFeatures::EDITABLE),
+                "the target paragraph must retain the editing closure"
+            );
+            assert!(
+                paragraph.bytes().sources() > 0,
+                "the editor must retain source provenance"
+            );
+            assert!(
+                paragraph.bytes().hit_testing() > 0,
+                "the editor must retain hit-testing facts"
+            );
+            assert!(
+                paragraph.bytes().selection() > 0,
+                "the editor must retain selection facts"
+            );
+            assert!(
+                paragraph.bytes().navigation() > 0,
+                "the editor must retain navigation facts"
+            );
+        } else {
+            display_paragraphs += 1;
+            assert_eq!(
+                paragraph.requested(),
+                SceneFeatures::DISPLAY,
+                "an unrelated sibling must remain display-only"
+            );
+            assert_eq!(
+                paragraph.resident(),
+                SceneFeatures::DISPLAY,
+                "an unrelated sibling must not be promoted"
+            );
+            assert_eq!(
+                paragraph.bytes().sources(),
+                0,
+                "display siblings must omit sources"
+            );
+            assert_eq!(
+                paragraph.bytes().hit_testing(),
+                0,
+                "display siblings must omit hit testing"
+            );
+            assert_eq!(
+                paragraph.bytes().selection(),
+                0,
+                "display siblings must omit selection"
+            );
+            assert_eq!(
+                paragraph.bytes().navigation(),
+                0,
+                "display siblings must omit navigation"
+            );
+        }
+    }
+    assert_eq!(
+        editable_paragraphs, 1,
+        "the mixed document must contain exactly one editor"
+    );
+    assert_eq!(
+        display_paragraphs,
+        paragraph_count.saturating_sub(editable_paragraphs),
+        "every non-editor paragraph must remain display-only"
+    );
 }
 
 fn identity(namespace: u64, index: usize) -> DocumentId {

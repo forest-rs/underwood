@@ -2679,6 +2679,37 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
     assert!(geometry.movements.is_empty());
     assert!(geometry.source_map.is_none());
     assert!(geometry.semantics.is_empty());
+
+    let accessible = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+                .with_features(crate::SceneFeatures::ACCESSIBLE),
+        )
+        .expect("accessibility-only scene must prepare");
+    assert!(
+        accessible.scene().semantics().is_ok(),
+        "the accessible profile must expose semantics"
+    );
+    assert!(
+        accessible.scene().interaction().is_err(),
+        "semantic bounds must not imply retained hit testing"
+    );
+    let paragraph = accessible
+        .scene()
+        .paragraph_residencies()
+        .next()
+        .expect("fixture has one paragraph");
+    assert!(paragraph.bytes().sources() > 0);
+    assert!(paragraph.bytes().semantics() > 0);
+    assert_eq!(paragraph.bytes().hit_testing(), 0);
+    let geometry = layout
+        .cached_geometry_for_test(paragraph.paragraph())
+        .expect("accessible geometry remains resident");
+    assert!(
+        geometry.clusters.is_empty(),
+        "transient semantic-bound construction must not retain hit clusters"
+    );
 }
 
 #[test]
@@ -2720,9 +2751,9 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     let output = layout
         .prepare(&document.snapshot(), &request)
         .expect("mixed-capability scene must prepare");
+    let scene = output.scene();
 
-    let error = output
-        .scene()
+    let error = scene
         .editing()
         .expect_err("whole-scene editing must reject the display sibling");
     assert_eq!(error.paragraph(), Some(display));
@@ -2739,6 +2770,52 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     assert!(display_geometry.movements.is_empty());
     assert_eq!(editor_geometry.features, crate::SceneFeatures::EDITABLE);
     assert!(!editor_geometry.movements.is_empty());
+
+    let residency = scene.residency();
+    assert_eq!(residency.paragraphs(), 2);
+    assert!(residency.bytes().structure() > 0);
+    assert!(residency.bytes().layout() > 0);
+    assert!(residency.bytes().paint() > 0);
+    let paragraphs: Vec<_> = scene.paragraph_residencies().collect();
+    assert_eq!(paragraphs.len(), 2);
+    let display_residency = paragraphs
+        .iter()
+        .copied()
+        .find(|entry| entry.paragraph() == display)
+        .expect("display residency is reported");
+    assert_eq!(display_residency.requested(), crate::SceneFeatures::DISPLAY);
+    assert_eq!(display_residency.resident(), crate::SceneFeatures::DISPLAY);
+    assert_eq!(display_residency.bytes().sources(), 0);
+    assert_eq!(display_residency.bytes().hit_testing(), 0);
+    assert_eq!(display_residency.bytes().selection(), 0);
+    assert_eq!(display_residency.bytes().navigation(), 0);
+
+    let editor_residency = paragraphs
+        .iter()
+        .copied()
+        .find(|entry| entry.paragraph() == editor)
+        .expect("editor residency is reported");
+    assert_eq!(editor_residency.requested(), crate::SceneFeatures::EDITABLE);
+    assert_eq!(editor_residency.resident(), crate::SceneFeatures::EDITABLE);
+    assert!(editor_residency.bytes().sources() > 0);
+    assert!(editor_residency.bytes().hit_testing() > 0);
+    assert!(editor_residency.bytes().selection() > 0);
+    assert!(editor_residency.bytes().navigation() > 0);
+    assert_eq!(editor_residency.bytes().semantics(), 0);
+    assert_eq!(editor_residency.bytes().native_text_input(), 0);
+
+    let cache_residency = layout.cache_diagnostics().scene_cache_residency();
+    assert_eq!(
+        cache_residency.layout(),
+        display_residency
+            .bytes()
+            .layout()
+            .saturating_add(editor_residency.bytes().layout())
+    );
+    assert_eq!(
+        cache_residency.sources(),
+        editor_residency.bytes().sources()
+    );
 }
 
 fn one_leaf_document(identity: [u8; 16], text: &str) -> (Document, StyleMap, PaintTable) {

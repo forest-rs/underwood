@@ -208,6 +208,22 @@ with resident facts it reports a warm upgrade and repeats no formation work.
 known scratch, hits, misses, evictions, and releases. Shared font blobs and
 caller-held scenes are outside that charge.
 
+Prepared-scene capabilities are explicit and cumulative. `DISPLAY` retains
+only layout and paint. `ACCESSIBLE` adds source provenance and semantic
+structure without pointer-hit data. `SELECTABLE` adds exact point hits and
+selection geometry. `EDITABLE` is a strict superset that also retains logical
+and visual navigation plus the prerequisites for native text-input queries.
+Documents can apply one default with sparse paragraph overrides, so one editor
+does not promote thousands of display-only siblings.
+
+`TextScene::residency` reports deterministic bytes by structure, layout,
+paint, source, semantic, hit-testing, selection, navigation, and native-input
+category. `TextScene::paragraph_residencies` is an allocation-free traversal
+that exposes both the requested and actually resident capabilities for every
+paragraph. These values account for Underwood-owned immutable records; they do
+not include allocator metadata, fonts, renderer resources, or caller-held
+objects.
+
 [`TextConstraint::MaxContent`] suppresses soft wrapping while preserving
 mandatory breaks. [`TextConstraint::MinContent`] commits every legal soft
 break through line-final shaping, and

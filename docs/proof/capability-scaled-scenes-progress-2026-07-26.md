@@ -2,7 +2,7 @@
 
 ## Status
 
-These checkpoints implement the first four approved Design-0018 boundaries.
+These checkpoints implement the first five approved Design-0018 boundaries.
 This is not the completion proof.
 
 Prepared scenes now distinguish display, source provenance, semantics, hit
@@ -41,12 +41,10 @@ explicitly with `SnapshotTextUnitView::to_owned` or
 `ProjectedTextUnitView::to_owned`.
 
 The remaining Design-0018 work is deliberate and tracked by
-`und-oh0.13.17.10`:
-
-- requested-versus-resident byte diagnostics;
-- upgrade, 2,048-sibling mixed-document, editable-typing, and
-  creation/destruction wind tunnels;
-- the final complete portability, documentation, and repository gates.
+`und-oh0.13.17.10`: creation/destruction churn, the source-heavy/bidi/native
+corpus matrix, the comparison with high-level Parley `Layout`, remaining
+table/query compaction justified by those measurements, and the final complete
+portability, documentation, and repository gates.
 
 ## Public migration
 
@@ -131,6 +129,28 @@ An exact published-scene hit does not touch adapter recency because it does
 not enter formation. Adapter LRU therefore represents reusable-formation
 recency rather than display traversal recency.
 
+## Scene residency diagnostics
+
+`TextScene` and `CompositionScene` expose `residency()` and an allocation-free
+`paragraph_residencies()` traversal. Each paragraph observation names the
+normalized requested features, the physically resident feature closure, and
+deterministic charges for structure, layout, paint, sources, semantics, hit
+testing, selection, navigation, and native text input.
+
+These are representation charges, not allocator-exact process memory. They
+cover owned table capacities and immutable packed records and exclude allocator
+metadata, fonts, paint values, caller storage, and renderer resources.
+`CacheDiagnostics::scene_cache_residency()` reports the same category model
+for engine-owned paragraph cache entries. Published-scene structure includes
+its persistent spine; cache residency does not.
+
+The diagnostic found and retired one real mirage before this checkpoint:
+accessible text initially denied the hit-testing facade but still retained the
+complete cluster/hit table because semantic bounds were derived through it.
+Semantic bounds are now accumulated directly from interaction units into
+per-leaf bounds. An accessible scene retains semantics and sources with zero
+hit-testing bytes and never constructs the cluster table.
+
 The public adapter migration is intentionally breaking:
 
 - `ParagraphFormation::retained_entries` became the richer
@@ -192,6 +212,60 @@ bytes. The capability-scaled paths are the central claim: selectable drops 35
 calls, editable drops 130 calls, and a hot hit with source traversal performs
 no allocation. This table does not yet substitute for the required 64,
 1,000, and 2,048-item residency and mixed-document matrices.
+
+## Capability scaling checkpoint
+
+The checked release runner
+`benches/labels/profile-capability-scaling.sh` measures one editable paragraph
+among display-only siblings. Each repeat asserts zero preparation work; each
+typing event asserts exactly one analyzed, shaped, and lowered paragraph; and
+the per-paragraph residency traversal proves that no display sibling retains
+sources or interaction sidecars.
+
+| Paragraphs | Upgrade ns | Exact repeat ns | Typing ns/keystroke |
+|---:|---:|---:|---:|
+| 64 | 53,458 | 68 | 24,957 |
+| 1,000 | 345,250 | 72 | 35,532 |
+| 2,048 | 759,958 | 63 | 47,373 |
+
+The upgrade intentionally publishes a new sparse-capability scene and scales
+with the persistent document shape. Exact published-root reuse is constant
+time. Typing grows only with logarithmic persistent document/scene path depth;
+unchanged siblings perform no projection, formation, or geometry work.
+
+The same scenes report:
+
+| Paragraphs | Total bytes | Structure | Layout | Paint | Editor sources | Editor hit | Editor selection | Editor navigation |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 197,080 | 31,496 | 87,824 | 64,512 | 352 | 4,704 | 2,560 | 5,632 |
+| 1,000 | 2,892,760 | 495,752 | 1,375,760 | 1,008,000 | 352 | 4,704 | 2,560 | 5,632 |
+| 2,048 | 5,911,000 | 1,015,560 | 2,817,808 | 2,064,384 | 352 | 4,704 | 2,560 | 5,632 |
+
+Only the one editor owns the four interaction columns; their charges remain
+constant as display siblings are added.
+
+Matched `malloc_history` traces reinforce the work law:
+
+| Paragraphs | Exact-repeat calls/bytes | One typing event calls/bytes |
+|---:|---:|---:|
+| 64 | 0 / 0 | 176 / 52,752 |
+| 1,000 | 0 / 0 | 179 / 53,784 |
+| 2,048 | within 1 call / 128 bytes of baseline | 184 / 55,080 |
+
+The 2,048 exact-repeat subtraction was `-1` call / `-128` bytes because the
+separate baseline process contained one more runtime allocation; it is
+reported as profiler noise, not as negative allocation. The changed editable
+paragraph is not allocation-free: stack attribution shows most calls in
+scene geometry/sidecar construction and adapter interaction/cursor lowering,
+with much smaller contributions from shaping and document publication. That
+is the measured target for the remaining typed-table and scratch work.
+
+The focused allocator subset is:
+
+```sh
+benches/labels/profile-allocations.sh \
+    target/release/underwood_label_benchmark 1 2048 capabilities
+```
 
 The checkpoint passes:
 

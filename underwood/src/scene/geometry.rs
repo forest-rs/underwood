@@ -232,31 +232,42 @@ impl CachedGeometry {
         self.semantics.retain_from(&retained.semantics);
     }
 
-    pub(super) fn accounted_owned_bytes(&self) -> usize {
-        let mut bytes = vec_bytes::<CachedLine>(self.lines.capacity())
-            .saturating_add(vec_bytes::<CachedGlyph>(self.glyphs.capacity()))
-            .saturating_add(vec_bytes::<Range<usize>>(self.line_fragments.capacity()))
+    pub(super) fn residency_bytes(&self) -> SceneResidencyBytes {
+        let layout =
+            vec_bytes::<CachedLine>(self.lines.capacity())
+                .saturating_add(vec_bytes::<CachedGlyph>(self.glyphs.capacity()));
+        let mut paint = vec_bytes::<Range<usize>>(self.line_fragments.capacity())
             .saturating_add(vec_bytes::<CachedFragment>(self.fragments.capacity()))
-            .saturating_add(vec_bytes::<CachedPaintGlyph>(self.paint_glyphs.capacity()))
-            .saturating_add(vec_bytes::<SourceSpan>(self.line_sources.capacity()))
-            .saturating_add(vec_bytes::<SourceSpan>(self.paint_sources.capacity()))
-            .saturating_add(vec_bytes::<CachedCluster>(self.clusters.capacity()))
-            .saturating_add(vec_bytes::<CachedCaret>(self.carets.capacity()))
-            .saturating_add(vec_bytes::<CachedCursorMovement>(self.movements.capacity()))
-            .saturating_add(vec_bytes::<CachedSemantic>(self.semantics.capacity()));
-        bytes = bytes.saturating_add(
-            self.source_map
-                .as_ref()
-                .map_or(0, |map| map.accounted_owned_bytes()),
-        );
+            .saturating_add(vec_bytes::<CachedPaintGlyph>(self.paint_glyphs.capacity()));
         for fragment in &self.fragments {
-            bytes = bytes.saturating_add(vec_bytes::<i16>(fragment.normalized_coords.len()));
+            paint = paint.saturating_add(vec_bytes::<i16>(fragment.normalized_coords.len()));
         }
+        let sources = vec_bytes::<SourceSpan>(self.line_sources.capacity())
+            .saturating_add(vec_bytes::<SourceSpan>(self.paint_sources.capacity()))
+            .saturating_add(
+                self.source_map
+                    .as_ref()
+                    .map_or(0, |map| map.accounted_owned_bytes()),
+            );
+        let mut hit_testing = vec_bytes::<CachedCluster>(self.clusters.capacity());
         for cluster in self.clusters.iter() {
-            bytes =
-                bytes.saturating_add(vec_bytes::<CachedHitSlice>(cluster.hit_slices.capacity()));
+            hit_testing = hit_testing
+                .saturating_add(vec_bytes::<CachedHitSlice>(cluster.hit_slices.capacity()));
         }
-        bytes
+        SceneResidencyBytes::from_categories(
+            layout,
+            paint,
+            sources,
+            vec_bytes::<CachedSemantic>(self.semantics.capacity()),
+            hit_testing,
+            vec_bytes::<CachedCaret>(self.carets.capacity()),
+            vec_bytes::<CachedCursorMovement>(self.movements.capacity()),
+            0,
+        )
+    }
+
+    pub(super) fn accounted_owned_bytes(&self) -> usize {
+        self.residency_bytes().total()
     }
 }
 
@@ -323,8 +334,16 @@ pub(super) fn build_geometry(
     let mut clusters = Vec::new();
     let mut carets = Vec::new();
     let mut caret_maps = Vec::new();
-    let needs_clusters =
-        features.has_semantics() || features.has_hit_testing() || features.has_selection();
+    let retains_clusters = features.has_hit_testing() || features.has_selection();
+    let builds_semantics = features.has_semantics();
+    let mut semantic_bounds: Vec<Option<Rect>> = Vec::with_capacity(if builds_semantics {
+        projection.spans.len()
+    } else {
+        0
+    });
+    if builds_semantics {
+        semantic_bounds.resize(projection.spans.len(), None);
+    }
 
     for line in prepared.lines() {
         let line_index = lines.len();
@@ -366,22 +385,22 @@ pub(super) fn build_geometry(
             } else {
                 0.0
             };
-            let source = if needs_clusters {
+            let source = if builds_semantics || retains_clusters {
                 Some(
-                    map.expect("interaction capabilities retain a source map")
+                    map.expect("source-aware capabilities retain a source map")
                         .span(paragraph_source.clone(), prepared.paragraph())?,
                 )
             } else {
                 None
             };
-            let left = needs_clusters
+            let left = retains_clusters
                 .then(|| projection.source_position(unit.left().offset(), unit.left().affinity()))
                 .transpose()?;
-            let right = needs_clusters
+            let right = retains_clusters
                 .then(|| projection.source_position(unit.right().offset(), unit.right().affinity()))
                 .transpose()?;
             let mut slice_x = unit_x;
-            let mut hit_slices = Vec::with_capacity(if needs_clusters {
+            let mut hit_slices = Vec::with_capacity(if retains_clusters {
                 unit.slices().len()
             } else {
                 0
@@ -389,7 +408,7 @@ pub(super) fn build_geometry(
             for slice in unit.slices() {
                 let next_x = slice_x + slice.advance();
                 let source = slice.source();
-                if needs_clusters {
+                if retains_clusters {
                     map.expect("interaction capabilities retain a source map")
                         .span(source.clone(), prepared.paragraph())?;
                     hit_slices.push(CachedHitSlice {
@@ -405,7 +424,7 @@ pub(super) fn build_geometry(
             {
                 last.x1 += unit_expansion;
             }
-            let semantic_id = if needs_clusters {
+            let semantic_id = if retains_clusters {
                 hit_slices.first().map_or_else(
                     || projection.semantic_for_range(paragraph_source),
                     |slice| Ok(slice.semantic_id),
@@ -421,7 +440,20 @@ pub(super) fn build_geometry(
                 next_x,
                 current_line_top + line.height(),
             );
-            if needs_clusters {
+            if builds_semantics {
+                for index in map
+                    .expect("semantic capability retains a source map")
+                    .leaf_indices_for_span(
+                        source.expect("semantic bounds retain a projected source span"),
+                    )
+                {
+                    semantic_bounds[index] = Some(match semantic_bounds[index] {
+                        Some(current) => current.union(bounds),
+                        None => bounds,
+                    });
+                }
+            }
+            if retains_clusters {
                 clusters.push(CachedCluster {
                     source: source.expect("cluster construction retains its source span"),
                     semantic_id,
@@ -449,34 +481,51 @@ pub(super) fn build_geometry(
         }
         caret_map.finish_empty();
         caret_maps.push(caret_map);
-        if needs_clusters && line.units().is_empty() && !projection.spans.is_empty() {
+        if (builds_semantics || retains_clusters)
+            && line.units().is_empty()
+            && !projection.spans.is_empty()
+        {
             let source = line.source();
-            let affinity = if source.start == 0 {
-                TextAffinity::Downstream
-            } else {
-                TextAffinity::Upstream
-            };
-            let position = projection.source_position(source.start, affinity)?;
             let local_source = map
-                .expect("interaction capabilities retain a source map")
+                .expect("source-aware capabilities retain a source map")
                 .span(source.clone(), prepared.paragraph())?;
-            clusters.push(CachedCluster {
-                semantic_id: projection.semantic_for_range(source)?,
-                source: local_source,
-                boundary: ClusterBoundary::None,
-                whitespace: ClusterWhitespace::None,
-                hit_slices: Vec::new(),
-                bounds: Rect::new(
-                    inline_start,
-                    current_line_top,
-                    inline_start,
-                    current_line_top + line.height(),
-                ),
-                line: line_index,
-                left: position,
-                right: position,
-                bidi_level: 0,
-            });
+            let bounds = Rect::new(
+                inline_start,
+                current_line_top,
+                inline_start,
+                current_line_top + line.height(),
+            );
+            if builds_semantics {
+                for index in map
+                    .expect("semantic capability retains a source map")
+                    .leaf_indices_for_span(local_source)
+                {
+                    semantic_bounds[index] = Some(match semantic_bounds[index] {
+                        Some(current) => current.union(bounds),
+                        None => bounds,
+                    });
+                }
+            }
+            if retains_clusters {
+                let affinity = if source.start == 0 {
+                    TextAffinity::Downstream
+                } else {
+                    TextAffinity::Upstream
+                };
+                let position = projection.source_position(source.start, affinity)?;
+                clusters.push(CachedCluster {
+                    semantic_id: projection.semantic_for_range(source)?,
+                    source: local_source,
+                    boundary: ClusterBoundary::None,
+                    whitespace: ClusterWhitespace::None,
+                    hit_slices: Vec::new(),
+                    bounds,
+                    line: line_index,
+                    left: position,
+                    right: position,
+                    bidi_level: 0,
+                });
+            }
         }
         let adjusted_advance = line.advance()
             + expansion
@@ -508,7 +557,7 @@ pub(super) fn build_geometry(
     let glyphs = build_layout_glyphs(prepared, &lines)?;
     let paint = build_paint_fragments(prepared, features, &glyphs)?;
 
-    if needs_clusters
+    if retains_clusters
         && prepared.lines().is_empty()
         && projection.mapping.text().is_empty()
         && !projection.spans.is_empty()
@@ -559,23 +608,17 @@ pub(super) fn build_geometry(
         {
             continue;
         }
-        let mut bounds: Option<Rect> = None;
-        for cluster in &clusters {
-            if map
-                .expect("semantic capability retains a source map")
-                .ranges_for_span(cluster.source)
-                .any(|source| {
-                    matches!(source, LocalRange::Snapshot { text, .. } if text == span.text)
-                        || matches!(span.source, LeafSpanSource::Composition { .. })
-                            && matches!(source, LocalRange::Composition { .. })
-                })
-            {
-                bounds = Some(match bounds {
-                    Some(current) => current.union(cluster.bounds),
-                    None => cluster.bounds,
-                });
-            }
-        }
+        let bounds = projection
+            .spans
+            .iter()
+            .zip(&semantic_bounds)
+            .filter(|(candidate, _)| {
+                candidate.text == span.text
+                    || matches!(span.source, LeafSpanSource::Composition { .. })
+                        && matches!(candidate.source, LeafSpanSource::Composition { .. })
+            })
+            .filter_map(|(_, bounds)| *bounds)
+            .reduce(|bounds, next| bounds.union(next));
         let source = Some(SourceReference::Leaf(u32::try_from(span_index).map_err(
             |_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph()),
         )?));
@@ -587,7 +630,6 @@ pub(super) fn build_geometry(
             bounds: bounds.unwrap_or(empty_bounds),
         });
     }
-
     let movements = if projection.spans.is_empty() || !features.has_navigation() {
         Vec::new()
     } else {
@@ -681,7 +723,7 @@ pub(super) fn build_geometry(
         source_map,
         line_sources: CachedSidecar::new(features.has_sources(), line_sources),
         paint_sources: CachedSidecar::new(features.has_sources(), paint.sources),
-        clusters: CachedSidecar::new(needs_clusters, clusters),
+        clusters: CachedSidecar::new(retains_clusters, clusters),
         carets: CachedSidecar::new(features.has_selection(), carets),
         movements: CachedSidecar::new(features.has_navigation(), movements),
         semantics: CachedSidecar::new(features.has_semantics(), semantics),

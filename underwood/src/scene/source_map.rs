@@ -188,19 +188,12 @@ impl ParagraphSourceMap {
 
     pub(super) fn ranges_for_span(&self, span: SourceSpan) -> LocalRanges<'_> {
         let source = self.source_range(span);
-        if source.is_empty() {
-            let index = self
-                .leaf_for_position(source.start, TextAffinity::Upstream)
-                .or_else(|| self.leaf_for_position(source.start, TextAffinity::Downstream));
-            return LocalRanges::new(self, source, index.unwrap_or(0), index.map_or(0, |i| i + 1));
-        }
-        let front = self
-            .leaves
-            .partition_point(|leaf| leaf.paragraph.end <= source.start);
-        let back = self
-            .leaves
-            .partition_point(|leaf| leaf.paragraph.start < source.end);
-        LocalRanges::new(self, source, front, back)
+        let indices = self.leaf_indices_for_source(source);
+        LocalRanges::new(self, source, indices.start, indices.end)
+    }
+
+    pub(super) fn leaf_indices_for_span(&self, span: SourceSpan) -> Range<usize> {
+        self.leaf_indices_for_source(self.source_range(span))
     }
 
     pub(super) fn ranges_for_leaf(&self, index: u32) -> LocalRanges<'_> {
@@ -261,6 +254,22 @@ impl ParagraphSourceMap {
         let start = self.source_position(projected.start, TextAffinity::Downstream);
         let end = self.source_position(projected.end, TextAffinity::Upstream);
         SourceSpan::new(start.min(end), start.max(end))
+    }
+
+    fn leaf_indices_for_source(&self, source: SourceSpan) -> Range<usize> {
+        if source.is_empty() {
+            let index = self
+                .leaf_for_position(source.start, TextAffinity::Upstream)
+                .or_else(|| self.leaf_for_position(source.start, TextAffinity::Downstream));
+            return index.map_or(0..0, |index| index..index + 1);
+        }
+        let front = self
+            .leaves
+            .partition_point(|leaf| leaf.paragraph.end <= source.start);
+        let back = self
+            .leaves
+            .partition_point(|leaf| leaf.paragraph.start < source.end);
+        front..back
     }
 
     fn source_position(&self, projected: u32, affinity: TextAffinity) -> u32 {

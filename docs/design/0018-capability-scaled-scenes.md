@@ -565,6 +565,11 @@ selected first design.
    third checkpoint together with step 3 so no temporary maximal
    representation was presented as capability-scaled.
 5. Add byte accounting and matched display/selectable/editable wind tunnels.
+   Implemented in the fourth checkpoint. Public diagnostics distinguish the
+   request from the physically resident capability closure and report
+   deterministic category bytes. The checked 64/1,000/2,048 mixed-document
+   tunnel proves constant-time exact repeats, one editable paragraph's
+   sidecars, and localized typing without sibling reconstruction.
 6. Only then compact remaining tables and add query indexes.
 
 ## Approval gate
