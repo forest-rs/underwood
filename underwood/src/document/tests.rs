@@ -35,6 +35,46 @@ fn dropped_edit_publishes_nothing_and_old_snapshot_survives() {
 }
 
 #[test]
+fn same_leaf_range_edits_reuse_one_staged_buffer_and_freeze_at_commit() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"document-cow-001"));
+    let mut fixture = document.edit();
+    let paragraph = fixture
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("paragraph must append");
+    let text = fixture
+        .append_text(paragraph, InlineRole::TEXT, "abcdef")
+        .expect("text must append");
+    let publication = fixture.commit().expect("fixture must publish");
+    let old = publication.snapshot().clone();
+
+    let mut edit = document.edit();
+    edit.replace_text_range(text, 1..2, "X")
+        .expect("first range must stage");
+    let first_buffer = edit.staged.paragraphs[0].leaves[0]
+        .staged_buffer_ptr()
+        .expect("the first range converts shared text to one staged buffer");
+    edit.replace_text_range(text, 3..4, "Y")
+        .expect("second range must stage");
+    let second_buffer = edit.staged.paragraphs[0].leaves[0]
+        .staged_buffer_ptr()
+        .expect("the second range retains the staged buffer");
+    assert_eq!(
+        first_buffer, second_buffer,
+        "same-length replacements in one transaction must mutate one buffer"
+    );
+
+    let committed = edit.commit().expect("ranges must publish atomically");
+    assert_eq!(old.text(text), Some("abcdef"));
+    assert_eq!(committed.snapshot().text(text), Some("aXcYef"));
+    assert!(
+        committed.snapshot().paragraphs()[0].leaves[0]
+            .staged_buffer_ptr()
+            .is_none(),
+        "published text must freeze back to shared immutable storage"
+    );
+}
+
+#[test]
 fn paragraph_heading_roles_survive_snapshot_publication() {
     let mut document = Document::new(DocumentId::from_bytes(*b"document-test-02"));
     let mut edit = document.edit();

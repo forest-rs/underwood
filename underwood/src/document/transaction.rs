@@ -134,7 +134,7 @@ pub(super) fn validate_replacement_plans(
             if bytes.start > bytes.end
                 || out_of_order
                 || leaf
-                    .text
+                    .text()
                     .get(bytes.start as usize..bytes.end as usize)
                     .is_none()
             {
@@ -179,7 +179,7 @@ pub(super) fn validate_replacement_plans(
             .get(text.paragraph as usize)
             .and_then(|paragraph| paragraph.leaves.get(text.index as usize))
             .filter(|leaf| leaf.id == text)
-            .map(|leaf| leaf.text.len() as u64)
+            .map(|leaf| leaf.text().len() as u64)
             .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
         let removed = plans
             .iter()
@@ -225,7 +225,7 @@ fn validate_selection_position(
         .get(text.index as usize)
         .filter(|leaf| leaf.id == text)
         .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
-    if !leaf.text.is_char_boundary(position.byte() as usize) {
+    if !leaf.text().is_char_boundary(position.byte() as usize) {
         return Err(EditError::for_text(EditErrorKind::InvalidTextRange, text));
     }
     Ok(paragraph.id)
@@ -287,11 +287,7 @@ impl Edit<'_> {
             paragraph: paragraph.index,
             index,
         };
-        record.leaves.push(TextLeaf {
-            id,
-            role,
-            text: Arc::from(text),
-        });
+        record.leaves.push(TextLeaf::new(id, role, text));
         record.version = record.version.saturating_add(1);
         self.mark_changed(paragraph);
         Ok(id)
@@ -312,7 +308,7 @@ impl Edit<'_> {
             .get_mut(text.index as usize)
             .filter(|leaf| leaf.id == text)
             .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
-        leaf.text = Arc::from(replacement);
+        leaf.replace(replacement);
         paragraph.version = paragraph.version.saturating_add(1);
         let paragraph_id = paragraph.id;
         self.mark_changed(paragraph_id);
@@ -338,15 +334,9 @@ impl Edit<'_> {
             .get_mut(text.index as usize)
             .filter(|leaf| leaf.id == text)
             .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
-        let mut value = String::from(leaf.text.as_ref());
-        if value
-            .get(bytes.start as usize..bytes.end as usize)
-            .is_none()
-        {
+        if leaf.replace_range(bytes, replacement).is_err() {
             return Err(EditError::for_text(EditErrorKind::InvalidTextRange, text));
         }
-        value.replace_range(bytes.start as usize..bytes.end as usize, replacement);
-        leaf.text = Arc::from(value);
         paragraph.version = paragraph.version.saturating_add(1);
         let paragraph_id = paragraph.id;
         self.mark_changed(paragraph_id);
@@ -367,6 +357,19 @@ impl Edit<'_> {
             })?);
         self.changed
             .sort_unstable_by_key(|paragraph| paragraph.index);
+        for paragraph in &self.changed {
+            let record = self
+                .staged
+                .paragraphs
+                .get_mut(paragraph.index as usize)
+                .filter(|record| record.id == *paragraph)
+                .ok_or_else(|| {
+                    EditError::for_paragraph(EditErrorKind::InvalidStructure, *paragraph)
+                })?;
+            for leaf in &mut record.leaves {
+                leaf.freeze();
+            }
+        }
         let state = Arc::new(self.staged);
         self.document.state = Arc::clone(&state);
         Ok(Publication {

@@ -47,7 +47,7 @@ impl<'a> Projection<'a> {
         let mut paint_runs = Vec::with_capacity(paragraph.leaves.len());
         let mut start = 0_u32;
         for leaf in &paragraph.leaves {
-            let len = u32::try_from(leaf.text.len()).map_err(|_| {
+            let len = u32::try_from(leaf.text().len()).map_err(|_| {
                 SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
             })?;
             let end = start.checked_add(len).ok_or_else(|| {
@@ -170,7 +170,7 @@ impl<'a> Projection<'a> {
                     &mut inline_flow_runs,
                     &mut paint_runs,
                     leaf,
-                    leaf.text.as_ref(),
+                    leaf.text(),
                     LeafSpanSource::Snapshot { start: 0 },
                     style,
                 )?;
@@ -183,7 +183,7 @@ impl<'a> Projection<'a> {
                 let bytes = range.bytes();
                 if bytes.start < source
                     || leaf
-                        .text
+                        .text()
                         .get(bytes.start as usize..bytes.end as usize)
                         .is_none()
                 {
@@ -195,7 +195,7 @@ impl<'a> Projection<'a> {
                 }
                 if source < bytes.start {
                     let retained = leaf
-                        .text
+                        .text()
                         .get(source as usize..bytes.start as usize)
                         .ok_or_else(|| {
                             SceneError::for_source(
@@ -245,11 +245,11 @@ impl<'a> Projection<'a> {
                 }
                 source = bytes.end;
             }
-            let end = u32::try_from(leaf.text.len()).map_err(|_| {
+            let end = u32::try_from(leaf.text().len()).map_err(|_| {
                 SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
             })?;
             if source < end {
-                let retained = leaf.text.get(source as usize..).ok_or_else(|| {
+                let retained = leaf.text().get(source as usize..).ok_or_else(|| {
                     SceneError::for_source(
                         SceneErrorKind::InvalidComposition,
                         paragraph.id,
@@ -500,7 +500,7 @@ pub(super) fn append_projection_span<'a>(
         paragraph: start..end,
         text: leaf.id,
         source,
-        leaf_len: u32::try_from(leaf.text.len())
+        leaf_len: u32::try_from(leaf.text().len())
             .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?,
         role: leaf.role,
         semantic: leaf.semantic_id(),

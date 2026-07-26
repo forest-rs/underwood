@@ -14,6 +14,7 @@ use crate::{
 };
 
 mod model;
+mod sequence;
 mod transaction;
 
 pub use model::{
