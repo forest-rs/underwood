@@ -8,18 +8,21 @@
 //! algorithms.
 
 use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
-use core::{mem, ops::Range};
+use core::{
+    mem::{self, size_of, size_of_val},
+    ops::Range,
+};
 
 use parley_engine::{Analysis, Analyzer, ShapedText, Shaper};
 use underwood::adapter::{
     AnalysisRun, FormationWork, InlineFlowRun, LineBreakReason, LineShapingWork,
-    ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput,
-    ParagraphPreparationId, PreparationError, PreparedLine, PreparedParagraph, PreparedRun,
-    ShapingRun,
+    ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
+    ParagraphFormationOutput, ParagraphFormationReuse, ParagraphInput, ParagraphPreparationId,
+    PreparationError, PreparedLine, PreparedParagraph, PreparedRun, ShapingRun,
 };
 use underwood::{
-    AnalysisStyle, InlineFlowStyle, ParagraphStyle, RegionTranscript, ResolvedDirection,
-    ShapingStyle,
+    AnalysisStyle, InlineFlowStyle, ParagraphStyle, RegionAttempt, RegionTranscript,
+    ResolvedDirection, ShapingStyle,
 };
 
 use crate::font::FontSet;
@@ -27,7 +30,7 @@ use crate::interaction::{collect_analysis_units, lower_visual_units, prepared_cu
 use crate::line_break::{
     FormedLine, LineFormationScratch, LineFormationWork, LogicalCluster, apply_wrap_policy,
     collect_logical_clusters, form_lines, line_run_pieces, reorder_visual_pieces,
-    update_line_metrics,
+    shaped_text_accounted_bytes, update_line_metrics,
 };
 use crate::lowering::{
     checked_source_range, index_char_starts, lower_glyphs, paint_coverage, portable_synthesis,
@@ -54,6 +57,9 @@ pub struct ParleyParagraphEngine {
     reshape_scratch: ShapedText,
     cache: BTreeMap<ParagraphPreparationId, PreparationCache>,
     outputs: BTreeMap<ParagraphPreparationId, RetainedOutput>,
+    retention_budget: usize,
+    retention_clock: u64,
+    retention_work: RetentionWork,
 }
 
 impl ParleyParagraphEngine {
@@ -68,6 +74,80 @@ impl ParleyParagraphEngine {
             reshape_scratch: ShapedText::new(),
             cache: BTreeMap::new(),
             outputs: BTreeMap::new(),
+            retention_budget: 0,
+            retention_clock: 0,
+            retention_work: RetentionWork::default(),
+        }
+    }
+
+    fn scratch_accounted_bytes(&self) -> usize {
+        self.line_scratch
+            .accounted_owned_bytes()
+            .saturating_add(shaped_text_accounted_bytes(&self.reshape_scratch))
+    }
+
+    fn remove_cache(&mut self, preparation: ParagraphPreparationId, release: bool) -> bool {
+        let Some(cache) = self.cache.remove(&preparation) else {
+            return false;
+        };
+        self.retention_work.resident_bytes = self
+            .retention_work
+            .resident_bytes
+            .saturating_sub(cache.accounted_bytes);
+        if release {
+            self.retention_work.releases = self.retention_work.releases.saturating_add(1);
+        }
+        true
+    }
+
+    fn remove_output(&mut self, preparation: ParagraphPreparationId, release: bool) -> bool {
+        let Some(output) = self.outputs.remove(&preparation) else {
+            return false;
+        };
+        self.retention_work.resident_bytes = self
+            .retention_work
+            .resident_bytes
+            .saturating_sub(output.accounted_bytes);
+        if release {
+            self.retention_work.releases = self.retention_work.releases.saturating_add(1);
+        }
+        true
+    }
+
+    fn release_entry(&mut self, preparation: ParagraphPreparationId, release: bool) {
+        self.remove_cache(preparation, release);
+        self.remove_output(preparation, release);
+    }
+
+    fn enforce_retention_budget(&mut self) {
+        while self.retention_work.resident_bytes > self.retention_budget {
+            let cache = self
+                .cache
+                .iter()
+                .map(|(id, entry)| (entry.last_used, 0_u8, *id))
+                .min();
+            let output = self
+                .outputs
+                .iter()
+                .map(|(id, entry)| (entry.last_used, 1_u8, *id))
+                .min();
+            let oldest = match (cache, output) {
+                (Some(cache), Some(output)) => Some(cache.min(output)),
+                (Some(cache), None) => Some(cache),
+                (None, Some(output)) => Some(output),
+                (None, None) => None,
+            };
+            let Some((_, kind, preparation)) = oldest else {
+                break;
+            };
+            let removed = match kind {
+                0 => self.remove_cache(preparation, false),
+                _ => self.remove_output(preparation, false),
+            };
+            if !removed {
+                break;
+            }
+            self.retention_work.evictions = self.retention_work.evictions.saturating_add(1);
         }
     }
 }
@@ -96,6 +176,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         .map(|prepared| RetainedOutput {
                             prepared: prepared.clone(),
                             region_transcript: cache.region_transcript.clone(),
+                            last_used: 0,
+                            accounted_bytes: 0,
                         })
                 })
                 .or_else(|| {
@@ -105,6 +187,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         .cloned()
                 });
             if let Some(output) = output {
+                self.retention_work.hits = self.retention_work.hits.saturating_add(1);
                 return Ok(output.into_formation_output());
             }
         }
@@ -120,6 +203,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         .map(|prepared| RetainedOutput {
                             prepared: prepared.clone(),
                             region_transcript: cache.region_transcript.clone(),
+                            last_used: 0,
+                            accounted_bytes: 0,
                         })
                 })
                 .or_else(|| {
@@ -129,13 +214,21 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         .cloned()
                 });
             if let Some(output) = output {
-                self.cache.remove(&preparation_id);
+                self.release_entry(preparation_id, true);
                 self.outputs.insert(preparation_id, output.clone());
+                self.retention_work.hits = self.retention_work.hits.saturating_add(1);
                 return Ok(output.into_formation_output());
             }
         }
-        self.outputs.remove(&preparation_id);
+        self.remove_output(preparation_id, true);
         let retained = self.cache.contains_key(&preparation_id);
+        let formation_reuse = if retained {
+            self.retention_work.hits = self.retention_work.hits.saturating_add(1);
+            ParagraphFormationReuse::RetainedFacts
+        } else {
+            self.retention_work.misses = self.retention_work.misses.saturating_add(1);
+            ParagraphFormationReuse::Cold
+        };
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         if !retained || change.analysis_changed() {
@@ -227,6 +320,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         region_transcript: None,
                         prepared: None,
                         prepared_paint_runs: Vec::new(),
+                        last_used: 0,
+                        accounted_bytes: 0,
                     },
                 );
             }
@@ -474,12 +569,14 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .filter(|prepared| prepared.features().contains(input.features()))
         {
             return match preparation.region_transcript.clone() {
-                Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
-                    prepared.clone(),
-                    work,
-                    transcript,
-                )),
-                None => Ok(ParagraphFormationOutput::new(prepared.clone(), work)),
+                Some(transcript) => {
+                    Ok(
+                        ParagraphFormationOutput::in_regions(prepared.clone(), work, transcript)
+                            .with_reuse(formation_reuse),
+                    )
+                }
+                None => Ok(ParagraphFormationOutput::new(prepared.clone(), work)
+                    .with_reuse(formation_reuse)),
             };
         }
         if !needs_formation
@@ -501,8 +598,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
             return match region_transcript {
                 Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
                     repainted, work, transcript,
-                )),
-                None => Ok(ParagraphFormationOutput::new(repainted, work)),
+                )
+                .with_reuse(formation_reuse)),
+                None => {
+                    Ok(ParagraphFormationOutput::new(repainted, work).with_reuse(formation_reuse))
+                }
             };
         }
         let mut prepared_lines = Vec::with_capacity(preparation.formed_lines.len());
@@ -625,23 +725,80 @@ impl ParagraphFormation for ParleyParagraphEngine {
         match region_transcript {
             Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
                 paragraph, work, transcript,
-            )),
-            None => Ok(ParagraphFormationOutput::new(paragraph, work)),
+            )
+            .with_reuse(formation_reuse)),
+            None => Ok(ParagraphFormationOutput::new(paragraph, work).with_reuse(formation_reuse)),
         }
     }
 
     fn release(&mut self, preparation: ParagraphPreparationId) {
-        self.cache.remove(&preparation);
-        self.outputs.remove(&preparation);
+        self.release_entry(preparation, true);
     }
 
     fn clear(&mut self) {
+        self.retention_work.releases = self
+            .retention_work
+            .releases
+            .saturating_add(self.cache.len().saturating_add(self.outputs.len()));
         self.cache.clear();
         self.outputs.clear();
+        self.retention_work.resident_bytes = 0;
     }
 
-    fn retained_entries(&self) -> Option<usize> {
-        Some(self.cache.len().saturating_add(self.outputs.len()))
+    fn set_retained_facts_budget(&mut self, bytes: usize) {
+        self.retention_budget = bytes;
+        self.enforce_retention_budget();
+    }
+
+    fn commit_preparation(&mut self, preparation: ParagraphPreparationId) {
+        self.retention_clock = self.retention_clock.saturating_add(1);
+        let current_use = self.retention_clock;
+        if let Some(cache) = self.cache.get_mut(&preparation) {
+            self.retention_work.resident_bytes = self
+                .retention_work
+                .resident_bytes
+                .saturating_sub(cache.accounted_bytes);
+            cache.last_used = current_use;
+            cache.accounted_bytes = cache.calculate_accounted_owned_bytes();
+            self.retention_work.resident_bytes = self
+                .retention_work
+                .resident_bytes
+                .saturating_add(cache.accounted_bytes);
+        } else if let Some(output) = self.outputs.get_mut(&preparation) {
+            self.retention_work.resident_bytes = self
+                .retention_work
+                .resident_bytes
+                .saturating_sub(output.accounted_bytes);
+            output.last_used = current_use;
+            output.accounted_bytes = output.calculate_accounted_owned_bytes();
+            self.retention_work.resident_bytes = self
+                .retention_work
+                .resident_bytes
+                .saturating_add(output.accounted_bytes);
+        }
+        self.retention_work.peak_bytes = self
+            .retention_work
+            .peak_bytes
+            .max(self.retention_work.resident_bytes);
+        self.enforce_retention_budget();
+    }
+
+    fn trim_retained_facts(&mut self) {
+        self.clear();
+    }
+
+    fn retained_facts(&self) -> Option<ParagraphFormationCacheDiagnostics> {
+        Some(ParagraphFormationCacheDiagnostics::new(
+            self.retention_budget,
+            self.cache.len().saturating_add(self.outputs.len()),
+            self.retention_work.resident_bytes,
+            self.retention_work.peak_bytes,
+            self.scratch_accounted_bytes(),
+            self.retention_work.hits,
+            self.retention_work.misses,
+            self.retention_work.evictions,
+            self.retention_work.releases,
+        ))
     }
 }
 
@@ -672,12 +829,71 @@ struct PreparationCache {
     region_transcript: Option<RegionTranscript>,
     prepared: Option<PreparedParagraph>,
     prepared_paint_runs: Vec<underwood::adapter::PaintRun>,
+    last_used: u64,
+    accounted_bytes: usize,
+}
+
+impl PreparationCache {
+    fn calculate_accounted_owned_bytes(&self) -> usize {
+        let mut bytes = size_of::<Self>()
+            .saturating_add(self.text.len())
+            .saturating_add(vec_bytes::<AnalysisStyle>(self.analysis_styles.capacity()))
+            .saturating_add(vec_bytes::<AnalysisRun>(self.analysis_runs.capacity()))
+            .saturating_add(size_of_val(self.analysis.char_info()))
+            .saturating_add(size_of_val(self.analysis.bidi_levels()))
+            .saturating_add(vec_bytes::<Range<usize>>(self.interaction_units.capacity()))
+            .saturating_add(vec_bytes::<bool>(self.joining_units.capacity()))
+            .saturating_add(vec_bytes::<u32>(self.char_starts.capacity()))
+            .saturating_add(vec_bytes::<ShapingStyle>(self.shaping_styles.capacity()))
+            .saturating_add(vec_bytes::<ShapingRun>(self.shaping_runs.capacity()))
+            .saturating_add(vec_bytes::<u16>(self.style_indices.capacity()))
+            .saturating_add(vec_bytes::<u16>(self.inline_flow_indices.capacity()))
+            .saturating_add(shaped_text_accounted_bytes(&self.shaped_text))
+            .saturating_add(vec_bytes::<[u8; 4]>(self.scripts.capacity()))
+            .saturating_add(vec_bytes::<f32>(self.base_cluster_advances.capacity()))
+            .saturating_add(vec_bytes::<f32>(self.base_glyph_advances.capacity()))
+            .saturating_add(vec_bytes::<LogicalCluster>(
+                self.logical_clusters.capacity(),
+            ))
+            .saturating_add(vec_bytes::<InlineFlowStyle>(
+                self.inline_flow_styles.capacity(),
+            ))
+            .saturating_add(vec_bytes::<InlineFlowRun>(self.inline_flow_runs.capacity()))
+            .saturating_add(vec_bytes::<FormedLine>(self.formed_lines.capacity()))
+            .saturating_add(vec_bytes::<underwood::adapter::PaintRun>(
+                self.prepared_paint_runs.capacity(),
+            ));
+        for line in &self.formed_lines {
+            bytes = bytes.saturating_add(line.accounted_owned_bytes());
+        }
+        if let Some(transcript) = &self.region_transcript {
+            bytes = bytes.saturating_add(
+                size_of::<RegionAttempt>().saturating_mul(transcript.attempts().len()),
+            );
+        }
+        if let Some(prepared) = &self.prepared {
+            bytes = bytes.saturating_add(prepared.accounted_owned_bytes());
+        }
+        bytes
+    }
 }
 
 #[derive(Clone, Debug)]
 struct RetainedOutput {
     prepared: PreparedParagraph,
     region_transcript: Option<RegionTranscript>,
+    last_used: u64,
+    accounted_bytes: usize,
+}
+
+impl RetainedOutput {
+    fn calculate_accounted_owned_bytes(&self) -> usize {
+        size_of::<Self>()
+            .saturating_add(self.prepared.accounted_owned_bytes())
+            .saturating_add(self.region_transcript.as_ref().map_or(0, |transcript| {
+                size_of::<RegionAttempt>().saturating_mul(transcript.attempts().len())
+            }))
+    }
 }
 
 impl RetainedOutput {
@@ -687,8 +903,24 @@ impl RetainedOutput {
                 self.prepared,
                 FormationWork::default(),
                 transcript,
-            ),
-            None => ParagraphFormationOutput::new(self.prepared, FormationWork::default()),
+            )
+            .with_reuse(ParagraphFormationReuse::RetainedOutput),
+            None => ParagraphFormationOutput::new(self.prepared, FormationWork::default())
+                .with_reuse(ParagraphFormationReuse::RetainedOutput),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RetentionWork {
+    resident_bytes: usize,
+    peak_bytes: usize,
+    hits: usize,
+    misses: usize,
+    evictions: usize,
+    releases: usize,
+}
+
+const fn vec_bytes<T>(capacity: usize) -> usize {
+    size_of::<T>().saturating_mul(capacity)
 }

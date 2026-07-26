@@ -22,9 +22,9 @@ The first draft public slice is deliberately complete end to end:
   constraint-only changes; wrapped constraint changes expose their separate
   line-final shaping work;
   an explicit [`CacheBudget`] independently bounds committed and transient
-  composition geometry plus coordinated backend state, and can separately
-  bound exact identity-free preparation shared by equivalent labels, while
-  release operations and [`CacheDiagnostics`] expose lifecycle facts to hosts;
+  composition geometry, reusable adapter facts, and exact identity-free
+  preparation shared by equivalent labels, while release operations and
+  [`CacheDiagnostics`] expose lifecycle facts to hosts;
 - [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
   and font-derived metrics behind the paragraph-engine boundary instead of
   hiding text preparation in scene construction; formed lines retain complete
@@ -67,11 +67,12 @@ Closest hits also clamp to an empty editable leaf:
 
 ```rust,ignore
 let interaction = scene.interaction()?;
+let selection = scene.selection()?;
 let hit = interaction
     .hit_test(point)
     .or_else(|| interaction.hit_test_closest(point));
 if let Some(hit) = hit {
-    let caret = interaction
+    let caret = selection
         .caret(hit.position())
         .expect("a hit from this scene has a matching caret stop");
     assert_eq!(caret.position(), hit.position());
@@ -80,8 +81,8 @@ if let Some(hit) = hit {
 
 `SnapshotTextPosition` includes the exact document revision, semantic text
 leaf, UTF-8 byte boundary, and upstream/downstream affinity. Passing a position
-from another revision or scene to [`SceneInteraction::caret`] returns `None` rather
-than silently relocating it.
+from another revision or scene to [`SceneSelection::caret`] returns `None`
+rather than silently relocating it.
 
 ## Selection sets and replacement
 
@@ -136,7 +137,9 @@ use underwood_parley::ParleyParagraphEngine;
 
 let mut layout = LayoutEngine::new(
     ParleyParagraphEngine::new(fonts),
-    CacheBudget::new(4_096).with_shared_preparation_bytes(8 * 1024 * 1024),
+    CacheBudget::new(4_096)
+        .with_shared_preparation_bytes(8 * 1024 * 1024)
+        .with_adapter_facts_bytes(32 * 1024 * 1024),
 );
 let mut label =
     TextBlock::plain(DocumentId::from_bytes(*b"save-label-00001"), "Save")?;
@@ -188,6 +191,18 @@ semantic, interaction, paint, and geometry identity. `release_document`
 releases identity-bound entries but preserves useful shared facts;
 `clear_cache` releases both. The byte diagnostics are deterministic retention
 charges, not allocator-exact heap measurements.
+
+Reusable adapter facts have a third, independent byte budget. Its default is
+zero: stable display labels retain their published scene segments without
+silently retaining analysis, shaping, and formed-line state. Hosts that value
+warm edits or capability upgrades opt in with
+`CacheBudget::with_adapter_facts_bytes`. `LayoutEngine::trim_adapter_facts`
+drops that state without invalidating caller-held scenes. A later upgrade is
+then allowed to re-form only its target and reports a cold capability upgrade;
+with resident facts it reports a warm upgrade and repeats no formation work.
+`CacheDiagnostics::adapter_facts` exposes deterministic resident/peak bytes,
+known scratch, hits, misses, evictions, and releases. Shared font blobs and
+caller-held scenes are outside that charge.
 
 [`TextConstraint::MaxContent`] suppresses soft wrapping while preserving
 mandatory breaks. [`TextConstraint::MinContent`] commits every legal soft

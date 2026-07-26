@@ -527,6 +527,17 @@ impl PreparedParagraph {
         &self.facts.movements
     }
 
+    /// Returns the deterministic byte charge for this prepared paragraph's
+    /// owned portable records.
+    ///
+    /// Shared font blobs and allocator overhead are excluded. An adapter
+    /// retaining another handle to the same facts may use this charge for its
+    /// own conservative cache budgeting.
+    #[must_use]
+    pub fn accounted_owned_bytes(&self) -> usize {
+        self.facts.estimated_owned_bytes()
+    }
+
     /// Replaces only glyph paint coverage while retaining all other prepared facts.
     ///
     /// The original paragraph has already proved line, interaction, source,

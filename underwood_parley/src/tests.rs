@@ -12,9 +12,9 @@ use parley_engine::{FontInstance, ShapeOptions, ShapedText, Shaper};
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     LineBreakReason as TestLineBreakReason, LineShapingWork, ParagraphConstraints,
-    ParagraphFormation, ParagraphFormationOutput, PreparationErrorKind, PreparedClusterSide,
-    PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
-    PreparedParagraph, PreparedRun,
+    ParagraphFormation, ParagraphFormationCacheDiagnostics, ParagraphFormationOutput,
+    PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
+    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedRun,
 };
 use underwood::{
     AnalysisStyle, BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId,
@@ -99,8 +99,20 @@ impl ParagraphFormation for PreparedFactsProbe {
         self.inner.clear();
     }
 
-    fn retained_entries(&self) -> Option<usize> {
-        self.inner.retained_entries()
+    fn set_retained_facts_budget(&mut self, bytes: usize) {
+        self.inner.set_retained_facts_budget(bytes);
+    }
+
+    fn commit_preparation(&mut self, preparation: underwood::adapter::ParagraphPreparationId) {
+        self.inner.commit_preparation(preparation);
+    }
+
+    fn trim_retained_facts(&mut self) {
+        self.inner.trim_retained_facts();
+    }
+
+    fn retained_facts(&self) -> Option<ParagraphFormationCacheDiagnostics> {
+        self.inner.retained_facts()
     }
 }
 
@@ -319,7 +331,9 @@ fn fixture_engine_with_budgets(budget: usize, shared_preparation_bytes: usize) -
     let paragraphs = fixture_paragraph_engine();
     LayoutEngine::new(
         paragraphs,
-        CacheBudget::new(budget).with_shared_preparation_bytes(shared_preparation_bytes),
+        CacheBudget::new(budget)
+            .with_shared_preparation_bytes(shared_preparation_bytes)
+            .with_adapter_facts_bytes(64 * 1024 * 1024),
     )
 }
 
@@ -341,9 +355,13 @@ fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formatio
         inner: fixture_paragraph_engine(),
         outputs: Rc::clone(&observed),
     };
-    let mut layout = LayoutEngine::new(adapter, CacheBudget::new(32));
+    let mut layout = LayoutEngine::new(
+        adapter,
+        CacheBudget::new(32).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     let (document, styles, paint) = fixture_document("Display, then edit.", 1.2);
-    let display_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let display_request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
     let display = layout
         .prepare(&document.snapshot(), &display_request)
         .expect("display-only text must prepare");
@@ -358,17 +376,121 @@ fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formatio
     drop(first_observed);
 
     let editable_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
-        .with_features(SceneFeatures::EDITABLE);
+        .with_features(SceneFeatures::EDITABLE)
+        .with_preparation_trace();
     let editable = layout
         .prepare(&document.snapshot(), &editable_request)
         .expect("a retained display paragraph must upgrade");
     assert_eq!(editable.work().analysis().paragraphs(), 0);
     assert_eq!(editable.work().shape().paragraphs(), 0);
     assert_eq!(editable.work().flow().paragraphs(), 0);
+    let reuse = editable
+        .trace()
+        .expect("the capability upgrade requested a trace")
+        .reuse();
+    assert_eq!(reuse.adapter_fact_hits(), 1);
+    assert_eq!(reuse.adapter_fact_misses(), 0);
+    assert_eq!(reuse.warm_capability_upgrades(), 1);
+    assert_eq!(reuse.cold_capability_upgrades(), 0);
     let observed = observed.borrow();
     assert_eq!(observed.len(), 2);
     assert!(observed[1].features().contains(SceneFeatures::EDITABLE));
     assert!(!observed[1].movements().is_empty());
+}
+
+#[test]
+fn zero_adapter_budget_keeps_display_scene_and_reports_cold_upgrade() {
+    let mut layout = LayoutEngine::new(fixture_paragraph_engine(), CacheBudget::new(32));
+    let (document, styles, paint) = fixture_document("Display can outlive formation.", 1.2);
+    let display_request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
+    let display = layout
+        .prepare(&document.snapshot(), &display_request)
+        .expect("display-only text must prepare");
+    let retained_display = display.scene().clone();
+    let adapter = layout
+        .cache_diagnostics()
+        .adapter_facts()
+        .expect("Parley reports adapter-fact accounting");
+    assert_eq!(adapter.budget_bytes(), 0);
+    assert_eq!(adapter.entries(), 0);
+    assert_eq!(adapter.resident_bytes(), 0);
+    assert_eq!(adapter.evictions(), 1);
+    assert_eq!(retained_display.fragment_count(), 1);
+
+    let editable_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(SceneFeatures::EDITABLE)
+        .with_preparation_trace();
+    let editable = layout
+        .prepare(&document.snapshot(), &editable_request)
+        .expect("cold capability upgrade must remain correct");
+    assert_eq!(editable.work().analysis().paragraphs(), 1);
+    assert_eq!(editable.work().shape().paragraphs(), 1);
+    assert_eq!(editable.work().flow().paragraphs(), 1);
+    let reuse = editable
+        .trace()
+        .expect("the cold upgrade requested a trace")
+        .reuse();
+    assert_eq!(reuse.adapter_fact_hits(), 0);
+    assert_eq!(reuse.adapter_fact_misses(), 1);
+    assert_eq!(reuse.warm_capability_upgrades(), 0);
+    assert_eq!(reuse.cold_capability_upgrades(), 1);
+    assert!(
+        retained_display.interaction().is_err(),
+        "the caller-held display scene remains unchanged by the upgrade"
+    );
+    assert!(
+        editable.scene().editing().is_ok(),
+        "the cold path still publishes the exact requested capability"
+    );
+}
+
+#[test]
+fn explicit_adapter_trim_preserves_scene_and_degrades_only_later_upgrade() {
+    let mut layout = LayoutEngine::new(
+        fixture_paragraph_engine(),
+        CacheBudget::new(32).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
+    let (document, styles, paint) = fixture_document("Trim retained facts.", 1.2);
+    let display_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let display = layout
+        .prepare(&document.snapshot(), &display_request)
+        .expect("display-only text must prepare");
+    let retained_display = display.scene().clone();
+    assert_eq!(
+        layout
+            .cache_diagnostics()
+            .adapter_facts()
+            .expect("Parley reports adapter-fact accounting")
+            .entries(),
+        1
+    );
+
+    layout.trim_adapter_facts();
+    let trimmed = layout
+        .cache_diagnostics()
+        .adapter_facts()
+        .expect("Parley reports adapter-fact accounting");
+    assert_eq!(trimmed.entries(), 0);
+    assert_eq!(trimmed.resident_bytes(), 0);
+    assert_eq!(retained_display.fragment_count(), 1);
+
+    let upgraded = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+                .with_features(SceneFeatures::EDITABLE)
+                .with_preparation_trace(),
+        )
+        .expect("upgrade after trim must reform rather than fail");
+    assert_eq!(
+        upgraded
+            .trace()
+            .expect("upgrade requested a trace")
+            .reuse()
+            .cold_capability_upgrades(),
+        1
+    );
 }
 
 fn fixture_document(text: &str, line_height: f32) -> (Document, StyleMap, PaintTable) {

@@ -278,9 +278,9 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             assert!(
                 churn_layout
                     .cache_diagnostics()
-                    .backend_entries()
-                    .is_some_and(|entries| entries <= CHURN_BUDGET),
-                "backend cache must remain coordinated with geometry eviction"
+                    .adapter_facts()
+                    .is_some_and(|facts| facts.entries() == 0),
+                "the default zero adapter-fact budget must keep churn display-only"
             );
             black_box(output.scene().fragments().len());
         }
@@ -292,9 +292,9 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
         "geometry residency must settle at the configured budget"
     );
     assert_eq!(
-        churn_cache.backend_entries(),
-        Some(CHURN_BUDGET),
-        "backend residency must match retained geometry"
+        churn_cache.adapter_facts().map(|facts| facts.entries()),
+        Some(0),
+        "published display geometry must not imply adapter-fact residency"
     );
     assert_eq!(
         churn_cache.evictions(),
@@ -1622,9 +1622,9 @@ fn assert_residency(layout: &LayoutEngine, expected: usize) {
         "geometry residency must match the expected lifecycle state"
     );
     assert_eq!(
-        cache.backend_entries(),
-        Some(expected),
-        "backend residency must remain coordinated with geometry"
+        cache.adapter_facts().map(|facts| facts.entries()),
+        Some(0),
+        "the default zero adapter-fact budget must remain independent from geometry"
     );
 }
 

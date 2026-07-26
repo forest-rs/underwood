@@ -12,7 +12,10 @@ fn alignment_only_change_reuses_adapter_prepared_facts() {
         inner: fixture_paragraph_engine(),
         outputs: Rc::clone(&outputs),
     };
-    let mut engine = LayoutEngine::new(probe, CacheBudget::new(8));
+    let mut engine = LayoutEngine::new(
+        probe,
+        CacheBudget::new(8).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     let width = FiniteWidth::new(300.0).expect("fixture width is valid");
     engine
         .prepare(
@@ -58,7 +61,10 @@ fn composition_preparation_does_not_displace_committed_adapter_facts() {
         inner: fixture_paragraph_engine(),
         outputs: Rc::clone(&outputs),
     };
-    let mut engine = LayoutEngine::new(probe, CacheBudget::new(8));
+    let mut engine = LayoutEngine::new(
+        probe,
+        CacheBudget::new(8).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     let width = FiniteWidth::new(300.0).expect("fixture width is valid");
     let request = editable_scene_request(TextConstraint::Wrap(width), &styles, &paint);
     let committed = engine

@@ -18,6 +18,11 @@ const COLD_ITERATIONS: usize = 20;
 const RETAINED_ITERATIONS: usize = 200;
 const MUTATION_ITERATIONS: usize = 100;
 const PROFILE_PARAGRAPHS: usize = 1_000;
+const ADAPTER_FACTS_BYTES: usize = 128 * 1024 * 1024;
+
+const fn retained_budget(entries: usize) -> CacheBudget {
+    CacheBudget::new(entries).with_adapter_facts_bytes(ADAPTER_FACTS_BYTES)
+}
 
 struct DocumentFixture {
     document: Document,
@@ -74,7 +79,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let width = FiniteWidth::new(420.0)?;
     let cold = measure(COLD_ITERATIONS, || {
         let paragraphs = ParleyParagraphEngine::new(fonts.clone());
-        let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(PARAGRAPHS));
+        let mut layout = LayoutEngine::new(paragraphs, retained_budget(PARAGRAPHS));
         let request =
             SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
         let output = layout
@@ -91,7 +96,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = document_fixture()?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts.clone()),
-        CacheBudget::new(PARAGRAPHS),
+        retained_budget(PARAGRAPHS),
     );
     let snapshot = fixture.document.snapshot();
     let request = SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
@@ -121,7 +126,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = document_fixture()?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts.clone()),
-        CacheBudget::new(PARAGRAPHS),
+        retained_budget(PARAGRAPHS),
     );
     let snapshot = fixture.document.snapshot();
     let request = SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
@@ -154,7 +159,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let fixture = document_fixture()?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts.clone()),
-        CacheBudget::new(PARAGRAPHS),
+        retained_budget(PARAGRAPHS),
     );
     let snapshot = fixture.document.snapshot();
     let wide = FiniteWidth::new(420.0)?;
@@ -195,7 +200,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let mut fixture = document_fixture()?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts.clone()),
-        CacheBudget::new(PARAGRAPHS),
+        retained_budget(PARAGRAPHS),
     );
     let request = SceneRequest::new(TextConstraint::Wrap(wide), &fixture.styles, &fixture.dark);
     layout.prepare(&fixture.document.snapshot(), &request)?;
@@ -331,7 +336,7 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
     };
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts),
-        CacheBudget::new(cache_entries),
+        retained_budget(cache_entries),
     );
     let snapshot = fixture.document.snapshot();
     let region_flow = matches!(scenario, "localized-region" | "g0")
@@ -668,7 +673,7 @@ fn measure_line_churn(
     let snapshot = fixture.document.snapshot();
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts.clone()),
-        CacheBudget::new(PARAGRAPHS),
+        retained_budget(PARAGRAPHS),
     );
     layout.prepare(
         &snapshot,

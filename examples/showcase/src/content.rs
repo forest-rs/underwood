@@ -327,7 +327,10 @@ impl ShowcaseContent {
 
         Ok(Self {
             document,
-            layout: LayoutEngine::new(paragraphs, CacheBudget::new(4_096)),
+            layout: LayoutEngine::new(
+                paragraphs,
+                CacheBudget::new(4_096).with_adapter_facts_bytes(128 * 1024 * 1024),
+            ),
             paragraphs: Paragraphs {
                 title: title_paragraph,
                 deck: deck_paragraph,

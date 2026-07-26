@@ -655,7 +655,10 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
     .expect("Arabic fallback is valid");
-    let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
+    let mut engine = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(32).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     let wide = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,

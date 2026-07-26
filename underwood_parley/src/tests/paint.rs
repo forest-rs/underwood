@@ -29,7 +29,10 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
         inner: fixture_paragraph_engine(),
         outputs: Rc::clone(&outputs),
     };
-    let mut engine = LayoutEngine::new(probe, CacheBudget::new(8));
+    let mut engine = LayoutEngine::new(
+        probe,
+        CacheBudget::new(8).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     engine
         .prepare(&document.snapshot(), &request)

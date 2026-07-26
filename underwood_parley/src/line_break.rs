@@ -8,7 +8,10 @@
 //! selection, portable lowering, or scene construction.
 
 use alloc::vec::Vec;
-use core::ops::Range;
+use core::{
+    mem::{size_of, size_of_val},
+    ops::Range,
+};
 
 use parley_engine::ShapedText;
 use underwood::adapter::{InlineFlowRun, LineBreakReason, ParagraphConstraints, PreparationError};
@@ -44,6 +47,13 @@ pub(crate) struct FormedLine {
     pub(crate) scripts: Vec<[u8; 4]>,
 }
 
+impl FormedLine {
+    pub(crate) fn accounted_owned_bytes(&self) -> usize {
+        shaped_text_accounted_bytes(&self.shaped_text)
+            .saturating_add(vec_bytes::<[u8; 4]>(self.scripts.capacity()))
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LineShapeWork {
     pub(crate) resolved_clusters: u32,
@@ -55,6 +65,26 @@ pub(crate) struct LineFormationScratch {
     shaped_text: ShapedText,
     scripts: Vec<[u8; 4]>,
     clusters: Vec<LogicalCluster>,
+}
+
+impl LineFormationScratch {
+    pub(crate) fn accounted_owned_bytes(&self) -> usize {
+        shaped_text_accounted_bytes(&self.shaped_text)
+            .saturating_add(vec_bytes::<[u8; 4]>(self.scripts.capacity()))
+            .saturating_add(vec_bytes::<LogicalCluster>(self.clusters.capacity()))
+    }
+}
+
+pub(crate) fn shaped_text_accounted_bytes(shaped: &ShapedText) -> usize {
+    size_of_val(shaped.runs())
+        .saturating_add(size_of_val(shaped.clusters()))
+        .saturating_add(size_of_val(shaped.glyphs()))
+        .saturating_add(size_of_val(shaped.fonts()))
+        .saturating_add(size_of_val(shaped.normalized_coords()))
+}
+
+const fn vec_bytes<T>(capacity: usize) -> usize {
+    size_of::<T>().saturating_mul(capacity)
 }
 
 #[derive(Clone, Copy, Debug, Default)]

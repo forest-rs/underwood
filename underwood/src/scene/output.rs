@@ -249,6 +249,10 @@ pub struct PreparationReuse {
     pub(super) exact_geometry_reuses: usize,
     pub(super) shared_preparation_reuses: usize,
     pub(super) adapter_calls: usize,
+    pub(super) adapter_fact_hits: usize,
+    pub(super) adapter_fact_misses: usize,
+    pub(super) warm_capability_upgrades: usize,
+    pub(super) cold_capability_upgrades: usize,
     pub(super) formation_invalidations: usize,
     pub(super) adjustment_invalidations: usize,
     pub(super) paint_invalidations: usize,
@@ -289,6 +293,31 @@ impl PreparationReuse {
     #[must_use]
     pub const fn adapter_calls(self) -> usize {
         self.adapter_calls
+    }
+
+    /// Returns adapter calls that found identity-local retained facts.
+    #[must_use]
+    pub const fn adapter_fact_hits(self) -> usize {
+        self.adapter_fact_hits
+    }
+
+    /// Returns adapter calls that began without identity-local retained facts.
+    #[must_use]
+    pub const fn adapter_fact_misses(self) -> usize {
+        self.adapter_fact_misses
+    }
+
+    /// Returns capability upgrades built from resident adapter facts.
+    #[must_use]
+    pub const fn warm_capability_upgrades(self) -> usize {
+        self.warm_capability_upgrades
+    }
+
+    /// Returns capability upgrades that repeated formation after adapter-fact
+    /// release or eviction.
+    #[must_use]
+    pub const fn cold_capability_upgrades(self) -> usize {
+        self.cold_capability_upgrades
     }
 
     /// Returns cached paragraphs whose text, shaping, flow, or region key changed.

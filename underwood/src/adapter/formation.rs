@@ -38,10 +38,151 @@ pub trait ParagraphFormation {
     /// Stateless implementations may keep the default no-op behavior.
     fn clear(&mut self) {}
 
-    /// Returns the number of retained backend paragraph entries, when observable.
+    /// Configures the deterministic byte budget for reusable adapter facts.
+    ///
+    /// The budget is independent from published scene residency. A zero
+    /// budget permits the adapter to discard analysis, shaping, and line facts
+    /// after a successful output has been lowered into a scene.
+    fn set_retained_facts_budget(&mut self, _bytes: usize) {}
+
+    /// Commits one successfully consumed preparation to adapter retention.
+    ///
+    /// [`LayoutEngine`](crate::LayoutEngine) calls this only after validating
+    /// and lowering the returned output. Adapters use the call to update
+    /// recency and enforce the configured retained-fact budget.
+    fn commit_preparation(&mut self, _preparation: ParagraphPreparationId) {}
+
+    /// Drops reusable adapter facts without invalidating published scenes.
+    fn trim_retained_facts(&mut self) {}
+
+    /// Returns retained adapter-fact accounting, when observable.
     #[must_use]
-    fn retained_entries(&self) -> Option<usize> {
+    fn retained_facts(&self) -> Option<ParagraphFormationCacheDiagnostics> {
         None
+    }
+}
+
+/// Deterministic retained-fact accounting reported by a paragraph adapter.
+///
+/// The byte charge covers adapter-owned reusable analysis, shaping, line, and
+/// lowered-output storage. Shared font blobs and caller-owned published scenes
+/// are excluded.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParagraphFormationCacheDiagnostics {
+    budget_bytes: usize,
+    entries: usize,
+    resident_bytes: usize,
+    peak_bytes: usize,
+    scratch_bytes: usize,
+    hits: usize,
+    misses: usize,
+    evictions: usize,
+    releases: usize,
+}
+
+impl ParagraphFormationCacheDiagnostics {
+    /// Creates a complete adapter-fact accounting snapshot.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the complete cache accounting contract"
+    )]
+    #[must_use]
+    pub const fn new(
+        budget_bytes: usize,
+        entries: usize,
+        resident_bytes: usize,
+        peak_bytes: usize,
+        scratch_bytes: usize,
+        hits: usize,
+        misses: usize,
+        evictions: usize,
+        releases: usize,
+    ) -> Self {
+        Self {
+            budget_bytes,
+            entries,
+            resident_bytes,
+            peak_bytes,
+            scratch_bytes,
+            hits,
+            misses,
+            evictions,
+            releases,
+        }
+    }
+
+    /// Returns the configured deterministic byte budget.
+    #[must_use]
+    pub const fn budget_bytes(self) -> usize {
+        self.budget_bytes
+    }
+
+    /// Returns retained preparation identities.
+    #[must_use]
+    pub const fn entries(self) -> usize {
+        self.entries
+    }
+
+    /// Returns the current deterministic adapter-fact byte charge.
+    #[must_use]
+    pub const fn resident_bytes(self) -> usize {
+        self.resident_bytes
+    }
+
+    /// Returns the highest observed adapter-fact byte charge.
+    #[must_use]
+    pub const fn peak_bytes(self) -> usize {
+        self.peak_bytes
+    }
+
+    /// Returns the adapter's current reusable scratch byte charge.
+    #[must_use]
+    pub const fn scratch_bytes(self) -> usize {
+        self.scratch_bytes
+    }
+
+    /// Returns formation calls that found reusable adapter facts.
+    #[must_use]
+    pub const fn hits(self) -> usize {
+        self.hits
+    }
+
+    /// Returns formation calls that had to start without reusable facts.
+    #[must_use]
+    pub const fn misses(self) -> usize {
+        self.misses
+    }
+
+    /// Returns retained entries removed to enforce the byte budget.
+    #[must_use]
+    pub const fn evictions(self) -> usize {
+        self.evictions
+    }
+
+    /// Returns retained entries removed by explicit lifecycle operations.
+    #[must_use]
+    pub const fn releases(self) -> usize {
+        self.releases
+    }
+}
+
+/// Retained adapter state used to produce one formation output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ParagraphFormationReuse {
+    /// No reusable adapter facts were available.
+    #[default]
+    Cold,
+    /// Reusable analysis, shaping, or formed-line facts were available.
+    RetainedFacts,
+    /// The exact portable prepared output was already retained.
+    RetainedOutput,
+}
+
+impl ParagraphFormationReuse {
+    /// Returns whether the output used any retained adapter facts.
+    #[must_use]
+    pub const fn is_hit(self) -> bool {
+        matches!(self, Self::RetainedFacts | Self::RetainedOutput)
     }
 }
 
@@ -544,6 +685,7 @@ pub struct ParagraphFormationOutput {
     paragraph: PreparedParagraph,
     work: FormationWork,
     region_transcript: Option<RegionTranscript>,
+    reuse: ParagraphFormationReuse,
 }
 
 impl ParagraphFormationOutput {
@@ -554,6 +696,7 @@ impl ParagraphFormationOutput {
             paragraph,
             work,
             region_transcript: None,
+            reuse: ParagraphFormationReuse::Cold,
         }
     }
 
@@ -568,7 +711,15 @@ impl ParagraphFormationOutput {
             paragraph,
             work,
             region_transcript: Some(region_transcript),
+            reuse: ParagraphFormationReuse::Cold,
         }
+    }
+
+    /// Returns a copy reporting which retained adapter state produced it.
+    #[must_use]
+    pub const fn with_reuse(mut self, reuse: ParagraphFormationReuse) -> Self {
+        self.reuse = reuse;
+        self
     }
 
     /// Returns the prepared paragraph.
@@ -587,6 +738,12 @@ impl ParagraphFormationOutput {
     #[must_use]
     pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
         self.region_transcript.as_ref()
+    }
+
+    /// Returns the retained adapter state used by this formation call.
+    #[must_use]
+    pub const fn reuse(&self) -> ParagraphFormationReuse {
+        self.reuse
     }
 }
 

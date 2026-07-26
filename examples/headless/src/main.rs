@@ -123,7 +123,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let fonts = font_catalog()?;
     let paragraphs = ParleyParagraphEngine::new(fonts);
-    let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(256));
+    let mut layout = LayoutEngine::new(
+        paragraphs,
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(420.0)?),
         &styles,
@@ -580,7 +583,7 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
     ]);
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(font_catalog()?),
-        CacheBudget::new(256),
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
     );
     let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0)?),
@@ -685,7 +688,10 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
         "latin",
         include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"),
     )?])?;
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(256));
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0)?),
         &styles,

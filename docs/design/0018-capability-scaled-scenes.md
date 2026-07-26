@@ -394,10 +394,10 @@ reusable adapter facts for low-latency upgrades and edits. The engine must not
 silently count adapter facts as “free” merely because they are not scene
 sidecars.
 
-The public lifecycle vocabulary will provide a separate adapter-fact byte or
-entry budget and an explicit trim operation. Its exact names follow the
-existing `CacheBudget` migration, but setting the adapter budget to zero must
-be a supported, tested configuration rather than an internal accident.
+The public lifecycle vocabulary provides
+`CacheBudget::with_adapter_facts_bytes` and
+`LayoutEngine::trim_adapter_facts`. Setting the adapter budget to zero is a
+supported, tested configuration rather than an internal accident.
 
 ## Cache and upgrade laws
 
@@ -552,8 +552,10 @@ selected first design.
    migration together with the adapter prepared-output split. The first
    mergeable slice must prove display requests do not build the movement graph;
    a maximal mask with maximal lowering is not an independently landable step.
+   Implemented in the first checkpoint.
 2. Add separately budgeted adapter-fact residency, warm/cold upgrade
-   diagnostics, and the forced-eviction degradation proof.
+   diagnostics, and the forced-eviction degradation proof. Implemented in the
+   second checkpoint.
 3. Split `ParagraphSceneSegment` into layout, run-sized paint, and interaction
    handles; move scene interaction methods behind borrowed facades.
 4. Introduce the paragraph-local source map and replace eager per-record

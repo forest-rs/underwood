@@ -15,6 +15,7 @@ pub struct CacheBudget {
     max_entries: usize,
     max_composition_entries: usize,
     shared_preparation_bytes: usize,
+    adapter_facts_bytes: usize,
 }
 
 impl CacheBudget {
@@ -31,6 +32,7 @@ impl CacheBudget {
             max_entries,
             max_composition_entries: max_entries,
             shared_preparation_bytes: 0,
+            adapter_facts_bytes: 0,
         }
     }
 
@@ -54,6 +56,18 @@ impl CacheBudget {
         self
     }
 
+    /// Returns a budget that may retain this many bytes of identity-local
+    /// paragraph-adapter facts.
+    ///
+    /// This budget is independent from published scene geometry and
+    /// cross-identity shared preparation. The default is zero: outputs remain
+    /// valid, but a later edit or capability upgrade may need cold formation.
+    #[must_use]
+    pub const fn with_adapter_facts_bytes(mut self, bytes: usize) -> Self {
+        self.adapter_facts_bytes = bytes;
+        self
+    }
+
     /// Returns the maximum number of retained committed geometry entries.
     #[must_use]
     pub const fn max_entries(self) -> usize {
@@ -71,6 +85,12 @@ impl CacheBudget {
     pub const fn shared_preparation_bytes(self) -> usize {
         self.shared_preparation_bytes
     }
+
+    /// Returns the deterministic byte budget for identity-local adapter facts.
+    #[must_use]
+    pub const fn adapter_facts_bytes(self) -> usize {
+        self.adapter_facts_bytes
+    }
 }
 
 /// Snapshot of coordinated retained-cache state and cumulative activity.
@@ -80,7 +100,7 @@ pub struct CacheDiagnostics {
     composition_budget: usize,
     committed_entries: usize,
     composition_entries: usize,
-    backend_entries: Option<usize>,
+    adapter_facts: Option<ParagraphFormationCacheDiagnostics>,
     scene_cache_accounted_bytes: usize,
     peak_entries: usize,
     hits: usize,
@@ -129,10 +149,11 @@ impl CacheDiagnostics {
         self.committed_entries + self.composition_entries
     }
 
-    /// Returns retained backend preparation entries, when the backend reports them.
+    /// Returns retained paragraph-adapter facts, when the backend reports
+    /// deterministic accounting.
     #[must_use]
-    pub const fn backend_entries(self) -> Option<usize> {
-        self.backend_entries
+    pub const fn adapter_facts(self) -> Option<ParagraphFormationCacheDiagnostics> {
+        self.adapter_facts
     }
 
     /// Returns the deterministic capacity charge for retained scene-cache data.
@@ -336,8 +357,10 @@ impl LayoutEngine {
     /// Creates an engine owning one configured paragraph adapter and cache budget.
     #[must_use]
     pub fn new(paragraphs: impl ParagraphFormation + 'static, budget: CacheBudget) -> Self {
+        let mut paragraphs: Box<dyn ParagraphFormation> = Box::new(paragraphs);
+        paragraphs.set_retained_facts_budget(budget.adapter_facts_bytes);
         Self {
-            paragraphs: Box::new(paragraphs),
+            paragraphs,
             cache: BTreeMap::new(),
             composition_cache: BTreeMap::new(),
             committed_recency: BTreeSet::new(),
@@ -876,6 +899,15 @@ impl LayoutEngine {
         self.cache_work.scene_cache_accounted_bytes = 0;
     }
 
+    /// Drops reusable adapter facts without invalidating retained or
+    /// caller-owned scenes.
+    ///
+    /// A later edit or capability upgrade may perform cold paragraph
+    /// formation and reports that work normally.
+    pub fn trim_adapter_facts(&mut self) {
+        self.paragraphs.trim_retained_facts();
+    }
+
     /// Returns a snapshot of coordinated cache state and cumulative activity.
     #[must_use]
     pub fn cache_diagnostics(&self) -> CacheDiagnostics {
@@ -885,7 +917,7 @@ impl LayoutEngine {
             composition_budget: self.budget.max_composition_entries,
             committed_entries: self.cache.len(),
             composition_entries: self.composition_cache.len(),
-            backend_entries: self.paragraphs.retained_entries(),
+            adapter_facts: self.paragraphs.retained_facts(),
             scene_cache_accounted_bytes: self.cache_work.scene_cache_accounted_bytes,
             peak_entries: self.cache_work.peak_entries,
             hits: self.cache_work.hits,
@@ -2004,6 +2036,12 @@ fn prepare_paragraph_geometry(
                 .geometry,
         )
     });
+    let capability_upgrade = formation_matches
+        && paint_matches
+        && adjustment_matches
+        && cache
+            .get(&paragraph.id)
+            .is_some_and(|entry| !entry.segment.geometry.features.contains(features));
     if !cached {
         reuse.cold_paragraphs = reuse.cold_paragraphs.saturating_add(1);
     } else {
@@ -2068,7 +2106,7 @@ fn prepare_paragraph_geometry(
     let shared_hit = shared_query
         .as_ref()
         .and_then(|query| shared_preparation.lookup(query, current_use));
-    let (prepared, candidate_transcript, backend_called) = if let Some(hit) = shared_hit {
+    let (prepared, candidate_transcript, formation_reuse) = if let Some(hit) = shared_hit {
         // The shared result may represent a state the identity-bound backend
         // never observed. Drop any older lane-local facts so a later call
         // cannot apply a relative change record to the wrong base.
@@ -2079,7 +2117,7 @@ fn prepare_paragraph_geometry(
         (
             PreparedParagraph::from_shared_facts(paragraph.id, hit.facts),
             transcript,
-            false,
+            None,
         )
     } else {
         reuse.adapter_calls = reuse.adapter_calls.saturating_add(1);
@@ -2123,13 +2161,35 @@ fn prepare_paragraph_geometry(
                 return Err(SceneError::from_preparation(paragraph.id, error.kind()));
             }
         };
+        let formation_reuse = output.reuse();
         record_formation_work(work, output.work());
         (
             output.paragraph().clone(),
             output.region_transcript().cloned(),
-            true,
+            Some(formation_reuse),
         )
     };
+    let backend_called = formation_reuse.is_some();
+    if let Some(formation_reuse) = formation_reuse {
+        if formation_reuse.is_hit() {
+            reuse.adapter_fact_hits = reuse.adapter_fact_hits.saturating_add(1);
+        } else {
+            reuse.adapter_fact_misses = reuse.adapter_fact_misses.saturating_add(1);
+        }
+        if capability_upgrade {
+            match formation_reuse {
+                ParagraphFormationReuse::Cold => {
+                    reuse.cold_capability_upgrades =
+                        reuse.cold_capability_upgrades.saturating_add(1);
+                }
+                ParagraphFormationReuse::RetainedFacts
+                | ParagraphFormationReuse::RetainedOutput => {
+                    reuse.warm_capability_upgrades =
+                        reuse.warm_capability_upgrades.saturating_add(1);
+                }
+            }
+        }
+    }
     if prepared.paragraph() != paragraph.id
         || prepared.text_len() != text_len
         || !prepared.features().contains(features)
@@ -2275,6 +2335,9 @@ fn prepare_paragraph_geometry(
             cache.insert(paragraph.id, entry);
             (None, 0, current_accounted_bytes)
         };
+    if backend_called {
+        paragraphs.commit_preparation(preparation);
+    }
     Ok(CacheAccess {
         paragraph: paragraph.id,
         previous_use,

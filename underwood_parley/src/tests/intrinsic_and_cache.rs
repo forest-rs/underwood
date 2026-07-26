@@ -208,7 +208,12 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     }
     let after_churn = engine.cache_diagnostics();
     assert_eq!(after_churn.current_entries(), 2);
-    assert_eq!(after_churn.backend_entries(), Some(2));
+    assert_eq!(
+        after_churn
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
+        Some(2)
+    );
     assert_eq!(after_churn.evictions(), 1);
     assert_eq!(after_churn.peak_entries(), 3);
     assert_eq!(after_churn.budget(), 2);
@@ -234,7 +239,12 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     engine.release_document(blocks[1].id());
     let after_release = engine.cache_diagnostics();
     assert_eq!(after_release.current_entries(), 1);
-    assert_eq!(after_release.backend_entries(), Some(1));
+    assert_eq!(
+        after_release
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
+        Some(1)
+    );
     assert_eq!(after_release.releases(), 1);
     assert!(
         after_release.scene_cache_accounted_bytes() < after_churn.scene_cache_accounted_bytes()
@@ -249,7 +259,13 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     assert_eq!(reloaded.work().shape().paragraphs(), 1);
     engine.clear_cache();
     assert_eq!(engine.cache_diagnostics().current_entries(), 0);
-    assert_eq!(engine.cache_diagnostics().backend_entries(), Some(0));
+    assert_eq!(
+        engine
+            .cache_diagnostics()
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
+        Some(0)
+    );
     assert_eq!(engine.cache_diagnostics().scene_cache_accounted_bytes(), 0);
 
     let mut zero = fixture_engine_with_budget(0);
@@ -261,9 +277,91 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
         .expect("zero-budget output still materializes");
     assert!(!owned.scene().fragments().is_empty());
     assert_eq!(zero.cache_diagnostics().current_entries(), 0);
-    assert_eq!(zero.cache_diagnostics().backend_entries(), Some(0));
+    assert_eq!(
+        zero.cache_diagnostics()
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
+        Some(0)
+    );
     assert_eq!(zero.cache_diagnostics().scene_cache_accounted_bytes(), 0);
     assert_eq!(zero.cache_diagnostics().evictions(), 1);
+}
+
+#[test]
+fn adapter_fact_budget_is_byte_bounded_and_eviction_degrades_only_the_target() {
+    let (_, styles, paint) = fixture_document("cache", 1.2);
+    let style = styles.default_style().clone();
+    let blocks = [
+        TextBlock::plain(
+            DocumentId::from_bytes(*b"facts-block-0001"),
+            "same retained text",
+        )
+        .expect("first block initializes"),
+        TextBlock::plain(
+            DocumentId::from_bytes(*b"facts-block-0002"),
+            "same retained text",
+        )
+        .expect("second block initializes"),
+    ];
+    let display = BlockRequest::new(TextConstraint::MaxContent, &style, &paint);
+
+    let mut probe = LayoutEngine::new(
+        fixture_paragraph_engine(),
+        CacheBudget::new(2).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
+    probe
+        .prepare_block(&blocks[0].snapshot(), &display)
+        .expect("probe block prepares");
+    let one_entry_bytes = probe
+        .cache_diagnostics()
+        .adapter_facts()
+        .expect("Parley reports adapter-fact accounting")
+        .resident_bytes();
+    assert!(
+        one_entry_bytes > 0,
+        "one retained Parley preparation must have a nonzero byte charge"
+    );
+
+    let mut bounded = LayoutEngine::new(
+        fixture_paragraph_engine(),
+        CacheBudget::new(2).with_adapter_facts_bytes(one_entry_bytes),
+    );
+    let first = bounded
+        .prepare_block(&blocks[0].snapshot(), &display)
+        .expect("first display block prepares")
+        .scene()
+        .clone();
+    let second = bounded
+        .prepare_block(&blocks[1].snapshot(), &display)
+        .expect("second display block prepares")
+        .scene()
+        .clone();
+    let facts = bounded
+        .cache_diagnostics()
+        .adapter_facts()
+        .expect("Parley reports adapter-fact accounting");
+    assert!(facts.resident_bytes() <= facts.budget_bytes());
+    assert_eq!(facts.entries(), 1);
+    assert_eq!(facts.evictions(), 1);
+    assert_eq!(first.fragment_count(), 1);
+    assert_eq!(second.fragment_count(), 1);
+
+    let upgraded = bounded
+        .prepare_block(
+            &blocks[0].snapshot(),
+            &display
+                .with_features(SceneFeatures::EDITABLE)
+                .with_preparation_trace(),
+        )
+        .expect("evicted target must upgrade through cold formation");
+    let reuse = upgraded.trace().expect("upgrade requested a trace").reuse();
+    assert_eq!(reuse.cold_capability_upgrades(), 1);
+    assert_eq!(reuse.warm_capability_upgrades(), 0);
+    assert_eq!(
+        second.fragment_count(),
+        1,
+        "adapter eviction and target upgrade must not invalidate a sibling scene"
+    );
 }
 
 #[test]
@@ -342,7 +440,9 @@ fn identical_blocks_share_only_identity_free_preparation() {
     assert_eq!(diagnostics.shared_preparation_hits(), 1);
     assert_eq!(diagnostics.shared_preparation_misses(), 1);
     assert_eq!(
-        diagnostics.backend_entries(),
+        diagnostics
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
         Some(1),
         "a shared consumer must not manufacture a backend identity entry"
     );
@@ -905,7 +1005,9 @@ fn failed_first_preparation_releases_untracked_backend_state() {
         "failed preparation must not create geometry residency"
     );
     assert_eq!(
-        cache.backend_entries(),
+        cache
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
         Some(0),
         "failed preparation must not strand untracked Parley preparation"
     );

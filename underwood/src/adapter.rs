@@ -27,8 +27,9 @@ mod prepared;
 pub use error::{PreparationError, PreparationErrorKind};
 pub use formation::{
     AnalysisRun, AnalysisStyleId, FormationWork, InlineFlowRun, InlineFlowStyleId, LineShapingWork,
-    PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphFormationChange,
-    ParagraphFormationOutput, ParagraphInput, ParagraphPreparationId, ShapingRun, ShapingStyleId,
+    PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
+    ParagraphFormationChange, ParagraphFormationOutput, ParagraphFormationReuse, ParagraphInput,
+    ParagraphPreparationId, ShapingRun, ShapingStyleId,
 };
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedCaret, PreparedClusterSide,

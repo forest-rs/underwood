@@ -484,7 +484,10 @@ fn layout_engine() -> Result<LayoutEngine, AnyError> {
         ["Noto Kufi Arabic"],
     )?;
     let paragraphs = ParleyParagraphEngine::new(fonts);
-    Ok(LayoutEngine::new(paragraphs, CacheBudget::new(256)))
+    Ok(LayoutEngine::new(
+        paragraphs,
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
+    ))
 }
 
 fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> {

@@ -12,8 +12,9 @@ use super::{
 use crate::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationOutput, ParagraphInput, PreparationError, PreparationErrorKind,
-    PreparedCaret, PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph,
+    ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphInput,
+    ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedCaret,
+    PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph,
     PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
     PreparedRun, TextAffinity,
 };
@@ -299,7 +300,7 @@ impl ParagraphFormation for RetainingInvalidAdapter {
         .form(input, constraints)
     }
 
-    fn release(&mut self, _preparation: crate::adapter::ParagraphPreparationId) {
+    fn release(&mut self, _preparation: ParagraphPreparationId) {
         self.retained = false;
     }
 
@@ -307,8 +308,18 @@ impl ParagraphFormation for RetainingInvalidAdapter {
         self.retained = false;
     }
 
-    fn retained_entries(&self) -> Option<usize> {
-        Some(usize::from(self.retained))
+    fn retained_facts(&self) -> Option<ParagraphFormationCacheDiagnostics> {
+        Some(ParagraphFormationCacheDiagnostics::new(
+            usize::MAX,
+            usize::from(self.retained),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ))
     }
 }
 
@@ -589,7 +600,10 @@ fn invalid_first_output_releases_untracked_backend_state() {
         "invalid output must not create geometry residency"
     );
     assert_eq!(
-        layout.cache_diagnostics().backend_entries(),
+        layout
+            .cache_diagnostics()
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
         Some(0),
         "invalid output must release backend state with no geometry owner"
     );

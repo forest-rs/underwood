@@ -265,7 +265,10 @@ fn fixture() -> Result<Fixture, AnyError> {
         Font::from_bytes("arabic", ARABIC_FONT)?,
     ])?
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?;
-    let layout = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(256));
+    let layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
     Ok(Fixture {
         document,
         first_text,

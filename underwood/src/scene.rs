@@ -11,7 +11,8 @@ use core::ops::Range;
 
 use crate::adapter::{
     AnalysisRun, AnalysisStyleId, FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId,
-    LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphFormationChange,
+    LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation,
+    ParagraphFormationCacheDiagnostics, ParagraphFormationChange, ParagraphFormationReuse,
     ParagraphInput, ParagraphPreparationId, PreparationErrorKind, PreparedParagraph,
     PreparedParagraphFacts, ShapingRun, ShapingStyleId, TextAffinity,
 };
