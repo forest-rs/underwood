@@ -22,6 +22,8 @@ diagnostics. It covers:
   slot transcripts.
 - retained alignment and Western-justification churn over fixed accepted
   region slots.
+- closest-hit and represented-position query scaling over increasingly long
+  wrapped editable paragraphs.
 
 Deterministic `WorkReport`, intrinsic-metric, and cache assertions are the
 correctness proof. Machine-local elapsed time is supporting evidence only. A
@@ -46,6 +48,7 @@ target/release/underwood_label_benchmark justification-churn 200 512
 target/release/underwood_label_benchmark cross-identical 200 512
 target/release/underwood_label_benchmark cross-distinct 200 512
 benches/labels/profile-allocations.sh
+benches/labels/profile-interaction-scaling.sh
 ```
 
 The fonts are included from the repository's audited example fixtures.

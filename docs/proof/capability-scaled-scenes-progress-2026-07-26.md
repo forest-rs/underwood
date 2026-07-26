@@ -365,6 +365,56 @@ The 64/1,000/2,048 timing rerun reports 64/78/63 ns per exact repeat and
 not establish a CPU speedup; they show no measured regression from replacing
 nested vectors with flat indexed traversal.
 
+## Indexed interaction-query checkpoint
+
+Packing records did not by itself make interaction queries scale. The new
+checked runner `benches/labels/profile-interaction-scaling.sh` prepares one
+wrapped editable paragraph, then repeatedly queries the final visual line or
+final authored byte without preparing another scene. Before indexing, both
+queries scanned the paragraph:
+
+| Word units | Lines | Closest hit before | Position lookup before |
+|---:|---:|---:|---:|
+| 64 | 11 | 2,310–2,445 ns | 1,125–1,152 ns |
+| 1,024 | 171 | 37,099–38,465 ns | 18,149–18,243 ns |
+| 8,192 | 1,366 | 298,862–315,384 ns | 145,753–146,282 ns |
+
+The indexed representation adds no hash table, arena, or per-line range
+allocation:
+
+- clusters remain line-contiguous and already carry a line ordinal, so two
+  `partition_point` calls borrow one line-local slice;
+- normal-flow closest-hit chooses a line logarithmically and visits only that
+  line's clusters;
+- arbitrary region flow visits candidate lines rather than flattening every
+  cluster in the scene;
+- carets and movement records are sorted once in their existing vectors and
+  resolved by binary search;
+- the paragraph source map maps revision-bound authored or composition
+  positions back to compact projected positions without allocating.
+
+Matched optimized runs after indexing are:
+
+| Word units | Lines | Closest hit after | Position lookup after |
+|---:|---:|---:|---:|
+| 64 | 11 | 136–158 ns | 26–27 ns |
+| 1,024 | 171 | 180–208 ns | 38–39 ns |
+| 8,192 | 1,366 | 136–151 ns | 49–64 ns |
+
+The result is flat within local measurement noise rather than proportional to
+the paragraph. A collapsed-whitespace regression proves reverse source mapping
+still resolves authored start/end positions and rejects an unrepresented
+interior caret.
+
+The query implementation does not ratify horizontal physical names as the
+long-term contract. It consumes a private, explicitly horizontal
+physical-to-logical axis mapping because horizontal top-to-bottom is the only
+mode Underwood represents today. The proposed logical-axis design requires
+paragraph-level writing mode, logical formation vocabulary, physical published
+geometry, and honest rejection until vertical formation is real. A future
+writing mode selects the query-axis mapping; it does not replace these line and
+source indexes.
+
 The checkpoint passes:
 
 ```sh

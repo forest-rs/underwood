@@ -1118,6 +1118,55 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
 }
 
 #[test]
+fn position_index_maps_authored_boundaries_through_whitespace_collapse() {
+    let (document, mut styles, paint) = one_leaf_document(*b"collapse-pos-001", "a   b");
+    let snapshot = document.snapshot();
+    let paragraph = snapshot.paragraphs()[0].id;
+    let text = snapshot.paragraphs()[0].leaves[0].id;
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
+    );
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(1),
+    );
+    let output = layout
+        .prepare(&snapshot, &request)
+        .expect("collapsed fixture must prepare");
+    let editing = output
+        .scene()
+        .editing()
+        .expect("fixture retains navigation");
+    let start = editing
+        .position_at(text, 0)
+        .expect("authored start maps to the projected start");
+    let end = editing
+        .position_at(text, 5)
+        .expect("authored end maps to the projected end");
+    assert_eq!(start.byte(), 0);
+    assert_eq!(start.affinity(), TextAffinity::Downstream);
+    assert_eq!(end.byte(), 5);
+    assert_eq!(end.affinity(), TextAffinity::Upstream);
+    assert!(
+        editing.position_at(text, 2).is_none(),
+        "the adapter did not represent an interior collapsed-whitespace caret"
+    );
+    assert!(
+        editing.caret(&end).is_some(),
+        "caret lookup uses the same reverse source index"
+    );
+}
+
+#[test]
 fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     let mut document = Document::new(DocumentId::from_bytes(*b"scene-test-doc11"));
     let mut edit = document.edit();

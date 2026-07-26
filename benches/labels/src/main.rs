@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-paint-slot|primed-unique|primed-region|primed-adjustment|primed-hit-query|primed-mixed-display|primed-mixed-editable|primed-editable-block|cold-identical|cold-accessible|cold-link|cold-selectable|cold-editable|upgrade-accessible|upgrade-link|upgrade-selectable|upgrade-editable|editable-to-display|mixed-upgrade|mixed-repeat|mixed-typing|editable-typing|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|paint-slot-churn|alignment-churn|justification-churn|localized-edit|hit-query|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-paint-slot|primed-unique|primed-region|primed-adjustment|primed-hit-query|primed-mixed-display|primed-mixed-editable|primed-editable-block|cold-identical|cold-accessible|cold-link|cold-selectable|cold-editable|upgrade-accessible|upgrade-link|upgrade-selectable|upgrade-editable|editable-to-display|mixed-upgrade|mixed-repeat|mixed-typing|editable-typing|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|paint-slot-churn|alignment-churn|justification-churn|localized-edit|hit-query|interaction-hit-closest|interaction-position-at|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels-or-query-units]"
         );
         return Ok(());
     }
@@ -473,6 +473,12 @@ fn run_profile(
         }
         "localized-edit" | "e0" => profile_localized_edit(rounds, labels, &style, &paint),
         "hit-query" | "i2" => profile_hit_query("hit-query", rounds, labels, &style, &paint, true),
+        "interaction-hit-closest" | "j0" => {
+            profile_scaled_interaction_query(rounds, labels, &style, &paint, true)
+        }
+        "interaction-position-at" | "j1" => {
+            profile_scaled_interaction_query(rounds, labels, &style, &paint, false)
+        }
         "width-churn" | "w0" => profile_width_churn("width-churn", rounds, labels, &style, &paint),
         "region-ready" | "g0" => {
             profile_width_churn("region-ready", rounds, labels, &style, &paint)
@@ -958,6 +964,69 @@ fn profile_hit_query(
     };
     black_box((&labels, &layout, &outputs));
     report_profile(name, rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_scaled_interaction_query(
+    rounds: usize,
+    units: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    hit_test: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let source = "word ".repeat(units);
+    let block = TextBlock::plain(identity(11, units), &source)?;
+    let snapshot = block.snapshot();
+    let text = snapshot.text_id();
+    let byte = u32::try_from(snapshot.text().len())?;
+    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(fonts()?), retained_budget(1));
+    let output = layout.prepare_block(
+        &snapshot,
+        &BlockRequest::new(TextConstraint::Wrap(FiniteWidth::new(240.0)?), style, paint)
+            .with_features(SceneFeatures::EDITABLE),
+    )?;
+    let scene = output.scene();
+    let line_count = scene.lines().len();
+    let target = scene
+        .lines()
+        .last()
+        .ok_or("interaction query fixture must produce a line")?
+        .bounds()
+        .center();
+    let editing = scene.editing()?;
+    let elapsed = if hit_test {
+        measure(|| {
+            for _ in 0..rounds {
+                black_box(
+                    editing
+                        .hit_test_closest(target)
+                        .expect("closest hit must resolve"),
+                );
+            }
+        })
+    } else {
+        measure(|| {
+            for _ in 0..rounds {
+                black_box(
+                    editing
+                        .position_at(text, byte)
+                        .expect("paragraph end must be represented"),
+                );
+            }
+        })
+    };
+    black_box((&block, &layout, &output));
+    report_interaction_profile(
+        if hit_test {
+            "interaction-hit-closest"
+        } else {
+            "interaction-position-at"
+        },
+        rounds,
+        units,
+        line_count,
+        elapsed,
+    );
     Ok(())
 }
 
@@ -1944,6 +2013,23 @@ fn report_document_profile(name: &str, rounds: usize, paragraphs: usize, elapsed
     }
     println!(
         "{name}\tprofile=isolated\tmachine=local\trounds={rounds}\tparagraphs={paragraphs}\toperations={rounds}\ttotal_ns={}\tns_per_operation={}",
+        elapsed.as_nanos(),
+        elapsed.as_nanos() / rounds as u128
+    );
+}
+
+fn report_interaction_profile(
+    name: &str,
+    rounds: usize,
+    units: usize,
+    lines: usize,
+    elapsed: Duration,
+) {
+    if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_some() {
+        return;
+    }
+    println!(
+        "{name}\tprofile=isolated\tmachine=local\trounds={rounds}\tunits={units}\tlines={lines}\toperations={rounds}\ttotal_ns={}\tns_per_operation={}",
         elapsed.as_nanos(),
         elapsed.as_nanos() / rounds as u128
     );

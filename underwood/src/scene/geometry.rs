@@ -144,6 +144,19 @@ impl CachedHitSidecar {
             .expect("a cached cluster belongs to retained hit geometry");
         &records.slices[cluster.hit_slices.clone()]
     }
+
+    pub(super) fn clusters_for_line(&self, line: usize) -> &[CachedCluster] {
+        let Some(records) = &self.records else {
+            return &[];
+        };
+        let start = records
+            .clusters
+            .partition_point(|cluster| cluster.line < line);
+        let end = records
+            .clusters
+            .partition_point(|cluster| cluster.line <= line);
+        &records.clusters[start..end]
+    }
 }
 
 impl Deref for CachedHitSidecar {
@@ -736,7 +749,7 @@ pub(super) fn build_geometry(
             bounds: bounds.unwrap_or(empty_bounds),
         });
     }
-    let movements = if projection.spans.is_empty() || !features.has_navigation() {
+    let mut movements = if projection.spans.is_empty() || !features.has_navigation() {
         Vec::new()
     } else {
         prepared
@@ -812,6 +825,8 @@ pub(super) fn build_geometry(
             ),
         });
     }
+    movements.sort_by_key(|movement| movement.position.key());
+    carets.sort_by_key(|caret| caret.position.key());
     Ok(CachedGeometry {
         features,
         facts: Arc::new(CachedGeometryFacts {

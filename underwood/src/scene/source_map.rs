@@ -45,6 +45,16 @@ impl SourcePosition {
     pub(super) const fn new(offset: u32, affinity: TextAffinity) -> Self {
         Self { offset, affinity }
     }
+
+    pub(super) const fn key(self) -> (u32, u8) {
+        (
+            self.offset,
+            match self.affinity {
+                TextAffinity::Upstream => 0,
+                TextAffinity::Downstream => 1,
+            },
+        )
+    }
 }
 
 /// Source represented by a retained record.
@@ -212,6 +222,44 @@ impl ParagraphSourceMap {
         .local_position(source, position.affinity)
     }
 
+    pub(super) fn source_position_for_local(
+        &self,
+        position: LocalPosition,
+    ) -> Option<SourcePosition> {
+        let affinity = match position {
+            LocalPosition::Snapshot { affinity, .. }
+            | LocalPosition::Composition { affinity, .. } => affinity,
+        };
+        let find = |leaf: &SourceLeaf| {
+            let start = match (leaf.source, position) {
+                (
+                    SourceLeafKind::Snapshot { start },
+                    LocalPosition::Snapshot { text, byte, .. },
+                ) if leaf.text == text => start_and_relative_byte(leaf, start, byte),
+                (
+                    SourceLeafKind::Composition { id, epoch, start },
+                    LocalPosition::Composition {
+                        id: position_id,
+                        epoch: position_epoch,
+                        byte,
+                        ..
+                    },
+                ) if id == position_id && epoch == position_epoch => {
+                    start_and_relative_byte(leaf, start, byte)
+                }
+                _ => None,
+            }?;
+            Some(SourcePosition::new(
+                self.projected_position(start, affinity),
+                affinity,
+            ))
+        };
+        match affinity {
+            TextAffinity::Upstream => self.leaves.iter().rev().find_map(find),
+            TextAffinity::Downstream => self.leaves.iter().find_map(find),
+        }
+    }
+
     pub(super) fn leaf_count(&self) -> usize {
         self.leaves.len()
     }
@@ -310,6 +358,57 @@ impl ParagraphSourceMap {
         }
     }
 
+    fn projected_position(&self, source: u32, affinity: TextAffinity) -> u32 {
+        if self.identity {
+            return source;
+        }
+        let mut inserted = self.relations.iter().filter(|relation| {
+            relation.kind == ProjectionKind::Inserted && relation.source.start == source
+        });
+        if let Some(first) = inserted.next() {
+            return inserted.fold(
+                match affinity {
+                    TextAffinity::Upstream => first.projected.start,
+                    TextAffinity::Downstream => first.projected.end,
+                },
+                |position, relation| match affinity {
+                    TextAffinity::Upstream => position.min(relation.projected.start),
+                    TextAffinity::Downstream => position.max(relation.projected.end),
+                },
+            );
+        }
+        if let Some(relation) = self
+            .relations
+            .iter()
+            .find(|relation| relation.source.start < source && source < relation.source.end)
+        {
+            return match relation.kind {
+                ProjectionKind::Identity => {
+                    relation.projected.start + (source - relation.source.start)
+                }
+                ProjectionKind::Replacement | ProjectionKind::Collapsed => match affinity {
+                    TextAffinity::Upstream => relation.projected.end,
+                    TextAffinity::Downstream => relation.projected.start,
+                },
+                ProjectionKind::Omitted => relation.projected.start,
+                ProjectionKind::Inserted => unreachable!("inserted runs have no source interior"),
+            };
+        }
+        match affinity {
+            TextAffinity::Upstream => self
+                .relations
+                .iter()
+                .rev()
+                .find(|relation| !relation.source.is_empty() && relation.source.end <= source)
+                .map_or(0, |relation| relation.projected.end),
+            TextAffinity::Downstream => self
+                .relations
+                .iter()
+                .find(|relation| !relation.source.is_empty() && relation.source.start >= source)
+                .map_or(self.projected_len, |relation| relation.projected.start),
+        }
+    }
+
     fn leaf_for_position(&self, source: u32, affinity: TextAffinity) -> Option<usize> {
         let match_leaf = |leaf: &SourceLeaf| match affinity {
             TextAffinity::Upstream => {
@@ -366,6 +465,12 @@ impl SourceLeaf {
             },
         }
     }
+}
+
+fn start_and_relative_byte(leaf: &SourceLeaf, start: u32, byte: u32) -> Option<u32> {
+    let relative = byte.checked_sub(start)?;
+    (relative <= leaf.paragraph.end - leaf.paragraph.start)
+        .then_some(leaf.paragraph.start + relative)
 }
 
 /// Borrowed exact-size iterator over one source observation.
