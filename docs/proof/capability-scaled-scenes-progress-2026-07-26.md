@@ -2,7 +2,7 @@
 
 ## Status
 
-These checkpoints implement the first two approved Design-0018 boundaries.
+These checkpoints implement the first four approved Design-0018 boundaries.
 This is not the completion proof.
 
 Prepared scenes now distinguish display, source provenance, semantics, hit
@@ -20,13 +20,33 @@ requested sidecars. Reusable adapter facts now have an independent
 deterministic byte budget. A zero budget or explicit trim leaves published
 scenes valid and makes a later capability upgrade visibly cold.
 
+Paragraph scenes now retain one source-independent glyph table and one
+paragraph-local source map. Lines, clusters, movements, semantics, and paint
+observations keep compact projected spans or source-map indexes instead of
+owning repeated `Vec<LocalRange>` values. Composition epoch rebinding updates
+the map once rather than rewriting every source-bearing record. This
+consolidates correctness as well as storage: glyph, hit, selection, semantic,
+and export paths can no longer rebuild contradictory provenance for the same
+multi-leaf grapheme or ligature.
+
+Ordinary paint is run-sized. Adjacent glyphs with the same run and paint state
+share one fragment range over a flat paint-glyph table. Explicitly clipped
+split-ligature paint remains the exceptional multi-fragment case, and those
+paint observations reference one source-independent layout glyph.
+
+Source iterators and hit units are borrowed views over those paragraph tables.
+Mapping one hit back to one or many authored leaves does not allocate.
+Callers that need to retain a hit unit beyond the scene materialize it
+explicitly with `SnapshotTextUnitView::to_owned` or
+`ProjectedTextUnitView::to_owned`.
+
 The remaining Design-0018 work is deliberate and tracked by
 `und-oh0.13.17.10`:
 
-- the paragraph-local compact source map and run-sized paint records;
 - requested-versus-resident byte diagnostics;
-- cold-label, upgrade, 2,048-sibling mixed-document, editable-typing, and
-  creation/destruction wind tunnels.
+- upgrade, 2,048-sibling mixed-document, editable-typing, and
+  creation/destruction wind tunnels;
+- the final complete portability, documentation, and repository gates.
 
 ## Public migration
 
@@ -73,6 +93,15 @@ through the source facade.
 There is intentionally no compatibility shim that materializes missing data.
 `MissingSceneCapability` reports the required, originally requested, and
 resident capability closures, plus the affected paragraph when it is known.
+
+Hit testing now returns `TextHit<SnapshotTextUnitView<'_>>` for committed
+scenes and `TextHit<ProjectedTextUnitView<'_>>` for transient composition
+scenes. `source().sources()` returns a borrowed exact-size, double-ended
+iterator rather than an owned slice. Existing short-lived call sites usually
+need only to iterate it. A caller that must retain the complete unit uses
+`source().to_owned()`. Fragment, glyph, line, and semantic source accessors
+likewise return allocation-free `SnapshotSources` or `ProjectedSources`
+iterators.
 
 ## Adapter-fact residency
 
@@ -134,6 +163,35 @@ Focused regressions prove:
   while leaving both published scenes valid;
 - renderer, PDF, showcase, IME, headless, and visual-proof consumers all use
   explicit capabilities and checked facades.
+- ordinary mixed-paint text retains fewer paint fragments than glyphs, while
+  explicit split-paint ligatures retain their clip topology and one physical
+  glyph identity;
+- cross-leaf graphemes, collapsed whitespace, bidi hits, and transient
+  composition all resolve through the same paragraph-local source map.
+
+## Matched allocation checkpoint
+
+The macOS `malloc_history` wind tunnel was run in release mode for the exact
+same one-label scenarios immediately before this representation change and at
+this checkpoint. Setup allocations are subtracted in both trees:
+
+| Scenario | Before calls | After calls | Before bytes | After bytes |
+|---|---:|---:|---:|---:|
+| cold display | 148 | 149 | 62,186 | 61,530 |
+| cold selectable | 219 | 184 | 81,970 | 72,778 |
+| cold editable | 316 | 186 | 112,090 | 75,634 |
+| repeated hit query | 2 | 0 | 96 | 0 |
+| paint-slot churn | 35 | 35 | 5,161 | 4,001 |
+| alignment churn | 40 | 40 | 8,997 | 5,813 |
+| justification churn | 46 | 44 | 9,173 | 5,941 |
+| localized edit | 102 | 103 | 18,181 | 16,781 |
+
+The one-call increases on cold display and localized edit come from the new
+central source-independent paragraph structures; they still reduce allocated
+bytes. The capability-scaled paths are the central claim: selectable drops 35
+calls, editable drops 130 calls, and a hot hit with source traversal performs
+no allocation. This table does not yet substitute for the required 64,
+1,000, and 2,048-item residency and mixed-document matrices.
 
 The checkpoint passes:
 

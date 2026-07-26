@@ -311,10 +311,7 @@ impl<'a> Projection<'a> {
         })
     }
 
-    pub(super) fn local_ranges(
-        &self,
-        paragraph: Range<u32>,
-    ) -> Result<Vec<LocalRange>, SceneError> {
+    pub(super) fn validate_source_range(&self, paragraph: Range<u32>) -> Result<(), SceneError> {
         let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
             SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
@@ -331,11 +328,11 @@ impl<'a> Projection<'a> {
                         paragraph.clone(),
                     )
                 })?;
-            return Ok(alloc::vec![span.local_range(source.start, source.end)]);
+            let _ = span;
+            return Ok(());
         }
 
         let mut covered = source.start;
-        let mut ranges = Vec::new();
         for span in &self.spans {
             let start = source.start.max(span.paragraph.start);
             let end = source.end.min(span.paragraph.end);
@@ -349,7 +346,6 @@ impl<'a> Projection<'a> {
                     paragraph.clone(),
                 ));
             }
-            ranges.push(span.local_range(start, end));
             covered = end;
         }
         if covered != source.end {
@@ -359,7 +355,7 @@ impl<'a> Projection<'a> {
                 paragraph,
             ));
         }
-        Ok(ranges)
+        Ok(())
     }
 
     pub(super) fn semantic_for_range(
@@ -422,11 +418,11 @@ impl<'a> Projection<'a> {
         Ok(first)
     }
 
-    pub(super) fn position_at(
+    pub(super) fn source_position(
         &self,
         paragraph_offset: u32,
         affinity: TextAffinity,
-    ) -> Result<LocalPosition, SceneError> {
+    ) -> Result<SourcePosition, SceneError> {
         let source = self
             .mapping
             .source_position(paragraph_offset, affinity)
@@ -437,14 +433,14 @@ impl<'a> Projection<'a> {
                     paragraph_offset..paragraph_offset,
                 )
             })?;
-        let span = span_for_position(&self.spans, source, affinity).ok_or_else(|| {
+        span_for_position(&self.spans, source, affinity).ok_or_else(|| {
             SceneError::for_source(
                 SceneErrorKind::SourceCoverage,
                 self.paragraph,
                 paragraph_offset..paragraph_offset,
             )
         })?;
-        Ok(span.local_position(source, affinity))
+        Ok(SourcePosition::new(paragraph_offset, affinity))
     }
 
     pub(super) fn empty_line_height_key(&self) -> u64 {
@@ -616,41 +612,6 @@ impl ProjectionSourceKey {
             },
         }));
         keys
-    }
-}
-
-impl LeafSpan {
-    pub(super) fn local_range(&self, paragraph_start: u32, paragraph_end: u32) -> LocalRange {
-        let relative_start = paragraph_start - self.paragraph.start;
-        let relative_end = paragraph_end - self.paragraph.start;
-        match self.source {
-            LeafSpanSource::Snapshot { start } => LocalRange::Snapshot {
-                text: self.text,
-                bytes: (start + relative_start)..(start + relative_end),
-            },
-            LeafSpanSource::Composition { id, epoch, start } => LocalRange::Composition {
-                id,
-                epoch,
-                bytes: (start + relative_start)..(start + relative_end),
-            },
-        }
-    }
-
-    pub(super) fn local_position(&self, paragraph: u32, affinity: TextAffinity) -> LocalPosition {
-        let relative = paragraph - self.paragraph.start;
-        match self.source {
-            LeafSpanSource::Snapshot { start } => LocalPosition::Snapshot {
-                text: self.text,
-                byte: start + relative,
-                affinity,
-            },
-            LeafSpanSource::Composition { id, epoch, start } => LocalPosition::Composition {
-                id,
-                epoch,
-                byte: start + relative,
-                affinity,
-            },
-        }
     }
 }
 
@@ -919,7 +880,7 @@ pub(super) fn validate_prepared(
                             PreparationErrorKind::InvalidOutput,
                         ));
                     }
-                    projection.local_ranges(source)?;
+                    projection.validate_source_range(source)?;
                 }
             }
             for range in run.unrendered_source() {

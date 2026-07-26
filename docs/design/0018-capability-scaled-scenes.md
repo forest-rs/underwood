@@ -558,9 +558,12 @@ selected first design.
    second checkpoint.
 3. Split `ParagraphSceneSegment` into layout, run-sized paint, and interaction
    handles; move scene interaction methods behind borrowed facades.
+   Implemented in the third checkpoint.
 4. Introduce the paragraph-local source map and replace eager per-record
    `LocalRange` vectors in one vertical slice: glyph source traversal, hit
-   result, selection ownership, PDF, and composition traps.
+   result, selection ownership, PDF, and composition traps. Implemented in the
+   third checkpoint together with step 3 so no temporary maximal
+   representation was presented as capability-scaled.
 5. Add byte accounting and matched display/selectable/editable wind tunnels.
 6. Only then compact remaining tables and add query indexes.
 

@@ -367,16 +367,21 @@ split, and public facades now execute after the Design-0017 structural laws are
 real; they remain dependency-free and do not authorize `unsafe`, renderer
 policy, serialization, or a global arena.
 
-The first two Design-0018 implementation checkpoints are green. Requests carry
+The first three Design-0018 implementation checkpoints are green. Requests carry
 a normalized uniform-plus-sparse capability policy; display-only paragraphs
 physically omit nonrequested scene sidecars; the Parley adapter omits cursor
 movement lowering below selection; warm upgrades share immutable formation and
 layout facts; and repository consumers use capability-checked source,
 semantic, interaction, selection, and editing facades. Reusable adapter facts
 now have a separate deterministic byte budget and LRU, a supported zero-budget
-static-label mode, explicit trim, and warm/cold degradation diagnostics.
-Migration, executable evidence, and the remaining source-compaction and
-wind-tunnel work are recorded in
+static-label mode, explicit trim, and warm/cold degradation diagnostics. The
+third checkpoint stores provenance once in a paragraph-local source map,
+coalesces ordinary paint into run-sized fragments over flat glyph tables, and
+returns borrowed source-complete hit views. Matched release allocation traces
+show cold editable preparation falling from 316 calls / 112,090 bytes to 186
+calls / 75,634 bytes and repeated source-aware hit queries falling from two
+allocations to zero. Migration, executable evidence, and the remaining byte
+diagnostics and wind-tunnel work are recorded in
 `docs/proof/capability-scaled-scenes-progress-2026-07-26.md`.
 
 The five Design-0017 completion-audit slices are implemented and measured.

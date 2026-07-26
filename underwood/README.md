@@ -61,9 +61,10 @@ units separately from painted glyphs. Each unit retains every shaping slice,
 including zero-advance marks and controls, while exposing only its two endpoint
 carets. Exact hits therefore cover ligature components and whitespace without
 pretending that ink bounds are cursor geometry. A committed hit returns a
-[`SnapshotTextUnit`] whose ordered source ranges can cross semantic leaves;
-`semantic_id()` still identifies the exact visual slice under the pointer.
-Closest hits also clamp to an empty editable leaf:
+borrowed [`SnapshotTextUnitView`] whose allocation-free source iterator can
+cross semantic leaves; `semantic_id()` still identifies the exact visual slice
+under the pointer. Call `to_owned()` only when the source-complete unit must
+outlive the borrowed scene. Closest hits also clamp to an empty editable leaf:
 
 ```rust,ignore
 let interaction = scene.interaction()?;
@@ -72,6 +73,9 @@ let hit = interaction
     .hit_test(point)
     .or_else(|| interaction.hit_test_closest(point));
 if let Some(hit) = hit {
+    for source in hit.source().sources() {
+        inspect(source);
+    }
     let caret = selection
         .caret(hit.position())
         .expect("a hit from this scene has a matching caret stop");

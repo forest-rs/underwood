@@ -137,6 +137,15 @@ fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
             .all(|fragment| fragment.paint_clip().is_none()),
         "single-paint glyphs must be complete unclipped draws"
     );
+    let fragments = output.scene().fragments();
+    let glyphs: usize = fragments
+        .iter()
+        .map(|fragment| fragment.glyphs().len())
+        .sum();
+    assert!(
+        glyphs > fragments.len(),
+        "ordinary paint must coalesce multiple glyphs into run-sized fragments"
+    );
 }
 
 #[test]

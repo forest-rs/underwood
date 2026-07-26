@@ -1725,11 +1725,15 @@ mod tests {
             let mut x = bounds.x0;
             while x <= bounds.x1 {
                 let point = Point::new(x, bounds.center().y);
-                if let Some(hit) = interaction.hit_test(point)
-                    && hit.source().sources().len() == 2
-                    && hit.source().sources()[0].text() == base
-                    && hit.source().sources()[1].text() == mark
-                {
+                if let Some(hit) = interaction.hit_test(point) {
+                    let sources = hit.source().sources();
+                    if sources.len() != 2
+                        || sources.get(0).is_none_or(|source| source.text() != base)
+                        || sources.get(1).is_none_or(|source| source.text() != mark)
+                    {
+                        x += 0.25;
+                        continue;
+                    }
                     if hit.position().text() == base {
                         leading = Some(point);
                     } else if hit.position().text() == mark && hit.position().byte() == 2 {

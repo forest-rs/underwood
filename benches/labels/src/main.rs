@@ -9,14 +9,19 @@ use std::time::{Duration, Instant};
 use underwood::{
     BlockRequest, Brush, CacheBudget, Color, ComputedInlineStyle, DocumentId, FiniteWidth,
     FloatSide, FlowRegion, InlineFlowStyle, LayoutEngine, PaintSlot, PaintTable, ParagraphStyle,
-    ProjectedText, ProjectionBuilder, Rect, RegionFloat, RegionFlow, SceneOutput, ShapingStyle,
-    Size, TextAlignment, TextBlock, TextConstraint, WhitespaceCollapse,
+    ProjectedText, ProjectionBuilder, Rect, RegionFloat, RegionFlow, SceneFeatures, SceneOutput,
+    ShapingStyle, Size, TextAlignment, TextBlock, TextConstraint, WhitespaceCollapse,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
 const LABELS: usize = 2_048;
 const CHURN_BUDGET: usize = 64;
 const SHARED_PREPARATION_BYTES: usize = 8 * 1024 * 1024;
+const ADAPTER_FACTS_BYTES: usize = 64 * 1024 * 1024;
+
+fn retained_budget(entries: usize) -> CacheBudget {
+    CacheBudget::new(entries).with_adapter_facts_bytes(ADAPTER_FACTS_BYTES)
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = std::env::args().skip(1);
@@ -25,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-paint-slot|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|paint-slot-churn|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-paint-slot|primed-unique|primed-region|primed-adjustment|primed-hit-query|cold-identical|cold-selectable|cold-editable|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|paint-slot-churn|alignment-churn|justification-churn|localized-edit|hit-query|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -64,7 +69,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     let mut labels = unique_labels()?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(LABELS),
+        retained_budget(LABELS),
     );
 
     let cold_unique = measure(|| {
@@ -359,9 +364,33 @@ fn run_profile(
         "primed-unique" | "p2" => profile_primed_unique(rounds, labels, &style, &paint),
         "primed-region" | "p3" => profile_primed_region(rounds, labels, &style, &paint),
         "primed-adjustment" | "p4" => profile_primed_adjustment(rounds, labels, &style, &paint),
-        "cold-identical" | "c0" => {
-            profile_cold_identical("cold-identical", rounds, labels, &style, &paint)
+        "primed-hit-query" | "p6" => {
+            profile_hit_query("primed-hit-query", rounds, labels, &style, &paint, false)
         }
+        "cold-identical" | "c0" => profile_cold_capability(
+            "cold-identical",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::DISPLAY,
+        ),
+        "cold-selectable" | "i0" => profile_cold_capability(
+            "cold-selectable",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::SELECTABLE,
+        ),
+        "cold-editable" | "i1" => profile_cold_capability(
+            "cold-editable",
+            rounds,
+            labels,
+            &style,
+            &paint,
+            SceneFeatures::EDITABLE,
+        ),
         "cross-identical" | "x1" => {
             profile_cross_identity("cross-identical", rounds, labels, &style, &paint, false)
         }
@@ -379,13 +408,7 @@ fn run_profile(
             profile_alignment_churn(rounds, labels, &style, &paint, true)
         }
         "localized-edit" | "e0" => profile_localized_edit(rounds, labels, &style, &paint),
-        "interaction-materialization" | "i0" => profile_cold_identical(
-            "interaction-materialization",
-            rounds,
-            labels,
-            &style,
-            &paint,
-        ),
+        "hit-query" | "i2" => profile_hit_query("hit-query", rounds, labels, &style, &paint, true),
         "width-churn" | "w0" => profile_width_churn("width-churn", rounds, labels, &style, &paint),
         "region-ready" | "g0" => {
             profile_width_churn("region-ready", rounds, labels, &style, &paint)
@@ -671,7 +694,7 @@ fn profile_primed_identical(
     let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -695,7 +718,7 @@ fn profile_primed_unique(
     let labels = unique_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -716,7 +739,7 @@ fn profile_primed_paint_slot(
     let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     let paint = PaintTable::from_brushes([
         Brush::Solid(Color::from_rgb8(0x20, 0x24, 0x2b)),
@@ -743,7 +766,7 @@ fn profile_primed_region(
     let labels = unique_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -766,7 +789,7 @@ fn profile_primed_adjustment(
     let labels = adjustment_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     let flow = adjustment_flow()?;
     for label in &labels {
@@ -780,12 +803,13 @@ fn profile_primed_adjustment(
     Ok(())
 }
 
-fn profile_cold_identical(
+fn profile_cold_capability(
     name: &str,
     rounds: usize,
     label_count: usize,
     style: &ComputedInlineStyle,
     paint: &PaintTable,
+    features: SceneFeatures,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
@@ -799,7 +823,8 @@ fn profile_cold_identical(
                 let output = layout
                     .prepare_block(
                         &label.snapshot(),
-                        &BlockRequest::new(TextConstraint::MaxContent, style, paint),
+                        &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                            .with_features(features),
                     )
                     .expect("cold identical label must prepare");
                 assert_eq!(
@@ -811,6 +836,58 @@ fn profile_cold_identical(
             }
         }
     });
+    report_profile(name, rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_hit_query(
+    name: &str,
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+    paint: &PaintTable,
+    measure_queries: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let mut outputs = Vec::with_capacity(label_count);
+    for label in &labels {
+        outputs.push(
+            layout.prepare_block(
+                &label.snapshot(),
+                &BlockRequest::new(TextConstraint::MaxContent, style, paint)
+                    .with_features(SceneFeatures::SELECTABLE),
+            )?,
+        );
+    }
+    let elapsed = if measure_queries {
+        measure(|| {
+            for _ in 0..rounds {
+                for output in &outputs {
+                    let scene = output.scene();
+                    let point = scene
+                        .lines()
+                        .first()
+                        .expect("selectable fixture has one line")
+                        .bounds()
+                        .center();
+                    let hit = scene
+                        .interaction()
+                        .expect("selectable fixture retains hit testing")
+                        .hit_test(point)
+                        .expect("line center intersects an interaction unit");
+                    black_box(hit.source().sources().len());
+                    black_box(hit.position());
+                }
+            }
+        })
+    } else {
+        Duration::ZERO
+    };
+    black_box((&labels, &layout, &outputs));
     report_profile(name, rounds, label_count, elapsed);
     Ok(())
 }
@@ -892,7 +969,7 @@ fn profile_retained_identical(
     let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -927,7 +1004,7 @@ fn profile_traced_retained(
     let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -984,7 +1061,7 @@ fn profile_retained_adjustment(
     let labels = adjustment_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     let flow = adjustment_flow()?;
     for label in &labels {
@@ -1062,7 +1139,7 @@ fn profile_paint_slot_churn(
     let labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     let paint = PaintTable::from_brushes([
         Brush::Solid(Color::from_rgb8(0x20, 0x24, 0x2b)),
@@ -1139,7 +1216,7 @@ fn profile_alignment_churn(
     let labels = adjustment_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     let flow = adjustment_flow()?;
     for label in &labels {
@@ -1210,7 +1287,7 @@ fn profile_localized_edit(
     let mut labels = identical_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -1256,7 +1333,7 @@ fn profile_width_churn(
     let labels = unique_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(
@@ -1303,7 +1380,7 @@ fn profile_region_churn(
     let labels = unique_labels_with_count(label_count)?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts()?),
-        CacheBudget::new(label_count),
+        retained_budget(label_count),
     );
     for label in &labels {
         layout.prepare_block(

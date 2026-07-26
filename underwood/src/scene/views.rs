@@ -268,15 +268,14 @@ impl<'a> SceneLineView<'a> {
 
     /// Iterates source-complete snapshot slices represented by the line.
     pub(crate) fn sources(self) -> SnapshotSources<'a> {
+        let geometry = &self.positioned.position.segment.geometry;
         SnapshotSources::new(
             self.revision,
-            self.positioned
-                .position
-                .segment
-                .geometry
-                .line_sources
-                .get(self.positioned.local)
-                .map_or(&[], Vec::as_slice),
+            geometry
+                .source_map
+                .as_deref()
+                .expect("source-capable lines retain a paragraph source map"),
+            SourceReference::Projected(geometry.line_sources[self.positioned.local]),
         )
     }
 
@@ -324,15 +323,14 @@ impl<'a> SceneLineView<'a> {
     }
 
     fn projected_sources(self) -> ProjectedSources<'a> {
+        let geometry = &self.positioned.position.segment.geometry;
         ProjectedSources::new(
             self.revision,
-            self.positioned
-                .position
-                .segment
-                .geometry
-                .line_sources
-                .get(self.positioned.local)
-                .map_or(&[], Vec::as_slice),
+            geometry
+                .source_map
+                .as_deref()
+                .expect("source-capable lines retain a paragraph source map"),
+            SourceReference::Projected(geometry.line_sources[self.positioned.local]),
         )
     }
 }
@@ -547,7 +545,15 @@ impl<'a> ProjectedSceneFragmentView<'a> {
 
     /// Iterates every authored and generated source slice.
     pub(crate) fn sources(self) -> ProjectedSources<'a> {
-        ProjectedSources::new(self.inner.revision, &self.inner.local().sources)
+        let geometry = &self.inner.positioned.position.segment.geometry;
+        ProjectedSources::from_spans(
+            self.inner.revision,
+            geometry
+                .source_map
+                .as_deref()
+                .expect("source-capable fragments retain a paragraph source map"),
+            &geometry.paint_sources[self.inner.local().glyphs.clone()],
+        )
     }
 
     /// Returns an explicit scene-space partial-paint clip.
@@ -621,11 +627,12 @@ impl<'a> SceneFragmentView<'a> {
     /// Returns positioned shaped glyph observations.
     #[must_use]
     pub fn glyphs(self) -> SceneGlyphs<'a> {
+        let glyphs = self.local().glyphs.clone();
         SceneGlyphs {
             revision: self.revision,
             fragment: self,
-            front: 0,
-            back: self.local().glyphs.len(),
+            front: glyphs.start,
+            back: glyphs.end,
         }
     }
 
@@ -649,7 +656,15 @@ impl<'a> SceneFragmentView<'a> {
 
     /// Iterates every source slice covered by this fragment.
     pub(crate) fn sources(self) -> SnapshotSources<'a> {
-        SnapshotSources::new(self.revision, &self.local().sources)
+        let geometry = &self.positioned.position.segment.geometry;
+        SnapshotSources::from_spans(
+            self.revision,
+            geometry
+                .source_map
+                .as_deref()
+                .expect("source-capable fragments retain a paragraph source map"),
+            &geometry.paint_sources[self.local().glyphs.clone()],
+        )
     }
 
     /// Returns an explicit scene-space partial-paint clip.
@@ -712,11 +727,12 @@ impl<'a> SceneGlyphs<'a> {
     /// Returns a fresh iterator over every glyph observation.
     #[must_use]
     pub fn iter(&self) -> Self {
+        let glyphs = self.fragment.local().glyphs.clone();
         Self {
             revision: self.revision,
             fragment: self.fragment,
-            front: 0,
-            back: self.fragment.local().glyphs.len(),
+            front: glyphs.start,
+            back: glyphs.end,
         }
     }
 
@@ -735,10 +751,11 @@ impl<'a> SceneGlyphs<'a> {
     /// Returns a glyph by fragment-local index.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<SceneGlyphView<'a>> {
-        (index < self.fragment.local().glyphs.len()).then_some(SceneGlyphView {
+        let glyphs = self.fragment.local().glyphs.clone();
+        (index < glyphs.len()).then_some(SceneGlyphView {
             revision: self.revision,
             fragment: self.fragment,
-            local: index,
+            local: glyphs.start + index,
         })
     }
 
@@ -884,7 +901,15 @@ impl<'a> ProjectedSceneGlyphView<'a> {
 
     /// Iterates source-complete authored and generated provenance.
     pub(crate) fn sources(self) -> ProjectedSources<'a> {
-        ProjectedSources::new(self.inner.revision, &self.inner.local().sources)
+        let geometry = &self.inner.fragment.positioned.position.segment.geometry;
+        ProjectedSources::new(
+            self.inner.revision,
+            geometry
+                .source_map
+                .as_deref()
+                .expect("source-capable glyphs retain a paragraph source map"),
+            SourceReference::Projected(geometry.paint_sources[self.inner.local]),
+        )
     }
 }
 
@@ -897,8 +922,18 @@ pub struct SceneGlyphView<'a> {
 }
 
 impl<'a> SceneGlyphView<'a> {
+    fn paint_glyph(self) -> &'a CachedPaintGlyph {
+        &self
+            .fragment
+            .positioned
+            .position
+            .segment
+            .geometry
+            .paint_glyphs[self.local]
+    }
+
     fn local(self) -> &'a CachedGlyph {
-        &self.fragment.local().glyphs[self.local]
+        &self.fragment.positioned.position.segment.geometry.glyphs[self.paint_glyph().instance]
     }
 
     /// Returns the identity shared by split-paint observations.
@@ -906,7 +941,7 @@ impl<'a> SceneGlyphView<'a> {
     pub fn instance_id(self) -> SceneGlyphInstanceId {
         SceneGlyphInstanceId {
             geometry: Arc::as_ptr(&self.fragment.positioned.position.segment.geometry) as usize,
-            glyph: self.local().instance,
+            glyph: self.paint_glyph().instance,
         }
     }
 
@@ -930,7 +965,15 @@ impl<'a> SceneGlyphView<'a> {
 
     /// Iterates source-complete glyph provenance.
     pub(crate) fn sources(self) -> SnapshotSources<'a> {
-        SnapshotSources::new(self.revision, &self.local().sources)
+        let geometry = &self.fragment.positioned.position.segment.geometry;
+        SnapshotSources::new(
+            self.revision,
+            geometry
+                .source_map
+                .as_deref()
+                .expect("source-capable glyphs retain a paragraph source map"),
+            SourceReference::Projected(geometry.paint_sources[self.local]),
+        )
     }
 }
 
@@ -938,14 +981,29 @@ impl<'a> SceneGlyphView<'a> {
 #[derive(Clone, Debug)]
 pub struct SnapshotSources<'a> {
     revision: DocumentRevision,
-    ranges: core::slice::Iter<'a, LocalRange>,
+    ranges: SourceRangeSequence<'a>,
 }
 
 impl<'a> SnapshotSources<'a> {
-    fn new(revision: DocumentRevision, ranges: &'a [LocalRange]) -> Self {
+    fn new(
+        revision: DocumentRevision,
+        map: &'a ParagraphSourceMap,
+        source: SourceReference,
+    ) -> Self {
         Self {
             revision,
-            ranges: ranges.iter(),
+            ranges: SourceRangeSequence::new(map, SourceReferences::One(source)),
+        }
+    }
+
+    fn from_spans(
+        revision: DocumentRevision,
+        map: &'a ParagraphSourceMap,
+        spans: &'a [SourceSpan],
+    ) -> Self {
+        Self {
+            revision,
+            ranges: SourceRangeSequence::new(map, SourceReferences::Spans(spans)),
         }
     }
 
@@ -956,6 +1014,18 @@ impl<'a> SnapshotSources<'a> {
             revision: self.revision,
             ranges: self.ranges.clone(),
         }
+    }
+
+    /// Returns one source range by observation-local index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<SnapshotTextRange> {
+        self.iter().nth(index)
+    }
+
+    /// Returns the first source range.
+    #[must_use]
+    pub fn first(&self) -> Option<SnapshotTextRange> {
+        self.get(0)
     }
 }
 
@@ -987,14 +1057,29 @@ impl ExactSizeIterator for SnapshotSources<'_> {}
 #[derive(Clone, Debug)]
 pub struct ProjectedSources<'a> {
     revision: DocumentRevision,
-    ranges: core::slice::Iter<'a, LocalRange>,
+    ranges: SourceRangeSequence<'a>,
 }
 
 impl<'a> ProjectedSources<'a> {
-    fn new(revision: DocumentRevision, ranges: &'a [LocalRange]) -> Self {
+    fn new(
+        revision: DocumentRevision,
+        map: &'a ParagraphSourceMap,
+        source: SourceReference,
+    ) -> Self {
         Self {
             revision,
-            ranges: ranges.iter(),
+            ranges: SourceRangeSequence::new(map, SourceReferences::One(source)),
+        }
+    }
+
+    fn from_spans(
+        revision: DocumentRevision,
+        map: &'a ParagraphSourceMap,
+        spans: &'a [SourceSpan],
+    ) -> Self {
+        Self {
+            revision,
+            ranges: SourceRangeSequence::new(map, SourceReferences::Spans(spans)),
         }
     }
 
@@ -1005,6 +1090,18 @@ impl<'a> ProjectedSources<'a> {
             revision: self.revision,
             ranges: self.ranges.clone(),
         }
+    }
+
+    /// Returns one source range by observation-local index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<ProjectedTextSource> {
+        self.iter().nth(index)
+    }
+
+    /// Returns the first source range.
+    #[must_use]
+    pub fn first(&self) -> Option<ProjectedTextSource> {
+        self.get(0)
     }
 }
 
@@ -1031,6 +1128,206 @@ impl DoubleEndedIterator for ProjectedSources<'_> {
 }
 
 impl ExactSizeIterator for ProjectedSources<'_> {}
+
+/// Borrowed source-complete interaction unit in one immutable snapshot.
+///
+/// The view retains no per-hit allocation. Its source iterator resolves the
+/// paragraph-local relation map lazily and stamps the current scene revision
+/// at observation time.
+#[derive(Clone, Copy, Debug)]
+pub struct SnapshotTextUnitView<'a> {
+    revision: DocumentRevision,
+    source_map: &'a ParagraphSourceMap,
+    source: SourceSpan,
+}
+
+impl<'a> SnapshotTextUnitView<'a> {
+    pub(super) const fn new(
+        revision: DocumentRevision,
+        source_map: &'a ParagraphSourceMap,
+        source: SourceSpan,
+    ) -> Self {
+        Self {
+            revision,
+            source_map,
+            source,
+        }
+    }
+
+    /// Iterates every ordered leaf-local source range without allocating.
+    #[must_use]
+    pub fn sources(self) -> SnapshotSources<'a> {
+        SnapshotSources::new(
+            self.revision,
+            self.source_map,
+            SourceReference::Projected(self.source),
+        )
+    }
+
+    /// Materializes an owned interaction unit for storage beyond the scene.
+    #[must_use]
+    pub fn to_owned(self) -> SnapshotTextUnit {
+        SnapshotTextUnit::new(self.sources().collect())
+    }
+}
+
+/// Borrowed source-complete interaction unit in a composition scene.
+#[derive(Clone, Copy, Debug)]
+pub struct ProjectedTextUnitView<'a> {
+    revision: DocumentRevision,
+    source_map: &'a ParagraphSourceMap,
+    source: SourceSpan,
+}
+
+impl<'a> ProjectedTextUnitView<'a> {
+    pub(super) const fn new(
+        revision: DocumentRevision,
+        source_map: &'a ParagraphSourceMap,
+        source: SourceSpan,
+    ) -> Self {
+        Self {
+            revision,
+            source_map,
+            source,
+        }
+    }
+
+    /// Iterates ordered authored and generated provenance without allocating.
+    #[must_use]
+    pub fn sources(self) -> ProjectedSources<'a> {
+        ProjectedSources::new(
+            self.revision,
+            self.source_map,
+            SourceReference::Projected(self.source),
+        )
+    }
+
+    /// Materializes an owned projected range for storage beyond the scene.
+    #[must_use]
+    pub fn to_owned(self) -> ProjectedTextRange {
+        ProjectedTextRange::new(self.sources().collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum SourceReferences<'a> {
+    One(SourceReference),
+    Spans(&'a [SourceSpan]),
+}
+
+impl SourceReferences<'_> {
+    fn len(self) -> usize {
+        match self {
+            Self::One(_) => 1,
+            Self::Spans(spans) => spans.len(),
+        }
+    }
+
+    fn get(self, index: usize) -> Option<SourceReference> {
+        match self {
+            Self::One(source) => (index == 0).then_some(source),
+            Self::Spans(spans) => spans.get(index).copied().map(SourceReference::Projected),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SourceRangeSequence<'a> {
+    map: &'a ParagraphSourceMap,
+    references: SourceReferences<'a>,
+    front_reference: usize,
+    back_reference: usize,
+    front_ranges: Option<LocalRanges<'a>>,
+    back_ranges: Option<LocalRanges<'a>>,
+    remaining: usize,
+}
+
+impl<'a> SourceRangeSequence<'a> {
+    fn new(map: &'a ParagraphSourceMap, references: SourceReferences<'a>) -> Self {
+        let back_reference = references.len();
+        let remaining = (0..back_reference)
+            .filter_map(|index| references.get(index))
+            .map(|source| map.ranges(source).len())
+            .sum();
+        Self {
+            map,
+            references,
+            front_reference: 0,
+            back_reference,
+            front_ranges: None,
+            back_ranges: None,
+            remaining,
+        }
+    }
+}
+
+impl Iterator for SourceRangeSequence<'_> {
+    type Item = LocalRange;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(ranges) = &mut self.front_ranges
+                && let Some(range) = ranges.next()
+            {
+                self.remaining -= 1;
+                return Some(range);
+            }
+            self.front_ranges = None;
+            if self.front_reference < self.back_reference {
+                let source = self
+                    .references
+                    .get(self.front_reference)
+                    .expect("source reference bounds remain valid");
+                self.front_reference += 1;
+                self.front_ranges = Some(self.map.ranges(source));
+                continue;
+            }
+            if let Some(ranges) = &mut self.back_ranges
+                && let Some(range) = ranges.next()
+            {
+                self.remaining -= 1;
+                return Some(range);
+            }
+            return None;
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl DoubleEndedIterator for SourceRangeSequence<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(ranges) = &mut self.back_ranges
+                && let Some(range) = ranges.next_back()
+            {
+                self.remaining -= 1;
+                return Some(range);
+            }
+            self.back_ranges = None;
+            if self.front_reference < self.back_reference {
+                self.back_reference -= 1;
+                let source = self
+                    .references
+                    .get(self.back_reference)
+                    .expect("source reference bounds remain valid");
+                self.back_ranges = Some(self.map.ranges(source));
+                continue;
+            }
+            if let Some(ranges) = &mut self.front_ranges
+                && let Some(range) = ranges.next_back()
+            {
+                self.remaining -= 1;
+                return Some(range);
+            }
+            return None;
+        }
+    }
+}
+
+impl ExactSizeIterator for SourceRangeSequence<'_> {}
 
 /// Allocation-free semantic observations in document order.
 #[derive(Clone, Debug)]
@@ -1106,10 +1403,15 @@ impl<'a> SemanticFragmentView<'a> {
     /// Returns snapshot-local source when the observation has exactly one.
     #[must_use]
     pub fn source(self) -> Option<SnapshotTextRange> {
-        self.local()
-            .source
+        let source = self.local().source?;
+        let source_map = self
+            .positioned
+            .segment
+            .geometry
+            .source_map
             .as_deref()
-            .and_then(|source| materialize_optional_snapshot_range(source, self.revision))
+            .expect("semantic capability retains a paragraph source map");
+        materialize_optional_snapshot_range(source_map, source, self.revision)
     }
 
     /// Returns scene-space semantic bounds.

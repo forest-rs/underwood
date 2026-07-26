@@ -779,7 +779,7 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
                 .iter()
                 .any(|source| matches!(source, ProjectedTextSource::Composition(_)));
             if has_snapshot && has_generated {
-                unit_source.get_or_insert_with(|| hit.source().clone());
+                unit_source.get_or_insert(*hit.source());
                 if !unit_positions.contains(hit.position()) {
                     unit_positions.push(*hit.position());
                 }

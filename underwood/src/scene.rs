@@ -39,6 +39,7 @@ mod output;
 mod projection;
 mod records;
 mod shared_cache;
+mod source_map;
 mod spine;
 mod views;
 
@@ -61,8 +62,9 @@ pub use records::{
 pub use views::{
     ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,
     ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources,
-    SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs, SceneLineView, SceneLines,
-    SceneSemantics, SemanticFragmentView, SnapshotSources,
+    ProjectedTextUnitView, SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs,
+    SceneLineView, SceneLines, SceneSemantics, SemanticFragmentView, SnapshotSources,
+    SnapshotTextUnitView,
 };
 
 use adjustment::*;
@@ -70,6 +72,7 @@ use geometry::*;
 use interaction::{SceneCore, SceneCursorStep};
 use projection::*;
 use shared_cache::*;
+use source_map::*;
 use spine::*;
 
 #[cfg(test)]

@@ -256,13 +256,13 @@ impl<'a> SceneInteraction<'a> {
 
     /// Returns the exact interaction unit under `point`.
     #[must_use]
-    pub fn hit_test(self, point: Point) -> Option<TextHit> {
+    pub fn hit_test(self, point: Point) -> Option<TextHit<SnapshotTextUnitView<'a>>> {
         self.scene.hit_test(point)
     }
 
     /// Returns the closest represented interaction-unit side.
     #[must_use]
-    pub fn hit_test_closest(self, point: Point) -> Option<TextHit> {
+    pub fn hit_test_closest(self, point: Point) -> Option<TextHit<SnapshotTextUnitView<'a>>> {
         self.scene.hit_test_closest(point)
     }
 }
@@ -280,13 +280,13 @@ impl<'a> SceneEditing<'a> {
 
     /// Returns the exact interaction unit under `point`.
     #[must_use]
-    pub fn hit_test(self, point: Point) -> Option<TextHit> {
+    pub fn hit_test(self, point: Point) -> Option<TextHit<SnapshotTextUnitView<'a>>> {
         self.scene.hit_test(point)
     }
 
     /// Returns the closest represented interaction-unit side.
     #[must_use]
-    pub fn hit_test_closest(self, point: Point) -> Option<TextHit> {
+    pub fn hit_test_closest(self, point: Point) -> Option<TextHit<SnapshotTextUnitView<'a>>> {
         self.scene.hit_test_closest(point)
     }
 
@@ -432,7 +432,7 @@ impl<'a> ProjectedSceneInteraction<'a> {
     pub fn hit_test(
         self,
         point: Point,
-    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+    ) -> Option<TextHit<ProjectedTextUnitView<'a>, ProjectedTextPosition>> {
         self.scene.hit_test(point)
     }
 
@@ -441,7 +441,7 @@ impl<'a> ProjectedSceneInteraction<'a> {
     pub fn hit_test_closest(
         self,
         point: Point,
-    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+    ) -> Option<TextHit<ProjectedTextUnitView<'a>, ProjectedTextPosition>> {
         self.scene.hit_test_closest(point)
     }
 }
@@ -462,7 +462,7 @@ impl<'a> ProjectedSceneEditing<'a> {
     pub fn hit_test(
         self,
         point: Point,
-    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+    ) -> Option<TextHit<ProjectedTextUnitView<'a>, ProjectedTextPosition>> {
         self.scene.hit_test(point)
     }
 
@@ -471,7 +471,7 @@ impl<'a> ProjectedSceneEditing<'a> {
     pub fn hit_test_closest(
         self,
         point: Point,
-    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+    ) -> Option<TextHit<ProjectedTextUnitView<'a>, ProjectedTextPosition>> {
         self.scene.hit_test_closest(point)
     }
 

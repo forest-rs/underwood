@@ -16,11 +16,13 @@ pub(super) struct CachedGeometry {
     pub(super) facts: Arc<CachedGeometryFacts>,
     pub(super) line_fragments: Vec<Range<usize>>,
     pub(super) fragments: Vec<CachedFragment>,
-    pub(super) line_sources: CachedSidecar<Vec<LocalRange>>,
+    pub(super) paint_glyphs: Vec<CachedPaintGlyph>,
+    pub(super) source_map: Option<Arc<ParagraphSourceMap>>,
+    pub(super) line_sources: CachedSidecar<SourceSpan>,
+    pub(super) paint_sources: CachedSidecar<SourceSpan>,
     pub(super) clusters: CachedSidecar<CachedCluster>,
     pub(super) carets: CachedSidecar<CachedCaret>,
     pub(super) movements: CachedSidecar<CachedCursorMovement>,
-    pub(super) texts: CachedSidecar<LocalRange>,
     pub(super) semantics: CachedSidecar<CachedSemantic>,
 }
 
@@ -28,6 +30,7 @@ pub(super) struct CachedGeometry {
 pub(super) struct CachedGeometryFacts {
     pub(super) height: f64,
     pub(super) lines: Vec<CachedLine>,
+    pub(super) glyphs: Vec<CachedGlyph>,
 }
 
 #[derive(Clone, Debug)]
@@ -57,13 +60,6 @@ impl<T> CachedSidecar<T> {
         self.records
             .as_ref()
             .map_or(0, |records| records.capacity())
-    }
-
-    fn make_mut(&mut self) -> Option<&mut Vec<T>>
-    where
-        T: Clone,
-    {
-        self.records.as_mut().map(Arc::make_mut)
     }
 
     fn retain_from(&mut self, retained: &Self) {
@@ -112,10 +108,9 @@ pub(super) struct CachedLine {
 #[derive(Clone, Debug)]
 pub(super) struct CachedFragment {
     pub(super) id: SceneFragmentId,
-    pub(super) glyphs: Vec<CachedGlyph>,
+    pub(super) glyphs: Range<usize>,
     pub(super) paint: PaintSlot,
     pub(super) transform: Affine,
-    pub(super) sources: Vec<LocalRange>,
     pub(super) paint_clip: Option<Rect>,
     pub(super) font: FontData,
     pub(super) font_size: f32,
@@ -127,24 +122,34 @@ pub(super) struct CachedFragment {
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGlyph {
-    pub(super) instance: usize,
     pub(super) id: u32,
     pub(super) position: Point,
     pub(super) advance: Vec2,
-    pub(super) sources: Vec<LocalRange>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CachedPaintGlyph {
+    pub(super) instance: usize,
+}
+
+struct PaintTopology {
+    fragments: Vec<CachedFragment>,
+    glyphs: Vec<CachedPaintGlyph>,
+    sources: Vec<SourceSpan>,
+    line_fragments: Vec<Range<usize>>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCluster {
-    pub(super) sources: Vec<LocalRange>,
+    pub(super) source: SourceSpan,
     pub(super) semantic_id: SemanticId,
     pub(super) boundary: ClusterBoundary,
     pub(super) whitespace: ClusterWhitespace,
     pub(super) hit_slices: Vec<CachedHitSlice>,
     pub(super) bounds: Rect,
     pub(super) line: usize,
-    pub(super) left: LocalPosition,
-    pub(super) right: LocalPosition,
+    pub(super) left: SourcePosition,
+    pub(super) right: SourcePosition,
     pub(super) bidi_level: u8,
 }
 
@@ -157,13 +162,13 @@ pub(super) struct CachedHitSlice {
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCaret {
-    pub(super) position: LocalPosition,
+    pub(super) position: SourcePosition,
     pub(super) bounds: Rect,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCursorMovement {
-    pub(super) position: LocalPosition,
+    pub(super) position: SourcePosition,
     pub(super) previous_visual: Option<CachedCursorStep>,
     pub(super) next_visual: Option<CachedCursorStep>,
     pub(super) previous_logical: Option<CachedCursorStep>,
@@ -172,8 +177,8 @@ pub(super) struct CachedCursorMovement {
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCursorStep {
-    pub(super) target: LocalPosition,
-    pub(super) source: Option<Vec<LocalRange>>,
+    pub(super) target: SourcePosition,
+    pub(super) source: Option<SourceSpan>,
 }
 
 #[derive(Clone, Debug)]
@@ -181,7 +186,7 @@ pub(super) struct CachedSemantic {
     pub(super) semantic_id: SemanticId,
     pub(super) paragraph_role: Option<ParagraphRole>,
     pub(super) inline_role: Option<InlineRole>,
-    pub(super) source: Option<Vec<LocalRange>>,
+    pub(super) source: Option<SourceReference>,
     pub(super) bounds: Rect,
 }
 
@@ -216,62 +221,43 @@ pub(super) enum LocalPosition {
 impl CachedGeometry {
     pub(super) fn retain_sidecars_from(&mut self, retained: &Self) {
         self.features = self.features.union(retained.features);
+        if self.source_map.is_none() {
+            self.source_map.clone_from(&retained.source_map);
+        }
         self.line_sources.retain_from(&retained.line_sources);
+        self.paint_sources.retain_from(&retained.paint_sources);
         self.clusters.retain_from(&retained.clusters);
         self.carets.retain_from(&retained.carets);
         self.movements.retain_from(&retained.movements);
-        self.texts.retain_from(&retained.texts);
         self.semantics.retain_from(&retained.semantics);
     }
 
     pub(super) fn accounted_owned_bytes(&self) -> usize {
         let mut bytes = vec_bytes::<CachedLine>(self.lines.capacity())
+            .saturating_add(vec_bytes::<CachedGlyph>(self.glyphs.capacity()))
             .saturating_add(vec_bytes::<Range<usize>>(self.line_fragments.capacity()))
             .saturating_add(vec_bytes::<CachedFragment>(self.fragments.capacity()))
+            .saturating_add(vec_bytes::<CachedPaintGlyph>(self.paint_glyphs.capacity()))
+            .saturating_add(vec_bytes::<SourceSpan>(self.line_sources.capacity()))
+            .saturating_add(vec_bytes::<SourceSpan>(self.paint_sources.capacity()))
             .saturating_add(vec_bytes::<CachedCluster>(self.clusters.capacity()))
             .saturating_add(vec_bytes::<CachedCaret>(self.carets.capacity()))
             .saturating_add(vec_bytes::<CachedCursorMovement>(self.movements.capacity()))
-            .saturating_add(vec_bytes::<LocalRange>(self.texts.capacity()))
             .saturating_add(vec_bytes::<CachedSemantic>(self.semantics.capacity()));
-        for sources in self.line_sources.iter() {
-            bytes = bytes.saturating_add(vec_bytes::<LocalRange>(sources.capacity()));
-        }
+        bytes = bytes.saturating_add(
+            self.source_map
+                .as_ref()
+                .map_or(0, |map| map.accounted_owned_bytes()),
+        );
         for fragment in &self.fragments {
-            bytes = bytes
-                .saturating_add(vec_bytes::<CachedGlyph>(fragment.glyphs.capacity()))
-                .saturating_add(vec_bytes::<LocalRange>(fragment.sources.capacity()))
-                .saturating_add(vec_bytes::<i16>(fragment.normalized_coords.len()));
-            for glyph in &fragment.glyphs {
-                bytes = bytes.saturating_add(vec_bytes::<LocalRange>(glyph.sources.capacity()));
-            }
+            bytes = bytes.saturating_add(vec_bytes::<i16>(fragment.normalized_coords.len()));
         }
         for cluster in self.clusters.iter() {
-            bytes = bytes
-                .saturating_add(vec_bytes::<LocalRange>(cluster.sources.capacity()))
-                .saturating_add(vec_bytes::<CachedHitSlice>(cluster.hit_slices.capacity()));
-        }
-        for movement in self.movements.iter() {
-            bytes = bytes
-                .saturating_add(cursor_step_bytes(movement.previous_visual.as_ref()))
-                .saturating_add(cursor_step_bytes(movement.next_visual.as_ref()))
-                .saturating_add(cursor_step_bytes(movement.previous_logical.as_ref()))
-                .saturating_add(cursor_step_bytes(movement.next_logical.as_ref()));
-        }
-        for semantic in self.semantics.iter() {
-            bytes = bytes.saturating_add(
-                semantic
-                    .source
-                    .as_ref()
-                    .map_or(0, |source| vec_bytes::<LocalRange>(source.capacity())),
-            );
+            bytes =
+                bytes.saturating_add(vec_bytes::<CachedHitSlice>(cluster.hit_slices.capacity()));
         }
         bytes
     }
-}
-
-fn cursor_step_bytes(step: Option<&CachedCursorStep>) -> usize {
-    step.and_then(|step| step.source.as_ref())
-        .map_or(0, |source| vec_bytes::<LocalRange>(source.capacity()))
 }
 
 const fn vec_bytes<T>(capacity: usize) -> usize {
@@ -283,91 +269,8 @@ pub(super) fn rebind_composition_geometry(
     id: CompositionId,
     epoch: crate::CompositionEpoch,
 ) {
-    if let Some(lines) = geometry.line_sources.make_mut() {
-        for sources in lines {
-            rebind_ranges(sources, id, epoch);
-        }
-    }
-    for fragment in &mut geometry.fragments {
-        rebind_ranges(&mut fragment.sources, id, epoch);
-        for glyph in &mut fragment.glyphs {
-            rebind_ranges(&mut glyph.sources, id, epoch);
-        }
-    }
-    if let Some(clusters) = geometry.clusters.make_mut() {
-        for cluster in clusters {
-            rebind_ranges(&mut cluster.sources, id, epoch);
-            rebind_position(&mut cluster.left, id, epoch);
-            rebind_position(&mut cluster.right, id, epoch);
-        }
-    }
-    if let Some(carets) = geometry.carets.make_mut() {
-        for caret in carets {
-            rebind_position(&mut caret.position, id, epoch);
-        }
-    }
-    if let Some(movements) = geometry.movements.make_mut() {
-        for movement in movements {
-            rebind_position(&mut movement.position, id, epoch);
-            for step in [
-                &mut movement.previous_visual,
-                &mut movement.next_visual,
-                &mut movement.previous_logical,
-                &mut movement.next_logical,
-            ]
-            .into_iter()
-            .flatten()
-            {
-                rebind_position(&mut step.target, id, epoch);
-                if let Some(source) = &mut step.source {
-                    rebind_ranges(source, id, epoch);
-                }
-            }
-        }
-    }
-    if let Some(texts) = geometry.texts.make_mut() {
-        rebind_ranges(texts, id, epoch);
-    }
-    if let Some(semantics) = geometry.semantics.make_mut() {
-        for semantic in semantics {
-            if let Some(source) = &mut semantic.source {
-                rebind_ranges(source, id, epoch);
-            }
-        }
-    }
-}
-
-pub(super) fn rebind_ranges(
-    ranges: &mut [LocalRange],
-    id: CompositionId,
-    epoch: crate::CompositionEpoch,
-) {
-    for range in ranges {
-        if let LocalRange::Composition {
-            id: range_id,
-            epoch: range_epoch,
-            ..
-        } = range
-        {
-            *range_id = id;
-            *range_epoch = epoch;
-        }
-    }
-}
-
-pub(super) fn rebind_position(
-    position: &mut LocalPosition,
-    id: CompositionId,
-    epoch: crate::CompositionEpoch,
-) {
-    if let LocalPosition::Composition {
-        id: position_id,
-        epoch: position_epoch,
-        ..
-    } = position
-    {
-        *position_id = id;
-        *position_epoch = epoch;
+    if let Some(source_map) = &mut geometry.source_map {
+        Arc::make_mut(source_map).rebind_composition(id, epoch);
     }
 }
 
@@ -378,6 +281,12 @@ pub(super) fn build_geometry(
     constraint: TextConstraint,
     region_transcript: Option<&RegionTranscript>,
 ) -> Result<CachedGeometry, SceneError> {
+    let source_map = features
+        .has_sources()
+        .then(|| ParagraphSourceMap::from_projection(projection))
+        .transpose()?
+        .map(Arc::new);
+    let map = source_map.as_deref();
     let empty_line_height = projection.empty_line_height();
     let empty_slot = region_transcript.and_then(|transcript| {
         transcript.attempts().iter().rev().find_map(|attempt| {
@@ -457,16 +366,19 @@ pub(super) fn build_geometry(
             } else {
                 0.0
             };
-            let sources = if needs_clusters {
-                projection.local_ranges(paragraph_source.clone())?
+            let source = if needs_clusters {
+                Some(
+                    map.expect("interaction capabilities retain a source map")
+                        .span(paragraph_source.clone(), prepared.paragraph())?,
+                )
             } else {
-                Vec::new()
+                None
             };
             let left = needs_clusters
-                .then(|| projection.position_at(unit.left().offset(), unit.left().affinity()))
+                .then(|| projection.source_position(unit.left().offset(), unit.left().affinity()))
                 .transpose()?;
             let right = needs_clusters
-                .then(|| projection.position_at(unit.right().offset(), unit.right().affinity()))
+                .then(|| projection.source_position(unit.right().offset(), unit.right().affinity()))
                 .transpose()?;
             let mut slice_x = unit_x;
             let mut hit_slices = Vec::with_capacity(if needs_clusters {
@@ -478,7 +390,8 @@ pub(super) fn build_geometry(
                 let next_x = slice_x + slice.advance();
                 let source = slice.source();
                 if needs_clusters {
-                    projection.local_ranges(source.clone())?;
+                    map.expect("interaction capabilities retain a source map")
+                        .span(source.clone(), prepared.paragraph())?;
                     hit_slices.push(CachedHitSlice {
                         semantic_id: projection.semantic_for_range(source)?,
                         x0: slice_x,
@@ -510,7 +423,7 @@ pub(super) fn build_geometry(
             );
             if needs_clusters {
                 clusters.push(CachedCluster {
-                    sources,
+                    source: source.expect("cluster construction retains its source span"),
                     semantic_id,
                     boundary: unit.boundary(),
                     whitespace: unit.whitespace(),
@@ -543,11 +456,13 @@ pub(super) fn build_geometry(
             } else {
                 TextAffinity::Upstream
             };
-            let position = projection.position_at(source.start, affinity)?;
-            let local_source = projection.local_ranges(source.clone())?;
+            let position = projection.source_position(source.start, affinity)?;
+            let local_source = map
+                .expect("interaction capabilities retain a source map")
+                .span(source.clone(), prepared.paragraph())?;
             clusters.push(CachedCluster {
                 semantic_id: projection.semantic_for_range(source)?,
-                sources: local_source,
+                source: local_source,
                 boundary: ClusterBoundary::None,
                 whitespace: ClusterWhitespace::None,
                 hit_slices: Vec::new(),
@@ -583,23 +498,28 @@ pub(super) fn build_geometry(
             adjustment,
         });
         if features.has_sources() {
-            line_sources.push(projection.local_ranges(line.source())?);
+            line_sources.push(
+                map.expect("source capability retains a source map")
+                    .span(line.source(), prepared.paragraph())?,
+            );
         }
         line_top = line_top.max(current_line_top + line.height());
     }
-    let (fragments, line_fragments) =
-        build_paint_fragments(prepared, projection, features, &lines)?;
+    let glyphs = build_layout_glyphs(prepared, &lines)?;
+    let paint = build_paint_fragments(prepared, features, &glyphs)?;
 
     if needs_clusters
         && prepared.lines().is_empty()
         && projection.mapping.text().is_empty()
         && !projection.spans.is_empty()
     {
-        let position = projection.position_at(0, TextAffinity::Downstream)?;
-        let sources = projection.local_ranges(0..0)?;
+        let position = projection.source_position(0, TextAffinity::Downstream)?;
+        let source = map
+            .expect("interaction capabilities retain a source map")
+            .span(0..0, prepared.paragraph())?;
         clusters.push(CachedCluster {
             semantic_id: projection.semantic_for_range(0..0)?,
-            sources,
+            source,
             boundary: ClusterBoundary::None,
             whitespace: ClusterWhitespace::None,
             hit_slices: Vec::new(),
@@ -641,26 +561,29 @@ pub(super) fn build_geometry(
         }
         let mut bounds: Option<Rect> = None;
         for cluster in &clusters {
-            if cluster.sources.iter().any(|source| {
-                matches!(source, LocalRange::Snapshot { text, .. } if *text == span.text)
-                    || matches!(span.source, LeafSpanSource::Composition { .. })
-                        && matches!(source, LocalRange::Composition { .. })
-            }) {
+            if map
+                .expect("semantic capability retains a source map")
+                .ranges_for_span(cluster.source)
+                .any(|source| {
+                    matches!(source, LocalRange::Snapshot { text, .. } if text == span.text)
+                        || matches!(span.source, LeafSpanSource::Composition { .. })
+                            && matches!(source, LocalRange::Composition { .. })
+                })
+            {
                 bounds = Some(match bounds {
                     Some(current) => current.union(cluster.bounds),
                     None => cluster.bounds,
                 });
             }
         }
-        let source = alloc::vec![LocalRange::Snapshot {
-            text: span.text,
-            bytes: 0..span.leaf_len,
-        }];
+        let source = Some(SourceReference::Leaf(u32::try_from(span_index).map_err(
+            |_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph()),
+        )?));
         semantics.push(CachedSemantic {
             semantic_id: span.semantic,
             paragraph_role: None,
             inline_role: Some(span.role),
-            source: Some(source),
+            source,
             bounds: bounds.unwrap_or(empty_bounds),
         });
     }
@@ -673,14 +596,30 @@ pub(super) fn build_geometry(
             .iter()
             .map(|movement| {
                 Ok(CachedCursorMovement {
-                    position: projection.position_at(
+                    position: projection.source_position(
                         movement.position().offset(),
                         movement.position().affinity(),
                     )?,
-                    previous_visual: cached_cursor_step(movement.previous_visual(), projection)?,
-                    next_visual: cached_cursor_step(movement.next_visual(), projection)?,
-                    previous_logical: cached_cursor_step(movement.previous_logical(), projection)?,
-                    next_logical: cached_cursor_step(movement.next_logical(), projection)?,
+                    previous_visual: cached_cursor_step(
+                        movement.previous_visual(),
+                        projection,
+                        map.expect("navigation capability retains a source map"),
+                    )?,
+                    next_visual: cached_cursor_step(
+                        movement.next_visual(),
+                        projection,
+                        map.expect("navigation capability retains a source map"),
+                    )?,
+                    previous_logical: cached_cursor_step(
+                        movement.previous_logical(),
+                        projection,
+                        map.expect("navigation capability retains a source map"),
+                    )?,
+                    next_logical: cached_cursor_step(
+                        movement.next_logical(),
+                        projection,
+                        map.expect("navigation capability retains a source map"),
+                    )?,
                 })
             })
             .collect::<Result<Vec<_>, SceneError>>()?
@@ -713,7 +652,7 @@ pub(super) fn build_geometry(
             }
         };
         carets.push(CachedCaret {
-            position: projection.position_at(
+            position: projection.source_position(
                 prepared_movement.position().offset(),
                 prepared_movement.position().affinity(),
             )?,
@@ -725,16 +664,6 @@ pub(super) fn build_geometry(
             ),
         });
     }
-    let texts = if features.has_sources() {
-        projection
-            .spans
-            .iter()
-            .map(|span| span.local_range(span.paragraph.start, span.paragraph.end))
-            .collect()
-    } else {
-        Vec::new()
-    };
-
     Ok(CachedGeometry {
         features,
         facts: Arc::new(CachedGeometryFacts {
@@ -744,56 +673,61 @@ pub(super) fn build_geometry(
                 line_top
             },
             lines,
+            glyphs,
         }),
-        line_fragments,
-        fragments,
+        line_fragments: paint.line_fragments,
+        fragments: paint.fragments,
+        paint_glyphs: paint.glyphs,
+        source_map,
         line_sources: CachedSidecar::new(features.has_sources(), line_sources),
+        paint_sources: CachedSidecar::new(features.has_sources(), paint.sources),
         clusters: CachedSidecar::new(needs_clusters, clusters),
         carets: CachedSidecar::new(features.has_selection(), carets),
         movements: CachedSidecar::new(features.has_navigation(), movements),
-        texts: CachedSidecar::new(features.has_sources(), texts),
         semantics: CachedSidecar::new(features.has_semantics(), semantics),
     })
 }
 
 pub(super) fn repaint_geometry(
     prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
+    _projection: &Projection<'_>,
     retained: &CachedGeometry,
 ) -> Result<CachedGeometry, SceneError> {
-    let (fragments, line_fragments) =
-        build_paint_fragments(prepared, projection, retained.features, &retained.lines)?;
+    let paint = build_paint_fragments(prepared, retained.features, &retained.glyphs)?;
     Ok(CachedGeometry {
         features: retained.features,
         facts: Arc::clone(&retained.facts),
-        line_fragments,
-        fragments,
+        line_fragments: paint.line_fragments,
+        fragments: paint.fragments,
+        paint_glyphs: paint.glyphs,
+        source_map: retained.source_map.clone(),
         line_sources: retained.line_sources.clone(),
+        paint_sources: CachedSidecar::new(retained.features.has_sources(), paint.sources),
         clusters: retained.clusters.clone(),
         carets: retained.carets.clone(),
         movements: retained.movements.clone(),
-        texts: retained.texts.clone(),
         semantics: retained.semantics.clone(),
     })
 }
 
-fn build_paint_fragments(
+fn build_layout_glyphs(
     prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
-    features: SceneFeatures,
     lines: &[CachedLine],
-) -> Result<(Vec<CachedFragment>, Vec<Range<usize>>), SceneError> {
+) -> Result<Vec<CachedGlyph>, SceneError> {
     if prepared.lines().len() != lines.len() {
         return Err(SceneError::for_paragraph(
             SceneErrorKind::SourceCoverage,
             prepared.paragraph(),
         ));
     }
-    let mut fragments: Vec<CachedFragment> = Vec::new();
-    let mut line_fragments = Vec::with_capacity(lines.len());
-    let mut glyph_index = 0_usize;
+    let glyph_count = prepared
+        .lines()
+        .iter()
+        .flat_map(|line| line.runs())
+        .map(|run| run.glyphs().len())
+        .sum();
+    let mut glyphs = Vec::with_capacity(glyph_count);
     for (line, cached_line) in prepared.lines().iter().zip(lines) {
-        let fragment_start = fragments.len();
         let expansion = cached_line.adjustment.opportunity_expansion();
         let opportunity_sources: Vec<_> = if expansion > 0.0 {
             line.western_justification_opportunity_sources().collect()
@@ -828,43 +762,69 @@ fn build_paint_fragments(
         let mut x = cached_line.bounds.x0;
         line_glyph_index = 0;
         for run in line.runs() {
-            let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
-            let run_fragment_start = fragments.len();
             for glyph in run.glyphs() {
                 let glyph_expansion = if opportunity_glyphs.contains(&Some(line_glyph_index)) {
                     expansion
                 } else {
                     0.0
                 };
-                let glyph_advance =
-                    Vec2::new(glyph.advance().x + glyph_expansion, glyph.advance().y);
-                let instance = glyph_index;
-                glyph_index += 1;
-                let position = Point::new(
-                    x + glyph.offset().x,
-                    cached_line.baseline - glyph.offset().y,
-                );
+                let advance = Vec2::new(glyph.advance().x + glyph_expansion, glyph.advance().y);
+                glyphs.push(CachedGlyph {
+                    id: glyph.id(),
+                    position: Point::new(
+                        x + glyph.offset().x,
+                        cached_line.baseline - glyph.offset().y,
+                    ),
+                    advance,
+                });
+                x += advance.x;
+                line_glyph_index += 1;
+            }
+        }
+    }
+    Ok(glyphs)
+}
+
+fn build_paint_fragments(
+    prepared: &PreparedParagraph,
+    features: SceneFeatures,
+    layout_glyphs: &[CachedGlyph],
+) -> Result<PaintTopology, SceneError> {
+    let mut fragments: Vec<CachedFragment> = Vec::new();
+    let mut paint_glyphs = Vec::new();
+    let mut paint_sources = Vec::new();
+    let mut line_fragments = Vec::with_capacity(prepared.lines().len());
+    let mut instance = 0_usize;
+    for line in prepared.lines() {
+        let fragment_start = fragments.len();
+        for run in line.runs() {
+            let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
+            let run_fragment_start = fragments.len();
+            for glyph in run.glyphs() {
+                let layout = layout_glyphs.get(instance).ok_or_else(|| {
+                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
+                })?;
+                if layout.id != glyph.id() {
+                    return Err(SceneError::for_paragraph(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                    ));
+                }
                 for segment in glyph.paint().segments() {
-                    let sources = if features.has_sources() {
-                        projection.local_ranges(segment.source())?
-                    } else {
-                        Vec::new()
-                    };
                     let paint_clip = segment.clip().map(|clip| {
                         Rect::new(
-                            position.x + clip.x0,
-                            position.y + clip.y0,
-                            position.x + clip.x1,
-                            position.y + clip.y1,
+                            layout.position.x + clip.x0,
+                            layout.position.y + clip.y0,
+                            layout.position.x + clip.x1,
+                            layout.position.y + clip.y1,
                         )
                     });
-                    let cached_glyph = CachedGlyph {
-                        instance,
-                        id: glyph.id(),
-                        position,
-                        advance: glyph_advance,
-                        sources: sources.clone(),
-                    };
+                    let paint_glyph = CachedPaintGlyph { instance };
+                    let paint_glyph_index = paint_glyphs.len();
+                    paint_glyphs.push(paint_glyph);
+                    if features.has_sources() {
+                        paint_sources.push(segment.source().into());
+                    }
                     let preceding = fragments
                         .get_mut(run_fragment_start..)
                         .and_then(|run_fragments| run_fragments.last_mut());
@@ -873,8 +833,7 @@ fn build_paint_fragments(
                         && preceding.paint_clip.is_none()
                         && preceding.paint == segment.slot()
                     {
-                        preceding.glyphs.push(cached_glyph);
-                        preceding.sources.extend(sources);
+                        preceding.glyphs.end = paint_glyphs.len();
                     } else {
                         let id = SceneFragmentId(fragment_identity(
                             prepared.paragraph(),
@@ -882,10 +841,9 @@ fn build_paint_fragments(
                         ));
                         fragments.push(CachedFragment {
                             id,
-                            glyphs: alloc::vec![cached_glyph],
+                            glyphs: paint_glyph_index..paint_glyphs.len(),
                             paint: segment.slot(),
                             transform: Affine::IDENTITY,
-                            sources,
                             paint_clip,
                             font: run.font().clone(),
                             font_size: run.font_size(),
@@ -896,26 +854,39 @@ fn build_paint_fragments(
                         });
                     }
                 }
-                x += glyph_advance.x;
-                line_glyph_index += 1;
+                instance += 1;
             }
         }
         line_fragments.push(fragment_start..fragments.len());
     }
-    Ok((fragments, line_fragments))
+    if instance != layout_glyphs.len()
+        || features.has_sources() && paint_sources.len() != paint_glyphs.len()
+    {
+        return Err(SceneError::for_paragraph(
+            SceneErrorKind::SourceCoverage,
+            prepared.paragraph(),
+        ));
+    }
+    Ok(PaintTopology {
+        fragments,
+        glyphs: paint_glyphs,
+        sources: paint_sources,
+        line_fragments,
+    })
 }
 
 pub(super) fn cached_cursor_step(
     step: Option<&crate::adapter::PreparedCursorStep>,
     projection: &Projection<'_>,
+    source_map: &ParagraphSourceMap,
 ) -> Result<Option<CachedCursorStep>, SceneError> {
     step.map(|step| {
         let target = step.target();
         Ok(CachedCursorStep {
-            target: projection.position_at(target.offset(), target.affinity())?,
+            target: projection.source_position(target.offset(), target.affinity())?,
             source: step
                 .source()
-                .map(|source| projection.local_ranges(source))
+                .map(|source| source_map.span(source, projection.paragraph))
                 .transpose()?,
         })
     })
@@ -936,37 +907,26 @@ pub(super) fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 
     identity
 }
 
-pub(super) fn projected_range(
-    ranges: &[LocalRange],
-    revision: DocumentRevision,
-) -> ProjectedTextRange {
-    ProjectedTextRange::new(
-        ranges
-            .iter()
-            .map(|range| materialize_projected_source(range, revision))
-            .collect(),
-    )
-}
-
 pub(super) fn materialize_projected_source(
-    range: &LocalRange,
+    range: LocalRange,
     revision: DocumentRevision,
 ) -> ProjectedTextSource {
     match range {
         LocalRange::Snapshot { text, bytes } => {
-            ProjectedTextSource::Snapshot(SnapshotTextRange::new(revision, *text, bytes.clone()))
+            ProjectedTextSource::Snapshot(SnapshotTextRange::new(revision, text, bytes))
         }
-        LocalRange::Composition { id, epoch, bytes } => ProjectedTextSource::Composition(
-            crate::CompositionTextRange::new(*id, *epoch, bytes.clone()),
-        ),
+        LocalRange::Composition { id, epoch, bytes } => {
+            ProjectedTextSource::Composition(crate::CompositionTextRange::new(id, epoch, bytes))
+        }
     }
 }
 
 pub(super) fn projected_position(
-    position: LocalPosition,
+    source_map: &ParagraphSourceMap,
+    position: SourcePosition,
     revision: DocumentRevision,
 ) -> ProjectedTextPosition {
-    match position {
+    match source_map.materialize_position(position) {
         LocalPosition::Snapshot {
             text,
             byte,
@@ -986,59 +946,66 @@ pub(super) fn projected_position(
 }
 
 pub(super) fn materialize_optional_snapshot_range(
-    ranges: &[LocalRange],
+    source_map: &ParagraphSourceMap,
+    reference: SourceReference,
     revision: DocumentRevision,
 ) -> Option<SnapshotTextRange> {
-    let [LocalRange::Snapshot { text, bytes }] = ranges else {
+    let mut ranges = source_map.ranges(reference);
+    let LocalRange::Snapshot { text, bytes } = ranges.next()? else {
         return None;
     };
-    Some(SnapshotTextRange::new(revision, *text, bytes.clone()))
+    if ranges.next().is_some() {
+        return None;
+    }
+    Some(SnapshotTextRange::new(revision, text, bytes))
 }
 
 pub(super) fn materialize_cursor_step(
+    source_map: &ParagraphSourceMap,
     step: Option<&CachedCursorStep>,
     revision: DocumentRevision,
 ) -> Option<SceneCursorStep> {
     step.map(|step| SceneCursorStep {
-        target: materialize_position(step.target, revision),
+        target: materialize_position(source_map, step.target, revision),
         source: step
             .source
-            .as_ref()
-            .map(|source| materialize_snapshot_unit(source, revision)),
+            .map(|source| materialize_snapshot_unit(source_map, source, revision)),
     })
 }
 
 pub(super) fn materialize_range(
-    range: &LocalRange,
+    range: LocalRange,
     revision: DocumentRevision,
 ) -> SnapshotTextRange {
     let LocalRange::Snapshot { text, bytes } = range else {
         unreachable!("committed geometry cannot contain composition source")
     };
-    SnapshotTextRange::new(revision, *text, bytes.clone())
+    SnapshotTextRange::new(revision, text, bytes)
 }
 
 pub(super) fn materialize_snapshot_unit(
-    ranges: &[LocalRange],
+    source_map: &ParagraphSourceMap,
+    span: SourceSpan,
     revision: DocumentRevision,
 ) -> SnapshotTextUnit {
     SnapshotTextUnit::new(
-        ranges
-            .iter()
+        source_map
+            .ranges_for_span(span)
             .map(|range| materialize_range(range, revision))
             .collect(),
     )
 }
 
 pub(super) fn materialize_position(
-    position: LocalPosition,
+    source_map: &ParagraphSourceMap,
+    position: SourcePosition,
     revision: DocumentRevision,
 ) -> SnapshotTextPosition {
     let LocalPosition::Snapshot {
         text,
         byte,
         affinity,
-    } = position
+    } = source_map.materialize_position(position)
     else {
         unreachable!("committed geometry cannot contain a composition position")
     };

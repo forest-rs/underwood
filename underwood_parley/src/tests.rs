@@ -23,7 +23,7 @@ use underwood::{
     InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, OverflowWrap, PaintSlot, PaintTable,
     ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, Rect,
     RegionAttemptOutcome, RegionFlow, ResolvedDirection, SceneFeatures, SceneRequest,
-    SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
+    SelectionErrorKind, ShapingStyle, SnapshotTextUnitView, StyleMap, SurfaceErrorKind,
     SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
     TextSelectionMode, TextSpacing, TextWrapMode, Vec2, WhitespaceCollapse, WordBreak,
 };
@@ -298,10 +298,15 @@ fn scan_line_hits(scene: &TextScene, line_index: usize) -> Vec<ScannedHit> {
     hits
 }
 
-fn sole_unit_source(unit: &SnapshotTextUnit) -> &underwood::SnapshotTextRange {
-    let [source] = unit.sources() else {
-        panic!("fixture interaction unit must remain within one semantic leaf");
-    };
+fn sole_unit_source(unit: &SnapshotTextUnitView<'_>) -> underwood::SnapshotTextRange {
+    let mut sources = unit.sources();
+    let source = sources
+        .next()
+        .expect("fixture interaction unit must retain one semantic leaf");
+    assert!(
+        sources.next().is_none(),
+        "fixture interaction unit must remain within one semantic leaf"
+    );
     source
 }
 

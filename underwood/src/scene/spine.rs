@@ -135,7 +135,10 @@ impl SceneSummary {
             clusters: geometry.clusters.len(),
             carets: geometry.carets.len(),
             movements: geometry.movements.len(),
-            texts: geometry.texts.len(),
+            texts: geometry
+                .source_map
+                .as_deref()
+                .map_or(0, ParagraphSourceMap::leaf_count),
             semantics: geometry.semantics.len(),
             min_x,
             max_x,
@@ -833,14 +836,17 @@ mod tests {
                 facts: Arc::new(CachedGeometryFacts {
                     height,
                     lines: Vec::new(),
+                    glyphs: Vec::new(),
                 }),
                 line_fragments: Vec::new(),
                 fragments: Vec::new(),
+                paint_glyphs: Vec::new(),
+                source_map: None,
                 line_sources: CachedSidecar::new(false, Vec::new()),
+                paint_sources: CachedSidecar::new(false, Vec::new()),
                 clusters: CachedSidecar::new(false, Vec::new()),
                 carets: CachedSidecar::new(false, Vec::new()),
                 movements: CachedSidecar::new(false, Vec::new()),
-                texts: CachedSidecar::new(false, Vec::new()),
                 semantics: CachedSidecar::new(false, Vec::new()),
             }),
             None,

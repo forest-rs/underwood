@@ -2506,17 +2506,9 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
     let start = SnapshotTextPosition::new(snapshot.revision(), text, 0, TextAffinity::Downstream);
     let end = SnapshotTextPosition::new(snapshot.revision(), text, 2, TextAffinity::Upstream);
     let source = SnapshotTextRange::new(snapshot.revision(), text, 0..2);
-    let local_start = super::LocalPosition::Snapshot {
-        text,
-        byte: 0,
-        affinity: TextAffinity::Downstream,
-    };
-    let local_end = super::LocalPosition::Snapshot {
-        text,
-        byte: 2,
-        affinity: TextAffinity::Upstream,
-    };
-    let local_source = super::LocalRange::Snapshot { text, bytes: 0..2 };
+    let local_start = super::SourcePosition::new(0, TextAffinity::Downstream);
+    let local_end = super::SourcePosition::new(2, TextAffinity::Upstream);
+    let local_source = super::SourceSpan::new(0, 2);
     let segment = Arc::new(super::ParagraphSceneSegment::new(
         paragraph,
         Arc::new(super::CachedGeometry {
@@ -2524,10 +2516,14 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
             facts: Arc::new(super::CachedGeometryFacts {
                 height: 0.0,
                 lines: Vec::new(),
+                glyphs: Vec::new(),
             }),
             line_fragments: Vec::new(),
             fragments: Vec::new(),
+            paint_glyphs: Vec::new(),
+            source_map: Some(Arc::new(super::ParagraphSourceMap::snapshot_leaf(text, 2))),
             line_sources: super::CachedSidecar::from_records(Vec::new()),
+            paint_sources: super::CachedSidecar::from_records(Vec::new()),
             clusters: super::CachedSidecar::from_records(Vec::new()),
             carets: super::CachedSidecar::from_records(Vec::new()),
             movements: super::CachedSidecar::from_records(vec![
@@ -2542,14 +2538,13 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
                     position: local_end,
                     previous_visual: Some(super::CachedCursorStep {
                         target: local_start,
-                        source: Some(vec![local_source.clone()]),
+                        source: Some(local_source),
                     }),
                     next_visual: None,
                     previous_logical: None,
                     next_logical: None,
                 },
             ]),
-            texts: super::CachedSidecar::from_records(vec![local_source]),
             semantics: super::CachedSidecar::from_records(Vec::new()),
         }),
         None,
@@ -2682,7 +2677,7 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
     assert!(geometry.clusters.is_empty());
     assert!(geometry.carets.is_empty());
     assert!(geometry.movements.is_empty());
-    assert!(geometry.texts.is_empty());
+    assert!(geometry.source_map.is_none());
     assert!(geometry.semantics.is_empty());
 }
 

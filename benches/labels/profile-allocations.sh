@@ -68,7 +68,10 @@ primed-paint-slot p5
 primed-unique p2
 primed-region p3
 primed-adjustment p4
+primed-hit-query p6
 cold-identical c0
+cold-selectable i0
+cold-editable i1
 retained-identical r0
 retained-adjustment r1
 paint-change a0
@@ -76,7 +79,7 @@ paint-slot-churn a3
 alignment-churn a1
 justification-churn a2
 localized-edit e0
-interaction-materialization i0
+hit-query i2
 width-churn w0
 region-ready g0
 region-churn g1
@@ -102,6 +105,12 @@ awk '
         print "cold-identical", \
             calls["cold-identical"] - calls["setup-identical"], \
             bytes["cold-identical"] - bytes["setup-identical"]
+        print "cold-selectable", \
+            calls["cold-selectable"] - calls["setup-identical"], \
+            bytes["cold-selectable"] - bytes["setup-identical"]
+        print "cold-editable", \
+            calls["cold-editable"] - calls["setup-identical"], \
+            bytes["cold-editable"] - bytes["setup-identical"]
         print "cross-identical", \
             calls["cross-identical"] - calls["setup-cross-identical"], \
             bytes["cross-identical"] - bytes["setup-cross-identical"]
@@ -132,9 +141,9 @@ awk '
         print "localized-edit", \
             calls["localized-edit"] - calls["primed-identical"], \
             bytes["localized-edit"] - bytes["primed-identical"]
-        print "interaction-materialization", \
-            calls["interaction-materialization"] - calls["setup-identical"], \
-            bytes["interaction-materialization"] - bytes["setup-identical"]
+        print "hit-query", \
+            calls["hit-query"] - calls["primed-hit-query"], \
+            bytes["hit-query"] - bytes["primed-hit-query"]
         print "width-churn", \
             calls["width-churn"] - calls["primed-unique"], \
             bytes["width-churn"] - bytes["primed-unique"]
