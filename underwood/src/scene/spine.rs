@@ -8,6 +8,7 @@
 //! record ordinals without rewriting retained records.
 
 use super::*;
+use crate::RegionAttempt;
 use core::mem::size_of;
 
 // Paragraph indices are `u32`; a balanced tree over every representable
@@ -35,7 +36,7 @@ impl ParagraphSceneSegment {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct SceneSummary {
     pub(super) paragraphs: usize,
     pub(super) block_extent: f64,
@@ -52,11 +53,70 @@ pub(super) struct SceneSummary {
     pub(super) max_y: f64,
     pub(super) first_baseline: Option<f64>,
     pub(super) last_baseline: Option<f64>,
+    pub(super) region_start: Option<RegionCursor>,
+    pub(super) region_end: Option<RegionCursor>,
+    pub(super) region_attempts: usize,
+    pub(super) region_height_rejections: usize,
+    pub(super) region_chain_valid: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct SceneRegionBinding {
+    pub(super) start: RegionCursor,
+    pub(super) end: RegionCursor,
+    pub(super) attempts: usize,
+    pub(super) height_rejections: usize,
+}
+
+impl Default for SceneSummary {
+    fn default() -> Self {
+        Self {
+            paragraphs: 0,
+            block_extent: 0.0,
+            lines: 0,
+            fragments: 0,
+            clusters: 0,
+            carets: 0,
+            movements: 0,
+            texts: 0,
+            semantics: 0,
+            min_x: 0.0,
+            max_x: 0.0,
+            min_y: 0.0,
+            max_y: 0.0,
+            first_baseline: None,
+            last_baseline: None,
+            region_start: None,
+            region_end: None,
+            region_attempts: 0,
+            region_height_rejections: 0,
+            region_chain_valid: true,
+        }
+    }
 }
 
 impl SceneSummary {
     fn from_segment(segment: &ParagraphSceneSegment) -> Self {
         let geometry = &segment.geometry;
+        let region_start = segment
+            .region_transcript
+            .as_ref()
+            .map(RegionTranscript::start);
+        let region_end = segment
+            .region_transcript
+            .as_ref()
+            .map(RegionTranscript::end);
+        let region_attempts = segment
+            .region_transcript
+            .as_ref()
+            .map_or(0, |transcript| transcript.attempts().len());
+        let region_height_rejections = segment.region_transcript.as_ref().map_or(0, |transcript| {
+            transcript
+                .attempts()
+                .iter()
+                .filter(|attempt| attempt.outcome() == RegionAttemptOutcome::HeightRejected)
+                .count()
+        });
         let mut min_x = 0.0_f64;
         let mut max_x = 0.0_f64;
         let mut min_y = 0.0_f64;
@@ -83,11 +143,28 @@ impl SceneSummary {
             max_y,
             first_baseline: geometry.lines.first().map(|line| line.baseline),
             last_baseline: geometry.lines.last().map(|line| line.baseline),
+            region_start,
+            region_end,
+            region_attempts,
+            region_height_rejections,
+            region_chain_valid: true,
         }
     }
 
     fn combine(left: Self, right: Self, normal_flow: bool) -> Self {
         let right_origin = if normal_flow { left.block_extent } else { 0.0 };
+        let region_chain_valid = left.region_chain_valid
+            && right.region_chain_valid
+            && match (
+                left.region_start,
+                left.region_end,
+                right.region_start,
+                right.region_end,
+            ) {
+                (None, None, None, None) => true,
+                (Some(_), Some(left_end), Some(right_start), Some(_)) => left_end == right_start,
+                _ => false,
+            };
         Self {
             paragraphs: left.paragraphs.saturating_add(right.paragraphs),
             block_extent: if normal_flow {
@@ -113,6 +190,13 @@ impl SceneSummary {
                 .last_baseline
                 .map(|value| value + right_origin)
                 .or(left.last_baseline),
+            region_start: left.region_start.or(right.region_start),
+            region_end: right.region_end.or(left.region_end),
+            region_attempts: left.region_attempts.saturating_add(right.region_attempts),
+            region_height_rejections: left
+                .region_height_rejections
+                .saturating_add(right.region_height_rejections),
+            region_chain_valid,
         }
     }
 }
@@ -125,6 +209,7 @@ enum SceneNode {
     },
     Branch {
         summary: SceneSummary,
+        height: u8,
         left: Arc<Self>,
         right: Arc<Self>,
     },
@@ -140,8 +225,16 @@ impl SceneNode {
     fn branch(left: Arc<Self>, right: Arc<Self>, normal_flow: bool) -> Self {
         Self::Branch {
             summary: SceneSummary::combine(left.summary(), right.summary(), normal_flow),
+            height: left.height().max(right.height()).saturating_add(1),
             left,
             right,
+        }
+    }
+
+    fn height(&self) -> u8 {
+        match self {
+            Self::Leaf { .. } => 1,
+            Self::Branch { height, .. } => *height,
         }
     }
 }
@@ -177,6 +270,10 @@ impl SceneSpine {
             .unwrap_or_default()
     }
 
+    pub(super) const fn is_normal_flow(&self) -> bool {
+        self.normal_flow
+    }
+
     pub(super) fn segment(&self, index: usize) -> Option<&Arc<ParagraphSceneSegment>> {
         let mut node = self.root.as_deref()?;
         let mut index = index;
@@ -189,6 +286,45 @@ impl SceneSpine {
                         node = left;
                     } else {
                         index -= left_count;
+                        node = right;
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn positioned_segment(&self, index: usize) -> Option<PositionedSegment<'_>> {
+        self.positioned_record(index, |summary| summary.paragraphs)
+            .map(|(position, _)| position)
+    }
+
+    pub(super) fn positioned_segment_at_block(&self, block: f64) -> Option<PositionedSegment<'_>> {
+        if !self.normal_flow {
+            return None;
+        }
+        let root = self.root.as_deref()?;
+        let block = if block.is_nan() {
+            return None;
+        } else {
+            block.clamp(0.0, root.summary().block_extent)
+        };
+        let mut node = root;
+        let mut local_block = block;
+        let mut position = SegmentPosition::default();
+        loop {
+            match node {
+                SceneNode::Leaf { segment, .. } => {
+                    return Some(PositionedSegment { segment, position });
+                }
+                SceneNode::Branch { left, right, .. } => {
+                    let left_summary = left.summary();
+                    if local_block < left_summary.block_extent
+                        || right.summary().block_extent == 0.0
+                    {
+                        node = left;
+                    } else {
+                        local_block -= left_summary.block_extent;
+                        position.advance(left_summary, true);
                         node = right;
                     }
                 }
@@ -212,8 +348,47 @@ impl SceneSpine {
         })
     }
 
+    pub(super) fn replace_range(
+        &self,
+        start: usize,
+        segments: &[Arc<ParagraphSceneSegment>],
+    ) -> Option<Self> {
+        if segments.is_empty() {
+            return (start <= self.summary().paragraphs).then(|| self.clone());
+        }
+        let end = start.checked_add(segments.len())?;
+        (end <= self.summary().paragraphs).then_some(())?;
+        Some(Self {
+            root: Some(replace_node_range(
+                self.root.as_ref()?,
+                start,
+                segments,
+                self.normal_flow,
+            )?),
+            normal_flow: self.normal_flow,
+        })
+    }
+
+    pub(super) fn append(&self, segment: Arc<ParagraphSceneSegment>) -> Self {
+        let leaf = Arc::new(SceneNode::Leaf {
+            summary: SceneSummary::from_segment(&segment),
+            segment,
+        });
+        Self {
+            root: Some(match &self.root {
+                Some(root) => append_node(root, leaf, self.normal_flow),
+                None => leaf,
+            }),
+            normal_flow: self.normal_flow,
+        }
+    }
+
     pub(super) fn segments(&self) -> SpineSegments<'_> {
         SpineSegments::new(self.root.as_deref(), self.normal_flow)
+    }
+
+    pub(super) fn region_attempts(&self) -> SpineRegionAttempts<'_> {
+        SpineRegionAttempts::new(self)
     }
 
     pub(super) fn accounted_node_bytes(&self) -> usize {
@@ -242,6 +417,19 @@ impl SceneSpine {
     pub(super) fn positioned_fragment(&self, index: usize) -> Option<PositionedFragment<'_>> {
         self.positioned_record(index, |summary| summary.fragments)
             .map(|(position, local)| PositionedFragment { position, local })
+    }
+
+    pub(super) fn positioned_movement(&self, index: usize) -> Option<PositionedMovement<'_>> {
+        self.positioned_record(index, |summary| summary.movements)
+            .map(|(position, local)| PositionedMovement {
+                position,
+                _local: local,
+            })
+    }
+
+    pub(super) fn positioned_text(&self, index: usize) -> Option<PositionedText<'_>> {
+        self.positioned_record(index, |summary| summary.texts)
+            .map(|(position, local)| PositionedText { position, local })
     }
 
     fn positioned_record(
@@ -362,6 +550,97 @@ fn replace_node(
     }
 }
 
+fn replace_node_range(
+    node: &Arc<SceneNode>,
+    index: usize,
+    segments: &[Arc<ParagraphSceneSegment>],
+    normal_flow: bool,
+) -> Option<Arc<SceneNode>> {
+    match node.as_ref() {
+        SceneNode::Leaf { .. } => (index == 0 && segments.len() == 1).then(|| {
+            let segment = Arc::clone(&segments[0]);
+            Arc::new(SceneNode::Leaf {
+                summary: SceneSummary::from_segment(&segment),
+                segment,
+            })
+        }),
+        SceneNode::Branch { left, right, .. } => {
+            let left_count = left.summary().paragraphs;
+            if index >= left_count {
+                let right = replace_node_range(right, index - left_count, segments, normal_flow)?;
+                return Some(Arc::new(SceneNode::branch(
+                    Arc::clone(left),
+                    right,
+                    normal_flow,
+                )));
+            }
+
+            let left_replacements = segments.len().min(left_count - index);
+            let left =
+                replace_node_range(left, index, &segments[..left_replacements], normal_flow)?;
+            let right = if left_replacements == segments.len() {
+                Arc::clone(right)
+            } else {
+                replace_node_range(right, 0, &segments[left_replacements..], normal_flow)?
+            };
+            Some(Arc::new(SceneNode::branch(left, right, normal_flow)))
+        }
+    }
+}
+
+fn append_node(node: &Arc<SceneNode>, leaf: Arc<SceneNode>, normal_flow: bool) -> Arc<SceneNode> {
+    match node.as_ref() {
+        SceneNode::Leaf { .. } => Arc::new(SceneNode::branch(Arc::clone(node), leaf, normal_flow)),
+        SceneNode::Branch { left, right, .. } => {
+            let right = append_node(right, leaf, normal_flow);
+            balance_right(Arc::clone(left), right, normal_flow)
+        }
+    }
+}
+
+fn balance_right(left: Arc<SceneNode>, right: Arc<SceneNode>, normal_flow: bool) -> Arc<SceneNode> {
+    if right.height() <= left.height().saturating_add(1) {
+        return Arc::new(SceneNode::branch(left, right, normal_flow));
+    }
+    let SceneNode::Branch {
+        left: middle,
+        right: outer,
+        ..
+    } = right.as_ref()
+    else {
+        unreachable!("a leaf cannot exceed its sibling by two levels")
+    };
+    if outer.height() >= middle.height() {
+        Arc::new(SceneNode::branch(
+            Arc::new(SceneNode::branch(left, Arc::clone(middle), normal_flow)),
+            Arc::clone(outer),
+            normal_flow,
+        ))
+    } else {
+        let SceneNode::Branch {
+            left: middle_left,
+            right: middle_right,
+            ..
+        } = middle.as_ref()
+        else {
+            unreachable!("an inner leaf cannot make the right branch left-heavy")
+        };
+        Arc::new(SceneNode::branch(
+            Arc::new(SceneNode::branch(
+                left,
+                Arc::clone(middle_left),
+                normal_flow,
+            )),
+            Arc::new(SceneNode::branch(
+                Arc::clone(middle_right),
+                Arc::clone(outer),
+                normal_flow,
+            )),
+            normal_flow,
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct SegmentPosition {
     pub(super) block_origin: f64,
@@ -405,6 +684,18 @@ pub(super) struct PositionedLine<'a> {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PositionedFragment<'a> {
+    pub(super) position: PositionedSegment<'a>,
+    pub(super) local: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PositionedMovement<'a> {
+    pub(super) position: PositionedSegment<'a>,
+    pub(super) _local: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PositionedText<'a> {
     pub(super) position: PositionedSegment<'a>,
     pub(super) local: usize,
 }
@@ -481,6 +772,51 @@ impl<'a> Iterator for SpineSegments<'a> {
 
 impl ExactSizeIterator for SpineSegments<'_> {}
 
+#[derive(Clone, Debug)]
+pub(super) struct SpineRegionAttempts<'a> {
+    segments: SpineSegments<'a>,
+    current: Option<core::slice::Iter<'a, RegionAttempt>>,
+    remaining: usize,
+}
+
+impl<'a> SpineRegionAttempts<'a> {
+    fn new(spine: &'a SceneSpine) -> Self {
+        Self {
+            segments: spine.segments(),
+            current: None,
+            remaining: spine.summary().region_attempts,
+        }
+    }
+}
+
+impl<'a> Iterator for SpineRegionAttempts<'a> {
+    type Item = &'a RegionAttempt;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(attempt) = self.current.as_mut().and_then(Iterator::next) {
+                self.remaining = self.remaining.saturating_sub(1);
+                return Some(attempt);
+            }
+            let positioned = self.segments.next()?;
+            self.current = Some(
+                positioned
+                    .segment
+                    .region_transcript
+                    .as_ref()
+                    .map_or([].as_slice(), RegionTranscript::attempts)
+                    .iter(),
+            );
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for SpineRegionAttempts<'_> {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +886,64 @@ mod tests {
             changed.unshared_node_bytes_from(Some(&spine)),
             3 * size_of::<SceneNode>(),
             "replacing the middle paragraph retains one new leaf and its two-node root path"
+        );
+    }
+
+    #[test]
+    fn range_replacement_copies_each_covered_path_once() {
+        let segments: Vec<_> = (0..64).map(|paragraph| segment(paragraph, 10.0)).collect();
+        let spine = SceneSpine::from_segments(&segments, false);
+        let replacements: Vec<_> = (20..28).map(|paragraph| segment(paragraph, 20.0)).collect();
+        let changed = spine
+            .replace_range(20, &replacements)
+            .expect("range is represented");
+
+        assert!(Arc::ptr_eq(
+            spine.segment(19).expect("prefix exists"),
+            changed.segment(19).expect("prefix remains")
+        ));
+        assert!(Arc::ptr_eq(
+            spine.segment(28).expect("suffix exists"),
+            changed.segment(28).expect("suffix remains")
+        ));
+        for (offset, replacement) in replacements.iter().enumerate() {
+            assert!(Arc::ptr_eq(
+                changed.segment(20 + offset).expect("replacement exists"),
+                replacement
+            ));
+        }
+        assert!(
+            changed.unshared_node_bytes_from(Some(&spine))
+                < replacements
+                    .len()
+                    .saturating_mul(MAX_SPINE_DEPTH)
+                    .saturating_mul(size_of::<SceneNode>()),
+            "one range update must share paths instead of applying independent replacements"
+        );
+    }
+
+    #[test]
+    fn append_remains_balanced_and_shares_the_complete_prefix() {
+        let initial: Vec<_> = (0..1_024)
+            .map(|paragraph| segment(paragraph, 10.0))
+            .collect();
+        let spine = SceneSpine::from_segments(&initial, true);
+        let appended = segment(1_024, 20.0);
+        let changed = spine.append(Arc::clone(&appended));
+
+        assert!(Arc::ptr_eq(
+            spine.segment(511).expect("old prefix exists"),
+            changed.segment(511).expect("old prefix remains")
+        ));
+        assert!(Arc::ptr_eq(
+            changed.segment(1_024).expect("appended segment exists"),
+            &appended
+        ));
+        assert_eq!(changed.summary().paragraphs, 1_025);
+        assert_eq!(changed.summary().block_extent, 10_260.0);
+        assert!(
+            changed.root.as_deref().expect("root exists").height() <= 12,
+            "sequential append must preserve logarithmic depth"
         );
     }
 }

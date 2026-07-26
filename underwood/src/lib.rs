@@ -59,9 +59,9 @@ pub use scene::{
     ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources,
     ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,
     SceneCompositionRect, SceneFragmentId, SceneFragmentView, SceneFragments, SceneGlyphInstanceId,
-    SceneGlyphView, SceneGlyphs, SceneLineView, SceneLines, SceneOutput, SceneSelectionRect,
-    SceneSemantics, SemanticFragmentView, SnapshotSources, StageWork, TextHit, TextMetrics,
-    TextScene, WorkReport,
+    SceneGlyphView, SceneGlyphs, SceneLineView, SceneLines, SceneOutput, SceneRegionAttempts,
+    SceneRegionTranscript, SceneSelectionRect, SceneSemantics, SemanticFragmentView,
+    SnapshotSources, StageWork, TextHit, TextMetrics, TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

@@ -220,7 +220,7 @@ work, and all local and protected remote gates are green.
 
 ## Retained O(change) preparation and scene lifecycle
 
-**Status:** Active — Design-0017 and public traversal migration approved
+**Status:** Active — Designs 0017 and 0018 approved
 
 **Beads:** `und-oh0.13.17` and its dependency-ordered children
 
@@ -304,12 +304,78 @@ The localized normal-flow preparation scan is also removed:
 subtrees are skipped by identity; region-flow suffix convergence remains an
 explicit separate law.
 
-Before steps 4 and 6 are considered complete, ratify capability-scaled scene
-retention. Display-only labels must not retain maximal editable facts, and
-authored provenance should live in one paragraph-local source map rather than
-being repeated in every record. The proposed request, sidecar, upgrade, and
-typed-table design is recorded in
+Before steps 4 and 6 are considered complete, implement the approved
+capability-scaled scene retention. Display-only labels must not retain maximal
+editable facts, and authored provenance should live in one paragraph-local
+source map rather than being repeated in every record. The approved request,
+sidecar, upgrade, and typed-table design is recorded in
 `docs/design/0018-capability-scaled-scenes.md`.
+
+### Design-0017 completion audit — 2026-07-26
+
+The first measured O(change) proof is real for same-structure normal-flow text
+edits, but it is not the complete approved design. A requirement-by-requirement
+audit found four remaining lifecycle laws that broad test counts did not prove:
+
+- region scenes still flatten every paragraph transcript and localized region
+  edits still visit the whole document instead of stopping at cursor
+  convergence;
+- a local `StyleMap` mutation copy-on-writes one flat override vector and
+  forces whole-document preparation rather than exposing a changed paragraph
+  bucket;
+- point, caret, and exact text lookup still scan every paragraph-local
+  interaction record despite the persistent spine;
+- paragraph append falls back to complete scene preparation rather than
+  extending the persistent document and scene paths.
+
+**Fence:** `SceneSpine` owns persistent paragraph order, prefix summaries,
+region-chain summaries, and logarithmic paragraph/record routing; it explicitly
+does not own projection, shaping, or host interaction policy. `StyleMap` owns
+immutable computed-style provenance and paragraph-local change discovery; it
+explicitly does not own layout cache lifetime. `LayoutEngine` owns combining
+those structural facts into localized preparation and cursor convergence; it
+explicitly does not own adapter internals.
+
+Options considered:
+
+1. Add isolated special cases while retaining a flat document transcript and
+   scan-based interaction. This would improve selected benchmarks while leaving
+   the normative work laws false.
+2. Extend the existing typed persistent document/scene structures with the
+   summaries and traversal seams already required by Design-0017. This keeps
+   paragraph segments as the reclamation unit and makes the proof paths share
+   the product representation.
+3. Introduce a general arena or mutable scene index. This adds lifetime and
+   reclamation policy without solving the immutable-publication laws.
+
+Choose option 2. Execute in independently green slices:
+
+1. make document-level region transcripts cheap scene-spine views over
+   paragraph attempt blocks and remove flatten/replay work from publication;
+2. prepare localized region ranges from the first changed paragraph through
+   cursor convergence, with O(log P + A) paragraph traversal and spine
+   replacement;
+3. route normal-flow point, caret, and exact text lookup through spine and
+   paragraph-local sorted facts rather than complete-scene scans;
+4. give style overrides paragraph-local persistent provenance and feed their
+   structural changes into the same localized preparation mechanism;
+5. extend persistent publication for append, then rerun every work law and
+   matched 64/1,000 proof before closure.
+
+Design-0018 was approved on 2026-07-26. Its feature masks, sidecars, adapter
+split, and public facades now execute after the Design-0017 structural laws are
+real; they remain dependency-free and do not authorize `unsafe`, renderer
+policy, serialization, or a global arena.
+
+The five Design-0017 completion-audit slices are implemented and measured.
+Region transcripts are persistent scene views, region edits stop at cursor
+convergence, normal-flow interaction and exact text lookup descend the spine,
+style overrides use paragraph-local persistent provenance, and append extends
+the document and scene paths. Matched 64/1,000 allocation counts differ by
+only three calls for localized text, region, and style, and four calls for
+append. Exact results, the `SceneRegionTranscript` migration, and remaining
+non-claims are recorded in
+`docs/proof/retained-structural-laws-2026-07-26.md`.
 
 The proposed representation and public migration are recorded in
 `docs/design/0017-retained-scene-lifecycle.md`.

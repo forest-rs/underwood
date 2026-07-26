@@ -34,12 +34,13 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
             .expect("transcript must replay exactly"),
         transcript.end()
     );
+    let mut attempts = transcript.attempts();
     assert_eq!(
-        transcript.attempts()[0].outcome(),
+        attempts.next().expect("rejected attempt exists").outcome(),
         RegionAttemptOutcome::HeightRejected
     );
     assert_eq!(
-        transcript.attempts()[1].outcome(),
+        attempts.next().expect("accepted attempt exists").outcome(),
         RegionAttemptOutcome::Accepted
     );
     assert_eq!(
@@ -68,9 +69,10 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
     let trace = output.trace().expect("trace was requested");
     assert_eq!(trace.region_attempts(), transcript.attempts().len());
     assert_eq!(trace.region_height_rejections(), 1);
-    assert!(
-        trace.memory().scratch_growth_bytes() > 0,
-        "the first region request grows reusable attempt scratch"
+    assert_eq!(
+        trace.memory().scratch_growth_bytes(),
+        0,
+        "region publication retains paragraph attempt blocks instead of flattening scratch"
     );
 
     let retained = engine
@@ -139,12 +141,10 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
             .expect("each same-row interval retains exact hit geometry");
         assert!(source.start <= hit.position().byte() && hit.position().byte() <= source.end);
     }
+    let transcript = output.region_transcript().expect("transcript exists");
     for line in lines {
-        let attempt = output
-            .region_transcript()
-            .expect("transcript exists")
+        let attempt = transcript
             .attempts()
-            .iter()
             .find(|attempt| {
                 attempt.outcome() == RegionAttemptOutcome::Accepted
                     && attempt.source()
@@ -192,11 +192,9 @@ fn floats_decompose_into_distinct_zero_allocation_slot_bands() {
     let output = fixture_engine()
         .prepare(&document.snapshot(), &request)
         .expect("text must flow around floats");
-    let accepted: Vec<_> = output
-        .region_transcript()
-        .expect("transcript exists")
+    let transcript = output.region_transcript().expect("transcript exists");
+    let accepted: Vec<_> = transcript
         .attempts()
-        .iter()
         .filter(|attempt| attempt.outcome() == RegionAttemptOutcome::Accepted)
         .collect();
 
@@ -285,6 +283,75 @@ fn paragraphs_resume_one_cursor_across_region_boundaries() {
 }
 
 #[test]
+fn localized_region_edit_stops_when_the_cursor_converges() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"region-localized"));
+    let mut edit = document.edit();
+    let mut target = None;
+    for index in 0..64 {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("paragraph is valid");
+        let text = edit
+            .append_text(paragraph, InlineRole::TEXT, "stable")
+            .expect("text is valid");
+        if index == 31 {
+            target = Some(text);
+        }
+    }
+    edit.commit().expect("document publishes");
+    let (_, styles, paint) = fixture_document("style", 1.0);
+    let flow = RegionFlow::rectangle(Rect::new(0.0, 0.0, 120.0, 2_000.0)).expect("flow is valid");
+    let request = SceneRequest::new(
+        TextConstraint::Wrap(FiniteWidth::new(120.0).expect("fallback width is valid")),
+        &styles,
+        &paint,
+    )
+    .with_region_flow(&flow)
+    .with_preparation_trace();
+    let mut engine = fixture_engine_with_budgets(128, 8 * 1024 * 1024);
+    let cold = engine
+        .prepare(&document.snapshot(), &request)
+        .expect("initial region scene prepares");
+
+    let mut edit = document.edit();
+    edit.replace_text(target.expect("target exists"), "changed")
+        .expect("target edits");
+    let publication = edit.commit().expect("edit publishes");
+    let changed = engine
+        .prepare(publication.snapshot(), &request)
+        .expect("localized region scene prepares");
+
+    assert_eq!(changed.work().shape().paragraphs(), 1);
+    assert_eq!(changed.work().flow().paragraphs(), 1);
+    assert_eq!(changed.work().paint().paragraphs(), 1);
+    assert_eq!(changed.work().reused_paragraphs(), 63);
+    assert_eq!(
+        changed
+            .region_transcript()
+            .expect("changed transcript exists")
+            .attempts()
+            .len(),
+        cold.region_transcript()
+            .expect("cold transcript exists")
+            .attempts()
+            .len()
+    );
+    assert!(
+        changed
+            .trace()
+            .expect("trace exists")
+            .memory()
+            .scene_output_capacity_bytes()
+            < cold
+                .trace()
+                .expect("trace exists")
+                .memory()
+                .scene_output_capacity_bytes(),
+        "localized publication must retain the unchanged region-scene paths"
+    );
+}
+
+#[test]
 fn changing_only_region_geometry_reuses_analysis_and_canonical_shaping() {
     let text = "alpha beta gamma delta";
     let (document, styles, paint) = fixture_document(text, 1.0);
@@ -332,10 +399,10 @@ fn empty_paragraph_consumes_height_without_fabricating_text() {
     let output = fixture_engine()
         .prepare(&document.snapshot(), &request)
         .expect("empty paragraph must consume an exact slot");
-    let attempts = output
+    let transcript = output
         .region_transcript()
-        .expect("empty paragraph retains a transcript")
-        .attempts();
+        .expect("empty paragraph retains a transcript");
+    let attempts: Vec<_> = transcript.attempts().collect();
 
     assert_eq!(attempts.len(), 2);
     assert_eq!(attempts[0].outcome(), RegionAttemptOutcome::HeightRejected);

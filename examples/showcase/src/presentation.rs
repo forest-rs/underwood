@@ -11,8 +11,8 @@ use underwood::{
     CompositionScene, FontData, InlineRole, PaintSlot, PaintTable, ParagraphRole, Point,
     ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,
     ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, RegionAttemptOutcome,
-    RegionTranscript, SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs,
-    SceneLineView, SceneLines, SceneSemantics, SemanticFragmentView, TextScene, Vec2,
+    SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs, SceneLineView, SceneLines,
+    SceneRegionTranscript, SceneSemantics, SemanticFragmentView, TextScene, Vec2,
     adapter::{FontSynthesis, LineBreakReason},
 };
 
@@ -420,7 +420,7 @@ impl FrameLayout {
 pub(crate) fn record_frame(
     document: &TextScene,
     page: &LivingPagePlan,
-    transcript: &RegionTranscript,
+    transcript: &SceneRegionTranscript,
     layout: FrameLayout,
     diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
@@ -449,7 +449,7 @@ pub(crate) fn record_frame(
 pub(crate) fn record_composition_frame(
     document: &CompositionScene,
     page: &LivingPagePlan,
-    transcript: &RegionTranscript,
+    transcript: &SceneRegionTranscript,
     layout: FrameLayout,
     diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
@@ -480,7 +480,7 @@ fn record_scene(
     paint: &PaintTable,
     semantics: AnySemantics<'_>,
     page_plan: &LivingPagePlan,
-    transcript: &RegionTranscript,
+    transcript: &SceneRegionTranscript,
     layout: FrameLayout,
     diagnostics: DiagnosticsMode,
     overlay: &EditorOverlay,
@@ -645,7 +645,7 @@ fn paint_page_foundation<S: PaintSink + ?Sized>(
 fn paint_flow_diagnostics<S: PaintSink + ?Sized>(
     painter: &mut Painter<'_, S>,
     page: &LivingPagePlan,
-    transcript: &RegionTranscript,
+    transcript: &SceneRegionTranscript,
     placement: Affine,
 ) {
     let region_stroke = Stroke::new(1.0).with_dashes(0.0, [8.0, 5.0]);

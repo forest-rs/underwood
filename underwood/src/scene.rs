@@ -43,8 +43,8 @@ pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
 pub use interaction::{CompositionScene, TextScene};
 pub use output::{
     CompositionSceneOutput, PreparationMemory, PreparationReuse, PreparationTrace,
-    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneOutput, StageWork,
-    TextMetrics, WorkReport,
+    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneOutput,
+    SceneRegionAttempts, SceneRegionTranscript, StageWork, TextMetrics, WorkReport,
 };
 pub use records::{
     LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneGlyphInstanceId,

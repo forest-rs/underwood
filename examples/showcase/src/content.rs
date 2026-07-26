@@ -10,8 +10,9 @@ use underwood::{
     ComputedInlineStyle, Document, DocumentId, DocumentSnapshot, FiniteWidth, FontFeature,
     FontVariation, FontWeight, InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight,
     PaintSlot, PaintTable, ParagraphId, ParagraphRole, ParagraphStyle, PreparationTrace,
-    RegionTranscript, SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap, Tag,
-    TextAlignment, TextConstraint, TextId, TextScene, WhitespaceCollapse, WordBreak, WorkReport,
+    SceneRegionTranscript, SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap,
+    Tag, TextAlignment, TextConstraint, TextId, TextScene, WhitespaceCollapse, WordBreak,
+    WorkReport,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -54,7 +55,7 @@ pub(crate) struct PreparedDocumentFrame {
     pub(crate) work: WorkReport,
     pub(crate) trace: PreparationTrace,
     pub(crate) page: LivingPagePlan,
-    pub(crate) region_transcript: RegionTranscript,
+    pub(crate) region_transcript: SceneRegionTranscript,
     pub(crate) line_count: usize,
     pub(crate) axis_weight: f32,
 }
@@ -66,7 +67,7 @@ pub(crate) struct PreparedCompositionFrame {
     pub(crate) work: WorkReport,
     pub(crate) trace: PreparationTrace,
     pub(crate) page: LivingPagePlan,
-    pub(crate) region_transcript: RegionTranscript,
+    pub(crate) region_transcript: SceneRegionTranscript,
     pub(crate) line_count: usize,
     pub(crate) axis_weight: f32,
 }
@@ -397,8 +398,7 @@ impl ShowcaseContent {
                 .clone(),
             region_transcript: output
                 .region_transcript()
-                .expect("the living page always prepares through regions")
-                .clone(),
+                .expect("the living page always prepares through regions"),
             page,
             axis_weight,
         })
@@ -435,8 +435,7 @@ impl ShowcaseContent {
                 .clone(),
             region_transcript: output
                 .region_transcript()
-                .expect("the living page always prepares through regions")
-                .clone(),
+                .expect("the living page always prepares through regions"),
             page,
             axis_weight,
         })
@@ -843,11 +842,11 @@ mod tests {
     fn living_page_consumes_retry_float_exclusion_and_all_wide_columns() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(900.0, 0.5).expect("document must prepare");
-        let attempts = frame.region_transcript.attempts();
+        let attempts: Vec<_> = frame.region_transcript.attempts().collect();
         let regions: Vec<_> = frame.page.flow().regions().collect();
 
         assert_eq!(
-            attempts.first().map(underwood::RegionAttempt::outcome),
+            attempts.first().map(|attempt| attempt.outcome()),
             Some(RegionAttemptOutcome::HeightRejected)
         );
         let continuation = frame
@@ -913,7 +912,6 @@ mod tests {
             frame
                 .region_transcript
                 .attempts()
-                .iter()
                 .any(|attempt| attempt.slot().region() == continuation)
         );
     }

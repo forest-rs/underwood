@@ -304,6 +304,16 @@ impl DocumentSnapshot {
             .flatten()
     }
 
+    pub(crate) fn appended_paragraphs_from(&self, previous: &Self) -> Option<Range<usize>> {
+        (self.id() == previous.id())
+            .then(|| {
+                self.state
+                    .paragraphs
+                    .appended_range_from(&previous.state.paragraphs)
+            })
+            .flatten()
+    }
+
     pub(crate) fn leaf(&self, id: TextId) -> Option<&TextLeaf> {
         if id.document != self.state.id {
             return None;

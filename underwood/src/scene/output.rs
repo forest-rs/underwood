@@ -92,7 +92,6 @@ pub struct SceneOutput {
     pub(super) scene: TextScene,
     pub(super) work: WorkReport,
     pub(super) trace: Option<PreparationTrace>,
-    pub(super) region_transcript: Option<RegionTranscript>,
 }
 
 /// Immutable transient scene for one exact composition epoch.
@@ -101,8 +100,89 @@ pub struct CompositionSceneOutput {
     pub(super) scene: CompositionScene,
     pub(super) work: WorkReport,
     pub(super) trace: Option<PreparationTrace>,
-    pub(super) region_transcript: Option<RegionTranscript>,
 }
+
+/// Cheap immutable view of document-level region attempts retained in scene segments.
+///
+/// Paragraph attempt blocks remain structurally shared with the prepared
+/// scene. Cloning this value clones one scene-core handle; iterating attempts
+/// does not flatten or copy those blocks.
+#[derive(Clone, Debug)]
+pub struct SceneRegionTranscript {
+    core: Arc<SceneCore>,
+}
+
+impl SceneRegionTranscript {
+    pub(super) fn new(core: Arc<SceneCore>) -> Option<Self> {
+        core.region.map(|_| Self { core })
+    }
+
+    /// Returns the cursor before the first paragraph attempt.
+    #[must_use]
+    pub fn start(&self) -> RegionCursor {
+        self.core
+            .region
+            .expect("a scene region transcript retains its binding")
+            .start
+    }
+
+    /// Returns the cursor after the final paragraph attempt.
+    #[must_use]
+    pub fn end(&self) -> RegionCursor {
+        self.core
+            .region
+            .expect("a scene region transcript retains its binding")
+            .end
+    }
+
+    /// Iterates exact attempts in paragraph and execution order.
+    #[must_use]
+    pub fn attempts(&self) -> SceneRegionAttempts<'_> {
+        SceneRegionAttempts {
+            inner: self.core.spine.region_attempts(),
+        }
+    }
+
+    /// Replays every retained paragraph block against one region flow.
+    pub fn replay(&self, flow: &RegionFlow) -> Result<RegionCursor, SceneError> {
+        let mut cursor = self.start();
+        for attempt in self.attempts() {
+            if flow.slot(cursor) != Some(attempt.slot()) {
+                return Err(SceneError::new(SceneErrorKind::Flow));
+            }
+            cursor = match attempt.outcome() {
+                RegionAttemptOutcome::Accepted => {
+                    flow.accept(cursor, attempt.slot(), attempt.line_height())?
+                }
+                RegionAttemptOutcome::HeightRejected => flow.reject(cursor, attempt.slot())?,
+            };
+        }
+        if cursor != self.end() {
+            return Err(SceneError::new(SceneErrorKind::Flow));
+        }
+        Ok(cursor)
+    }
+}
+
+/// Allocation-free iterator over region attempts retained by one scene.
+#[derive(Clone, Debug)]
+pub struct SceneRegionAttempts<'a> {
+    inner: SpineRegionAttempts<'a>,
+}
+
+impl<'a> Iterator for SceneRegionAttempts<'a> {
+    type Item = &'a crate::RegionAttempt;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for SceneRegionAttempts<'_> {}
 
 impl CompositionSceneOutput {
     /// Returns the prepared transient scene.
@@ -125,8 +205,8 @@ impl CompositionSceneOutput {
 
     /// Returns replayable region attempts for this transient request.
     #[must_use]
-    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
-        self.region_transcript.as_ref()
+    pub fn region_transcript(&self) -> Option<SceneRegionTranscript> {
+        SceneRegionTranscript::new(Arc::clone(&self.scene.core))
     }
 }
 
@@ -151,8 +231,8 @@ impl SceneOutput {
 
     /// Returns replayable region attempts for this request.
     #[must_use]
-    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
-        self.region_transcript.as_ref()
+    pub fn region_transcript(&self) -> Option<SceneRegionTranscript> {
+        SceneRegionTranscript::new(Arc::clone(&self.scene.core))
     }
 }
 

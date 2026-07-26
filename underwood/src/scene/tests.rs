@@ -1856,6 +1856,165 @@ fn no_op_publication_reuses_the_exact_scene_core_at_the_new_revision() {
 }
 
 #[test]
+fn localized_style_branch_prepares_only_its_paragraph() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-style-path"));
+    let mut edit = document.edit();
+    let mut target = None;
+    for index in 0..64 {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        let text = edit
+            .append_text(paragraph, InlineRole::TEXT, "stable")
+            .expect("fixture text appends");
+        if index == 31 {
+            target = Some(text);
+        }
+    }
+    let publication = edit.commit().expect("fixture publishes");
+    let base = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(base.clone());
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(128),
+    );
+    let first = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    let mut changed_styles = styles.clone();
+    changed_styles.set(
+        target.expect("target exists"),
+        ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Test"), 12.0).expect("changed style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        ),
+    );
+    let changed = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &changed_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("localized style prepares");
+
+    assert_eq!(changed.work().shape().paragraphs(), 1);
+    assert_eq!(changed.work().paint().paragraphs(), 1);
+    assert_eq!(changed.work().reused_paragraphs(), 63);
+    for index in [0, 63] {
+        assert!(Arc::ptr_eq(
+            first
+                .scene()
+                .core
+                .spine
+                .segment(index)
+                .expect("old sibling exists"),
+            changed
+                .scene()
+                .core
+                .spine
+                .segment(index)
+                .expect("new sibling exists")
+        ));
+    }
+}
+
+#[test]
+fn appended_paragraph_extends_the_persistent_scene_path() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-appendpath"));
+    let mut edit = document.edit();
+    for _ in 0..64 {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        edit.append_text(paragraph, InlineRole::TEXT, "stable")
+            .expect("fixture text appends");
+    }
+    let first_publication = edit.commit().expect("fixture publishes");
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(128),
+    );
+    let first = layout
+        .prepare(
+            first_publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("appended paragraph is valid");
+    edit.append_text(paragraph, InlineRole::TEXT, "appended")
+        .expect("appended text is valid");
+    let publication = edit.commit().expect("append publishes");
+    let appended = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("appended scene prepares");
+
+    assert_eq!(appended.work().shape().paragraphs(), 1);
+    assert_eq!(appended.work().paint().paragraphs(), 1);
+    assert_eq!(appended.work().reused_paragraphs(), 64);
+    assert_eq!(appended.scene().core.paragraph_count, 65);
+    assert!(Arc::ptr_eq(
+        first
+            .scene()
+            .core
+            .spine
+            .segment(31)
+            .expect("old prefix exists"),
+        appended
+            .scene()
+            .core
+            .spine
+            .segment(31)
+            .expect("old prefix remains")
+    ));
+    assert!(
+        appended
+            .trace()
+            .expect("trace exists")
+            .memory()
+            .scene_output_capacity_bytes()
+            < first.scene().core.spine.accounted_node_bytes(),
+        "append must publish a logarithmic spine path rather than rebuild the root"
+    );
+}
+
+#[test]
 fn composition_replaces_only_its_persistent_paragraph_path() {
     let mut document = Document::new(DocumentId::from_bytes(*b"scene-comp-spine"));
     let mut edit = document.edit();
@@ -2361,6 +2520,7 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
             paragraph_count: 1,
             spine: super::SceneSpine::from_segments(&[segment], true),
             metrics: super::TextMetrics::default(),
+            region: None,
         }),
     };
 

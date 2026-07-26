@@ -758,25 +758,22 @@ fn shared_region_transcripts_rebind_the_consuming_paragraph() {
         .prepare_block(&second.snapshot(), &request)
         .expect("second region block shares preparation");
     assert_eq!(second_output.work().shared_preparations(), 1);
-    let first_attempts = first_output
+    let first_transcript = first_output
         .region_transcript()
-        .expect("first transcript exists")
-        .attempts();
-    let second_attempts = second_output
+        .expect("first transcript exists");
+    let second_transcript = second_output
         .region_transcript()
-        .expect("second transcript exists")
-        .attempts();
+        .expect("second transcript exists");
+    let first_attempts = first_transcript.attempts();
+    let second_attempts = second_transcript.attempts();
     assert_eq!(first_attempts.len(), second_attempts.len());
     assert!(
-        first_attempts
-            .iter()
-            .zip(second_attempts)
-            .all(|(first, second)| {
-                first.paragraph() != second.paragraph()
-                    && first.source() == second.source()
-                    && first.slot() == second.slot()
-                    && first.outcome() == second.outcome()
-            }),
+        first_attempts.zip(second_attempts).all(|(first, second)| {
+            first.paragraph() != second.paragraph()
+                && first.source() == second.source()
+                && first.slot() == second.slot()
+                && first.outcome() == second.outcome()
+        }),
         "shared attempt facts must be rebound to the consuming paragraph"
     );
 }

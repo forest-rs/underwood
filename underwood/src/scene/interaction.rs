@@ -104,6 +104,19 @@ impl CompositionScene {
         &self,
         point: Point,
     ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+        if self.core.spine.is_normal_flow() {
+            let positioned = self.core.spine.positioned_segment_at_block(point.y)?;
+            return positioned
+                .segment
+                .geometry
+                .clusters
+                .iter()
+                .find(|cluster| {
+                    let origin = Vec2::new(0.0, positioned.position.block_origin);
+                    (cluster.bounds + origin).contains(point)
+                })
+                .map(|cluster| cached_projected_hit(cluster, positioned, self.revision, point));
+        }
         self.positioned_clusters()
             .find_map(|(positioned, cluster)| {
                 let origin = Vec2::new(0.0, positioned.position.block_origin);
@@ -119,6 +132,11 @@ impl CompositionScene {
         &self,
         point: Point,
     ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
+        if self.core.spine.is_normal_flow() {
+            let positioned = self.core.spine.positioned_segment_at_block(point.y)?;
+            return closest_cluster(positioned, point)
+                .map(|cluster| cached_projected_hit(cluster, positioned, self.revision, point));
+        }
         let mut closest: Option<(PositionedSegment<'_>, &CachedCluster, f64, f64)> = None;
         for (positioned, cluster) in self.positioned_clusters() {
             let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
@@ -141,6 +159,16 @@ impl CompositionScene {
         &self,
         position: &ProjectedTextPosition,
     ) -> Option<SceneCaret<ProjectedTextPosition>> {
+        if let ProjectedTextPosition::Snapshot(position) = position {
+            let positioned = positioned_snapshot_segment(&self.core.spine, position.text())?;
+            return positioned.segment.geometry.carets.iter().find_map(|caret| {
+                let candidate = projected_position(caret.position, self.revision);
+                (candidate == ProjectedTextPosition::Snapshot(*position)).then(|| SceneCaret {
+                    position: candidate,
+                    bounds: caret.bounds + Vec2::new(0.0, positioned.position.block_origin),
+                })
+            });
+        }
         self.positioned_carets().find_map(|(positioned, caret)| {
             let candidate = projected_position(caret.position, self.revision);
             (candidate == *position).then(|| SceneCaret {
@@ -157,10 +185,24 @@ impl CompositionScene {
         position: &ProjectedTextPosition,
         movement: TextMovement,
     ) -> Option<ProjectedTextPosition> {
-        let record = self
-            .positioned_movements()
-            .map(|(_, record)| record)
-            .find(|record| projected_position(record.position, self.revision) == *position)?;
+        let record = match position {
+            ProjectedTextPosition::Snapshot(position) => {
+                let positioned = positioned_snapshot_segment(&self.core.spine, position.text())?;
+                positioned
+                    .segment
+                    .geometry
+                    .movements
+                    .iter()
+                    .find(|record| {
+                        projected_position(record.position, self.revision)
+                            == ProjectedTextPosition::Snapshot(*position)
+                    })?
+            }
+            ProjectedTextPosition::Composition(_) => self
+                .positioned_movements()
+                .map(|(_, record)| record)
+                .find(|record| projected_position(record.position, self.revision) == *position)?,
+        };
         let step = match movement {
             TextMovement::PreviousVisual => record.previous_visual.as_ref(),
             TextMovement::NextVisual => record.next_visual.as_ref(),
@@ -309,6 +351,7 @@ pub(super) struct SceneCore {
     pub(super) paragraph_count: usize,
     pub(super) spine: SceneSpine,
     pub(super) metrics: TextMetrics,
+    pub(super) region: Option<SceneRegionBinding>,
 }
 
 impl TextScene {
@@ -561,6 +604,19 @@ impl TextScene {
     /// geometry to the nearest line edge.
     #[must_use]
     pub fn hit_test(&self, point: Point) -> Option<TextHit> {
+        if self.core.spine.is_normal_flow() {
+            let positioned = self.core.spine.positioned_segment_at_block(point.y)?;
+            return positioned
+                .segment
+                .geometry
+                .clusters
+                .iter()
+                .find(|cluster| {
+                    let origin = Vec2::new(0.0, positioned.position.block_origin);
+                    (cluster.bounds + origin).contains(point)
+                })
+                .map(|cluster| cached_snapshot_hit(cluster, positioned, self.revision, point));
+        }
         self.positioned_clusters()
             .find_map(|(positioned, cluster)| {
                 let origin = Vec2::new(0.0, positioned.position.block_origin);
@@ -576,6 +632,11 @@ impl TextScene {
     /// painted glyph fragment.
     #[must_use]
     pub fn hit_test_closest(&self, point: Point) -> Option<TextHit> {
+        if self.core.spine.is_normal_flow() {
+            let positioned = self.core.spine.positioned_segment_at_block(point.y)?;
+            return closest_cluster(positioned, point)
+                .map(|cluster| cached_snapshot_hit(cluster, positioned, self.revision, point));
+        }
         let mut closest: Option<(PositionedSegment<'_>, &CachedCluster, f64, f64)> = None;
         for (positioned, cluster) in self.positioned_clusters() {
             let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
@@ -598,7 +659,11 @@ impl TextScene {
     /// affinity, or a valid snapshot position not represented by this scene.
     #[must_use]
     pub fn caret(&self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
-        self.positioned_carets().find_map(|(positioned, caret)| {
+        if position.revision() != self.revision {
+            return None;
+        }
+        let positioned = positioned_snapshot_segment(&self.core.spine, position.text())?;
+        positioned.segment.geometry.carets.iter().find_map(|caret| {
             let candidate = materialize_position(caret.position, self.revision);
             (candidate == *position).then(|| SceneCaret {
                 position: candidate,
@@ -613,9 +678,15 @@ impl TextScene {
     /// treating every paragraph-local start as a document start.
     #[must_use]
     pub fn start_position(&self) -> Option<SnapshotTextPosition> {
-        self.positioned_movements()
-            .filter(|(_, movement)| movement.previous_logical.is_none())
-            .map(|(_, movement)| materialize_position(movement.position, self.revision))
+        let first = self.core.spine.positioned_movement(0)?;
+        first
+            .position
+            .segment
+            .geometry
+            .movements
+            .iter()
+            .filter(|movement| movement.previous_logical.is_none())
+            .map(|movement| materialize_position(movement.position, self.revision))
             .min_by_key(logical_position_key)
     }
 
@@ -625,9 +696,20 @@ impl TextScene {
     /// treating every paragraph-local end as a document end.
     #[must_use]
     pub fn end_position(&self) -> Option<SnapshotTextPosition> {
-        self.positioned_movements()
-            .filter(|(_, movement)| movement.next_logical.is_none())
-            .map(|(_, movement)| materialize_position(movement.position, self.revision))
+        let last = self
+            .core
+            .spine
+            .summary()
+            .movements
+            .checked_sub(1)
+            .and_then(|index| self.core.spine.positioned_movement(index))?;
+        last.position
+            .segment
+            .geometry
+            .movements
+            .iter()
+            .filter(|movement| movement.next_logical.is_none())
+            .map(|movement| materialize_position(movement.position, self.revision))
             .max_by_key(logical_position_key)
     }
 
@@ -643,13 +725,14 @@ impl TextScene {
         if text.document != self.document {
             return None;
         }
+        let positioned = positioned_snapshot_segment(&self.core.spine, text)?;
         let preferred = if byte == 0 {
             TextAffinity::Downstream
         } else {
             TextAffinity::Upstream
         };
         let mut fallback = None;
-        for (_, movement) in self.positioned_movements() {
+        for movement in &positioned.segment.geometry.movements {
             let position = materialize_position(movement.position, self.revision);
             if position.text() == text && position.byte() == byte {
                 if position.affinity() == preferred {
@@ -689,9 +772,17 @@ impl TextScene {
         if position.revision() != self.revision || position.text().document != self.document {
             return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
         }
-        if self.positioned_movements().any(|(_, movement)| {
-            materialize_position(movement.position, self.revision) == *position
-        }) {
+        let Some(positioned) = positioned_snapshot_segment(&self.core.spine, position.text())
+        else {
+            return Err(SelectionError::new(SelectionErrorKind::UnknownPosition));
+        };
+        if positioned
+            .segment
+            .geometry
+            .movements
+            .iter()
+            .any(|movement| materialize_position(movement.position, self.revision) == *position)
+        {
             Ok(())
         } else {
             Err(SelectionError::new(SelectionErrorKind::UnknownPosition))
@@ -760,10 +851,15 @@ impl TextScene {
         }
         let mut ranges = Vec::new();
         for index in start_text..=end_text {
-            let text = self
-                .positioned_texts()
-                .nth(index)
+            let positioned = self
+                .core
+                .spine
+                .positioned_text(index)
                 .expect("validated text rank remains represented");
+            let text = materialize_range(
+                &positioned.position.segment.geometry.texts[positioned.local],
+                self.revision,
+            );
             let bytes = if start_text == end_text {
                 start.byte()..end.byte()
             } else if index == start_text {
@@ -856,9 +952,13 @@ impl TextScene {
         movement: TextMovement,
     ) -> Result<Option<SceneCursorStep>, SelectionError> {
         self.validate_position(position)?;
-        let record = self
-            .positioned_movements()
-            .map(|(_, record)| record)
+        let positioned = positioned_snapshot_segment(&self.core.spine, position.text())
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        let record = positioned
+            .segment
+            .geometry
+            .movements
+            .iter()
             .find(|record| materialize_position(record.position, self.revision) == *position)
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
         let step = match movement {
@@ -876,44 +976,32 @@ impl TextScene {
         position: &SnapshotTextPosition,
         movement: TextMovement,
     ) -> Option<SceneCursorStep> {
-        let current = position.text().paragraph;
         let previous = matches!(
             movement,
             TextMovement::PreviousVisual | TextMovement::PreviousLogical
         );
-        let paragraph = self
-            .positioned_movements()
-            .filter_map(|(_, movement)| match movement.position {
-                LocalPosition::Snapshot { text, .. } => Some(text.paragraph),
-                LocalPosition::Composition { .. } => None,
-            })
-            .filter(|paragraph| {
-                if previous {
-                    *paragraph < current
-                } else {
-                    *paragraph > current
-                }
-            })
-            .reduce(|candidate, paragraph| {
-                if previous {
-                    candidate.max(paragraph)
-                } else {
-                    candidate.min(paragraph)
-                }
-            })?;
-        let mut candidates = self.positioned_movements().filter_map(|(_, record)| {
-            let LocalPosition::Snapshot { text, .. } = record.position else {
-                return None;
-            };
-            (text.paragraph == paragraph
-                && match movement {
-                    TextMovement::PreviousVisual => record.next_visual.is_none(),
-                    TextMovement::NextVisual => record.previous_visual.is_none(),
-                    TextMovement::PreviousLogical => record.next_logical.is_none(),
-                    TextMovement::NextLogical => record.previous_logical.is_none(),
-                })
-            .then_some(record)
-        });
+        let current = positioned_snapshot_segment(&self.core.spine, position.text())?;
+        let global = if previous {
+            current.position.movement_base.checked_sub(1)?
+        } else {
+            current
+                .position
+                .movement_base
+                .saturating_add(current.segment.geometry.movements.len())
+        };
+        let adjacent = self.core.spine.positioned_movement(global)?;
+        let mut candidates = adjacent
+            .position
+            .segment
+            .geometry
+            .movements
+            .iter()
+            .filter(|record| match movement {
+                TextMovement::PreviousVisual => record.next_visual.is_none(),
+                TextMovement::NextVisual => record.previous_visual.is_none(),
+                TextMovement::PreviousLogical => record.next_logical.is_none(),
+                TextMovement::NextLogical => record.previous_logical.is_none(),
+            });
         let target = materialize_position(candidates.next()?.position, self.revision);
         if candidates.next().is_some() {
             return None;
@@ -998,8 +1086,17 @@ impl TextScene {
     }
 
     fn text_rank(&self, text: TextId) -> Result<usize, SelectionError> {
-        self.positioned_texts()
-            .position(|range| range.text() == text)
+        let positioned = positioned_snapshot_segment(&self.core.spine, text)
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        positioned
+            .segment
+            .geometry
+            .texts
+            .iter()
+            .position(|range| {
+                matches!(range, LocalRange::Snapshot { text: candidate, .. } if *candidate == text)
+            })
+            .map(|local| positioned.position.text_base.saturating_add(local))
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))
     }
 
@@ -1028,42 +1125,6 @@ impl TextScene {
                 .clusters
                 .iter()
                 .map(move |cluster| (positioned, cluster))
-        })
-    }
-
-    fn positioned_carets(&self) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCaret)> {
-        self.core.spine.segments().flat_map(|positioned| {
-            positioned
-                .segment
-                .geometry
-                .carets
-                .iter()
-                .map(move |caret| (positioned, caret))
-        })
-    }
-
-    fn positioned_movements(
-        &self,
-    ) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCursorMovement)> {
-        self.core.spine.segments().flat_map(|positioned| {
-            positioned
-                .segment
-                .geometry
-                .movements
-                .iter()
-                .map(move |movement| (positioned, movement))
-        })
-    }
-
-    fn positioned_texts(&self) -> impl Iterator<Item = SnapshotTextRange> {
-        let revision = self.revision;
-        self.core.spine.segments().flat_map(move |positioned| {
-            positioned
-                .segment
-                .geometry
-                .texts
-                .iter()
-                .map(move |range| materialize_range(range, revision))
         })
     }
 }
@@ -1182,6 +1243,33 @@ fn ranges_overlap(first: &SnapshotTextRange, second: &SnapshotTextRange) -> bool
 
 fn nearly_equal(first: f64, second: f64) -> bool {
     (first - second).abs() <= f64::max(1.0, first.abs().max(second.abs())) * 1.0e-9
+}
+
+fn positioned_snapshot_segment(spine: &SceneSpine, text: TextId) -> Option<PositionedSegment<'_>> {
+    let positioned = spine.positioned_segment(usize::try_from(text.paragraph).ok()?)?;
+    (positioned.segment.paragraph.document == text.document
+        && positioned.segment.paragraph.index == text.paragraph)
+        .then_some(positioned)
+}
+
+fn closest_cluster<'a>(
+    positioned: PositionedSegment<'a>,
+    point: Point,
+) -> Option<&'a CachedCluster> {
+    positioned
+        .segment
+        .geometry
+        .clusters
+        .iter()
+        .min_by(|first, second| {
+            let origin = Vec2::new(0.0, positioned.position.block_origin);
+            let first = distance_to_rect_axes(point, first.bounds + origin);
+            let second = distance_to_rect_axes(point, second.bounds + origin);
+            first
+                .0
+                .total_cmp(&second.0)
+                .then_with(|| first.1.total_cmp(&second.1))
+        })
 }
 
 fn cached_snapshot_hit(

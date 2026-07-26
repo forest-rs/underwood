@@ -16,5 +16,8 @@ for paragraphs in 64 1000; do
     "$binary" retained "$paragraphs"
     "$binary" edit-staging "$paragraphs"
     "$binary" localized-prepare "$paragraphs"
+    "$binary" localized-region "$paragraphs"
+    "$binary" localized-style "$paragraphs"
+    "$binary" append "$paragraphs"
     "$binary" localized-edit "$paragraphs"
 done

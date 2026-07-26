@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use underwood::{
     Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth,
-    InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole, SceneRequest,
-    ShapingStyle, StyleMap, TextConstraint, TextId,
+    InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole, Rect,
+    RegionFlow, SceneRequest, ShapingStyle, StyleMap, TextConstraint, TextId,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(scenario) = arguments.next() {
         if scenario == "--help" || scenario == "-h" {
             println!(
-                "usage: underwood_semantic_scene_benchmark [setup-retained|retained|setup-edit|edit-staging|localized-prepare|localized-edit] [paragraphs]"
+                "usage: underwood_semantic_scene_benchmark [setup-retained|retained|setup-edit|edit-staging|localized-prepare|localized-edit|localized-region|localized-style|append] [paragraphs]"
             );
             return Ok(());
         }
@@ -324,12 +324,33 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
     let fonts = fonts()?;
     let mut fixture = document_fixture_with_paragraphs(paragraphs)?;
     let width = FiniteWidth::new(420.0)?;
+    let cache_entries = if matches!(scenario, "append" | "a0") {
+        paragraphs.saturating_add(1)
+    } else {
+        paragraphs
+    };
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts),
-        CacheBudget::new(paragraphs),
+        CacheBudget::new(cache_entries),
     );
     let snapshot = fixture.document.snapshot();
-    let request = SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark);
+    let region_flow = matches!(scenario, "localized-region" | "g0")
+        .then(|| {
+            RegionFlow::rectangle(Rect::new(
+                0.0,
+                0.0,
+                420.0,
+                f64::from(u32::try_from(paragraphs).unwrap_or(u32::MAX)) * 80.0,
+            ))
+        })
+        .transpose()?;
+    let request = match &region_flow {
+        Some(flow) => {
+            SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark)
+                .with_region_flow(flow)
+        }
+        None => SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark),
+    };
     let primed = layout.prepare(&snapshot, &request)?;
     assert_eq!(
         primed.work().shape().paragraphs(),
@@ -346,8 +367,44 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
             black_box(output);
             Some(measurement)
         }
+        "localized-style" | "y0" => {
+            let mut styles = fixture.styles.clone();
+            styles.set(
+                fixture.edited_text,
+                ComputedInlineStyle::new(
+                    ShapingStyle::new(underwood::FontFamily::named("Roboto Flex"), 17.0)?,
+                    InlineFlowStyle::default(),
+                    PaintSlot::new(1),
+                ),
+            );
+            let changed_request =
+                SceneRequest::new(TextConstraint::Wrap(width), &styles, &fixture.dark);
+            let (output, measurement) =
+                measure_event(|| layout.prepare(&snapshot, &changed_request));
+            let output = output?;
+            assert_eq!(output.work().shape().paragraphs(), 1);
+            assert_eq!(
+                output.work().reused_paragraphs(),
+                paragraphs.saturating_sub(1)
+            );
+            black_box((styles, output));
+            Some(measurement)
+        }
+        "append" | "a0" => {
+            let mut edit = fixture.document.edit();
+            let paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
+            edit.append_text(paragraph, InlineRole::TEXT, "appended retained paragraph")?;
+            let publication = edit.commit()?;
+            let (output, measurement) =
+                measure_event(|| layout.prepare(publication.snapshot(), &request));
+            let output = output?;
+            assert_eq!(output.work().shape().paragraphs(), 1);
+            assert_eq!(output.work().reused_paragraphs(), paragraphs);
+            black_box((publication, output));
+            Some(measurement)
+        }
         "setup-edit" | "s1" | "edit-staging" | "d0" | "localized-prepare" | "p0"
-        | "localized-edit" | "e0" => {
+        | "localized-edit" | "e0" | "localized-region" | "g0" => {
             let position = primed
                 .scene()
                 .position_at(fixture.edited_text, 1)
@@ -371,7 +428,7 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
                     black_box(replacement);
                     Some(measurement)
                 }
-                "localized-prepare" | "p0" => {
+                "localized-prepare" | "p0" | "localized-region" | "g0" => {
                     let replacement = fixture.document.replace_selections(&selections, "x")?;
                     let (output, measurement) = measure_event(|| {
                         layout.prepare(replacement.publication().snapshot(), &request)

@@ -760,31 +760,21 @@ pub(super) fn validate_styles(
     snapshot: &DocumentSnapshot,
     request: &SceneRequest<'_>,
 ) -> Result<usize, SceneError> {
-    if request
-        .styles
-        .overrides()
-        .iter()
-        .any(|(text, _)| snapshot.text(*text).is_none())
-    {
-        return Err(SceneError::for_document(
-            SceneErrorKind::InvalidStyle,
-            snapshot.id(),
-        ));
-    }
-    if request.styles.paragraph_overrides().iter().any(|(id, _)| {
-        !snapshot
-            .paragraphs()
-            .iter()
-            .any(|paragraph| paragraph.id == *id)
-    }) {
-        return Err(SceneError::for_document(
-            SceneErrorKind::InvalidStyle,
-            snapshot.id(),
-        ));
-    }
     let mut required_paint_slots = 0;
+    let mut inline_overrides = 0_usize;
+    let mut paragraph_overrides = 0_usize;
     for paragraph in snapshot.paragraphs() {
+        if request
+            .styles
+            .paragraph_style_override(paragraph.id)
+            .is_some()
+        {
+            paragraph_overrides = paragraph_overrides.saturating_add(1);
+        }
         for leaf in &paragraph.leaves {
+            if request.styles.style_override(leaf.id).is_some() {
+                inline_overrides = inline_overrides.saturating_add(1);
+            }
             let slot = request.styles.style_for(leaf.id).paint();
             if request.paint.brush(slot).is_none() {
                 return Err(SceneError::for_paragraph(
@@ -794,6 +784,14 @@ pub(super) fn validate_styles(
             }
             required_paint_slots = required_paint_slots.max(slot.index() as usize + 1);
         }
+    }
+    if inline_overrides != request.styles.inline_override_count()
+        || paragraph_overrides != request.styles.paragraph_override_count()
+    {
+        return Err(SceneError::for_document(
+            SceneErrorKind::InvalidStyle,
+            snapshot.id(),
+        ));
     }
     Ok(required_paint_slots)
 }

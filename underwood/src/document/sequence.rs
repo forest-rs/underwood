@@ -83,6 +83,17 @@ impl ParagraphSequence {
     ) -> Option<ChangedParagraphs<'a>> {
         (self.len == previous.len).then(|| ChangedParagraphs::new(previous, self))
     }
+
+    pub(crate) fn appended_range_from(&self, previous: &Self) -> Option<core::ops::Range<usize>> {
+        (self.len >= previous.len
+            && sequence_prefix_matches(
+                previous.root.as_deref(),
+                previous.height,
+                self.root.as_deref(),
+                self.height,
+            ))
+        .then_some(previous.len..self.len)
+    }
 }
 
 impl Index<usize> for ParagraphSequence {
@@ -386,6 +397,63 @@ fn node_capacity(height: u8) -> usize {
         .unwrap_or(usize::MAX)
 }
 
+fn sequence_prefix_matches(
+    previous: Option<&ParagraphNode>,
+    previous_height: u8,
+    current: Option<&ParagraphNode>,
+    current_height: u8,
+) -> bool {
+    match (previous, current) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(previous), Some(current)) if core::ptr::eq(previous, current) => true,
+        (Some(previous), Some(current)) if current_height > previous_height => {
+            let ParagraphNode::Branch { children, .. } = current else {
+                return false;
+            };
+            children.first().is_some_and(|child| {
+                sequence_prefix_matches(
+                    Some(previous),
+                    previous_height,
+                    Some(child),
+                    current_height - 1,
+                )
+            })
+        }
+        (Some(previous), Some(current)) if current_height == previous_height => {
+            match (previous, current) {
+                (ParagraphNode::Leaf(previous), ParagraphNode::Leaf(current)) => {
+                    previous.len() <= current.len()
+                        && previous
+                            .iter()
+                            .zip(current)
+                            .all(|(previous, current)| Arc::ptr_eq(previous, current))
+                }
+                (
+                    ParagraphNode::Branch {
+                        children: previous, ..
+                    },
+                    ParagraphNode::Branch {
+                        children: current, ..
+                    },
+                ) => {
+                    previous.len() <= current.len()
+                        && previous.iter().zip(current).all(|(previous, current)| {
+                            sequence_prefix_matches(
+                                Some(previous),
+                                previous_height - 1,
+                                Some(current),
+                                current_height - 1,
+                            )
+                        })
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -471,5 +539,31 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0, 31, 32, 1_023, 1_024, 2_047]
         );
+    }
+
+    #[test]
+    fn append_prefix_detection_crosses_leaf_and_root_boundaries() {
+        for initial_len in [0, 31, 32, 33, 1_023, 1_024] {
+            let mut original = ParagraphSequence::default();
+            for index in 0..initial_len {
+                original.push(paragraph(index));
+            }
+            let mut appended = original.clone();
+            appended.push(paragraph(initial_len));
+            appended.push(paragraph(initial_len + 1));
+            assert_eq!(
+                appended.appended_range_from(&original),
+                Some(initial_len as usize..initial_len as usize + 2)
+            );
+
+            if initial_len != 0 {
+                let mut edited = appended.clone();
+                edited
+                    .get_mut(initial_len as usize - 1)
+                    .expect("prefix paragraph exists")
+                    .version += 1;
+                assert_eq!(edited.appended_range_from(&original), None);
+            }
+        }
     }
 }

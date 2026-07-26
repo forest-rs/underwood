@@ -1,6 +1,6 @@
 # Design-0018: Capability-scaled prepared scenes
 
-- **Status:** Proposed
+- **Status:** Approved — 2026-07-26
 - **Date:** 2026-07-26
 - **Bead:** `und-oh0.13.17.9`
 - **Extends:** Design-0011, Design-0014, and Design-0017
@@ -568,3 +568,5 @@ Approval authorizes the breaking request/facade migration and foundational
 adapter/segment representation changes described above. It does not authorize
 a new dependency, `unsafe`, renderer or toolkit policy, a serialized format,
 or a global arena.
+
+Bruce approved this gate on 2026-07-26.
