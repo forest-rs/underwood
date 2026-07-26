@@ -280,6 +280,8 @@ pub enum SceneErrorKind {
     Flow,
     /// A style references an absent paint slot or text leaf.
     InvalidStyle,
+    /// A sparse scene-capability override names an unrepresented paragraph.
+    InvalidFeatures,
     /// A composition does not belong to the requested snapshot or has an invalid target.
     InvalidComposition,
 }

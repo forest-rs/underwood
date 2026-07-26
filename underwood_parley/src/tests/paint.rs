@@ -30,7 +30,7 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
         outputs: Rc::clone(&outputs),
     };
     let mut engine = LayoutEngine::new(probe, CacheBudget::new(8));
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     engine
         .prepare(&document.snapshot(), &request)
         .expect("initial paint prepares");
@@ -39,7 +39,7 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
     let repainted = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
         )
         .expect("paint-slot change prepares");
     assert_eq!(repainted.work().analysis().paragraphs(), 0);
@@ -79,7 +79,7 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
 fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
     let (document, styles, paint) = fixture_document("ب", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -114,7 +114,7 @@ fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
 fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
     let (document, styles, paint) = fixture_document("j office ب", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -162,7 +162,7 @@ fn synthetic_embolden_prepares_without_outline_metrics() {
     ])
     .expect("fixture catalog is valid");
     let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -206,7 +206,7 @@ fn system_font_fallback_prepares_han_without_outline_metrics() {
     .expect("fixture catalog is valid")
     .with_system_fonts();
     let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -249,7 +249,7 @@ fn split_paint_ligature_without_component_geometry_fails_explicitly() {
         Brush::Solid(Color::BLACK),
         Brush::Solid(Color::from_rgba8(0xff, 0x00, 0x00, 0xff)),
     ]);
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -268,7 +268,7 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
     let text = "office \u{2067}مرحبا\u{2069} world";
     let (document, styles, paint) = fixture_document(text, 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -276,13 +276,11 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("bidi format controls must not become phantom glyphs or source gaps");
+    let sources = scene_sources(output.scene());
     assert_eq!(output.scene().lines().len(), 1);
     assert_eq!(
-        output
-            .scene()
-            .line(0)
-            .expect("line exists")
-            .sources()
+        sources
+            .for_line(output.scene().line(0).expect("line exists"))
             .iter()
             .next()
             .expect("source exists")
@@ -295,7 +293,10 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
         .expect("fixture range fits");
     assert!(output.scene().fragments().iter().all(|fragment| {
         fragment.glyphs().iter().all(|glyph| {
-            let source = glyph.source().bytes();
+            let source = sources
+                .first_for_glyph(glyph)
+                .expect("source-aware glyph retains source")
+                .bytes();
             !((source.start <= isolate && source.end >= isolate + 3)
                 || (source.start <= pop && source.end >= pop + 3))
         })

@@ -28,7 +28,7 @@ fn scene_movement_crosses_semantic_paragraph_boundaries() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -37,10 +37,13 @@ fn scene_movement_crosses_semantic_paragraph_boundaries() {
         .prepare(&document.snapshot(), &request)
         .expect("multi-paragraph interaction must prepare");
     let scene = output.scene();
-    let start = scene
+    let editing = scene
+        .editing()
+        .expect("fixture retains editable scene data");
+    let start = editing
         .start_position()
         .expect("a nonempty document scene has one logical start");
-    let document_end = scene
+    let document_end = editing
         .end_position()
         .expect("a nonempty document scene has one logical end");
     assert_eq!(start.text(), first);
@@ -49,13 +52,13 @@ fn scene_movement_crosses_semantic_paragraph_boundaries() {
     assert_eq!(document_end.text(), second);
     assert_eq!(document_end.byte(), 3);
     assert_eq!(document_end.affinity(), TextAffinity::Upstream);
-    let second_start = scene
+    let second_start = editing
         .next_word_position(&start)
         .expect("word movement crosses the paragraph boundary");
     assert_eq!((second_start.text(), second_start.byte()), (second, 0));
-    assert_eq!(scene.previous_word_position(&second_start), Some(start));
+    assert_eq!(editing.previous_word_position(&second_start), Some(start));
 
-    let end = *scene
+    let end = *editing
         .hit_test_closest(Point::new(
             10_000.0,
             scene.line(0).expect("line exists").bounds().center().y,
@@ -63,13 +66,13 @@ fn scene_movement_crosses_semantic_paragraph_boundaries() {
         .expect("first paragraph end must resolve")
         .position();
     assert_eq!(end.text(), first);
-    let carets = scene
-        .selection_set([scene
+    let carets = editing
+        .selection_set([editing
             .collapsed_selection(&end)
             .expect("first paragraph caret is valid")])
         .expect("one caret forms a set");
     for movement in [TextMovement::NextVisual, TextMovement::NextLogical] {
-        let moved = scene
+        let moved = editing
             .move_selections(&carets, movement, false)
             .expect("movement must compose across paragraph boundaries");
         assert_eq!(
@@ -101,23 +104,26 @@ fn represented_positions_preserve_affinity_and_reject_non_carets() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     let output = fixture_engine()
         .prepare(&document.snapshot(), &request)
         .expect("multi-leaf positions must prepare");
     let scene = output.scene();
+    let editing = scene
+        .editing()
+        .expect("fixture retains editable scene data");
 
-    let first_end = scene
+    let first_end = editing
         .position_at(first, 2)
         .expect("the first leaf end is a represented caret");
-    let second_start = scene
+    let second_start = editing
         .position_at(second, 0)
         .expect("the second leaf start is a represented caret");
     assert_eq!(first_end.affinity(), TextAffinity::Upstream);
     assert_eq!(second_start.affinity(), TextAffinity::Downstream);
     assert_ne!(first_end, second_start);
     assert!(
-        scene.position_at(second, 1).is_none(),
+        editing.position_at(second, 1).is_none(),
         "an interior UTF-8 byte is not a represented caret"
     );
 
@@ -126,7 +132,7 @@ fn represented_positions_preserve_affinity_and_reject_non_carets() {
         .snapshot()
         .text_id();
     assert!(
-        scene.position_at(foreign, 0).is_none(),
+        editing.position_at(foreign, 0).is_none(),
         "a foreign leaf cannot resolve in this scene"
     );
 }
@@ -158,39 +164,42 @@ fn logical_word_positions_follow_analysis_across_bidi_and_collapsed_leaves() {
     styles.set(first, style.clone());
     styles.set(second, style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     let output = fixture_engine()
         .prepare(&document.snapshot(), &request)
         .expect("collapsed mixed-bidi words must prepare");
     let scene = output.scene();
+    let editing = scene
+        .editing()
+        .expect("fixture retains editable scene data");
 
-    let one = scene
+    let one = editing
         .position_at(first, 0)
         .expect("first word start is represented");
-    let arabic = scene
+    let arabic = editing
         .next_word_position(&one)
         .expect("the next logical word is Arabic");
-    let two = scene
+    let two = editing
         .next_word_position(&arabic)
         .expect("the next logical word follows Arabic");
     assert_eq!((arabic.text(), arabic.byte()), (second, 3));
     assert_eq!((two.text(), two.byte()), (second, 14));
     assert_eq!(
-        scene
+        editing
             .previous_word_position(&two)
             .expect("previous logical word returns to Arabic"),
         arabic
     );
     assert_eq!(
-        scene
+        editing
             .previous_word_position(&arabic)
             .expect("previous logical word crosses collapsed leaves"),
         one
     );
-    assert_eq!(scene.previous_word_position(&one), Some(one));
-    let end = scene.end_position().expect("scene end is represented");
-    assert_eq!(scene.next_word_position(&two), Some(end));
-    assert_eq!(scene.next_word_position(&end), Some(end));
+    assert_eq!(editing.previous_word_position(&one), Some(one));
+    let end = editing.end_position().expect("scene end is represented");
+    assert_eq!(editing.next_word_position(&two), Some(end));
+    assert_eq!(editing.next_word_position(&end), Some(end));
 }
 
 #[test]
@@ -215,16 +224,19 @@ fn split_leaf_grapheme_has_no_fabricated_interior_position() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     let output = fixture_engine()
         .prepare(&document.snapshot(), &request)
         .expect("split grapheme must prepare");
     let scene = output.scene();
+    let editing = scene
+        .editing()
+        .expect("fixture retains editable scene data");
 
-    assert!(scene.position_at(base, 0).is_some());
-    assert!(scene.position_at(mark, 2).is_some());
+    assert!(editing.position_at(base, 0).is_some());
+    assert!(editing.position_at(mark, 2).is_some());
     assert!(
-        scene.position_at(base, 1).is_none() && scene.position_at(mark, 0).is_none(),
+        editing.position_at(base, 1).is_none() && editing.position_at(mark, 0).is_none(),
         "a semantic leaf seam inside one grapheme is not a caret boundary"
     );
 }
@@ -233,7 +245,7 @@ fn split_leaf_grapheme_has_no_fabricated_interior_position() {
 fn exact_interaction_uses_ligature_components_not_glyph_ink() {
     let (document, styles, paint) = fixture_document("office", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -242,6 +254,9 @@ fn exact_interaction_uses_ligature_components_not_glyph_ink() {
         .prepare(&document.snapshot(), &request)
         .expect("ligature interaction must prepare");
     let scene = output.scene();
+    let editing = scene
+        .editing()
+        .expect("fixture retains editable scene data");
     assert_eq!(
         scene.fragments().len(),
         1,
@@ -257,19 +272,19 @@ fn exact_interaction_uses_ligature_components_not_glyph_ink() {
     );
 
     let y = scene.line(0).expect("line exists").bounds().center().y;
-    let first = scene
+    let first = editing
         .hit_test(Point::new(0.1, y))
         .expect("the first cluster must be hittable");
-    let second = scene
+    let second = editing
         .hit_test(Point::new(0.5, y))
         .expect("a second point in the same cluster must be hittable");
     assert_eq!(first.position(), second.position());
     assert_eq!(
-        scene
+        editing
             .caret(first.position())
             .expect("first hit caret must resolve")
             .bounds(),
-        scene
+        editing
             .caret(second.position())
             .expect("second hit caret must resolve")
             .bounds(),
@@ -285,7 +300,7 @@ fn interaction_map_groups_combining_source_and_keeps_whitespace() {
     ] {
         let (document, styles, paint) = fixture_document(text, 1.2);
         let mut engine = fixture_engine();
-        let request = SceneRequest::new(
+        let request = editable_scene_request(
             TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
             &styles,
             &paint,
@@ -334,18 +349,21 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
         Brush::Solid(Color::BLACK),
         Brush::Solid(Color::from_rgb8(0xff, 0x00, 0x00)),
     ]);
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     let output = fixture_engine()
         .prepare(&document.snapshot(), &request)
         .expect("cross-leaf whitespace collapse must prepare");
     let scene = output.scene();
+    let interaction = scene
+        .interaction()
+        .expect("fixture retains hit-testing data");
     let line = &scene.line(0).expect("line exists");
     let y = line.bounds().center().y;
 
     let mut collapsed_hits = Vec::new();
     let mut x = line.bounds().x0;
     while x <= line.bounds().x1 {
-        if let Some(hit) = scene.hit_test(Point::new(x, y))
+        if let Some(hit) = interaction.hit_test(Point::new(x, y))
             && hit.source().sources().len() == 2
         {
             if collapsed_hits
@@ -392,7 +410,9 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
     );
 
     let selection = scene
-        .selection(
+        .editing()
+        .expect("fixture retains editable scene data")
+        .selection_between(
             &collapsed_hits[0],
             &collapsed_hits[1],
             TextSelectionMode::Logical,
@@ -411,7 +431,7 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
             fragment
                 .glyphs()
                 .iter()
-                .any(|glyph| glyph.sources().count() == 2)
+                .any(|glyph| scene_sources(scene).for_glyph(glyph).count() == 2)
         })
         .expect("the collapsed space must retain both source leaves");
     assert_eq!(
@@ -443,7 +463,7 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -456,17 +476,26 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
     let semantic_texts: Vec<_> = output
         .scene()
         .semantics()
+        .expect("test scene requested semantics")
+        .iter()
         .filter_map(|semantic| semantic.source().map(|source| source.text()))
         .collect();
     assert!(semantic_texts.contains(&base));
     assert!(semantic_texts.contains(&mark));
+    let sources = scene_sources(output.scene());
     assert!(output.scene().fragments().iter().any(|fragment| {
-        let texts: Vec<_> = fragment.sources().map(|source| source.text()).collect();
+        let texts: Vec<_> = sources
+            .for_fragment(fragment)
+            .map(|source| source.text())
+            .collect();
         texts.contains(&base) && texts.contains(&mark)
     }));
     let scene = output.scene();
+    let editing = scene
+        .editing()
+        .expect("fixture retains editable scene data");
     let y = scene.line(0).expect("line exists").bounds().center().y;
-    let hit = scene
+    let hit = editing
         .hit_test(Point::new(
             scene.line(0).expect("line exists").bounds().x0,
             y,
@@ -503,6 +532,8 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
     );
     let base_semantic = scene
         .semantics()
+        .expect("test scene requested semantics")
+        .iter()
         .find(|semantic| {
             semantic
                 .source()
@@ -516,16 +547,16 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
         "a zero-advance mark has no fabricated pointer interior"
     );
 
-    let end = *scene
+    let end = *editing
         .hit_test_closest(Point::new(10_000.0, y))
         .expect("the trailing grapheme side must resolve")
         .position();
-    let carets = scene
-        .selection_set([scene
+    let carets = editing
+        .selection_set([editing
             .collapsed_selection(&end)
             .expect("the trailing position is valid")])
         .expect("one caret forms a selection set");
-    let deletion = scene
+    let deletion = editing
         .move_selections(&carets, TextMovement::PreviousLogical, true)
         .expect("backspace must cross the complete grapheme");
     let ranges = deletion
@@ -537,7 +568,7 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
     assert_eq!(ranges[0].bytes(), 0..1);
     assert_eq!(ranges[1].text(), mark);
     assert_eq!(ranges[1].bytes(), 0..2);
-    let geometry = scene
+    let geometry = editing
         .selection_geometry(&deletion)
         .expect("source-complete selection geometry must resolve");
     assert_eq!(
@@ -561,7 +592,7 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
 fn rtl_visual_hits_retain_reversed_logical_sides() {
     let (document, styles, paint) = fixture_document("مرحبا", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -591,7 +622,7 @@ fn rtl_visual_hits_retain_reversed_logical_sides() {
 fn soft_wrap_exposes_both_affinities_for_one_logical_boundary() {
     let (document, styles, paint) = fixture_document("alpha beta gamma", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -599,12 +630,15 @@ fn soft_wrap_exposes_both_affinities_for_one_logical_boundary() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("wrapped interaction must prepare");
+    let editing = output
+        .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
     let first = scan_line_hits(output.scene(), 0);
     let second = scan_line_hits(output.scene(), 1);
     let at_end = first.last().expect("first line has a final cluster");
     let at_start = second.first().expect("second line has an initial cluster");
-    let end_hit = output
-        .scene()
+    let end_hit = editing
         .hit_test(Point::new(
             at_end.max_x,
             output
@@ -616,8 +650,7 @@ fn soft_wrap_exposes_both_affinities_for_one_logical_boundary() {
                 .y,
         ))
         .expect("line-end cluster must be hittable");
-    let start_hit = output
-        .scene()
+    let start_hit = editing
         .hit_test(Point::new(
             at_start.min_x,
             output
@@ -633,14 +666,12 @@ fn soft_wrap_exposes_both_affinities_for_one_logical_boundary() {
     assert_eq!(end_hit.position().affinity(), TextAffinity::Upstream);
     assert_eq!(start_hit.position().affinity(), TextAffinity::Downstream);
     assert_ne!(
-        output
-            .scene()
+        editing
             .caret(end_hit.position())
             .expect("upstream caret must resolve")
             .bounds()
             .y0,
-        output
-            .scene()
+        editing
             .caret(start_hit.position())
             .expect("downstream caret must resolve")
             .bounds()
@@ -653,7 +684,7 @@ fn soft_wrap_exposes_both_affinities_for_one_logical_boundary() {
 fn empty_editable_leaf_has_a_closest_hit_and_exact_caret() {
     let (document, styles, paint) = fixture_document("", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -661,15 +692,17 @@ fn empty_editable_leaf_has_a_closest_hit_and_exact_caret() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("empty editable text must prepare");
-    let hit = output
+    let editing = output
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let hit = editing
         .hit_test_closest(Point::new(200.0, 80.0))
         .expect("empty semantic text must expose a clamped position");
     assert_eq!(sole_unit_source(hit.source()).bytes(), 0..0);
     assert_eq!(hit.position().byte(), 0);
     assert_eq!(hit.position().affinity(), TextAffinity::Downstream);
-    let caret = output
-        .scene()
+    let caret = editing
         .caret(hit.position())
         .expect("empty position must have caret geometry");
     assert_eq!(caret.bounds().x0, 0.0);
@@ -691,7 +724,7 @@ fn structurally_leafless_paragraph_is_not_editable() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -702,6 +735,8 @@ fn structurally_leafless_paragraph_is_not_editable() {
     assert!(
         output
             .scene()
+            .editing()
+            .expect("fixture retains editable scene data")
             .hit_test_closest(Point::new(0.0, 0.0))
             .is_none(),
         "structure without a semantic text leaf must not manufacture an editable position"
@@ -730,7 +765,7 @@ fn semantic_leaf_boundary_ownership_follows_affinity() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -740,12 +775,15 @@ fn semantic_leaf_boundary_ownership_follows_affinity() {
         .prepare(&document.snapshot(), &request)
         .expect("multi-leaf interaction must prepare");
     let scene = output.scene();
+    let interaction = scene
+        .interaction()
+        .expect("fixture retains hit-testing data");
     let y = scene.line(0).expect("line exists").bounds().center().y;
     let mut first_right = None;
     let mut second_left = None;
     let mut x = scene.line(0).expect("line exists").bounds().x0;
     while x <= scene.line(0).expect("line exists").bounds().x1 {
-        if let Some(hit) = scene.hit_test(Point::new(x, y)) {
+        if let Some(hit) = interaction.hit_test(Point::new(x, y)) {
             let source = sole_unit_source(hit.source());
             if source.text() == first_text {
                 first_right = Some((x, hit.semantic_id()));
@@ -757,10 +795,10 @@ fn semantic_leaf_boundary_ownership_follows_affinity() {
     }
     let (first_x, first_semantic) = first_right.expect("first leaf must be hittable");
     let (second_x, second_semantic) = second_left.expect("second leaf must be hittable");
-    let first_hit = scene
+    let first_hit = interaction
         .hit_test(Point::new(first_x, y))
         .expect("first leaf trailing side must resolve");
-    let second_hit = scene
+    let second_hit = interaction
         .hit_test(Point::new(second_x, y))
         .expect("second leaf leading side must resolve");
     assert_eq!(first_hit.position().text(), first_text);
@@ -778,7 +816,7 @@ fn semantic_leaf_boundary_ownership_follows_affinity() {
 fn caret_rejects_a_position_from_another_revision() {
     let (mut document, styles, paint) = fixture_document("abc", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -786,8 +824,11 @@ fn caret_rejects_a_position_from_another_revision() {
     let old_output = engine
         .prepare(&document.snapshot(), &request)
         .expect("old interaction must prepare");
-    let old_hit = old_output
+    let old_editing = old_output
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let old_hit = old_editing
         .hit_test(Point::new(
             0.0,
             old_output
@@ -808,7 +849,12 @@ fn caret_rejects_a_position_from_another_revision() {
         .prepare(&document.snapshot(), &request)
         .expect("new interaction must prepare");
     assert!(
-        new_output.scene().caret(&old_position).is_none(),
+        new_output
+            .scene()
+            .editing()
+            .expect("fixture retains editable scene data")
+            .caret(&old_position)
+            .is_none(),
         "a snapshot position must not silently migrate to a newer revision"
     );
 }
@@ -818,7 +864,7 @@ fn closest_hit_selects_the_nearest_line_before_its_inline_edge() {
     let text = "a\nsupercalifragilisticexpialidocious";
     let (document, styles, paint) = fixture_document(text, 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -829,6 +875,8 @@ fn closest_hit_selects_the_nearest_line_before_its_inline_edge() {
     assert_eq!(output.scene().lines().len(), 2);
     let hit = output
         .scene()
+        .interaction()
+        .expect("fixture retains hit-testing data")
         .hit_test_closest(Point::new(
             10_000.0,
             output
@@ -850,7 +898,7 @@ fn closest_hit_selects_the_nearest_line_before_its_inline_edge() {
 fn mandatory_break_keeps_before_and_after_carets_on_distinct_lines() {
     let (document, styles, paint) = fixture_document("a\n", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -859,8 +907,11 @@ fn mandatory_break_keeps_before_and_after_carets_on_distinct_lines() {
         .prepare(&document.snapshot(), &request)
         .expect("mandatory-break interaction must prepare");
     assert_eq!(output.scene().lines().len(), 2);
-    let before = output
+    let editing = output
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let before = editing
         .hit_test_closest(Point::new(
             10_000.0,
             output
@@ -872,8 +923,7 @@ fn mandatory_break_keeps_before_and_after_carets_on_distinct_lines() {
                 .y,
         ))
         .expect("the broken line must clamp before the control");
-    let after = output
-        .scene()
+    let after = editing
         .hit_test_closest(Point::new(
             10_000.0,
             output
@@ -888,14 +938,12 @@ fn mandatory_break_keeps_before_and_after_carets_on_distinct_lines() {
     assert_eq!(before.position().byte(), 1);
     assert_eq!(after.position().byte(), 2);
     assert_ne!(
-        output
-            .scene()
+        editing
             .caret(before.position())
             .expect("pre-break caret must resolve")
             .bounds()
             .y0,
-        output
-            .scene()
+        editing
             .caret(after.position())
             .expect("post-break caret must resolve")
             .bounds()

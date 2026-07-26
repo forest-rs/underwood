@@ -7,8 +7,8 @@ use underwood::{
     Brush, CacheBudget, Color, CompositionId, CompositionSession, CompositionUpdate,
     ComputedInlineStyle, Document, DocumentId, EditableSurface, EditableSurfaceElement,
     FiniteWidth, FontFamily, InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot, PaintTable,
-    ParagraphRole, Point, SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap,
-    SurfaceTextEncoding, TextConstraint,
+    ParagraphRole, Point, SceneFeatures, SceneRequest, Script, ShapingStyle,
+    SnapshotTextSelectionSet, StyleMap, SurfaceTextEncoding, TextConstraint,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -51,25 +51,27 @@ fn main() -> Result<(), AnyError> {
         TextConstraint::Wrap(FiniteWidth::new(640.0)?),
         &fixture.styles,
         &fixture.paint,
-    );
+    )
+    .with_features(SceneFeatures::EDITABLE);
     let committed = fixture.layout.prepare(&snapshot, &request)?;
     let scene = committed.scene();
+    let editing = scene.editing()?;
     let first_line = scene.line(0).expect("first paragraph has a line");
     let last_line = scene.line(2).expect("last paragraph has a line");
-    let primary = *scene
+    let primary = *editing
         .hit_test_closest(Point::new(-100.0, first_line.bounds().center().y))
         .expect("first paragraph has a primary insertion point")
         .position();
-    let secondary = *scene
+    let secondary = *editing
         .hit_test_closest(Point::new(10_000.0, last_line.bounds().center().y))
         .expect("last paragraph has a secondary insertion point")
         .position();
-    let selections = scene.selection_set([
-        scene.collapsed_selection(&primary)?,
-        scene.collapsed_selection(&secondary)?,
+    let selections = editing.selection_set([
+        editing.collapsed_selection(&primary)?,
+        editing.collapsed_selection(&secondary)?,
     ])?;
     let start =
-        scene.begin_composition(&selections, CompositionId::from_bytes(*b"ime-compat-epoch"))?;
+        editing.begin_composition(&selections, CompositionId::from_bytes(*b"ime-compat-epoch"))?;
     assert!(
         start.selection_changed(),
         "native composition must report multi-selection normalization"

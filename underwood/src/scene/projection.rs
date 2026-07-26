@@ -760,6 +760,19 @@ pub(super) fn validate_styles(
     snapshot: &DocumentSnapshot,
     request: &SceneRequest<'_>,
 ) -> Result<usize, SceneError> {
+    for paragraph in request.features.overridden_paragraphs() {
+        if paragraph.document != snapshot.id()
+            || snapshot
+                .paragraphs()
+                .get(paragraph.index as usize)
+                .is_none_or(|represented| represented.id != paragraph)
+        {
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::InvalidFeatures,
+                paragraph,
+            ));
+        }
+    }
     let mut required_paint_slots = 0;
     let mut inline_overrides = 0_usize;
     let mut paragraph_overrides = 0_usize;

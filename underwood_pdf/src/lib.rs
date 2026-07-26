@@ -24,7 +24,8 @@ use krilla::paint::{Fill, FillRule};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use underwood::{
     Affine, Brush, DocumentSnapshot, FontData, PaintSlot, Point, Rect, SceneFragmentId,
-    SceneFragmentView, SceneGlyphInstanceId, SceneGlyphView, SnapshotTextRange, TextScene, Vec2,
+    SceneFragmentView, SceneGlyphInstanceId, SceneGlyphView, SceneSourceAccess, SnapshotTextRange,
+    TextScene, Vec2,
 };
 
 /// Dimensions and scene origin for one exported PDF page.
@@ -84,6 +85,8 @@ pub enum PdfErrorKind {
     InvalidPage,
     /// The snapshot and prepared scene do not identify the same revision.
     WrongSnapshot,
+    /// The scene was prepared without authored-source provenance.
+    MissingSourceCapability,
     /// A scene source cannot be resolved to valid UTF-8 in the snapshot.
     InvalidSource,
     /// A scene paint is absent or is not a supported solid sRGB brush.
@@ -132,6 +135,9 @@ impl Display for PdfError {
             PdfErrorKind::WrongSnapshot => {
                 "the document snapshot does not match the prepared text scene"
             }
+            PdfErrorKind::MissingSourceCapability => {
+                "the text scene was prepared without source provenance"
+            }
             PdfErrorKind::InvalidSource => {
                 "prepared glyph source is absent or not valid UTF-8 in the snapshot"
             }
@@ -170,7 +176,10 @@ pub fn to_pdf(
     page: PdfPage,
 ) -> Result<Vec<u8>, PdfError> {
     validate_snapshot(scene, snapshot)?;
-    let (lines, mut fonts) = prepare_scene(scene, snapshot)?;
+    let sources = scene
+        .sources()
+        .map_err(|_| PdfError::new(PdfErrorKind::MissingSourceCapability, None))?;
+    let (lines, mut fonts) = prepare_scene(scene, sources, snapshot)?;
 
     let mut document = Document::new();
     let settings = PageSettings::from_wh(page.width, page.height)
@@ -266,16 +275,17 @@ type FontCache = Vec<(FontData, Font)>;
 
 fn prepare_scene(
     scene: &TextScene,
+    sources: SceneSourceAccess<'_>,
     snapshot: &DocumentSnapshot,
 ) -> Result<(Vec<PreparedLine>, FontCache), PdfError> {
     let mut fonts = Vec::new();
     for fragment in scene.fragments() {
-        validate_fragment(scene, snapshot, fragment, &mut fonts)?;
+        validate_fragment(scene, sources, snapshot, fragment, &mut fonts)?;
     }
 
     let mut lines = Vec::with_capacity(scene.lines().len());
     for line in scene.lines() {
-        let map = LineSourceMap::new(snapshot, line.sources())?;
+        let map = LineSourceMap::new(snapshot, sources.for_line(line))?;
         let mut groups: Vec<PreparedGroup> = Vec::new();
         let mut seen_instances: Vec<SceneGlyphInstanceId> = Vec::new();
         for fragment_index in line.fragment_range() {
@@ -292,7 +302,7 @@ fn prepare_scene(
                     id: glyph.id(),
                     position: glyph.position(),
                     advance: glyph.advance(),
-                    text_range: map.glyph_range(glyph, fragment.id())?,
+                    text_range: map.glyph_range(sources, glyph, fragment.id())?,
                     text_carrier,
                 });
             }
@@ -319,6 +329,7 @@ fn claim_text_carrier<Identity: Copy + Eq>(seen: &mut Vec<Identity>, identity: I
 
 fn validate_fragment(
     scene: &TextScene,
+    sources: SceneSourceAccess<'_>,
     snapshot: &DocumentSnapshot,
     fragment: SceneFragmentView<'_>,
     fonts: &mut FontCache,
@@ -351,7 +362,7 @@ fn validate_fragment(
         let _ = clip_path(clip, fragment.id())?;
     }
     for glyph in fragment.glyphs() {
-        let _ = glyph_text(snapshot, glyph, fragment.id())?;
+        let _ = glyph_text(sources, snapshot, glyph, fragment.id())?;
         let _ = finite_f32(glyph.position().x, Some(fragment.id()))?;
         let _ = finite_f32(glyph.position().y, Some(fragment.id()))?;
         let _ = finite_f32(glyph.advance().x, Some(fragment.id()))?;
@@ -429,11 +440,12 @@ impl LineSourceMap {
 
     fn glyph_range(
         &self,
+        sources: SceneSourceAccess<'_>,
         glyph: SceneGlyphView<'_>,
         fragment: SceneFragmentId,
     ) -> Result<Range<usize>, PdfError> {
-        let ranges: Vec<_> = glyph
-            .sources()
+        let ranges: Vec<_> = sources
+            .for_glyph(glyph)
             .map(|source| self.map_source(&source))
             .collect::<Option<_>>()
             .ok_or_else(|| PdfError::new(PdfErrorKind::InvalidSource, Some(fragment)))?;
@@ -570,12 +582,13 @@ fn cached_font(
 }
 
 fn glyph_text(
+    sources: SceneSourceAccess<'_>,
     snapshot: &DocumentSnapshot,
     glyph: SceneGlyphView<'_>,
     fragment: SceneFragmentId,
 ) -> Result<String, PdfError> {
     let mut text = String::new();
-    for source in glyph.sources() {
+    for source in sources.for_glyph(glyph) {
         text.push_str(source_text(snapshot, &source, Some(fragment))?);
     }
     if text.is_empty() {

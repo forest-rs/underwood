@@ -411,6 +411,7 @@ impl LayoutEngine {
                     CacheKind::Committed,
                     paragraph,
                     &projection,
+                    request.features.features_for(paragraph.id),
                     preflight_key,
                     request.constraint,
                     request.region_flow,
@@ -490,6 +491,7 @@ impl LayoutEngine {
         });
         let core = Arc::new(SceneCore {
             paragraph_count: snapshot.paragraphs().len(),
+            resident: resident_feature_policy(&spine, request.features.default_features()),
             spine,
             metrics,
             region,
@@ -499,6 +501,7 @@ impl LayoutEngine {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
                 paint: request.paint.clone(),
+                requested: request.features.clone(),
                 core: Arc::clone(&core),
             },
             work,
@@ -562,7 +565,8 @@ impl LayoutEngine {
                 SceneRequest::new(request.constraint, &styles, request.paint).with_region_flow(flow)
             }
             None => SceneRequest::new(request.constraint, &styles, request.paint),
-        };
+        }
+        .with_features(request.features);
         let scene_request = if request.trace {
             scene_request.with_preparation_trace()
         } else {
@@ -649,6 +653,10 @@ impl LayoutEngine {
                             CacheKind::Composition,
                             paragraph,
                             &projection,
+                            request
+                                .features
+                                .features_for(paragraph.id)
+                                .with_native_text_input(),
                             preflight_key,
                             request.constraint,
                             request.region_flow,
@@ -669,6 +677,7 @@ impl LayoutEngine {
                             CacheKind::Committed,
                             paragraph,
                             &projection,
+                            request.features.features_for(paragraph.id),
                             preflight_key,
                             request.constraint,
                             request.region_flow,
@@ -757,8 +766,16 @@ impl LayoutEngine {
             region_attempts,
             region_height_rejections,
         });
+        let effective_features = request.features.clone().with_paragraph(
+            target_paragraph,
+            request
+                .features
+                .features_for(target_paragraph)
+                .with_native_text_input(),
+        );
         let core = Arc::new(SceneCore {
             paragraph_count: snapshot.paragraphs().len(),
+            resident: resident_feature_policy(&spine, effective_features.default_features()),
             spine,
             metrics,
             region,
@@ -770,6 +787,7 @@ impl LayoutEngine {
                 composition: composition.id(),
                 epoch: composition.epoch(),
                 paint: request.paint.clone(),
+                requested: effective_features,
                 core: Arc::clone(&core),
             },
             work,
@@ -917,6 +935,7 @@ impl LayoutEngine {
         let published = self.published.get(&snapshot.id())?;
         if !published.snapshot.shares_state_with(snapshot)
             || !published.styles.shares_state_with(request.styles)
+            || !published.core.resident.contains_policy(&request.features)
             || published.constraint != ConstraintKey::from(request.constraint)
             || !region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
             || request.paint.len() < published.required_paint_slots
@@ -963,6 +982,7 @@ impl LayoutEngine {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
                 paint: request.paint.clone(),
+                requested: request.features.clone(),
                 core: Arc::clone(&published.core),
             },
             work,
@@ -981,6 +1001,7 @@ impl LayoutEngine {
         if published.constraint != ConstraintKey::from(request.constraint)
             || published.region_flow.is_some()
             || request.region_flow.is_some()
+            || !published.core.resident.contains_policy(&request.features)
             || published.core.paragraph_count != snapshot.paragraphs().len()
             || request.paint.len() < published.required_paint_slots
         {
@@ -1046,6 +1067,7 @@ impl LayoutEngine {
                 CacheKind::Committed,
                 paragraph,
                 &projection,
+                request.features.features_for(paragraph.id),
                 preflight_key,
                 request.constraint,
                 None,
@@ -1103,6 +1125,7 @@ impl LayoutEngine {
             Arc::new(SceneCore {
                 paragraph_count,
                 metrics: TextMetrics::from_summary(summary),
+                resident: resident_feature_policy(&spine, request.features.default_features()),
                 spine,
                 region: None,
             })
@@ -1112,6 +1135,7 @@ impl LayoutEngine {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
                 paint: request.paint.clone(),
+                requested: request.features.clone(),
                 core: Arc::clone(&core),
             },
             work,
@@ -1143,6 +1167,9 @@ impl LayoutEngine {
         let Some(published) = self.published.get(&snapshot.id()) else {
             return Ok(None);
         };
+        if !published.core.resident.contains_policy(&request.features) {
+            return Ok(None);
+        }
         if published.constraint != ConstraintKey::from(request.constraint)
             || !region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
             || request.paint.len() < published.required_paint_slots
@@ -1213,6 +1240,7 @@ impl LayoutEngine {
                 CacheKind::Committed,
                 paragraph,
                 &projection,
+                request.features.features_for(paragraph.id),
                 preflight_key,
                 request.constraint,
                 request.region_flow,
@@ -1270,6 +1298,7 @@ impl LayoutEngine {
         let core = Arc::new(SceneCore {
             paragraph_count: snapshot.paragraphs().len(),
             metrics: TextMetrics::from_summary(summary),
+            resident: resident_feature_policy(&spine, request.features.default_features()),
             spine,
             region,
         });
@@ -1278,6 +1307,7 @@ impl LayoutEngine {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
                 paint: request.paint.clone(),
+                requested: request.features.clone(),
                 core: Arc::clone(&core),
             },
             work,
@@ -1309,6 +1339,9 @@ impl LayoutEngine {
         let Some(published) = self.published.get(&snapshot.id()) else {
             return Ok(None);
         };
+        if !published.core.resident.contains_policy(&request.features) {
+            return Ok(None);
+        }
         let Some(region_flow) = request.region_flow else {
             return Ok(None);
         };
@@ -1418,6 +1451,7 @@ impl LayoutEngine {
                     CacheKind::Committed,
                     paragraph,
                     &projection,
+                    request.features.features_for(paragraph.id),
                     preflight_key,
                     request.constraint,
                     Some(region_flow),
@@ -1501,6 +1535,7 @@ impl LayoutEngine {
             Arc::new(SceneCore {
                 paragraph_count,
                 metrics: TextMetrics::from_summary(summary),
+                resident: resident_feature_policy(&spine, request.features.default_features()),
                 spine,
                 region,
             })
@@ -1510,6 +1545,7 @@ impl LayoutEngine {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
                 paint: request.paint.clone(),
+                requested: request.features.clone(),
                 core: Arc::clone(&core),
             },
             work,
@@ -1542,6 +1578,7 @@ impl LayoutEngine {
         (published.styles.shares_state_with(request.styles)
             && published.constraint == ConstraintKey::from(request.constraint)
             && region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
+            && published.core.resident.contains_policy(&request.features)
             && published.core.paragraph_count == snapshot.paragraphs().len())
         .then(|| published.core.spine.clone())
     }
@@ -1553,8 +1590,10 @@ impl LayoutEngine {
         composition: &CompositionSession,
     ) -> Option<CompositionSceneOutput> {
         let published = self.published_compositions.get(&snapshot.id())?;
+        let effective_features = effective_composition_features(request, published.target);
         if !published.snapshot.shares_state_with(snapshot)
             || !published.styles.shares_state_with(request.styles)
+            || !published.core.resident.contains_policy(&effective_features)
             || published.constraint != ConstraintKey::from(request.constraint)
             || !region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
             || !published.composition.shares_state_with(composition)
@@ -1604,6 +1643,7 @@ impl LayoutEngine {
                 composition: composition.id(),
                 epoch: composition.epoch(),
                 paint: request.paint.clone(),
+                requested: effective_features,
                 core: Arc::clone(&published.core),
             },
             work,
@@ -1616,9 +1656,14 @@ impl LayoutEngine {
         snapshot: &DocumentSnapshot,
         request: &SceneRequest<'_>,
     ) -> Option<SceneSpine> {
+        let target = self
+            .published_compositions
+            .get(&snapshot.id())
+            .map(|published| published.target);
         self.published_compositions
             .get(&snapshot.id())
             .filter(|published| {
+                let effective_features = effective_composition_features(request, published.target);
                 published.snapshot.shares_state_with(snapshot)
                     && published.styles.shares_state_with(request.styles)
                     && published.constraint == ConstraintKey::from(request.constraint)
@@ -1626,10 +1671,24 @@ impl LayoutEngine {
                         published.region_flow.as_ref(),
                         request.region_flow,
                     )
+                    && published.core.resident.contains_policy(&effective_features)
                     && published.core.paragraph_count == snapshot.paragraphs().len()
             })
             .map(|published| published.core.spine.clone())
-            .or_else(|| self.reusable_scene_spine(snapshot, request))
+            .or_else(|| {
+                let target = target?;
+                let effective_features = effective_composition_features(request, target);
+                let published = self.published.get(&snapshot.id())?;
+                (published.styles.shares_state_with(request.styles)
+                    && published.constraint == ConstraintKey::from(request.constraint)
+                    && region_provenance_matches(
+                        published.region_flow.as_ref(),
+                        request.region_flow,
+                    )
+                    && published.core.resident.contains_policy(&effective_features)
+                    && published.core.paragraph_count == snapshot.paragraphs().len())
+                .then(|| published.core.spine.clone())
+            })
     }
 
     fn record_access(&mut self, kind: CacheKind, access: &CacheAccess) {
@@ -1833,6 +1892,11 @@ fn reuse_paragraph_geometry(
     if !entry
         .preflight_key
         .matches(paragraph, request, region_cursor)
+        || !entry
+            .segment
+            .geometry
+            .features
+            .contains(request.features.features_for(paragraph.id))
     {
         return None;
     }
@@ -1859,6 +1923,7 @@ fn prepare_paragraph_geometry(
     cache_kind: CacheKind,
     paragraph: &Paragraph,
     projection: &Projection<'_>,
+    features: SceneFeatures,
     preflight_key: ParagraphPreflightKey,
     constraint: TextConstraint,
     region_flow: Option<&RegionFlow>,
@@ -1915,16 +1980,30 @@ fn prepare_paragraph_geometry(
     let adjustment_matches = cache.get(&paragraph.id).is_some_and(|entry| {
         entry.formation_key.paragraph_style.alignment() == projection.paragraph_style.alignment()
     });
-    let retained_paint_geometry =
-        (formation_matches && adjustment_matches && !paint_matches).then(|| {
-            Arc::clone(
-                &cache
-                    .get(&paragraph.id)
-                    .expect("paint-only reuse requires retained geometry")
-                    .segment
-                    .geometry,
-            )
-        });
+    let retained_layout = (formation_matches && adjustment_matches).then(|| {
+        Arc::clone(
+            &cache
+                .get(&paragraph.id)
+                .expect("layout reuse requires retained geometry")
+                .segment
+                .geometry,
+        )
+    });
+    let retained_paint_geometry = (formation_matches
+        && adjustment_matches
+        && !paint_matches
+        && cache
+            .get(&paragraph.id)
+            .is_some_and(|entry| entry.segment.geometry.features.contains(features)))
+    .then(|| {
+        Arc::clone(
+            &cache
+                .get(&paragraph.id)
+                .expect("paint-only reuse requires retained geometry")
+                .segment
+                .geometry,
+        )
+    });
     if !cached {
         reuse.cold_paragraphs = reuse.cold_paragraphs.saturating_add(1);
     } else {
@@ -1938,7 +2017,13 @@ fn prepare_paragraph_geometry(
             reuse.paint_invalidations = reuse.paint_invalidations.saturating_add(1);
         }
     }
-    if formation_matches && paint_matches && adjustment_matches {
+    if formation_matches
+        && paint_matches
+        && adjustment_matches
+        && cache
+            .get(&paragraph.id)
+            .is_some_and(|entry| entry.segment.geometry.features.contains(features))
+    {
         let entry = cache
             .get_mut(&paragraph.id)
             .expect("a reusable cache entry must exist");
@@ -1978,6 +2063,7 @@ fn prepare_paragraph_geometry(
             constraint,
             region_flow,
             region_cursor,
+            features,
         });
     let shared_hit = shared_query
         .as_ref()
@@ -2017,6 +2103,7 @@ fn prepare_paragraph_geometry(
                 preparation,
                 reusable_preparation,
                 formation_change,
+                features,
                 paragraph.id,
                 projection.paragraph_style,
                 projection.mapping.text(),
@@ -2043,7 +2130,10 @@ fn prepare_paragraph_geometry(
             true,
         )
     };
-    if prepared.paragraph() != paragraph.id || prepared.text_len() != text_len {
+    if prepared.paragraph() != paragraph.id
+        || prepared.text_len() != text_len
+        || !prepared.features().contains(features)
+    {
         if backend_called {
             paragraphs.release(preparation);
         }
@@ -2093,11 +2183,12 @@ fn prepare_paragraph_geometry(
     if backend_called && projection.mapping.text().is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
-    let geometry = match retained_paint_geometry.as_ref().map_or_else(
+    let mut geometry = match retained_paint_geometry.as_ref().map_or_else(
         || {
             build_geometry(
                 &prepared,
                 projection,
+                features,
                 constraint,
                 region_transcript.as_ref(),
             )
@@ -2112,6 +2203,10 @@ fn prepare_paragraph_geometry(
             return Err(error);
         }
     };
+    if let Some(retained) = retained_layout {
+        geometry.facts = Arc::clone(&retained.facts);
+        geometry.retain_sidecars_from(&retained);
+    }
     if backend_called && let Some(query) = &shared_query {
         shared_preparation.insert(
             query,
@@ -2522,6 +2617,31 @@ fn option_ref_eq<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
         (None, None) => true,
         _ => false,
     }
+}
+
+fn effective_composition_features(
+    request: &SceneRequest<'_>,
+    target: ParagraphId,
+) -> SceneFeaturePolicy {
+    request.features.clone().with_paragraph(
+        target,
+        request
+            .features
+            .features_for(target)
+            .with_native_text_input(),
+    )
+}
+
+fn resident_feature_policy(spine: &SceneSpine, default: SceneFeatures) -> SceneFeaturePolicy {
+    SceneFeaturePolicy::from_resolved(
+        default,
+        spine.segments().map(|positioned| {
+            (
+                positioned.segment.paragraph,
+                positioned.segment.geometry.features,
+            )
+        }),
+    )
 }
 
 fn region_provenance_matches(left: Option<&RegionFlow>, right: Option<&RegionFlow>) -> bool {

@@ -196,6 +196,7 @@ pub struct ParagraphInput<'a> {
     preparation: ParagraphPreparationId,
     reuse_preparation: Option<ParagraphPreparationId>,
     change: ParagraphFormationChange,
+    features: SceneFeatures,
     paragraph: ParagraphId,
     paragraph_style: ParagraphStyle,
     text: &'a str,
@@ -213,6 +214,7 @@ impl<'a> ParagraphInput<'a> {
         preparation: ParagraphPreparationId,
         reuse_preparation: Option<ParagraphPreparationId>,
         change: ParagraphFormationChange,
+        features: SceneFeatures,
         paragraph: ParagraphId,
         paragraph_style: ParagraphStyle,
         text: &'a str,
@@ -228,6 +230,7 @@ impl<'a> ParagraphInput<'a> {
             preparation,
             reuse_preparation,
             change,
+            features,
             paragraph,
             paragraph_style,
             text,
@@ -260,6 +263,12 @@ impl<'a> ParagraphInput<'a> {
     #[must_use]
     pub const fn change(&self) -> ParagraphFormationChange {
         self.change
+    }
+
+    /// Returns the normalized prepared-scene capabilities required downstream.
+    #[must_use]
+    pub const fn features(&self) -> SceneFeatures {
+        self.features
     }
 
     /// Returns the paragraph-local table of unique Unicode-analysis values.

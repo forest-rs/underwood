@@ -17,6 +17,7 @@ pub struct CompositionScene {
     pub(super) composition: CompositionId,
     pub(super) epoch: crate::CompositionEpoch,
     pub(super) paint: PaintTable,
+    pub(super) requested: SceneFeaturePolicy,
     pub(super) core: Arc<SceneCore>,
 }
 
@@ -49,6 +50,54 @@ impl CompositionScene {
     #[must_use]
     pub const fn epoch(&self) -> crate::CompositionEpoch {
         self.epoch
+    }
+
+    /// Returns the effective capability policy represented by this projection.
+    #[must_use]
+    pub const fn requested_features(&self) -> &SceneFeaturePolicy {
+        &self.requested
+    }
+
+    /// Returns unconditional renderer-facing display access.
+    #[must_use]
+    pub const fn display(&self) -> ProjectedSceneDisplay<'_> {
+        ProjectedSceneDisplay::new(self)
+    }
+
+    /// Returns source-aware traversal when every paragraph retained provenance.
+    pub fn sources(&self) -> Result<ProjectedSceneSourceAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_sources(),
+        )?;
+        Ok(ProjectedSceneSourceAccess::new(self))
+    }
+
+    /// Returns exact point interaction when every represented paragraph retained it.
+    pub fn interaction(&self) -> Result<ProjectedSceneInteraction<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_hit_testing(),
+        )?;
+        Ok(ProjectedSceneInteraction::new(self))
+    }
+
+    /// Returns complete native composition interaction and geometry access.
+    pub fn editing(&self) -> Result<ProjectedSceneEditing<'_>, MissingSceneCapability> {
+        require_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        Ok(ProjectedSceneEditing::new(self))
+    }
+
+    /// Returns semantic structure when every represented paragraph retained it.
+    pub fn semantics(&self) -> Result<ProjectedSceneSemanticAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_semantics(),
+        )?;
+        Ok(ProjectedSceneSemanticAccess::new(self))
     }
 
     /// Returns visual lines in flow order.
@@ -94,13 +143,13 @@ impl CompositionScene {
     }
 
     /// Iterates semantic fragments in document order.
-    pub fn semantics(&self) -> SceneSemantics<'_> {
+    pub(crate) fn semantic_records(&self) -> SceneSemantics<'_> {
         SceneSemantics::new(self.revision, &self.core.spine)
     }
 
     /// Returns the exact projected interaction unit under a point.
     #[must_use]
-    pub fn hit_test(
+    pub(crate) fn hit_test(
         &self,
         point: Point,
     ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
@@ -128,7 +177,7 @@ impl CompositionScene {
 
     /// Returns the closest projected interaction-unit side for native point queries.
     #[must_use]
-    pub fn hit_test_closest(
+    pub(crate) fn hit_test_closest(
         &self,
         point: Point,
     ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
@@ -155,7 +204,7 @@ impl CompositionScene {
 
     /// Resolves exact scene geometry for one projected caret position.
     #[must_use]
-    pub fn caret(
+    pub(crate) fn caret(
         &self,
         position: &ProjectedTextPosition,
     ) -> Option<SceneCaret<ProjectedTextPosition>> {
@@ -180,7 +229,7 @@ impl CompositionScene {
 
     /// Moves one position through the adapter-produced interaction map.
     #[must_use]
-    pub fn move_position(
+    pub(crate) fn move_position(
         &self,
         position: &ProjectedTextPosition,
         movement: TextMovement,
@@ -213,7 +262,7 @@ impl CompositionScene {
     }
 
     /// Resolves highlight rectangles for the selected range inside preedit.
-    pub fn composition_selection_geometry(
+    pub(crate) fn composition_selection_geometry(
         &self,
         session: &CompositionSession,
     ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
@@ -229,7 +278,7 @@ impl CompositionScene {
     /// This is the renderer-neutral marked-text geometry. Native hosts can use
     /// it for underlines or backgrounds without approximating the preedit from
     /// glyph ink. The supplied session must name this exact composition epoch.
-    pub fn composition_geometry(
+    pub(crate) fn composition_geometry(
         &self,
         session: &CompositionSession,
     ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
@@ -343,6 +392,7 @@ pub struct TextScene {
     pub(super) document: crate::DocumentId,
     pub(super) revision: DocumentRevision,
     pub(super) paint: PaintTable,
+    pub(super) requested: SceneFeaturePolicy,
     pub(super) core: Arc<SceneCore>,
 }
 
@@ -352,6 +402,7 @@ pub(super) struct SceneCore {
     pub(super) spine: SceneSpine,
     pub(super) metrics: TextMetrics,
     pub(super) region: Option<SceneRegionBinding>,
+    pub(super) resident: SceneFeaturePolicy,
 }
 
 impl TextScene {
@@ -373,6 +424,60 @@ impl TextScene {
         self.revision
     }
 
+    /// Returns the exact capability policy requested for this scene handle.
+    #[must_use]
+    pub const fn requested_features(&self) -> &SceneFeaturePolicy {
+        &self.requested
+    }
+
+    /// Returns unconditional renderer-facing display access.
+    #[must_use]
+    pub const fn display(&self) -> SceneDisplay<'_> {
+        SceneDisplay::new(self)
+    }
+
+    /// Returns source-aware access when every represented paragraph retained provenance.
+    pub fn sources(&self) -> Result<SceneSourceAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_sources(),
+        )?;
+        Ok(SceneSourceAccess::new(self))
+    }
+
+    /// Returns exact point interaction when every represented paragraph retained it.
+    pub fn interaction(&self) -> Result<SceneInteraction<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_hit_testing(),
+        )?;
+        Ok(SceneInteraction::new(self))
+    }
+
+    /// Returns complete selection, navigation, and native-input access.
+    pub fn editing(&self) -> Result<SceneEditing<'_>, MissingSceneCapability> {
+        require_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        Ok(SceneEditing::new(self))
+    }
+
+    /// Returns selection construction and geometry access.
+    pub fn selection(&self) -> Result<SceneSelection<'_>, MissingSceneCapability> {
+        require_scene_features(&self.core.spine, &self.requested, SceneFeatures::SELECTABLE)?;
+        Ok(SceneSelection::new(self))
+    }
+
+    /// Returns semantic structure when every represented paragraph retained it.
+    pub fn semantics(&self) -> Result<SceneSemanticAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_semantics(),
+        )?;
+        Ok(SceneSemanticAccess::new(self))
+    }
+
     /// Starts one native composition over the current primary insertion point.
     ///
     /// Native composition protocols expose one marked region. A sole logical
@@ -381,7 +486,7 @@ impl TextScene {
     /// disjoint logical ranges, the host-visible set is explicitly normalized
     /// to one collapsed primary extent before composition starts. Callers can
     /// observe that normalization through [`CompositionStart::selection_changed`].
-    pub fn begin_composition(
+    pub(crate) fn begin_composition(
         &self,
         selections: &SnapshotTextSelectionSet,
         id: CompositionId,
@@ -411,12 +516,12 @@ impl TextScene {
 
     /// Returns an empty selection set bound to this scene revision.
     #[must_use]
-    pub fn empty_selection_set(&self) -> SnapshotTextSelectionSet {
+    pub(crate) fn empty_selection_set(&self) -> SnapshotTextSelectionSet {
         SnapshotTextSelectionSet::new(self.document, self.revision, Vec::new())
     }
 
     /// Creates one collapsed selection at an exact scene position.
-    pub fn collapsed_selection(
+    pub(crate) fn collapsed_selection(
         &self,
         position: &SnapshotTextPosition,
     ) -> Result<SnapshotTextSelection, SelectionError> {
@@ -437,7 +542,7 @@ impl TextScene {
     ///
     /// A visual selection follows adapter-owned caret transitions and can
     /// expose several noncontiguous logical ranges across bidi boundaries.
-    pub fn selection(
+    pub(crate) fn selection_between(
         &self,
         anchor: &SnapshotTextPosition,
         extent: &SnapshotTextPosition,
@@ -453,14 +558,14 @@ impl TextScene {
     }
 
     /// Validates and collects independent selections for this scene.
-    pub fn selection_set(
+    pub(crate) fn selection_set(
         &self,
         selections: impl IntoIterator<Item = SnapshotTextSelection>,
     ) -> Result<SnapshotTextSelectionSet, SelectionError> {
         let selections: Vec<_> = selections.into_iter().collect();
         for selection in &selections {
             let expected =
-                self.selection(selection.anchor(), selection.extent(), selection.mode())?;
+                self.selection_between(selection.anchor(), selection.extent(), selection.mode())?;
             if expected.ranges() != selection.ranges() {
                 return Err(SelectionError::new(SelectionErrorKind::UnknownPosition));
             }
@@ -478,7 +583,7 @@ impl TextScene {
     /// When `extend` is true, each anchor is retained and the extent is moved.
     /// Otherwise a noncollapsed selection first collapses toward the requested
     /// direction and a collapsed selection advances by one interaction unit.
-    pub fn move_selections(
+    pub(crate) fn move_selections(
         &self,
         selections: &SnapshotTextSelectionSet,
         movement: TextMovement,
@@ -497,7 +602,7 @@ impl TextScene {
                     .cursor_step(selection.extent(), movement)?
                     .map_or(*selection.extent(), |step| step.target);
                 if extend {
-                    self.selection(selection.anchor(), &extent, mode)?
+                    self.selection_between(selection.anchor(), &extent, mode)?
                 } else {
                     self.collapsed_selection(&extent)?
                 }
@@ -508,7 +613,7 @@ impl TextScene {
     }
 
     /// Resolves visual highlight rectangles for a complete selection set.
-    pub fn selection_geometry(
+    pub(crate) fn selection_geometry(
         &self,
         selections: &SnapshotTextSelectionSet,
     ) -> Result<Vec<SceneSelectionRect>, SelectionError> {
@@ -594,7 +699,7 @@ impl TextScene {
     }
 
     /// Iterates semantic fragments in document order.
-    pub fn semantics(&self) -> SceneSemantics<'_> {
+    pub(crate) fn semantic_records(&self) -> SceneSemantics<'_> {
         SceneSemantics::new(self.revision, &self.core.spine)
     }
 
@@ -603,7 +708,7 @@ impl TextScene {
     /// Unlike selection hit testing, this does not clamp points outside unit
     /// geometry to the nearest line edge.
     #[must_use]
-    pub fn hit_test(&self, point: Point) -> Option<TextHit> {
+    pub(crate) fn hit_test(&self, point: Point) -> Option<TextHit> {
         if self.core.spine.is_normal_flow() {
             let positioned = self.core.spine.positioned_segment_at_block(point.y)?;
             return positioned
@@ -631,7 +736,7 @@ impl TextScene {
     /// This includes whitespace and empty editable text which may have no
     /// painted glyph fragment.
     #[must_use]
-    pub fn hit_test_closest(&self, point: Point) -> Option<TextHit> {
+    pub(crate) fn hit_test_closest(&self, point: Point) -> Option<TextHit> {
         if self.core.spine.is_normal_flow() {
             let positioned = self.core.spine.positioned_segment_at_block(point.y)?;
             return closest_cluster(positioned, point)
@@ -658,7 +763,7 @@ impl TextScene {
     /// Returns `None` for a stale revision, foreign text leaf, invalid
     /// affinity, or a valid snapshot position not represented by this scene.
     #[must_use]
-    pub fn caret(&self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
+    pub(crate) fn caret(&self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
         if position.revision() != self.revision {
             return None;
         }
@@ -677,7 +782,7 @@ impl TextScene {
     /// This follows Underwood's cross-paragraph movement graph rather than
     /// treating every paragraph-local start as a document start.
     #[must_use]
-    pub fn start_position(&self) -> Option<SnapshotTextPosition> {
+    pub(crate) fn start_position(&self) -> Option<SnapshotTextPosition> {
         let first = self.core.spine.positioned_movement(0)?;
         first
             .position
@@ -695,7 +800,7 @@ impl TextScene {
     /// This follows Underwood's cross-paragraph movement graph rather than
     /// treating every paragraph-local end as a document end.
     #[must_use]
-    pub fn end_position(&self) -> Option<SnapshotTextPosition> {
+    pub(crate) fn end_position(&self) -> Option<SnapshotTextPosition> {
         let last = self
             .core
             .spine
@@ -721,7 +826,7 @@ impl TextScene {
     /// leaf start prefers downstream affinity and every other boundary
     /// prefers upstream affinity, then falls back to either represented stop.
     #[must_use]
-    pub fn position_at(&self, text: TextId, byte: u32) -> Option<SnapshotTextPosition> {
+    pub(crate) fn position_at(&self, text: TextId, byte: u32) -> Option<SnapshotTextPosition> {
         if text.document != self.document {
             return None;
         }
@@ -749,7 +854,7 @@ impl TextScene {
     /// Word starts come from the paragraph adapter's retained Unicode
     /// analysis. A stale, foreign, or unrepresented position returns `None`.
     #[must_use]
-    pub fn previous_word_position(
+    pub(crate) fn previous_word_position(
         &self,
         position: &SnapshotTextPosition,
     ) -> Option<SnapshotTextPosition> {
@@ -761,7 +866,7 @@ impl TextScene {
     /// Word starts come from the paragraph adapter's retained Unicode
     /// analysis. A stale, foreign, or unrepresented position returns `None`.
     #[must_use]
-    pub fn next_word_position(
+    pub(crate) fn next_word_position(
         &self,
         position: &SnapshotTextPosition,
     ) -> Option<SnapshotTextPosition> {
@@ -1127,6 +1232,26 @@ impl TextScene {
                 .map(move |cluster| (positioned, cluster))
         })
     }
+}
+
+fn require_scene_features(
+    spine: &SceneSpine,
+    requested: &SceneFeaturePolicy,
+    required: SceneFeatures,
+) -> Result<(), MissingSceneCapability> {
+    for positioned in spine.segments() {
+        let paragraph = positioned.segment.paragraph;
+        let resident = positioned.segment.geometry.features;
+        if !resident.contains(required) {
+            return Err(MissingSceneCapability::new(
+                Some(paragraph),
+                required,
+                requested.features_for(paragraph),
+                resident,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn logical_position_key(position: &SnapshotTextPosition) -> (u32, u32, u32) {

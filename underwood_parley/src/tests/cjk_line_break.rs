@@ -163,16 +163,14 @@ fn public_scene_path_preserves_cjk_word_break_policy() {
     let normal = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MinContent, &normal_styles, &paint),
+            &editable_scene_request(TextConstraint::MinContent, &normal_styles, &paint),
         )
         .expect("native Han fallback must prepare the normal line policy");
+    let sources = scene_sources(normal.scene());
     assert_eq!(normal.scene().lines().len(), 2);
     assert_eq!(
-        normal
-            .scene()
-            .line(0)
-            .expect("line exists")
-            .sources()
+        sources
+            .for_line(normal.scene().line(0).expect("line exists"))
             .iter()
             .next()
             .expect("source exists")
@@ -184,7 +182,7 @@ fn public_scene_path_preserves_cjk_word_break_policy() {
     let keep_all = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MinContent, &keep_all_styles, &paint),
+            &editable_scene_request(TextConstraint::MinContent, &keep_all_styles, &paint),
         )
         .expect("native Han fallback must prepare keep-all");
     assert_eq!(

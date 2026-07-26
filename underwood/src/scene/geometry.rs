@@ -12,20 +12,82 @@ use core::{mem::size_of, ops::Deref};
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGeometry {
-    pub(super) height: f64,
+    pub(super) features: SceneFeatures,
     pub(super) facts: Arc<CachedGeometryFacts>,
     pub(super) line_fragments: Vec<Range<usize>>,
     pub(super) fragments: Vec<CachedFragment>,
+    pub(super) line_sources: CachedSidecar<Vec<LocalRange>>,
+    pub(super) clusters: CachedSidecar<CachedCluster>,
+    pub(super) carets: CachedSidecar<CachedCaret>,
+    pub(super) movements: CachedSidecar<CachedCursorMovement>,
+    pub(super) texts: CachedSidecar<LocalRange>,
+    pub(super) semantics: CachedSidecar<CachedSemantic>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGeometryFacts {
+    pub(super) height: f64,
     pub(super) lines: Vec<CachedLine>,
-    pub(super) clusters: Vec<CachedCluster>,
-    pub(super) carets: Vec<CachedCaret>,
-    pub(super) movements: Vec<CachedCursorMovement>,
-    pub(super) texts: Vec<LocalRange>,
-    pub(super) semantics: Vec<CachedSemantic>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CachedSidecar<T> {
+    records: Option<Arc<Vec<T>>>,
+}
+
+impl<T> CachedSidecar<T> {
+    pub(super) fn new(retain: bool, records: Vec<T>) -> Self {
+        debug_assert!(
+            retain || records.is_empty(),
+            "discarded sidecars must not be built"
+        );
+        Self {
+            records: retain.then(|| Arc::new(records)),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_records(records: Vec<T>) -> Self {
+        Self {
+            records: Some(Arc::new(records)),
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.records
+            .as_ref()
+            .map_or(0, |records| records.capacity())
+    }
+
+    fn make_mut(&mut self) -> Option<&mut Vec<T>>
+    where
+        T: Clone,
+    {
+        self.records.as_mut().map(Arc::make_mut)
+    }
+
+    fn retain_from(&mut self, retained: &Self) {
+        if self.records.is_none() {
+            self.records.clone_from(&retained.records);
+        }
+    }
+}
+
+impl<T> Deref for CachedSidecar<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        self.records.as_deref().map_or(&[], Vec::as_slice)
+    }
+}
+
+impl<'a, T> IntoIterator for &'a CachedSidecar<T> {
+    type Item = &'a T;
+    type IntoIter = core::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
 }
 
 impl Deref for CachedGeometry {
@@ -40,7 +102,6 @@ impl Deref for CachedGeometry {
 pub(super) struct CachedLine {
     pub(super) bounds: Rect,
     pub(super) advance: f64,
-    pub(super) sources: Vec<LocalRange>,
     pub(super) break_reason: LineBreakReason,
     pub(super) baseline: f64,
     pub(super) content_ascent: f64,
@@ -153,6 +214,16 @@ pub(super) enum LocalPosition {
 }
 
 impl CachedGeometry {
+    pub(super) fn retain_sidecars_from(&mut self, retained: &Self) {
+        self.features = self.features.union(retained.features);
+        self.line_sources.retain_from(&retained.line_sources);
+        self.clusters.retain_from(&retained.clusters);
+        self.carets.retain_from(&retained.carets);
+        self.movements.retain_from(&retained.movements);
+        self.texts.retain_from(&retained.texts);
+        self.semantics.retain_from(&retained.semantics);
+    }
+
     pub(super) fn accounted_owned_bytes(&self) -> usize {
         let mut bytes = vec_bytes::<CachedLine>(self.lines.capacity())
             .saturating_add(vec_bytes::<Range<usize>>(self.line_fragments.capacity()))
@@ -162,8 +233,8 @@ impl CachedGeometry {
             .saturating_add(vec_bytes::<CachedCursorMovement>(self.movements.capacity()))
             .saturating_add(vec_bytes::<LocalRange>(self.texts.capacity()))
             .saturating_add(vec_bytes::<CachedSemantic>(self.semantics.capacity()));
-        for line in self.lines.iter() {
-            bytes = bytes.saturating_add(vec_bytes::<LocalRange>(line.sources.capacity()));
+        for sources in self.line_sources.iter() {
+            bytes = bytes.saturating_add(vec_bytes::<LocalRange>(sources.capacity()));
         }
         for fragment in &self.fragments {
             bytes = bytes
@@ -212,9 +283,10 @@ pub(super) fn rebind_composition_geometry(
     id: CompositionId,
     epoch: crate::CompositionEpoch,
 ) {
-    let facts = Arc::make_mut(&mut geometry.facts);
-    for line in &mut facts.lines {
-        rebind_ranges(&mut line.sources, id, epoch);
+    if let Some(lines) = geometry.line_sources.make_mut() {
+        for sources in lines {
+            rebind_ranges(sources, id, epoch);
+        }
     }
     for fragment in &mut geometry.fragments {
         rebind_ranges(&mut fragment.sources, id, epoch);
@@ -222,35 +294,45 @@ pub(super) fn rebind_composition_geometry(
             rebind_ranges(&mut glyph.sources, id, epoch);
         }
     }
-    for cluster in &mut facts.clusters {
-        rebind_ranges(&mut cluster.sources, id, epoch);
-        rebind_position(&mut cluster.left, id, epoch);
-        rebind_position(&mut cluster.right, id, epoch);
+    if let Some(clusters) = geometry.clusters.make_mut() {
+        for cluster in clusters {
+            rebind_ranges(&mut cluster.sources, id, epoch);
+            rebind_position(&mut cluster.left, id, epoch);
+            rebind_position(&mut cluster.right, id, epoch);
+        }
     }
-    for caret in &mut facts.carets {
-        rebind_position(&mut caret.position, id, epoch);
+    if let Some(carets) = geometry.carets.make_mut() {
+        for caret in carets {
+            rebind_position(&mut caret.position, id, epoch);
+        }
     }
-    for movement in &mut facts.movements {
-        rebind_position(&mut movement.position, id, epoch);
-        for step in [
-            &mut movement.previous_visual,
-            &mut movement.next_visual,
-            &mut movement.previous_logical,
-            &mut movement.next_logical,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            rebind_position(&mut step.target, id, epoch);
-            if let Some(source) = &mut step.source {
-                rebind_ranges(source, id, epoch);
+    if let Some(movements) = geometry.movements.make_mut() {
+        for movement in movements {
+            rebind_position(&mut movement.position, id, epoch);
+            for step in [
+                &mut movement.previous_visual,
+                &mut movement.next_visual,
+                &mut movement.previous_logical,
+                &mut movement.next_logical,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                rebind_position(&mut step.target, id, epoch);
+                if let Some(source) = &mut step.source {
+                    rebind_ranges(source, id, epoch);
+                }
             }
         }
     }
-    rebind_ranges(&mut facts.texts, id, epoch);
-    for semantic in &mut facts.semantics {
-        if let Some(source) = &mut semantic.source {
-            rebind_ranges(source, id, epoch);
+    if let Some(texts) = geometry.texts.make_mut() {
+        rebind_ranges(texts, id, epoch);
+    }
+    if let Some(semantics) = geometry.semantics.make_mut() {
+        for semantic in semantics {
+            if let Some(source) = &mut semantic.source {
+                rebind_ranges(source, id, epoch);
+            }
         }
     }
 }
@@ -292,6 +374,7 @@ pub(super) fn rebind_position(
 pub(super) fn build_geometry(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
+    features: SceneFeatures,
     constraint: TextConstraint,
     region_transcript: Option<&RegionTranscript>,
 ) -> Result<CachedGeometry, SceneError> {
@@ -327,9 +410,12 @@ pub(super) fn build_geometry(
     );
     let mut line_top = 0.0;
     let mut lines = Vec::new();
+    let mut line_sources = Vec::new();
     let mut clusters = Vec::new();
     let mut carets = Vec::new();
     let mut caret_maps = Vec::new();
+    let needs_clusters =
+        features.has_semantics() || features.has_hit_testing() || features.has_selection();
 
     for line in prepared.lines() {
         let line_index = lines.len();
@@ -359,7 +445,11 @@ pub(super) fn build_geometry(
         let mut unit_x = inline_start;
         let mut original_unit_x = 0.0;
         let mut adjusted_unit_x = 0.0;
-        let mut caret_map = CaretAdjustmentMap::with_capacity(line.units().len());
+        let mut caret_map = CaretAdjustmentMap::with_capacity(if features.has_selection() {
+            line.units().len()
+        } else {
+            0
+        });
         for unit in line.units() {
             let paragraph_source = unit.source();
             let unit_expansion = if opportunity_sources.contains(&paragraph_source) {
@@ -367,20 +457,34 @@ pub(super) fn build_geometry(
             } else {
                 0.0
             };
-            let sources = projection.local_ranges(paragraph_source.clone())?;
-            let left = projection.position_at(unit.left().offset(), unit.left().affinity())?;
-            let right = projection.position_at(unit.right().offset(), unit.right().affinity())?;
+            let sources = if needs_clusters {
+                projection.local_ranges(paragraph_source.clone())?
+            } else {
+                Vec::new()
+            };
+            let left = needs_clusters
+                .then(|| projection.position_at(unit.left().offset(), unit.left().affinity()))
+                .transpose()?;
+            let right = needs_clusters
+                .then(|| projection.position_at(unit.right().offset(), unit.right().affinity()))
+                .transpose()?;
             let mut slice_x = unit_x;
-            let mut hit_slices = Vec::with_capacity(unit.slices().len());
+            let mut hit_slices = Vec::with_capacity(if needs_clusters {
+                unit.slices().len()
+            } else {
+                0
+            });
             for slice in unit.slices() {
                 let next_x = slice_x + slice.advance();
                 let source = slice.source();
-                projection.local_ranges(source.clone())?;
-                hit_slices.push(CachedHitSlice {
-                    semantic_id: projection.semantic_for_range(source)?,
-                    x0: slice_x,
-                    x1: next_x,
-                });
+                if needs_clusters {
+                    projection.local_ranges(source.clone())?;
+                    hit_slices.push(CachedHitSlice {
+                        semantic_id: projection.semantic_for_range(source)?,
+                        x0: slice_x,
+                        x1: next_x,
+                    });
+                }
                 slice_x = next_x;
             }
             if unit_expansion > 0.0
@@ -388,10 +492,14 @@ pub(super) fn build_geometry(
             {
                 last.x1 += unit_expansion;
             }
-            let semantic_id = hit_slices.first().map_or_else(
-                || projection.semantic_for_range(paragraph_source),
-                |slice| Ok(slice.semantic_id),
-            )?;
+            let semantic_id = if needs_clusters {
+                hit_slices.first().map_or_else(
+                    || projection.semantic_for_range(paragraph_source),
+                    |slice| Ok(slice.semantic_id),
+                )?
+            } else {
+                projection.paragraph_semantic
+            };
             let adjusted_unit_advance = unit.advance() + unit_expansion;
             let next_x = unit_x + adjusted_unit_advance;
             let bounds = Rect::new(
@@ -400,31 +508,35 @@ pub(super) fn build_geometry(
                 next_x,
                 current_line_top + line.height(),
             );
-            clusters.push(CachedCluster {
-                sources,
-                semantic_id,
-                boundary: unit.boundary(),
-                whitespace: unit.whitespace(),
-                hit_slices,
-                bounds,
-                line: line_index,
-                left,
-                right,
-                bidi_level: unit.bidi_level(),
-            });
-            caret_map.push(
-                original_unit_x,
-                original_unit_x + unit.advance(),
-                adjusted_unit_x,
-                adjusted_unit_x + adjusted_unit_advance,
-            );
+            if needs_clusters {
+                clusters.push(CachedCluster {
+                    sources,
+                    semantic_id,
+                    boundary: unit.boundary(),
+                    whitespace: unit.whitespace(),
+                    hit_slices,
+                    bounds,
+                    line: line_index,
+                    left: left.expect("cluster construction resolves the left position"),
+                    right: right.expect("cluster construction resolves the right position"),
+                    bidi_level: unit.bidi_level(),
+                });
+            }
+            if features.has_selection() {
+                caret_map.push(
+                    original_unit_x,
+                    original_unit_x + unit.advance(),
+                    adjusted_unit_x,
+                    adjusted_unit_x + adjusted_unit_advance,
+                );
+            }
             original_unit_x += unit.advance();
             adjusted_unit_x += adjusted_unit_advance;
             unit_x = next_x;
         }
         caret_map.finish_empty();
         caret_maps.push(caret_map);
-        if line.units().is_empty() && !projection.spans.is_empty() {
+        if needs_clusters && line.units().is_empty() && !projection.spans.is_empty() {
             let source = line.source();
             let affinity = if source.start == 0 {
                 TextAffinity::Downstream
@@ -464,18 +576,22 @@ pub(super) fn build_geometry(
                 current_line_top + line.height(),
             ),
             advance: adjusted_advance,
-            sources: projection.local_ranges(line.source())?,
             break_reason: line.break_reason(),
             baseline,
             content_ascent: line.content_ascent(),
             content_descent: line.content_descent(),
             adjustment,
         });
+        if features.has_sources() {
+            line_sources.push(projection.local_ranges(line.source())?);
+        }
         line_top = line_top.max(current_line_top + line.height());
     }
-    let (fragments, line_fragments) = build_paint_fragments(prepared, projection, &lines)?;
+    let (fragments, line_fragments) =
+        build_paint_fragments(prepared, projection, features, &lines)?;
 
-    if prepared.lines().is_empty()
+    if needs_clusters
+        && prepared.lines().is_empty()
         && projection.mapping.text().is_empty()
         && !projection.spans.is_empty()
     {
@@ -496,7 +612,8 @@ pub(super) fn build_geometry(
     }
 
     let mut semantics = Vec::new();
-    if !projection.spans.is_empty()
+    if features.has_semantics()
+        && !projection.spans.is_empty()
         && let Some(first_line) = lines.first()
     {
         let bounds = lines
@@ -512,6 +629,9 @@ pub(super) fn build_geometry(
         });
     }
     for (span_index, span) in projection.spans.iter().enumerate() {
+        if !features.has_semantics() {
+            break;
+        }
         if span.leaf_len == 0
             || projection.spans[..span_index]
                 .iter()
@@ -545,7 +665,7 @@ pub(super) fn build_geometry(
         });
     }
 
-    let movements = if projection.spans.is_empty() {
+    let movements = if projection.spans.is_empty() || !features.has_navigation() {
         Vec::new()
     } else {
         prepared
@@ -565,7 +685,11 @@ pub(super) fn build_geometry(
             })
             .collect::<Result<Vec<_>, SceneError>>()?
     };
-    for (prepared_movement, movement) in prepared.movements().iter().zip(&movements) {
+    for prepared_movement in prepared
+        .movements()
+        .iter()
+        .filter(|_| features.has_selection() && !projection.spans.is_empty())
+    {
         let caret = prepared_movement.caret();
         let line = usize::try_from(caret.line()).map_err(|_| {
             SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
@@ -589,7 +713,10 @@ pub(super) fn build_geometry(
             }
         };
         carets.push(CachedCaret {
-            position: movement.position,
+            position: projection.position_at(
+                prepared_movement.position().offset(),
+                prepared_movement.position().affinity(),
+            )?,
             bounds: Rect::new(
                 line_bounds.x0 + adjusted_inline,
                 line_bounds.y0,
@@ -598,28 +725,34 @@ pub(super) fn build_geometry(
             ),
         });
     }
-    let texts = projection
-        .spans
-        .iter()
-        .map(|span| span.local_range(span.paragraph.start, span.paragraph.end))
-        .collect();
+    let texts = if features.has_sources() {
+        projection
+            .spans
+            .iter()
+            .map(|span| span.local_range(span.paragraph.start, span.paragraph.end))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     Ok(CachedGeometry {
-        height: if prepared.lines().is_empty() {
-            empty_bounds.y1
-        } else {
-            line_top
-        },
+        features,
         facts: Arc::new(CachedGeometryFacts {
+            height: if prepared.lines().is_empty() {
+                empty_bounds.y1
+            } else {
+                line_top
+            },
             lines,
-            clusters,
-            carets,
-            movements,
-            texts,
-            semantics,
         }),
         line_fragments,
         fragments,
+        line_sources: CachedSidecar::new(features.has_sources(), line_sources),
+        clusters: CachedSidecar::new(needs_clusters, clusters),
+        carets: CachedSidecar::new(features.has_selection(), carets),
+        movements: CachedSidecar::new(features.has_navigation(), movements),
+        texts: CachedSidecar::new(features.has_sources(), texts),
+        semantics: CachedSidecar::new(features.has_semantics(), semantics),
     })
 }
 
@@ -628,18 +761,26 @@ pub(super) fn repaint_geometry(
     projection: &Projection<'_>,
     retained: &CachedGeometry,
 ) -> Result<CachedGeometry, SceneError> {
-    let (fragments, line_fragments) = build_paint_fragments(prepared, projection, &retained.lines)?;
+    let (fragments, line_fragments) =
+        build_paint_fragments(prepared, projection, retained.features, &retained.lines)?;
     Ok(CachedGeometry {
-        height: retained.height,
+        features: retained.features,
         facts: Arc::clone(&retained.facts),
         line_fragments,
         fragments,
+        line_sources: retained.line_sources.clone(),
+        clusters: retained.clusters.clone(),
+        carets: retained.carets.clone(),
+        movements: retained.movements.clone(),
+        texts: retained.texts.clone(),
+        semantics: retained.semantics.clone(),
     })
 }
 
 fn build_paint_fragments(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
+    features: SceneFeatures,
     lines: &[CachedLine],
 ) -> Result<(Vec<CachedFragment>, Vec<Range<usize>>), SceneError> {
     if prepared.lines().len() != lines.len() {
@@ -704,7 +845,11 @@ fn build_paint_fragments(
                     cached_line.baseline - glyph.offset().y,
                 );
                 for segment in glyph.paint().segments() {
-                    let sources = projection.local_ranges(segment.source())?;
+                    let sources = if features.has_sources() {
+                        projection.local_ranges(segment.source())?
+                    } else {
+                        Vec::new()
+                    };
                     let paint_clip = segment.clip().map(|clip| {
                         Rect::new(
                             position.x + clip.x0,

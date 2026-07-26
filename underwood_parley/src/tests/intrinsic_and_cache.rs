@@ -11,7 +11,7 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
     let max = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
         )
         .expect("max-content formation succeeds");
     assert_eq!(max.scene().lines().len(), 2);
@@ -47,7 +47,7 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
     let min = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MinContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MinContent, &styles, &paint),
         )
         .expect("min-content formation succeeds");
     assert_eq!(min.work().analysis().paragraphs(), 0);
@@ -60,7 +60,7 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
     let wrapped = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(
                     FiniteWidth::new(90.0).expect("test width is finite and positive"),
                 ),
@@ -85,7 +85,7 @@ fn hit_area_padding_does_not_inflate_zero_advance_intrinsic_width() {
     let output = fixture_engine()
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
         )
         .expect("mandatory break prepares");
     let max_advance = output
@@ -122,13 +122,13 @@ fn text_block_matches_document_path_and_empty_metrics_are_explicit() {
     let document_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
         )
         .expect("document prepares");
     let block_output = engine
         .prepare_block(
             &block.snapshot(),
-            &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("block prepares");
     assert_eq!(
@@ -171,7 +171,7 @@ fn text_block_matches_document_path_and_empty_metrics_are_explicit() {
     let empty_output = engine
         .prepare_block(
             &empty.snapshot(),
-            &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("empty block prepares");
     assert_eq!(empty_output.scene().metrics().size().width, 0.0);
@@ -201,7 +201,7 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
         let output = engine
             .prepare_block(
                 &block.snapshot(),
-                &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+                &editable_block_request(TextConstraint::MaxContent, &style, &paint),
             )
             .expect("block prepares");
         assert_eq!(output.work().shape().paragraphs(), 1);
@@ -219,7 +219,7 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     let retained = engine
         .prepare_block(
             &blocks[1].snapshot(),
-            &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("resident block prepares");
     assert_eq!(retained.work().analysis().paragraphs(), 0);
@@ -243,7 +243,7 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     let reloaded = engine
         .prepare_block(
             &blocks[0].snapshot(),
-            &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("evicted block prepares again");
     assert_eq!(reloaded.work().shape().paragraphs(), 1);
@@ -256,7 +256,7 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     let owned = zero
         .prepare_block(
             &blocks[0].snapshot(),
-            &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
+            &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("zero-budget output still materializes");
     assert!(!owned.scene().fragments().is_empty());
@@ -275,7 +275,7 @@ fn identical_blocks_share_only_identity_free_preparation() {
     let second = TextBlock::plain(DocumentId::from_bytes(*b"shared-label-002"), "office مرحبا")
         .expect("second block is valid");
     let mut layout = fixture_engine_with_budgets(8, 8 * 1024 * 1024);
-    let request = BlockRequest::new(TextConstraint::MaxContent, &style, &paint);
+    let request = editable_block_request(TextConstraint::MaxContent, &style, &paint);
 
     let first_output = layout
         .prepare_block(&first.snapshot(), &request)
@@ -302,12 +302,16 @@ fn identical_blocks_share_only_identity_free_preparation() {
         first_output
             .scene()
             .semantics()
+            .expect("test scene requested semantics")
+            .iter()
             .find_map(|semantic| semantic.source())
             .expect("first inline semantic has source")
             .text(),
         second_output
             .scene()
             .semantics()
+            .expect("test scene requested semantics")
+            .iter()
             .find_map(|semantic| semantic.source())
             .expect("second inline semantic has source")
             .text(),
@@ -317,12 +321,16 @@ fn identical_blocks_share_only_identity_free_preparation() {
         first_output
             .scene()
             .semantics()
+            .expect("test scene requested semantics")
+            .iter()
             .find(|semantic| semantic.inline_role().is_some())
             .expect("first inline semantic exists")
             .semantic_id(),
         second_output
             .scene()
             .semantics()
+            .expect("test scene requested semantics")
+            .iter()
             .find(|semantic| semantic.inline_role().is_some())
             .expect("second inline semantic exists")
             .semantic_id(),
@@ -381,7 +389,7 @@ fn shared_preparation_rebuilds_distinct_leaf_and_semantic_topology() {
         .expect("second emphasized leaf is valid");
     second_edit.commit().expect("second document commits");
 
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     let mut layout = fixture_engine_with_budgets(8, 8 * 1024 * 1024);
     let first_output = layout
         .prepare(&first.snapshot(), &request)
@@ -396,6 +404,8 @@ fn shared_preparation_rebuilds_distinct_leaf_and_semantic_topology() {
         first_output
             .scene()
             .semantics()
+            .expect("test scene requested semantics")
+            .iter()
             .filter(|semantic| semantic.inline_role().is_some())
             .count(),
         1
@@ -403,12 +413,16 @@ fn shared_preparation_rebuilds_distinct_leaf_and_semantic_topology() {
     let second_roles: Vec<_> = second_output
         .scene()
         .semantics()
+        .expect("test scene requested semantics")
+        .iter()
         .filter_map(|semantic| semantic.inline_role())
         .collect();
     assert_eq!(second_roles, [InlineRole::TEXT, InlineRole::EMPHASIS]);
     let second_texts: Vec<_> = second_output
         .scene()
         .semantics()
+        .expect("test scene requested semantics")
+        .iter()
         .filter_map(|semantic| semantic.source().map(|source| source.text()))
         .collect();
     assert_eq!(second_texts.len(), 2);
@@ -440,7 +454,7 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
         .expect("second text is valid");
     second_edit.commit().expect("second document commits");
 
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
     let mut layout = fixture_engine_with_budgets(8, 8 * 1024 * 1024);
     let first_snapshot = first.snapshot();
     let second_snapshot = second.snapshot();
@@ -460,40 +474,40 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
         .line(0)
         .expect("line exists")
         .bounds();
-    let first_end = *first_committed
+    let first_editing = first_committed
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let second_editing = second_committed
+        .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let first_end = *first_editing
         .hit_test_closest(Point::new(first_line.x1, first_line.center().y))
         .expect("first insertion point resolves")
         .position();
-    let second_end = *second_committed
-        .scene()
+    let second_end = *second_editing
         .hit_test_closest(Point::new(second_line.x1, second_line.center().y))
         .expect("second insertion point resolves")
         .position();
-    let first_selections = first_committed
-        .scene()
-        .selection_set([first_committed
-            .scene()
+    let first_selections = first_editing
+        .selection_set([first_editing
             .collapsed_selection(&first_end)
             .expect("first caret is valid")])
         .expect("first selection set is valid");
-    let second_selections = second_committed
-        .scene()
-        .selection_set([second_committed
-            .scene()
+    let second_selections = second_editing
+        .selection_set([second_editing
             .collapsed_selection(&second_end)
             .expect("second caret is valid")])
         .expect("second selection set is valid");
-    let mut first_session = first_committed
-        .scene()
+    let mut first_session = first_editing
         .begin_composition(
             &first_selections,
             CompositionId::from_bytes(*b"share-compose-01"),
         )
         .expect("first composition begins")
         .into_session();
-    let mut second_session = second_committed
-        .scene()
+    let mut second_session = second_editing
         .begin_composition(
             &second_selections,
             CompositionId::from_bytes(*b"share-compose-02"),
@@ -528,8 +542,10 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
         first_output.scene().composition(),
         second_output.scene().composition()
     );
+    let first_sources = projected_scene_sources(first_output.scene());
+    let second_sources = projected_scene_sources(second_output.scene());
     assert!(first_output.scene().fragments().iter().any(|fragment| {
-        fragment.sources().any(|source| {
+        first_sources.for_fragment(fragment).any(|source| {
             matches!(
                 source,
                 ProjectedTextSource::Composition(range)
@@ -539,7 +555,7 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
         })
     }));
     assert!(second_output.scene().fragments().iter().any(|fragment| {
-        fragment.sources().any(|source| {
+        second_sources.for_fragment(fragment).any(|source| {
             matches!(
                 source,
                 ProjectedTextSource::Composition(range)
@@ -579,12 +595,12 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
             .expect("block is valid"),
     ];
     let mut layout = fixture_engine_with_budgets(8, 8 * 1024 * 1024);
-    let max = BlockRequest::new(TextConstraint::MaxContent, &style, &paint);
+    let max = editable_block_request(TextConstraint::MaxContent, &style, &paint);
     layout
         .prepare_block(&blocks[0].snapshot(), &max)
         .expect("seed block prepares");
 
-    let brush_only = BlockRequest::new(TextConstraint::MaxContent, &style, &alternate_paint);
+    let brush_only = editable_block_request(TextConstraint::MaxContent, &style, &alternate_paint);
     let brush_output = layout
         .prepare_block(&blocks[1].snapshot(), &brush_only)
         .expect("brush-only consumer prepares");
@@ -598,7 +614,7 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
         .expect("alignment-only consumer prepares");
     assert_eq!(centered_output.work().shared_preparations(), 1);
 
-    let different_slot = BlockRequest::new(
+    let different_slot = editable_block_request(
         TextConstraint::MaxContent,
         &second_slot_style,
         &two_slot_paint,
@@ -609,7 +625,7 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
     assert_eq!(slot_output.work().shared_preparations(), 0);
     assert_eq!(slot_output.work().shape().paragraphs(), 1);
 
-    let wrapped = BlockRequest::new(
+    let wrapped = editable_block_request(
         TextConstraint::Wrap(FiniteWidth::new(200.0).expect("width is valid")),
         &style,
         &paint,
@@ -748,7 +764,7 @@ fn shared_region_transcripts_rebind_the_consuming_paragraph() {
     let flow =
         RegionFlow::rectangle(Rect::new(25.0, 40.0, 145.0, 180.0)).expect("flow region is valid");
     let request =
-        BlockRequest::new(TextConstraint::MaxContent, &style, &paint).with_region_flow(&flow);
+        editable_block_request(TextConstraint::MaxContent, &style, &paint).with_region_flow(&flow);
     let mut layout = fixture_engine_with_budgets(8, 8 * 1024 * 1024);
 
     let first_output = layout
@@ -782,7 +798,7 @@ fn shared_region_transcripts_rebind_the_consuming_paragraph() {
 fn shared_preparation_budget_is_byte_bounded_lru_and_oversized_safe() {
     let (_, styles, paint) = fixture_document("fixture", 1.2);
     let style = styles.default_style().clone();
-    let request = BlockRequest::new(TextConstraint::MaxContent, &style, &paint);
+    let request = editable_block_request(TextConstraint::MaxContent, &style, &paint);
     let probe = TextBlock::plain(DocumentId::from_bytes(*b"shared-size--001"), "aaaa")
         .expect("probe block is valid");
     let mut probe_layout = fixture_engine_with_budgets(2, 1024 * 1024);
@@ -878,7 +894,7 @@ fn failed_first_preparation_releases_untracked_backend_state() {
     engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
         )
         .expect_err("a catalog without Han coverage must fail");
 
@@ -910,12 +926,12 @@ fn cross_identity_second_work(
         .expect("first input block is valid");
     let second = TextBlock::plain(DocumentId::from_bytes(*b"shared-input-002"), "alpha beta")
         .expect("second input block is valid");
-    let mut first_request = BlockRequest::new(first_constraint, first_style, &paint)
+    let mut first_request = editable_block_request(first_constraint, first_style, &paint)
         .with_paragraph_style(first_paragraph);
     if let Some(flow) = first_flow {
         first_request = first_request.with_region_flow(flow);
     }
-    let mut second_request = BlockRequest::new(second_constraint, second_style, &paint)
+    let mut second_request = editable_block_request(second_constraint, second_style, &paint)
         .with_paragraph_style(second_paragraph);
     if let Some(flow) = second_flow {
         second_request = second_request.with_region_flow(flow);

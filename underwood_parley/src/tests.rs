@@ -22,10 +22,10 @@ use underwood::{
     EditableSurfaceElement, FiniteWidth, FontData, FontFamily, FontWeight, GenericFamily,
     InlineFlowStyle, InlineRole, LayoutEngine, LineHeight, OverflowWrap, PaintSlot, PaintTable,
     ParagraphRole, ParagraphStyle, Point, ProjectedTextPosition, ProjectedTextSource, Rect,
-    RegionAttemptOutcome, RegionFlow, ResolvedDirection, SceneRequest, SelectionErrorKind,
-    ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAffinity,
-    TextBlock, TextConstraint, TextMovement, TextScene, TextSelectionMode, TextSpacing,
-    TextWrapMode, Vec2, WhitespaceCollapse, WordBreak,
+    RegionAttemptOutcome, RegionFlow, ResolvedDirection, SceneFeatures, SceneRequest,
+    SelectionErrorKind, ShapingStyle, SnapshotTextUnit, StyleMap, SurfaceErrorKind,
+    SurfaceTextEncoding, TextAffinity, TextBlock, TextConstraint, TextMovement, TextScene,
+    TextSelectionMode, TextSpacing, TextWrapMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 use underwood::{Language, Script};
 
@@ -51,6 +51,24 @@ const LATIN_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
 const ARABIC_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/NotoKufiArabic-Regular.otf");
+
+fn editable_scene_request<'a>(
+    constraint: TextConstraint,
+    styles: &'a StyleMap,
+    paint: &'a PaintTable,
+) -> SceneRequest<'a> {
+    SceneRequest::new(constraint, styles, paint)
+        .with_features(SceneFeatures::EDITABLE.with_semantics())
+}
+
+fn editable_block_request<'a>(
+    constraint: TextConstraint,
+    style: &'a ComputedInlineStyle,
+    paint: &'a PaintTable,
+) -> BlockRequest<'a> {
+    BlockRequest::new(constraint, style, paint)
+        .with_features(SceneFeatures::EDITABLE.with_semantics())
+}
 
 #[derive(Debug)]
 struct PreparedFactsProbe {
@@ -162,10 +180,11 @@ impl ParagraphFormation for AnalysisCursorProof {
             [run],
         )?;
         let movements = prepared_cursor_movements(core::slice::from_ref(&line), source.end)?;
-        let paragraph = PreparedParagraph::try_new(
+        let paragraph = PreparedParagraph::try_new_with_features(
             input.paragraph(),
             source.end,
             ResolvedDirection::Ltr,
+            input.features(),
             [line],
             movements,
         )?;
@@ -240,12 +259,15 @@ struct ScannedHit {
 }
 
 fn scan_line_hits(scene: &TextScene, line_index: usize) -> Vec<ScannedHit> {
+    let interaction = scene
+        .interaction()
+        .expect("fixture retains hit-testing data");
     let bounds = scene.line(line_index).expect("line exists").bounds();
     let y = bounds.center().y;
     let mut hits: Vec<ScannedHit> = Vec::new();
     let mut x = bounds.x0;
     while x <= bounds.x1 {
-        if let Some(hit) = scene.hit_test(Point::new(x, y)) {
+        if let Some(hit) = interaction.hit_test(Point::new(x, y)) {
             let source = sole_unit_source(hit.source()).bytes();
             if let Some(existing) = hits.iter_mut().find(|existing| existing.source == source) {
                 existing.max_x = x;
@@ -269,6 +291,20 @@ fn sole_unit_source(unit: &SnapshotTextUnit) -> &underwood::SnapshotTextRange {
         panic!("fixture interaction unit must remain within one semantic leaf");
     };
     source
+}
+
+fn scene_sources(scene: &TextScene) -> underwood::SceneSourceAccess<'_> {
+    scene
+        .sources()
+        .expect("fixture retains authored-source provenance")
+}
+
+fn projected_scene_sources(
+    scene: &underwood::CompositionScene,
+) -> underwood::ProjectedSceneSourceAccess<'_> {
+    scene
+        .sources()
+        .expect("fixture retains projected-source provenance")
 }
 
 fn fixture_engine() -> LayoutEngine {
@@ -296,6 +332,43 @@ fn fixture_paragraph_engine() -> ParleyParagraphEngine {
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
     .expect("Arabic fallback is valid");
     ParleyParagraphEngine::new(fonts)
+}
+
+#[test]
+fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formation() {
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let adapter = PreparedFactsProbe {
+        inner: fixture_paragraph_engine(),
+        outputs: Rc::clone(&observed),
+    };
+    let mut layout = LayoutEngine::new(adapter, CacheBudget::new(32));
+    let (document, styles, paint) = fixture_document("Display, then edit.", 1.2);
+    let display_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let display = layout
+        .prepare(&document.snapshot(), &display_request)
+        .expect("display-only text must prepare");
+    assert_eq!(display.scene().fragment_count(), 1);
+    let first_observed = observed.borrow();
+    assert_eq!(first_observed.len(), 1);
+    assert_eq!(first_observed[0].features(), SceneFeatures::DISPLAY);
+    assert!(
+        first_observed[0].movements().is_empty(),
+        "display lowering must not build a hidden movement graph"
+    );
+    drop(first_observed);
+
+    let editable_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(SceneFeatures::EDITABLE);
+    let editable = layout
+        .prepare(&document.snapshot(), &editable_request)
+        .expect("a retained display paragraph must upgrade");
+    assert_eq!(editable.work().analysis().paragraphs(), 0);
+    assert_eq!(editable.work().shape().paragraphs(), 0);
+    assert_eq!(editable.work().flow().paragraphs(), 0);
+    let observed = observed.borrow();
+    assert_eq!(observed.len(), 2);
+    assert!(observed[1].features().contains(SceneFeatures::EDITABLE));
+    assert!(!observed[1].movements().is_empty());
 }
 
 fn fixture_document(text: &str, line_height: f32) -> (Document, StyleMap, PaintTable) {

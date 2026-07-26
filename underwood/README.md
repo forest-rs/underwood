@@ -66,9 +66,12 @@ pretending that ink bounds are cursor geometry. A committed hit returns a
 Closest hits also clamp to an empty editable leaf:
 
 ```rust,ignore
-let hit = scene.hit_test(point).or_else(|| scene.hit_test_closest(point));
+let interaction = scene.interaction()?;
+let hit = interaction
+    .hit_test(point)
+    .or_else(|| interaction.hit_test_closest(point));
 if let Some(hit) = hit {
-    let caret = scene
+    let caret = interaction
         .caret(hit.position())
         .expect("a hit from this scene has a matching caret stop");
     assert_eq!(caret.position(), hit.position());
@@ -77,7 +80,7 @@ if let Some(hit) = hit {
 
 `SnapshotTextPosition` includes the exact document revision, semantic text
 leaf, UTF-8 byte boundary, and upstream/downstream affinity. Passing a position
-from another revision or scene to [`TextScene::caret`] returns `None` rather
+from another revision or scene to [`SceneInteraction::caret`] returns `None` rather
 than silently relocating it.
 
 ## Selection sets and replacement
@@ -91,15 +94,16 @@ flattened together.
 ```rust,ignore
 use underwood::{TextMovement, TextSelectionMode};
 
-let anchor = scene.hit_test_closest(drag_start).unwrap();
-let extent = scene.hit_test_closest(drag_end).unwrap();
-let visual = scene.selection(
+let editing = scene.editing()?;
+let anchor = editing.hit_test_closest(drag_start).unwrap();
+let extent = editing.hit_test_closest(drag_end).unwrap();
+let visual = editing.selection_between(
     anchor.position(),
     extent.position(),
     TextSelectionMode::Visual,
 )?;
-let selections = scene.selection_set([visual])?;
-let selections = scene.move_selections(
+let selections = editing.selection_set([visual])?;
+let selections = editing.move_selections(
     &selections,
     TextMovement::NextVisual,
     true,
@@ -157,14 +161,16 @@ use underwood::TextSelectionMode;
 let snapshot = label.snapshot();
 let output = layout.prepare_block(
     &snapshot,
-    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint),
+    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint)
+        .with_features(underwood::SceneFeatures::EDITABLE),
 )?;
 let scene = output.scene();
+let editing = scene.editing()?;
 let text = snapshot.text_id();
-let start = scene.position_at(text, 0).unwrap();
-let end = scene.position_at(text, 4).unwrap();
-let selected = scene.selection(&start, &end, TextSelectionMode::Logical)?;
-let selected = scene.selection_set([selected])?;
+let start = editing.position_at(text, 0).unwrap();
+let end = editing.position_at(text, 4).unwrap();
+let selected = editing.selection_between(&start, &end, TextSelectionMode::Logical)?;
+let selected = editing.selection_set([selected])?;
 
 let rebound = label.replace_selections(&selected, "Open")?;
 assert_eq!(label.text(), "Open");
@@ -300,7 +306,7 @@ contributing leaf-local range.
 
 ## Composition epochs and editable surfaces
 
-[`TextScene::begin_composition`] creates a transient [`CompositionSession`]
+[`SceneEditing::begin_composition`] creates a transient [`CompositionSession`]
 without editing its immutable snapshot. Each accepted [`CompositionUpdate`]
 advances a checked epoch, carries generated UTF-8 text, selection, and optional
 IME-authored clauses, and projects that text through the same paragraph engine

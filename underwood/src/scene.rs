@@ -19,17 +19,19 @@ use crate::document::Paragraph;
 use crate::{
     Affine, AnalysisStyle, BaseDirection, BlockRequest, CompositionError, CompositionErrorKind,
     CompositionId, CompositionSession, CompositionStart, ComputedInlineStyle, DocumentRevision,
-    DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, PaintSlot, PaintTable, ParagraphId,
-    ParagraphRole, ParagraphStyle, Point, ProjectedText as TextProjection, ProjectionKind,
-    ProjectionSegment, Rect, RegionAttemptOutcome, RegionCursor, RegionFlow, RegionTranscript,
-    ResolvedDirection, SceneError, SceneErrorKind, SceneRequest, SelectionError,
-    SelectionErrorKind, SemanticId, ShapingStyle, Size, SnapshotTextPosition, SnapshotTextRange,
-    SnapshotTextSelection, SnapshotTextSelectionSet, SnapshotTextUnit, StyleMap, TextAlignment,
-    TextBlockSnapshot, TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2,
+    DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, MissingSceneCapability, PaintSlot,
+    PaintTable, ParagraphId, ParagraphRole, ParagraphStyle, Point, ProjectedText as TextProjection,
+    ProjectionKind, ProjectionSegment, Rect, RegionAttemptOutcome, RegionCursor, RegionFlow,
+    RegionTranscript, ResolvedDirection, SceneError, SceneErrorKind, SceneFeaturePolicy,
+    SceneFeatures, SceneRequest, SelectionError, SelectionErrorKind, SemanticId, ShapingStyle,
+    Size, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,
+    SnapshotTextUnit, StyleMap, TextAlignment, TextBlockSnapshot, TextConstraint, TextId,
+    TextMovement, TextSelectionMode, Vec2,
 };
 
 mod adjustment;
 mod engine;
+mod facades;
 mod geometry;
 mod interaction;
 mod output;
@@ -40,6 +42,11 @@ mod spine;
 mod views;
 
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
+pub use facades::{
+    ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneInteraction,
+    ProjectedSceneSemanticAccess, ProjectedSceneSourceAccess, SceneDisplay, SceneEditing,
+    SceneInteraction, SceneSelection, SceneSemanticAccess, SceneSourceAccess,
+};
 pub use interaction::{CompositionScene, TextScene};
 pub use output::{
     CompositionSceneOutput, PreparationMemory, PreparationReuse, PreparationTrace,

@@ -15,6 +15,7 @@ mod composition;
 mod document;
 mod editable;
 mod error;
+mod features;
 mod projection;
 mod region;
 mod scene;
@@ -38,6 +39,7 @@ pub use error::{
     CompositionError, CompositionErrorKind, EditError, EditErrorKind, SceneError, SceneErrorKind,
     SelectionError, SelectionErrorKind, StyleError, StyleErrorKind, SurfaceError, SurfaceErrorKind,
 };
+pub use features::{MissingSceneCapability, SceneFeaturePolicy, SceneFeatures};
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
 pub use parlance::{
     BaseDirection, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
@@ -54,14 +56,17 @@ pub use region::{
 };
 pub use scene::{
     CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
-    LineAdjustment, PreparationMemory, PreparationReuse, PreparationTrace,
-    ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,
-    ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources,
-    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneCaret,
-    SceneCompositionRect, SceneFragmentId, SceneFragmentView, SceneFragments, SceneGlyphInstanceId,
-    SceneGlyphView, SceneGlyphs, SceneLineView, SceneLines, SceneOutput, SceneRegionAttempts,
-    SceneRegionTranscript, SceneSelectionRect, SceneSemantics, SemanticFragmentView,
-    SnapshotSources, StageWork, TextHit, TextMetrics, TextScene, WorkReport,
+    LineAdjustment, PreparationMemory, PreparationReuse, PreparationTrace, ProjectedSceneDisplay,
+    ProjectedSceneEditing, ProjectedSceneFragmentView, ProjectedSceneFragments,
+    ProjectedSceneGlyphView, ProjectedSceneGlyphs, ProjectedSceneInteraction,
+    ProjectedSceneLineView, ProjectedSceneLines, ProjectedSceneSemanticAccess,
+    ProjectedSceneSourceAccess, ProjectedSources, ProjectedTextPosition, ProjectedTextRange,
+    ProjectedTextSource, SceneCaret, SceneCompositionRect, SceneDisplay, SceneEditing,
+    SceneFragmentId, SceneFragmentView, SceneFragments, SceneGlyphInstanceId, SceneGlyphView,
+    SceneGlyphs, SceneInteraction, SceneLineView, SceneLines, SceneOutput, SceneRegionAttempts,
+    SceneRegionTranscript, SceneSelection, SceneSelectionRect, SceneSemanticAccess, SceneSemantics,
+    SceneSourceAccess, SemanticFragmentView, SnapshotSources, StageWork, TextHit, TextMetrics,
+    TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

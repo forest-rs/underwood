@@ -150,7 +150,7 @@ impl EditableSurfaceSnapshot<'_> {
                 TextAffinity::Upstream,
             )
             .ok_or_else(|| SurfaceError::new(SurfaceErrorKind::UnsupportedSelection))?;
-            scene.selection(&start, &end, TextSelectionMode::Logical)
+            scene.selection_between(&start, &end, TextSelectionMode::Logical)
         }
         .map_err(|_| SurfaceError::new(SurfaceErrorKind::UnsupportedSelection))?;
         scene

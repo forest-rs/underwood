@@ -194,8 +194,8 @@ impl<'a> ProjectedSceneLineView<'a> {
     }
 
     /// Iterates authored and generated source slices represented by the line.
-    pub fn sources(self) -> ProjectedSources<'a> {
-        ProjectedSources::new(self.inner.revision, &self.inner.local().sources)
+    pub(crate) fn sources(self) -> ProjectedSources<'a> {
+        self.inner.projected_sources()
     }
 
     /// Returns the global scene-fragment range painted by this line.
@@ -267,8 +267,17 @@ impl<'a> SceneLineView<'a> {
     }
 
     /// Iterates source-complete snapshot slices represented by the line.
-    pub fn sources(self) -> SnapshotSources<'a> {
-        SnapshotSources::new(self.revision, &self.local().sources)
+    pub(crate) fn sources(self) -> SnapshotSources<'a> {
+        SnapshotSources::new(
+            self.revision,
+            self.positioned
+                .position
+                .segment
+                .geometry
+                .line_sources
+                .get(self.positioned.local)
+                .map_or(&[], Vec::as_slice),
+        )
     }
 
     /// Returns the global scene-fragment range painted by this line.
@@ -312,6 +321,19 @@ impl<'a> SceneLineView<'a> {
 
     fn translate(self) -> Vec2 {
         Vec2::new(0.0, self.positioned.position.position.block_origin)
+    }
+
+    fn projected_sources(self) -> ProjectedSources<'a> {
+        ProjectedSources::new(
+            self.revision,
+            self.positioned
+                .position
+                .segment
+                .geometry
+                .line_sources
+                .get(self.positioned.local)
+                .map_or(&[], Vec::as_slice),
+        )
     }
 }
 
@@ -519,12 +541,12 @@ impl<'a> ProjectedSceneFragmentView<'a> {
 
     /// Returns the first authored or generated source slice.
     #[must_use]
-    pub fn source(self) -> Option<ProjectedTextSource> {
+    pub(crate) fn source(self) -> Option<ProjectedTextSource> {
         self.sources().next()
     }
 
     /// Iterates every authored and generated source slice.
-    pub fn sources(self) -> ProjectedSources<'a> {
+    pub(crate) fn sources(self) -> ProjectedSources<'a> {
         ProjectedSources::new(self.inner.revision, &self.inner.local().sources)
     }
 
@@ -621,12 +643,12 @@ impl<'a> SceneFragmentView<'a> {
 
     /// Returns the first source slice covered by this fragment.
     #[must_use]
-    pub fn source(self) -> Option<SnapshotTextRange> {
+    pub(crate) fn source(self) -> Option<SnapshotTextRange> {
         self.sources().next()
     }
 
     /// Iterates every source slice covered by this fragment.
-    pub fn sources(self) -> SnapshotSources<'a> {
+    pub(crate) fn sources(self) -> SnapshotSources<'a> {
         SnapshotSources::new(self.revision, &self.local().sources)
     }
 
@@ -860,16 +882,8 @@ impl<'a> ProjectedSceneGlyphView<'a> {
         self.inner.advance()
     }
 
-    /// Returns the first authored or generated source slice.
-    #[must_use]
-    pub fn source(self) -> ProjectedTextSource {
-        self.sources()
-            .next()
-            .expect("validated glyphs retain source")
-    }
-
     /// Iterates source-complete authored and generated provenance.
-    pub fn sources(self) -> ProjectedSources<'a> {
+    pub(crate) fn sources(self) -> ProjectedSources<'a> {
         ProjectedSources::new(self.inner.revision, &self.inner.local().sources)
     }
 }
@@ -914,16 +928,8 @@ impl<'a> SceneGlyphView<'a> {
         self.local().advance
     }
 
-    /// Returns the first source slice covered by the glyph.
-    #[must_use]
-    pub fn source(self) -> SnapshotTextRange {
-        self.sources()
-            .next()
-            .expect("validated glyphs retain source")
-    }
-
     /// Iterates source-complete glyph provenance.
-    pub fn sources(self) -> SnapshotSources<'a> {
+    pub(crate) fn sources(self) -> SnapshotSources<'a> {
         SnapshotSources::new(self.revision, &self.local().sources)
     }
 }

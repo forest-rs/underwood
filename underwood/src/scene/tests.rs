@@ -48,18 +48,21 @@ impl ParagraphFormation for EchoAdapter {
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         if text_len == 0 {
             let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
-            let movements = [PreparedCursorMovement::new(
-                position,
-                PreparedCaret::try_new(0, 0.0)?,
-                None,
-                None,
-                None,
-                None,
-            )];
-            let paragraph = PreparedParagraph::try_new(
+            let movements = input.features().has_selection().then(|| {
+                PreparedCursorMovement::new(
+                    position,
+                    PreparedCaret::try_new(0, 0.0).expect("fixture caret is valid"),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            });
+            let paragraph = PreparedParagraph::try_new_with_features(
                 input.paragraph(),
                 text_len,
                 ResolvedDirection::Ltr,
+                input.features(),
                 [],
                 movements,
             )?;
@@ -246,12 +249,18 @@ impl ParagraphFormation for EchoAdapter {
                 None,
             ));
         }
-        let paragraph = PreparedParagraph::try_new(
+        let paragraph = PreparedParagraph::try_new_with_features(
             input.paragraph(),
             text_len,
             ResolvedDirection::Ltr,
+            input.features(),
             [line],
-            movements,
+            input
+                .features()
+                .has_selection()
+                .then_some(movements)
+                .into_iter()
+                .flatten(),
         )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
@@ -568,7 +577,8 @@ fn invalid_first_output_releases_untracked_backend_state() {
         TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::EDITABLE);
     layout
         .prepare(&document.snapshot(), &request)
         .expect_err("mid-scalar adapter source must be rejected");
@@ -830,7 +840,8 @@ fn layout_rejects_a_cursor_inside_a_utf8_scalar() {
         TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::EDITABLE);
     let error = layout
         .prepare(&document.snapshot(), &request)
         .expect_err("mid-scalar cursor output must be rejected");
@@ -992,7 +1003,8 @@ fn paragraph_style_override_from_another_document_is_rejected() {
         },
         CacheBudget::new(32),
     );
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
     let error = layout
         .prepare(&first.snapshot(), &request)
         .expect_err("a foreign paragraph style must not be silently ignored");
@@ -1008,7 +1020,8 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
         paragraph,
         ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
     );
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
@@ -1032,7 +1045,9 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
         .expect("right side must hit");
     let selection = committed
         .scene()
-        .selection(
+        .editing()
+        .expect("fixture retains editable scene data")
+        .selection_between(
             left.position(),
             right.position(),
             TextSelectionMode::Logical,
@@ -1106,7 +1121,8 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
         TextConstraint::Wrap(FiniteWidth::new(100.0).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::DISPLAY.with_sources());
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
@@ -1337,7 +1353,8 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::EDITABLE);
     let committed = layout
         .prepare(&snapshot, &request)
         .expect("committed scene must prepare");
@@ -1351,7 +1368,9 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         .expect("right cluster side must hit");
     let selection = committed
         .scene()
-        .selection(
+        .editing()
+        .expect("fixture retains editable scene data")
+        .selection_between(
             left.position(),
             right.position(),
             TextSelectionMode::Logical,
@@ -1671,7 +1690,8 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
     let first = layout
         .prepare(
             &first_snapshot,
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark)
+                .with_features(crate::SceneFeatures::DISPLAY.with_sources()),
         )
         .expect("initial scene prepares");
     let first_target_glyph = first
@@ -1691,7 +1711,8 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
     let repainted = layout
         .prepare(
             &first_snapshot,
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &light),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &light)
+                .with_features(crate::SceneFeatures::DISPLAY.with_sources()),
         )
         .expect("paint-only scene prepares");
     assert!(
@@ -1706,7 +1727,9 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
     let second = layout
         .prepare(
             second_publication.snapshot(),
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark).with_preparation_trace(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark)
+                .with_features(crate::SceneFeatures::DISPLAY.with_sources())
+                .with_preparation_trace(),
         )
         .expect("localized scene prepares");
     assert_eq!(second.work().shape().paragraphs(), 1);
@@ -2037,8 +2060,9 @@ fn composition_replaces_only_its_persistent_paragraph_path() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request =
-        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE)
+        .with_preparation_trace();
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
@@ -2197,8 +2221,9 @@ fn composition_residency_never_evicts_committed_geometry() {
     let (document, styles, paint) = one_leaf_document(*b"comp-budget-doc1", "committed");
     let snapshot = document.snapshot();
     let text = snapshot.paragraphs()[0].leaves[0].id;
-    let request =
-        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE)
+        .with_preparation_trace();
     let adapter = || EchoAdapter {
         split_utf8: false,
         split_paint: false,
@@ -2388,7 +2413,8 @@ fn composition_root_recency_protects_only_segments_it_names() {
         PaintSlot::new(0),
     ));
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
     let committed = layout
         .prepare(&snapshot, &request)
         .expect("committed document prepares");
@@ -2480,35 +2506,37 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
     let segment = Arc::new(super::ParagraphSceneSegment::new(
         paragraph,
         Arc::new(super::CachedGeometry {
-            height: 0.0,
+            features: crate::SceneFeatures::EDITABLE,
             facts: Arc::new(super::CachedGeometryFacts {
+                height: 0.0,
                 lines: Vec::new(),
-                clusters: Vec::new(),
-                carets: Vec::new(),
-                movements: vec![
-                    super::CachedCursorMovement {
-                        position: local_start,
-                        previous_visual: None,
-                        next_visual: None,
-                        previous_logical: None,
-                        next_logical: None,
-                    },
-                    super::CachedCursorMovement {
-                        position: local_end,
-                        previous_visual: Some(super::CachedCursorStep {
-                            target: local_start,
-                            source: Some(vec![local_source.clone()]),
-                        }),
-                        next_visual: None,
-                        previous_logical: None,
-                        next_logical: None,
-                    },
-                ],
-                texts: vec![local_source],
-                semantics: Vec::new(),
             }),
             line_fragments: Vec::new(),
             fragments: Vec::new(),
+            line_sources: super::CachedSidecar::from_records(Vec::new()),
+            clusters: super::CachedSidecar::from_records(Vec::new()),
+            carets: super::CachedSidecar::from_records(Vec::new()),
+            movements: super::CachedSidecar::from_records(vec![
+                super::CachedCursorMovement {
+                    position: local_start,
+                    previous_visual: None,
+                    next_visual: None,
+                    previous_logical: None,
+                    next_logical: None,
+                },
+                super::CachedCursorMovement {
+                    position: local_end,
+                    previous_visual: Some(super::CachedCursorStep {
+                        target: local_start,
+                        source: Some(vec![local_source.clone()]),
+                    }),
+                    next_visual: None,
+                    previous_logical: None,
+                    next_logical: None,
+                },
+            ]),
+            texts: super::CachedSidecar::from_records(vec![local_source]),
+            semantics: super::CachedSidecar::from_records(Vec::new()),
         }),
         None,
     ));
@@ -2516,19 +2544,21 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
         document: snapshot.id(),
         revision: snapshot.revision(),
         paint: PaintTable::from_brushes([Brush::Solid(Color::BLACK)]),
+        requested: crate::SceneFeaturePolicy::uniform(crate::SceneFeatures::EDITABLE),
         core: Arc::new(super::SceneCore {
             paragraph_count: 1,
             spine: super::SceneSpine::from_segments(&[segment], true),
             metrics: super::TextMetrics::default(),
             region: None,
+            resident: crate::SceneFeaturePolicy::uniform(crate::SceneFeatures::EDITABLE),
         }),
     };
 
     let forward = scene
-        .selection(&start, &end, TextSelectionMode::Visual)
+        .selection_between(&start, &end, TextSelectionMode::Visual)
         .expect("selection must use the equivalent reverse traversal");
     let reverse = scene
-        .selection(&end, &start, TextSelectionMode::Visual)
+        .selection_between(&end, &start, TextSelectionMode::Visual)
         .expect("the represented traversal must select");
     assert_eq!(forward.ranges(), reverse.ranges());
     assert_eq!(forward.ranges(), [source]);
@@ -2589,6 +2619,117 @@ fn composition_projection_rejects_a_missing_semantic_target() {
         SceneErrorKind::InvalidComposition,
         "a matching paragraph index is insufficient without the semantic text leaf"
     );
+}
+
+#[test]
+fn display_scene_excludes_interaction_and_reports_requested_resident_capabilities() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-features01", "display only");
+    let paragraph = document.snapshot().paragraphs()[0].id;
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    let output = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("display-only scene must prepare");
+    let scene = output.scene();
+    assert_eq!(scene.display().line_count(), 1);
+    assert_eq!(scene.display().fragment_count(), 1);
+
+    for error in [
+        scene.sources().expect_err("display excludes sources"),
+        scene
+            .interaction()
+            .expect_err("display excludes hit testing"),
+        scene.selection().expect_err("display excludes selection"),
+        scene.editing().expect_err("display excludes editing"),
+    ] {
+        assert_eq!(error.paragraph(), Some(paragraph));
+        assert_eq!(error.requested(), crate::SceneFeatures::DISPLAY);
+        assert_eq!(error.resident(), crate::SceneFeatures::DISPLAY);
+        assert!(
+            !crate::SceneFeatures::DISPLAY.contains(error.required()),
+            "the diagnostic must name a genuinely absent closure"
+        );
+    }
+
+    let geometry = layout
+        .cached_geometry_for_test(paragraph)
+        .expect("display geometry remains resident");
+    assert!(geometry.clusters.is_empty());
+    assert!(geometry.carets.is_empty());
+    assert!(geometry.movements.is_empty());
+    assert!(geometry.texts.is_empty());
+    assert!(geometry.semantics.is_empty());
+}
+
+#[test]
+fn sparse_editable_override_does_not_promote_a_display_sibling() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-features02"));
+    let mut edit = document.edit();
+    let display = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("display paragraph must append");
+    edit.append_text(display, InlineRole::TEXT, "display")
+        .expect("display text must append");
+    let editor = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("editor paragraph must append");
+    edit.append_text(editor, InlineRole::TEXT, "editor")
+        .expect("editor text must append");
+    edit.commit().expect("fixture must publish");
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style must be valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let policy = crate::SceneFeaturePolicy::uniform(crate::SceneFeatures::DISPLAY)
+        .with_paragraph(editor, crate::SceneFeatures::EDITABLE);
+    let request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_feature_policy(policy);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    let output = layout
+        .prepare(&document.snapshot(), &request)
+        .expect("mixed-capability scene must prepare");
+
+    let error = output
+        .scene()
+        .editing()
+        .expect_err("whole-scene editing must reject the display sibling");
+    assert_eq!(error.paragraph(), Some(display));
+    assert_eq!(error.requested(), crate::SceneFeatures::DISPLAY);
+    assert_eq!(error.resident(), crate::SceneFeatures::DISPLAY);
+
+    let display_geometry = layout
+        .cached_geometry_for_test(display)
+        .expect("display sibling remains resident");
+    let editor_geometry = layout
+        .cached_geometry_for_test(editor)
+        .expect("editor paragraph remains resident");
+    assert_eq!(display_geometry.features, crate::SceneFeatures::DISPLAY);
+    assert!(display_geometry.movements.is_empty());
+    assert_eq!(editor_geometry.features, crate::SceneFeatures::EDITABLE);
+    assert!(!editor_geometry.movements.is_empty());
 }
 
 fn one_leaf_document(identity: [u8; 16], text: &str) -> (Document, StyleMap, PaintTable) {

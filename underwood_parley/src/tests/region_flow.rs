@@ -13,7 +13,7 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
         FlowRegion::new(Rect::new(100.0, 0.0, 172.0, 200.0)).expect("second column is valid"),
     ])
     .expect("column flow is valid");
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(72.0).expect("fallback width is valid")),
         &styles,
         &paint,
@@ -24,6 +24,7 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("text must retry into the second column");
+    let sources = scene_sources(output.scene());
     let transcript = output
         .region_transcript()
         .expect("region preparation retains a transcript");
@@ -52,11 +53,8 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
         0.0
     );
     assert_eq!(
-        output
-            .scene()
-            .line(0)
-            .expect("line exists")
-            .sources()
+        sources
+            .for_line(output.scene().line(0).expect("line exists"))
             .iter()
             .next()
             .expect("source exists")
@@ -96,7 +94,7 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
         .with_exclusions([Rect::new(70.0, 0.0, 110.0, 50.0)])
         .expect("central exclusion is valid");
     let flow = RegionFlow::new([region]).expect("exclusion flow is valid");
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(180.0).expect("fallback width is valid")),
         &styles,
         &paint,
@@ -106,6 +104,7 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
         .prepare(&document.snapshot(), &request)
         .expect("text must fill both exclusion intervals");
     let lines = output.scene().lines();
+    let sources = scene_sources(output.scene());
 
     assert!(lines.len() >= 2);
     assert_eq!(
@@ -114,18 +113,14 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
     );
     assert!(lines.get(0).expect("line exists").bounds().x1 <= 70.0);
     assert!(lines.get(1).expect("line exists").bounds().x0 >= 110.0);
-    let left_source = lines
-        .get(0)
-        .expect("line exists")
-        .sources()
+    let left_source = sources
+        .for_line(lines.get(0).expect("line exists"))
         .iter()
         .next()
         .expect("source exists")
         .bytes();
-    let right_source = lines
-        .get(1)
-        .expect("line exists")
-        .sources()
+    let right_source = sources
+        .for_line(lines.get(1).expect("line exists"))
         .iter()
         .next()
         .expect("source exists")
@@ -137,6 +132,8 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
     ] {
         let hit = output
             .scene()
+            .editing()
+            .expect("fixture retains editable scene data")
             .hit_test(line.bounds().center())
             .expect("each same-row interval retains exact hit geometry");
         assert!(source.start <= hit.position().byte() && hit.position().byte() <= source.end);
@@ -148,8 +145,8 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
             .find(|attempt| {
                 attempt.outcome() == RegionAttemptOutcome::Accepted
                     && attempt.source()
-                        == line
-                            .sources()
+                        == sources
+                            .for_line(line)
                             .iter()
                             .fold(None, |range, source| {
                                 let bytes = source.bytes();
@@ -183,7 +180,7 @@ fn floats_decompose_into_distinct_zero_allocation_slot_bands() {
         ])
         .expect("floats fit");
     let flow = RegionFlow::new([region]).expect("float flow is valid");
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(180.0).expect("fallback width is valid")),
         &styles,
         &paint,
@@ -226,7 +223,7 @@ fn paragraphs_resume_one_cursor_across_region_boundaries() {
         FlowRegion::new(Rect::new(120.0, 0.0, 220.0, 40.0)).expect("second column is valid"),
     ])
     .expect("column flow is valid");
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(100.0).expect("fallback width is valid")),
         &styles,
         &paint,
@@ -301,7 +298,7 @@ fn localized_region_edit_stops_when_the_cursor_converges() {
     edit.commit().expect("document publishes");
     let (_, styles, paint) = fixture_document("style", 1.0);
     let flow = RegionFlow::rectangle(Rect::new(0.0, 0.0, 120.0, 2_000.0)).expect("flow is valid");
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(120.0).expect("fallback width is valid")),
         &styles,
         &paint,
@@ -361,7 +358,7 @@ fn changing_only_region_geometry_reuses_analysis_and_canonical_shaping() {
         RegionFlow::rectangle(Rect::new(0.0, 0.0, 72.0, 200.0)).expect("narrow flow is valid");
     let mut engine = fixture_engine();
     let request = |flow| {
-        SceneRequest::new(
+        editable_scene_request(
             TextConstraint::Wrap(FiniteWidth::new(180.0).expect("fallback width is valid")),
             &styles,
             &paint,
@@ -390,7 +387,7 @@ fn empty_paragraph_consumes_height_without_fabricating_text() {
         FlowRegion::new(Rect::new(100.0, 0.0, 180.0, 50.0)).expect("second region is valid"),
     ])
     .expect("empty-line flow is valid");
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(80.0).expect("fallback width is valid")),
         &styles,
         &paint,
@@ -410,13 +407,15 @@ fn empty_paragraph_consumes_height_without_fabricating_text() {
     assert!(attempts[1].source().is_empty());
     assert!(output.scene().lines().is_empty());
     assert_eq!(output.scene().metrics().size().height, 20.0);
-    let hit = output
+    let editing = output
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let hit = editing
         .hit_test_closest(Point::new(100.0, 10.0))
         .expect("empty paragraph keeps its represented caret");
     assert_eq!(
-        output
-            .scene()
+        editing
             .caret(hit.position())
             .expect("empty caret resolves")
             .bounds()
@@ -436,7 +435,7 @@ fn line_height_change_retries_regions_without_reshaping() {
     ])
     .expect("height-sensitive flow is valid");
     let mut engine = fixture_engine();
-    let compact_request = SceneRequest::new(
+    let compact_request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(120.0).expect("fallback width is valid")),
         &compact_styles,
         &paint,
@@ -450,7 +449,7 @@ fn line_height_change_retries_regions_without_reshaping() {
         0.0
     );
 
-    let spacious_request = SceneRequest::new(
+    let spacious_request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(120.0).expect("fallback width is valid")),
         &spacious_styles,
         &paint,
@@ -478,7 +477,7 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
     let plain = engine
         .prepare(
             &snapshot,
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(400.0).expect("plain width is valid")),
                 &styles,
                 &paint,
@@ -490,7 +489,7 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
     let shifted = engine
         .prepare(
             &snapshot,
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(400.0).expect("fallback width is valid")),
                 &styles,
                 &paint,
@@ -548,33 +547,39 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
         .bounds()
         .center()
         .y;
-    let anchor = *plain_scene
+    let plain_editing = plain_scene
+        .editing()
+        .expect("fixture retains editable scene data");
+    let shifted_editing = shifted_scene
+        .editing()
+        .expect("fixture retains editable scene data");
+    let anchor = *plain_editing
         .hit_test_closest(Point::new(
             plain_scene.line(0).expect("line exists").bounds().x0,
             y,
         ))
         .expect("plain start resolves")
         .position();
-    let extent = *plain_scene
+    let extent = *plain_editing
         .hit_test_closest(Point::new(
             plain_scene.line(0).expect("line exists").bounds().x1,
             y,
         ))
         .expect("plain end resolves")
         .position();
-    let selection = plain_scene
-        .selection(&anchor, &extent, TextSelectionMode::Visual)
+    let selection = plain_editing
+        .selection_between(&anchor, &extent, TextSelectionMode::Visual)
         .expect("visual selection is valid");
-    let plain_geometry = plain_scene
+    let plain_geometry = plain_editing
         .selection_geometry(
-            &plain_scene
+            &plain_editing
                 .selection_set([selection.clone()])
                 .expect("plain selection set is valid"),
         )
         .expect("plain selection geometry resolves");
-    let shifted_geometry = shifted_scene
+    let shifted_geometry = shifted_editing
         .selection_geometry(
-            &shifted_scene
+            &shifted_editing
                 .selection_set([selection])
                 .expect("shifted selection set is valid"),
         )
@@ -592,7 +597,7 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
     let (document, styles, paint) = fixture_document("office", 1.0);
     let snapshot = document.snapshot();
     let flow = RegionFlow::rectangle(Rect::new(40.0, 20.0, 440.0, 180.0)).expect("region is valid");
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0).expect("fallback width is valid")),
         &styles,
         &paint,
@@ -602,21 +607,21 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
     let committed = engine
         .prepare(&snapshot, &request)
         .expect("committed region scene prepares");
-    let line = &committed.scene().line(0).expect("line exists");
-    let end = *committed
+    let editing = committed
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let line = &committed.scene().line(0).expect("line exists");
+    let end = *editing
         .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
         .expect("line end resolves")
         .position();
-    let selections = committed
-        .scene()
-        .selection_set([committed
-            .scene()
+    let selections = editing
+        .selection_set([editing
             .collapsed_selection(&end)
             .expect("insertion selection is valid")])
         .expect("selection set is valid");
-    let mut session = committed
-        .scene()
+    let mut session = editing
         .begin_composition(&selections, CompositionId::from_bytes(*b"region-compose01"))
         .expect("composition starts")
         .into_session();
@@ -630,6 +635,7 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
     let transient = engine
         .prepare_composition(&snapshot, &request, &session)
         .expect("composition uses region formation");
+    let sources = projected_scene_sources(transient.scene());
     let transcript = transient
         .region_transcript()
         .expect("composition retains exact region attempts");
@@ -647,7 +653,7 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
             .all(|line| line.bounds().x0 >= 40.0 && line.bounds().y0 >= 20.0)
     );
     assert!(transient.scene().fragments().iter().any(|fragment| {
-        fragment.sources().any(|source| {
+        sources.for_fragment(fragment).any(|source| {
             matches!(
                 source,
                 ProjectedTextSource::Composition(range)

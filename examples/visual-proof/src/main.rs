@@ -16,11 +16,19 @@ use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{
     Brush, CacheBudget, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature,
     FontStyle, FontVariation, FontWeight, FontWidth, InlineFlowStyle, InlineRole, Language,
-    LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, SceneRequest,
-    Script, ShapingStyle, StyleMap, Tag, TextAlignment, TextConstraint, TextId, TextScene,
-    adapter::LineBreakReason,
+    LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, SceneFeatures,
+    SceneRequest, Script, ShapingStyle, StyleMap, Tag, TextAlignment, TextConstraint, TextId,
+    TextScene, adapter::LineBreakReason,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
+
+fn proof_scene_request<'a>(
+    constraint: TextConstraint,
+    styles: &'a StyleMap,
+    paint: &'a PaintTable,
+) -> SceneRequest<'a> {
+    SceneRequest::new(constraint, styles, paint).with_features(SceneFeatures::ACCESSIBLE)
+}
 
 const WIDTH: u16 = 1_600;
 const HEIGHT: u16 = 1_000;
@@ -275,6 +283,8 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     );
     assert!(
         hero.semantics()
+            .expect("scene request includes semantics")
+            .iter()
             .any(|fragment| fragment.inline_role() == Some(InlineRole::EMPHASIS)),
         "the hero must retain real inline semantics alongside glyph diagnostics"
     );
@@ -496,12 +506,16 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     styles.set(prefix, base.clone().with_paint(CORAL));
     styles.set(suffix, base.with_paint(CYAN));
     let paint = poster_paints();
-    let request = SceneRequest::new(
+    let request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(700.0)?),
         &styles,
         &paint,
     );
     let initial = layout.prepare(published.snapshot(), &request)?;
+    let sources = initial
+        .scene()
+        .sources()
+        .expect("proof request includes sources");
     assert_eq!(
         glyph_count(initial.scene(), suffix),
         4,
@@ -510,7 +524,7 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     assert!(
         initial.scene().fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                let source = glyph.source();
+                let source = sources.first_for_glyph(glyph).expect("glyph source exists");
                 source.text() == suffix && source.bytes() == (1..4)
             })
         }),
@@ -533,7 +547,7 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     );
 
     let recolored = paint.with_brush(CYAN, Brush::Solid(GOLD_COLOR))?;
-    let paint_request = SceneRequest::new(
+    let paint_request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(700.0)?),
         &styles,
         &recolored,
@@ -655,7 +669,7 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
     styles.set(arabic_text, arabic_style);
 
     let paints = poster_paints();
-    let request = SceneRequest::new(
+    let request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_350.0)?),
         &styles,
         &paints,
@@ -678,12 +692,13 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         6,
         "explicit liga-off office must preserve six glyphs"
     );
+    let sources = scene.sources().expect("proof request includes sources");
     let arabic_fragment = scene
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .sources()
+            sources
+                .for_fragment(*fragment)
                 .any(|source| source.text() == arabic_text)
         })
         .expect("Fontique fallback specimen must produce a fragment");
@@ -750,19 +765,29 @@ fn variable_style(
 }
 
 fn glyph_count(scene: &TextScene, text: TextId) -> usize {
+    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
-        .filter(|glyph| glyph.sources().any(|source| source.text() == text))
+        .filter(|glyph| {
+            sources
+                .for_glyph(*glyph)
+                .any(|source| source.text() == text)
+        })
         .count()
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
+    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
-        .find(|fragment| fragment.sources().any(|source| source.text() == text))
+        .find(|fragment| {
+            sources
+                .for_fragment(*fragment)
+                .any(|source| source.text() == text)
+        })
         .map(|fragment| fragment.normalized_coords().to_vec())
         .unwrap_or_default()
 }
@@ -829,7 +854,7 @@ fn layout_scene_aligned(
     }
     styles.set_paragraph_style(paragraph, ParagraphStyle::DEFAULT.with_alignment(alignment));
     let paints = poster_paints();
-    let request = SceneRequest::new(
+    let request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(width)?),
         &styles,
         &paints,

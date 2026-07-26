@@ -66,10 +66,11 @@ impl SharedPreparationCache {
             "shared lookup must use the synchronized backend epoch"
         );
         let fingerprint = text_fingerprint(query.projection.mapping.text());
-        let hit = self
-            .buckets
-            .get_mut(&fingerprint)
-            .and_then(|bucket| bucket.iter_mut().find(|entry| entry.key.matches(query)));
+        let hit = self.buckets.get_mut(&fingerprint).and_then(|bucket| {
+            bucket.iter_mut().find(|entry| {
+                entry.key.matches(query) && entry.facts.features().contains(query.features)
+            })
+        });
         match hit {
             Some(entry) => {
                 entry.last_used = current_use;
@@ -214,6 +215,7 @@ pub(super) struct SharedPreparationQuery<'query, 'source> {
     pub(super) constraint: TextConstraint,
     pub(super) region_flow: Option<&'query RegionFlow>,
     pub(super) region_cursor: Option<RegionCursor>,
+    pub(super) features: SceneFeatures,
 }
 
 #[derive(Clone, Debug)]

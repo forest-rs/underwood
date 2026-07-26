@@ -1294,12 +1294,13 @@ impl From<FiniteWidth> for TextConstraint {
 }
 
 /// Borrowed inputs for one scene preparation.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SceneRequest<'a> {
     pub(crate) constraint: TextConstraint,
     pub(crate) styles: &'a StyleMap,
     pub(crate) paint: &'a PaintTable,
     pub(crate) region_flow: Option<&'a crate::RegionFlow>,
+    pub(crate) features: crate::SceneFeaturePolicy,
     pub(crate) trace: bool,
 }
 
@@ -1312,8 +1313,29 @@ impl<'a> SceneRequest<'a> {
             styles,
             paint,
             region_flow: None,
+            features: crate::SceneFeaturePolicy::default(),
             trace: false,
         }
+    }
+
+    /// Returns a request with one uniform prepared-scene capability profile.
+    #[must_use]
+    pub fn with_features(mut self, features: crate::SceneFeatures) -> Self {
+        self.features = crate::SceneFeaturePolicy::uniform(features);
+        self
+    }
+
+    /// Returns a request with uniform defaults and sparse paragraph overrides.
+    #[must_use]
+    pub fn with_feature_policy(mut self, policy: crate::SceneFeaturePolicy) -> Self {
+        self.features = policy;
+        self
+    }
+
+    /// Returns the requested scene capability policy.
+    #[must_use]
+    pub const fn feature_policy(&self) -> &crate::SceneFeaturePolicy {
+        &self.features
     }
 
     /// Returns a request that fills exact slots from an immutable region flow.
@@ -1329,7 +1351,7 @@ impl<'a> SceneRequest<'a> {
 
     /// Returns the exact region policy, when one was requested.
     #[must_use]
-    pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
+    pub const fn region_flow(&self) -> Option<&'a crate::RegionFlow> {
         self.region_flow
     }
 
@@ -1346,7 +1368,7 @@ impl<'a> SceneRequest<'a> {
 
     /// Returns whether detailed preparation tracing was requested.
     #[must_use]
-    pub const fn preparation_trace(self) -> bool {
+    pub const fn preparation_trace(&self) -> bool {
         self.trace
     }
 }

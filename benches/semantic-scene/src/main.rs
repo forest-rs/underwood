@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use underwood::{
     Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth,
     InlineFlowStyle, InlineRole, LayoutEngine, PaintSlot, PaintTable, ParagraphRole, Rect,
-    RegionFlow, SceneRequest, ShapingStyle, StyleMap, TextConstraint, TextId,
+    RegionFlow, SceneFeatures, SceneRequest, ShapingStyle, StyleMap, TextConstraint, TextId,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -344,12 +344,31 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
             ))
         })
         .transpose()?;
+    let features = if matches!(
+        scenario,
+        "setup-edit"
+            | "s1"
+            | "edit-staging"
+            | "d0"
+            | "localized-prepare"
+            | "p0"
+            | "localized-edit"
+            | "e0"
+            | "localized-region"
+            | "g0"
+    ) {
+        SceneFeatures::EDITABLE
+    } else {
+        SceneFeatures::DISPLAY
+    };
     let request = match &region_flow {
         Some(flow) => {
             SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark)
+                .with_features(features)
                 .with_region_flow(flow)
         }
-        None => SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark),
+        None => SceneRequest::new(TextConstraint::Wrap(width), &fixture.styles, &fixture.dark)
+            .with_features(features),
     };
     let primed = layout.prepare(&snapshot, &request)?;
     assert_eq!(
@@ -382,10 +401,15 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
             let (output, measurement) =
                 measure_event(|| layout.prepare(&snapshot, &changed_request));
             let output = output?;
-            assert_eq!(output.work().shape().paragraphs(), 1);
+            assert_eq!(
+                output.work().shape().paragraphs(),
+                1,
+                "one changed paragraph must reshape"
+            );
             assert_eq!(
                 output.work().reused_paragraphs(),
-                paragraphs.saturating_sub(1)
+                paragraphs.saturating_sub(1),
+                "unchanged sibling paragraphs must be reused"
             );
             black_box((styles, output));
             Some(measurement)
@@ -398,19 +422,27 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
             let (output, measurement) =
                 measure_event(|| layout.prepare(publication.snapshot(), &request));
             let output = output?;
-            assert_eq!(output.work().shape().paragraphs(), 1);
-            assert_eq!(output.work().reused_paragraphs(), paragraphs);
+            assert_eq!(
+                output.work().shape().paragraphs(),
+                1,
+                "only the appended paragraph must shape"
+            );
+            assert_eq!(
+                output.work().reused_paragraphs(),
+                paragraphs,
+                "every pre-existing paragraph must be reused"
+            );
             black_box((publication, output));
             Some(measurement)
         }
         "setup-edit" | "s1" | "edit-staging" | "d0" | "localized-prepare" | "p0"
         | "localized-edit" | "e0" | "localized-region" | "g0" => {
-            let position = primed
-                .scene()
+            let editing = primed.scene().editing()?;
+            let position = editing
                 .position_at(fixture.edited_text, 1)
                 .ok_or("the one-byte insertion point must be represented")?;
-            let selection = primed.scene().collapsed_selection(&position)?;
-            let selections = primed.scene().selection_set([selection])?;
+            let selection = editing.collapsed_selection(&position)?;
+            let selections = editing.selection_set([selection])?;
             match scenario {
                 "setup-edit" | "s1" => {
                     black_box(selections);

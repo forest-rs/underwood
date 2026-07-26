@@ -89,12 +89,21 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .cache
                 .get(&preparation_id)
                 .and_then(|cache| {
-                    cache.prepared.as_ref().map(|prepared| RetainedOutput {
-                        prepared: prepared.clone(),
-                        region_transcript: cache.region_transcript.clone(),
-                    })
+                    cache
+                        .prepared
+                        .as_ref()
+                        .filter(|prepared| prepared.features().contains(input.features()))
+                        .map(|prepared| RetainedOutput {
+                            prepared: prepared.clone(),
+                            region_transcript: cache.region_transcript.clone(),
+                        })
                 })
-                .or_else(|| self.outputs.get(&preparation_id).cloned());
+                .or_else(|| {
+                    self.outputs
+                        .get(&preparation_id)
+                        .filter(|output| output.prepared.features().contains(input.features()))
+                        .cloned()
+                });
             if let Some(output) = output {
                 return Ok(output.into_formation_output());
             }
@@ -104,12 +113,21 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .cache
                 .get(&source)
                 .and_then(|cache| {
-                    cache.prepared.as_ref().map(|prepared| RetainedOutput {
-                        prepared: prepared.clone(),
-                        region_transcript: cache.region_transcript.clone(),
-                    })
+                    cache
+                        .prepared
+                        .as_ref()
+                        .filter(|prepared| prepared.features().contains(input.features()))
+                        .map(|prepared| RetainedOutput {
+                            prepared: prepared.clone(),
+                            region_transcript: cache.region_transcript.clone(),
+                        })
                 })
-                .or_else(|| self.outputs.get(&source).cloned());
+                .or_else(|| {
+                    self.outputs
+                        .get(&source)
+                        .filter(|output| output.prepared.features().contains(input.features()))
+                        .cloned()
+                });
             if let Some(output) = output {
                 self.cache.remove(&preparation_id);
                 self.outputs.insert(preparation_id, output.clone());
@@ -450,7 +468,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
         );
         if !needs_formation
             && !change.paint_changed()
-            && let Some(prepared) = &preparation.prepared
+            && let Some(prepared) = preparation
+                .prepared
+                .as_ref()
+                .filter(|prepared| prepared.features().contains(input.features()))
         {
             return match preparation.region_transcript.clone() {
                 Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
@@ -463,7 +484,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
         }
         if !needs_formation
             && change.paint_changed()
-            && let Some(prepared) = &preparation.prepared
+            && let Some(prepared) = preparation
+                .prepared
+                .as_ref()
+                .filter(|prepared| prepared.features().contains(input.features()))
         {
             let repainted = prepared
                 .try_map_glyph_paint(|glyph| paint_coverage(glyph.source(), input.paint_runs()))?;
@@ -573,16 +597,21 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 prepared_runs,
             )?);
         }
-        let movements = prepared_cursor_movements(&prepared_lines, text_len)?;
+        let movements = if input.features().has_selection() {
+            prepared_cursor_movements(&prepared_lines, text_len)?
+        } else {
+            Vec::new()
+        };
         let resolved_direction = if preparation.analysis.is_rtl() {
             ResolvedDirection::Rtl
         } else {
             ResolvedDirection::Ltr
         };
-        let paragraph = PreparedParagraph::try_new(
+        let paragraph = PreparedParagraph::try_new_with_features(
             input.paragraph(),
             text_len,
             resolved_direction,
+            input.features(),
             prepared_lines,
             movements,
         )?;

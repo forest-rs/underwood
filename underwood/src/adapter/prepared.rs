@@ -337,6 +337,7 @@ impl PreparedLine {
 pub(crate) struct PreparedParagraphFacts {
     text_len: u32,
     resolved_direction: ResolvedDirection,
+    features: SceneFeatures,
     lines: Vec<PreparedLine>,
     movements: Arc<Vec<PreparedCursorMovement>>,
 }
@@ -358,6 +359,29 @@ impl PreparedParagraph {
         paragraph: ParagraphId,
         text_len: u32,
         resolved_direction: ResolvedDirection,
+        lines: impl IntoIterator<Item = PreparedLine>,
+        movements: impl IntoIterator<Item = PreparedCursorMovement>,
+    ) -> Result<Self, PreparationError> {
+        Self::try_new_with_features(
+            paragraph,
+            text_len,
+            resolved_direction,
+            SceneFeatures::EDITABLE,
+            lines,
+            movements,
+        )
+    }
+
+    /// Validates formed lines and only the interaction facts requested by `features`.
+    ///
+    /// A profile below selection must supply no cursor-movement graph. This
+    /// keeps a display or accessibility adapter output from merely hiding
+    /// maximal lowering behind an empty scene sidecar.
+    pub fn try_new_with_features(
+        paragraph: ParagraphId,
+        text_len: u32,
+        resolved_direction: ResolvedDirection,
+        features: SceneFeatures,
         lines: impl IntoIterator<Item = PreparedLine>,
         movements: impl IntoIterator<Item = PreparedCursorMovement>,
     ) -> Result<Self, PreparationError> {
@@ -395,6 +419,9 @@ impl PreparedParagraph {
             positions.push(PreparedClusterSide::new(0, TextAffinity::Downstream));
         }
         let movements = Arc::new(movements.into_iter().collect::<Vec<_>>());
+        if !features.has_selection() && !movements.is_empty() {
+            return Err(PreparationError::invalid_output());
+        }
         let movement_positions: Vec<_> = movements
             .iter()
             .map(PreparedCursorMovement::position)
@@ -403,9 +430,10 @@ impl PreparedParagraph {
             .iter()
             .flat_map(|line| line.units.iter().map(PreparedInteractionUnit::source))
             .collect();
-        if positions
-            .iter()
-            .any(|position| !movement_positions.contains(position))
+        if features.has_selection()
+            && positions
+                .iter()
+                .any(|position| !movement_positions.contains(position))
             || movements.iter().enumerate().any(|(index, movement)| {
                 movements[..index]
                     .iter()
@@ -445,6 +473,7 @@ impl PreparedParagraph {
             facts: Arc::new(PreparedParagraphFacts {
                 text_len,
                 resolved_direction,
+                features,
                 lines,
                 movements,
             }),
@@ -478,6 +507,12 @@ impl PreparedParagraph {
     #[must_use]
     pub fn resolved_direction(&self) -> ResolvedDirection {
         self.facts.resolved_direction
+    }
+
+    /// Returns the normalized capabilities represented by this prepared output.
+    #[must_use]
+    pub fn features(&self) -> SceneFeatures {
+        self.facts.features
     }
 
     /// Returns the source-ordered formed lines.
@@ -548,6 +583,7 @@ impl PreparedParagraph {
             facts: Arc::new(PreparedParagraphFacts {
                 text_len: self.facts.text_len,
                 resolved_direction: self.facts.resolved_direction,
+                features: self.facts.features,
                 lines,
                 movements: Arc::clone(&self.facts.movements),
             }),
@@ -556,6 +592,10 @@ impl PreparedParagraph {
 }
 
 impl PreparedParagraphFacts {
+    pub(crate) const fn features(&self) -> SceneFeatures {
+        self.features
+    }
+
     pub(crate) fn estimated_owned_bytes(&self) -> usize {
         let mut bytes = size_of::<Self>()
             .saturating_add(vec_bytes::<PreparedLine>(self.lines.capacity()))

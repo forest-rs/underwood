@@ -123,6 +123,7 @@ pub struct BlockRequest<'a> {
     pub(crate) paint: &'a PaintTable,
     pub(crate) paragraph_style: ParagraphStyle,
     pub(crate) region_flow: Option<&'a crate::RegionFlow>,
+    pub(crate) features: crate::SceneFeatures,
     pub(crate) trace: bool,
 }
 
@@ -140,8 +141,22 @@ impl<'a> BlockRequest<'a> {
             paint,
             paragraph_style: ParagraphStyle::DEFAULT,
             region_flow: None,
+            features: crate::SceneFeatures::DISPLAY,
             trace: false,
         }
+    }
+
+    /// Returns a copy with the requested prepared-scene capabilities.
+    #[must_use]
+    pub const fn with_features(mut self, features: crate::SceneFeatures) -> Self {
+        self.features = features;
+        self
+    }
+
+    /// Returns the requested prepared-scene capabilities.
+    #[must_use]
+    pub const fn features(self) -> crate::SceneFeatures {
+        self.features
     }
 
     /// Returns a copy with paragraph-level analysis and flow values.
