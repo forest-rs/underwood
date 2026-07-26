@@ -280,6 +280,10 @@ impl DocumentSnapshot {
         &self.state.paragraphs
     }
 
+    pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
     pub(crate) fn leaf(&self, id: TextId) -> Option<&TextLeaf> {
         if id.document != self.state.id {
             return None;

@@ -19,24 +19,50 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
     let lines = output.scene().lines();
     assert_eq!(lines.len(), 3, "legal opportunities must form three lines");
     assert_eq!(
-        lines[0].break_reason(),
+        lines.get(0).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::Regular
     );
     assert_eq!(
-        lines[1].break_reason(),
+        lines.get(1).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::Regular
     );
     assert_eq!(
-        lines[2].break_reason(),
+        lines.get(2).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::End
     );
-    assert_eq!(lines[0].sources()[0].bytes(), 0..6);
     assert_eq!(
-        lines[1].sources()[0].bytes().start,
+        lines
+            .get(0)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
+        0..6
+    );
+    assert_eq!(
+        lines
+            .get(1)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes()
+            .start,
         u32::try_from(text.find("beta").expect("beta is present")).expect("fixture range fits")
     );
     assert_eq!(
-        lines[2].sources()[0].bytes().start,
+        lines
+            .get(2)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes()
+            .start,
         u32::try_from(text.find("gamma").expect("gamma is present")).expect("fixture range fits")
     );
 }
@@ -55,24 +81,43 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
         .prepare(&document.snapshot(), &request)
         .expect("mandatory breaks must form a scene");
     let lines = output.scene().lines();
-    let ranges: Vec<_> = lines.iter().map(|line| line.sources()[0].bytes()).collect();
+    let ranges: Vec<_> = lines
+        .iter()
+        .map(|line| line.sources().next().expect("source exists").bytes())
+        .collect();
     assert_eq!(
         lines.len(),
         5,
         "CRLF, LF, LS, and PS form four breaks: {ranges:?}"
     );
-    assert_eq!(lines[0].sources()[0].bytes(), 0..3, "CRLF stays together");
+    assert_eq!(
+        lines
+            .get(0)
+            .expect("line exists")
+            .sources()
+            .next()
+            .expect("source exists")
+            .bytes(),
+        0..3,
+        "CRLF stays together"
+    );
     assert!(
-        lines[..4]
+        lines
             .iter()
+            .take(4)
             .all(|line| line.break_reason() == underwood::adapter::LineBreakReason::Mandatory)
     );
     assert_eq!(
-        lines[4].break_reason(),
+        lines.get(4).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::End
     );
     assert_eq!(
-        lines.last().expect("final line exists").sources()[0]
+        lines
+            .get(lines.len() - 1)
+            .expect("final line exists")
+            .sources()
+            .next()
+            .expect("source exists")
             .bytes()
             .end,
         u32::try_from(text.len()).expect("fixture length fits")
@@ -91,12 +136,21 @@ fn product_path_uses_font_metrics_for_the_baseline() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("metric-backed formation must succeed");
-    let line = &output.scene().lines()[0];
+    let line = &output.scene().line(0).expect("line exists");
     assert_eq!(line.bounds().height(), 30.0);
     assert!(line.baseline() > line.bounds().y0 && line.baseline() < line.bounds().y1);
     assert_eq!(
         line.baseline(),
-        output.scene().fragments()[0].glyphs()[0].position().y
+        output
+            .scene()
+            .fragment(0)
+            .expect("fragment exists")
+            .glyphs()
+            .iter()
+            .next()
+            .expect("glyph exists")
+            .position()
+            .y
     );
     assert_ne!(
         line.baseline() - line.bounds().y0,
@@ -145,12 +199,24 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("mixed leaf formation succeeds");
-    let line = &output.scene().lines()[0];
+    let line = &output.scene().line(0).expect("line exists");
     assert_eq!(line.sources().len(), 2);
-    assert_eq!(line.sources()[0].text(), small);
-    assert_eq!(line.sources()[0].bytes(), 0..6);
-    assert_eq!(line.sources()[1].text(), large);
-    assert_eq!(line.sources()[1].bytes(), 0..3);
+    assert_eq!(
+        line.sources().iter().next().expect("source exists").text(),
+        small
+    );
+    assert_eq!(
+        line.sources().iter().next().expect("source exists").bytes(),
+        0..6
+    );
+    assert_eq!(
+        line.sources().iter().nth(1).expect("source exists").text(),
+        large
+    );
+    assert_eq!(
+        line.sources().iter().nth(1).expect("source exists").bytes(),
+        0..3
+    );
     assert_eq!(line.bounds().height(), 60.0);
     assert!(
         output
@@ -187,11 +253,17 @@ fn non_breaking_space_and_unbreakable_words_overflow_honestly() {
             "unbreakable source must not be split: {text:?}"
         );
         assert_eq!(
-            output.scene().lines()[0].break_reason(),
+            output.scene().line(0).expect("line exists").break_reason(),
             underwood::adapter::LineBreakReason::End
         );
         assert!(
-            output.scene().lines()[0].bounds().width() > 10.0,
+            output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .width()
+                > 10.0,
             "overflow must remain visible rather than report a false fit: {text:?}"
         );
     }
@@ -243,8 +315,18 @@ fn width_reshapes_committed_lines_while_line_height_reuses_them() {
     assert_eq!(respaced.work().line_reshapes(), 0);
     assert_eq!(respaced.work().flow().paragraphs(), 1);
     assert!(
-        respaced.scene().lines()[0].bounds().height()
-            > narrowed.scene().lines()[0].bounds().height()
+        respaced
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .height()
+            > narrowed
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .height()
     );
 }
 
@@ -270,7 +352,12 @@ fn all_line_height_bases_recompute_metrics_without_reshaping() {
             &SceneRequest::new(constraint, &metrics, &paint),
         )
         .expect("metrics-relative line height prepares");
-    let metrics_height = metrics_output.scene().lines()[0].bounds().height();
+    let metrics_height = metrics_output
+        .scene()
+        .line(0)
+        .expect("line exists")
+        .bounds()
+        .height();
     assert!(metrics_height > 0.0);
 
     let font_output = engine
@@ -279,7 +366,15 @@ fn all_line_height_bases_recompute_metrics_without_reshaping() {
             &SceneRequest::new(constraint, &font_relative, &paint),
         )
         .expect("font-size-relative line height prepares");
-    assert_eq!(font_output.scene().lines()[0].bounds().height(), 40.0);
+    assert_eq!(
+        font_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .height(),
+        40.0
+    );
     assert_eq!(font_output.work().analysis().paragraphs(), 0);
     assert_eq!(font_output.work().font_selection().paragraphs(), 0);
     assert_eq!(font_output.work().shape().paragraphs(), 0);
@@ -291,7 +386,15 @@ fn all_line_height_bases_recompute_metrics_without_reshaping() {
             &SceneRequest::new(constraint, &absolute, &paint),
         )
         .expect("absolute line height prepares");
-    assert_eq!(absolute_output.scene().lines()[0].bounds().height(), 50.0);
+    assert_eq!(
+        absolute_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .height(),
+        50.0
+    );
     assert_eq!(absolute_output.work().analysis().paragraphs(), 0);
     assert_eq!(absolute_output.work().font_selection().paragraphs(), 0);
     assert_eq!(absolute_output.work().shape().paragraphs(), 0);
@@ -322,7 +425,7 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
             &SceneRequest::new(constraint, &plain_styles, &paint),
         )
         .expect("plain shaping prepares");
-    let plain_width = plain.scene().lines()[0].bounds().width();
+    let plain_width = plain.scene().line(0).expect("line exists").bounds().width();
     let plain_glyphs: usize = plain
         .scene()
         .fragments()
@@ -345,7 +448,15 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     assert_eq!(tracked_output.work().analysis().paragraphs(), 0);
     assert_eq!(tracked_output.work().font_selection().paragraphs(), 0);
     assert_eq!(tracked_output.work().shape().paragraphs(), 1);
-    assert!(tracked_output.scene().lines()[0].bounds().width() > plain_width);
+    assert!(
+        tracked_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width()
+            > plain_width
+    );
     assert!(
         tracked_glyphs > plain_glyphs,
         "default optional ligatures must be disabled when tracking is nonzero"
@@ -361,8 +472,18 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     assert_eq!(wider_output.work().font_selection().paragraphs(), 0);
     assert_eq!(wider_output.work().shape().paragraphs(), 0);
     assert!(
-        wider_output.scene().lines()[0].bounds().width()
-            > tracked_output.scene().lines()[0].bounds().width(),
+        wider_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width()
+            > tracked_output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .width(),
         "advance-only changes must reach geometry without reshaping"
     );
 
@@ -382,8 +503,18 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     assert_eq!(wider_words_output.work().font_selection().paragraphs(), 0);
     assert_eq!(wider_words_output.work().shape().paragraphs(), 0);
     assert!(
-        wider_words_output.scene().lines()[0].bounds().width()
-            > wider_output.scene().lines()[0].bounds().width(),
+        wider_words_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width()
+            > wider_output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .width(),
         "word spacing must adjust retained separator advances"
     );
 
@@ -423,8 +554,13 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
         .collect();
     assert_eq!(tracked_glyphs, plain_glyphs);
     assert_eq!(
-        tracked.scene().lines()[0].bounds().width(),
-        plain.scene().lines()[0].bounds().width()
+        tracked
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width(),
+        plain.scene().line(0).expect("line exists").bounds().width()
     );
 }
 
@@ -543,9 +679,28 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         "committing the break must change real Arabic glyph output"
     );
     assert_eq!(output.scene().lines().len(), 2);
-    assert_eq!(output.scene().lines()[0].sources()[0].bytes(), 0..break_at);
     assert_eq!(
-        output.scene().lines()[1].sources()[0].bytes(),
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
+        0..break_at
+    );
+    assert_eq!(
+        output
+            .scene()
+            .line(1)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
         break_at..u32::try_from(text.len()).expect("fixture range fits")
     );
     assert!(output.scene().fragments().iter().all(|fragment| {
@@ -618,7 +773,16 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
     let prior_source =
         u32::try_from(clusters[prior_safe].source.start).expect("fixture source range fits");
     assert_eq!(
-        output.scene().lines()[0].sources()[0].bytes().end,
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes()
+            .end,
         prior_source
     );
     assert!(
@@ -655,7 +819,7 @@ fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
         .iter()
         .filter(|fragment| fragment.bidi_level() & 1 == 1)
         .map(|fragment| {
-            let glyph = &fragment.glyphs()[0];
+            let glyph = &fragment.glyphs().iter().next().expect("glyph exists");
             (glyph.position().x, glyph.source().bytes().start)
         })
         .collect();

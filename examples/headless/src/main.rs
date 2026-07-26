@@ -126,7 +126,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         first_scene.scene().lines().len() >= 4,
         "four semantic paragraphs must produce at least four visual lines"
     );
-    let fragment = &first_scene.scene().fragments()[0];
+    let fragment = first_scene
+        .scene()
+        .fragment(0)
+        .expect("the first real fragment exists");
     assert!(
         !fragment.glyphs().is_empty(),
         "the first real Parley fragment must contain shaped glyphs"
@@ -188,7 +191,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fragment
                 .source()
                 .is_some_and(|source| source.text() == first_arabic)
-                && fragment.glyphs()[0].advance().x == 0.0
+                && fragment
+                    .glyphs()
+                    .first()
+                    .is_some_and(|glyph| glyph.advance().x == 0.0)
         })
         .expect("Noto Kufi must expose a zero-advance Arabic mark");
     assert!(

@@ -36,6 +36,8 @@ mod output;
 mod projection;
 mod records;
 mod shared_cache;
+mod spine;
+mod views;
 
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
 pub use interaction::{CompositionScene, TextScene};
@@ -45,17 +47,22 @@ pub use output::{
     TextMetrics, WorkReport,
 };
 pub use records::{
-    LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragment, SceneFragmentId, SceneGlyph,
-    SceneGlyphInstanceId, SceneLine, SceneSelectionRect, SemanticFragment, TextHit,
+    LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneGlyphInstanceId,
+    SceneSelectionRect, TextHit,
+};
+pub use views::{
+    ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,
+    ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources,
+    SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs, SceneLineView, SceneLines,
+    SceneSemantics, SemanticFragmentView, SnapshotSources,
 };
 
 use adjustment::*;
 use geometry::*;
-use interaction::{
-    SceneCaretStop, SceneCluster, SceneCursorMovement, SceneCursorStep, SceneHitSlice,
-};
+use interaction::{SceneCore, SceneCursorStep};
 use projection::*;
 use shared_cache::*;
+use spine::*;
 
 #[cfg(test)]
 use projection::{append_analysis_run, append_inline_flow_run, append_shaping_run};

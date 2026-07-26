@@ -759,7 +759,7 @@ pub(super) fn append_paint_run(runs: &mut Vec<PaintRun>, bytes: Range<u32>, slot
 pub(super) fn validate_styles(
     snapshot: &DocumentSnapshot,
     request: &SceneRequest<'_>,
-) -> Result<(), SceneError> {
+) -> Result<usize, SceneError> {
     if request
         .styles
         .overrides()
@@ -782,21 +782,20 @@ pub(super) fn validate_styles(
             snapshot.id(),
         ));
     }
+    let mut required_paint_slots = 0;
     for paragraph in snapshot.paragraphs() {
         for leaf in &paragraph.leaves {
-            if request
-                .paint
-                .brush(request.styles.style_for(leaf.id).paint())
-                .is_none()
-            {
+            let slot = request.styles.style_for(leaf.id).paint();
+            if request.paint.brush(slot).is_none() {
                 return Err(SceneError::for_paragraph(
                     SceneErrorKind::InvalidStyle,
                     paragraph.id,
                 ));
             }
+            required_paint_slots = required_paint_slots.max(slot.index() as usize + 1);
         }
     }
-    Ok(())
+    Ok(required_paint_slots)
 }
 
 pub(super) fn validate_prepared(

@@ -225,7 +225,7 @@ line adjustment and scene geometry. `Start` and `End` consume the paragraph
 direction already resolved by Unicode analysis. `Justify` expands explicit
 Western inter-word spaces on eligible soft-wrapped lines; final and mandatory
 lines remain start-aligned, and CJK and Arabic strategies remain separate.
-[`SceneLine::adjustment`] exposes the exact offset, hanging trailing
+[`SceneLineView::adjustment`] exposes the exact offset, hanging trailing
 whitespace, and per-opportunity expansion. Changing only line height reuses
 accepted line glyphs and recomputes metrics.
 

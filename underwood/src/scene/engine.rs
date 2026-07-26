@@ -220,6 +220,40 @@ enum CacheKind {
     Composition,
 }
 
+#[derive(Clone, Debug)]
+struct PublishedScene {
+    snapshot: DocumentSnapshot,
+    styles: StyleMap,
+    constraint: ConstraintKey,
+    region_flow: Option<RegionFlow>,
+    required_paint_slots: usize,
+    core: Arc<SceneCore>,
+    region_transcript: Option<RegionTranscript>,
+    region_attempts: usize,
+    region_height_rejections: usize,
+}
+
+#[derive(Clone, Debug)]
+struct PublishedComposition {
+    snapshot: DocumentSnapshot,
+    styles: StyleMap,
+    constraint: ConstraintKey,
+    region_flow: Option<RegionFlow>,
+    composition: CompositionSession,
+    required_paint_slots: usize,
+    core: Arc<SceneCore>,
+    region_transcript: Option<RegionTranscript>,
+    region_attempts: usize,
+    region_height_rejections: usize,
+}
+
+#[derive(Clone, Debug)]
+struct BlockStyles {
+    inline: ComputedInlineStyle,
+    paragraph: ParagraphStyle,
+    map: StyleMap,
+}
+
 /// Mutable owner of one paragraph adapter and its retained stage caches.
 pub struct LayoutEngine {
     paragraphs: Box<dyn ParagraphFormation>,
@@ -232,6 +266,9 @@ pub struct LayoutEngine {
     cache_work: CacheWork,
     shared_preparation: SharedPreparationCache,
     scratch: PrepareScratch,
+    published: BTreeMap<crate::DocumentId, PublishedScene>,
+    published_compositions: BTreeMap<crate::DocumentId, PublishedComposition>,
+    block_styles: BTreeMap<crate::DocumentId, BlockStyles>,
 }
 
 impl core::fmt::Debug for LayoutEngine {
@@ -266,6 +303,9 @@ impl LayoutEngine {
             cache_work: CacheWork::default(),
             shared_preparation: SharedPreparationCache::new(budget.shared_preparation_bytes),
             scratch: PrepareScratch::default(),
+            published: BTreeMap::new(),
+            published_compositions: BTreeMap::new(),
+            block_styles: BTreeMap::new(),
         }
     }
 
@@ -275,7 +315,14 @@ impl LayoutEngine {
         snapshot: &DocumentSnapshot,
         request: &SceneRequest<'_>,
     ) -> Result<SceneOutput, SceneError> {
-        validate_styles(snapshot, request)?;
+        if let Some(output) = self.reuse_published_scene(snapshot, request) {
+            return Ok(output);
+        }
+        let required_paint_slots = validate_styles(snapshot, request)?;
+        let mut spine = self.reusable_scene_spine(snapshot, request);
+        let mut initial_segments = spine
+            .is_none()
+            .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
 
         let cache_before = request.trace.then(|| self.cache_diagnostics());
         let scratch_capacity_before = request
@@ -284,18 +331,10 @@ impl LayoutEngine {
         self.scratch.region_attempts.clear();
         let mut work = WorkReport::default();
         let mut reuse = PreparationReuse::default();
-        let mut lines = Vec::new();
-        let mut fragments = Vec::new();
-        let mut clusters = Vec::new();
-        let mut carets = Vec::new();
-        let mut movements = Vec::new();
-        let mut texts = Vec::new();
-        let mut semantics = Vec::new();
-        let mut y_offset = 0.0;
         let region_start = request.region_flow.map(RegionFlow::cursor);
         let mut region_cursor = region_start;
 
-        for paragraph in snapshot.paragraphs() {
+        for (paragraph_index, paragraph) in snapshot.paragraphs().iter().enumerate() {
             self.clock = self.clock.saturating_add(1);
             let access = if let Some(access) = reuse_paragraph_geometry(
                 &mut self.cache,
@@ -332,40 +371,45 @@ impl LayoutEngine {
                     .extend_from_slice(transcript.attempts());
                 region_cursor = Some(transcript.end());
             }
-            let geometry = &self
-                .cache
-                .get(&paragraph.id)
-                .expect("prepared committed geometry must remain resident")
-                .geometry;
-            materialize_geometry(
-                geometry,
-                snapshot.revision(),
-                if request.region_flow.is_some() {
-                    0.0
-                } else {
-                    y_offset
-                },
-                &mut lines,
-                &mut fragments,
-                &mut clusters,
-                &mut carets,
-                &mut movements,
-                &mut texts,
-                &mut semantics,
+            let segment = Arc::clone(
+                &self
+                    .cache
+                    .get(&paragraph.id)
+                    .expect("prepared committed geometry must remain resident")
+                    .segment,
             );
-            if request.region_flow.is_none() {
-                y_offset += geometry.height;
-            } else {
-                y_offset = y_offset.max(geometry.height);
+            debug_assert_eq!(
+                segment.paragraph, paragraph.id,
+                "the committed scene segment must retain its paragraph identity"
+            );
+            if let Some(segments) = &mut initial_segments {
+                segments.push(Arc::clone(&segment));
+            } else if !spine
+                .as_ref()
+                .and_then(|spine| spine.segment(paragraph_index))
+                .is_some_and(|retained| Arc::ptr_eq(retained, &segment))
+            {
+                spine = Some(
+                    spine
+                        .as_ref()
+                        .expect("a reused spine remains present")
+                        .replace(paragraph_index, Arc::clone(&segment))
+                        .expect("a reused spine has matching paragraph count"),
+                );
             }
             self.enforce_budget();
         }
 
+        let spine = initial_segments.map_or_else(
+            || spine.unwrap_or_else(|| SceneSpine::empty(request.region_flow.is_none())),
+            |segments| SceneSpine::from_segments(&segments, request.region_flow.is_none()),
+        );
+        let summary = spine.summary();
         work.paint = StageWork {
             paragraphs: snapshot.paragraphs().len(),
-            records: fragments.len(),
+            records: summary.fragments,
         };
-        let metrics = TextMetrics::from_lines(&lines, y_offset);
+        let metrics = TextMetrics::from_summary(summary);
         let region_attempts = self.scratch.region_attempts.len();
         let region_height_rejections = self
             .scratch
@@ -389,15 +433,7 @@ impl LayoutEngine {
             memory: PreparationMemory {
                 cache_before: cache_before.expect("traced request records initial cache state"),
                 cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: scene_output_capacity_bytes(
-                    &lines,
-                    &fragments,
-                    &clusters,
-                    &carets,
-                    &movements,
-                    texts.capacity(),
-                    &semantics,
-                ),
+                scene_output_capacity_bytes: spine.accounted_node_bytes(),
                 scratch_capacity_before: scratch_capacity_before
                     .expect("traced request records initial scratch state"),
                 scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
@@ -405,24 +441,44 @@ impl LayoutEngine {
             region_attempts,
             region_height_rejections,
         });
+        let core = Arc::new(SceneCore {
+            paragraph_count: snapshot.paragraphs().len(),
+            spine,
+            metrics,
+        });
         let output = SceneOutput {
             scene: TextScene {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
-                metrics,
-                lines,
-                fragments,
-                clusters,
-                carets,
-                movements,
-                texts,
                 paint: request.paint.clone(),
-                semantics,
+                core: Arc::clone(&core),
             },
             work,
             trace,
-            region_transcript,
+            region_transcript: region_transcript.clone(),
         };
+        if snapshot
+            .paragraphs()
+            .iter()
+            .all(|paragraph| self.cache.contains_key(&paragraph.id))
+        {
+            self.published.insert(
+                snapshot.id(),
+                PublishedScene {
+                    snapshot: snapshot.clone(),
+                    styles: request.styles.clone(),
+                    constraint: ConstraintKey::from(request.constraint),
+                    region_flow: request.region_flow.cloned(),
+                    required_paint_slots,
+                    core,
+                    region_transcript,
+                    region_attempts,
+                    region_height_rejections,
+                },
+            );
+        } else {
+            self.published.remove(&snapshot.id());
+        }
         Ok(output)
     }
 
@@ -432,8 +488,27 @@ impl LayoutEngine {
         snapshot: &TextBlockSnapshot,
         request: &BlockRequest<'_>,
     ) -> Result<SceneOutput, SceneError> {
-        let styles = StyleMap::new(request.style.clone())
-            .with_default_paragraph_style(request.paragraph_style);
+        let document = snapshot.document().id();
+        let styles = self
+            .block_styles
+            .get(&document)
+            .filter(|styles| {
+                styles.inline == *request.style && styles.paragraph == request.paragraph_style
+            })
+            .map(|styles| styles.map.clone())
+            .unwrap_or_else(|| {
+                let styles = StyleMap::new(request.style.clone())
+                    .with_default_paragraph_style(request.paragraph_style);
+                self.block_styles.insert(
+                    document,
+                    BlockStyles {
+                        inline: request.style.clone(),
+                        paragraph: request.paragraph_style,
+                        map: styles.clone(),
+                    },
+                );
+                styles
+            });
         let scene_request = match request.region_flow {
             Some(flow) => {
                 SceneRequest::new(request.constraint, &styles, request.paint).with_region_flow(flow)
@@ -455,7 +530,6 @@ impl LayoutEngine {
         request: &SceneRequest<'_>,
         composition: &CompositionSession,
     ) -> Result<CompositionSceneOutput, SceneError> {
-        validate_styles(snapshot, request)?;
         if composition.document() != snapshot.id()
             || composition.base_revision() != snapshot.revision()
         {
@@ -464,9 +538,17 @@ impl LayoutEngine {
                 snapshot.id(),
             ));
         }
+        if let Some(output) = self.reuse_published_composition(snapshot, request, composition) {
+            return Ok(output);
+        }
+        let required_paint_slots = validate_styles(snapshot, request)?;
         let target = composition.target_text().ok_or_else(|| {
             SceneError::for_document(SceneErrorKind::InvalidComposition, snapshot.id())
         })?;
+        let mut spine = self.reusable_composition_spine(snapshot, request);
+        let mut initial_segments = spine
+            .is_none()
+            .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
 
         let cache_before = request.trace.then(|| self.cache_diagnostics());
         let scratch_capacity_before = request
@@ -475,17 +557,10 @@ impl LayoutEngine {
         self.scratch.region_attempts.clear();
         let mut work = WorkReport::default();
         let mut reuse = PreparationReuse::default();
-        let mut lines = Vec::new();
-        let mut fragments = Vec::new();
-        let mut clusters = Vec::new();
-        let mut carets = Vec::new();
-        let mut movements = Vec::new();
-        let mut semantics = Vec::new();
-        let mut y_offset = 0.0;
         let region_start = request.region_flow.map(RegionFlow::cursor);
         let mut region_cursor = region_start;
 
-        for paragraph in snapshot.paragraphs() {
+        for (paragraph_index, paragraph) in snapshot.paragraphs().iter().enumerate() {
             let transient = paragraph.id.index == target.paragraph;
             self.clock = self.clock.saturating_add(1);
             let (kind, access) = if !transient
@@ -551,45 +626,54 @@ impl LayoutEngine {
                     .extend_from_slice(transcript.attempts());
                 region_cursor = Some(transcript.end());
             }
-            let geometry = match kind {
-                CacheKind::Committed => self
-                    .cache
-                    .get(&paragraph.id)
-                    .expect("prepared committed geometry must remain resident"),
-                CacheKind::Composition => self
-                    .composition_cache
-                    .get(&paragraph.id)
-                    .expect("prepared composition geometry must remain resident"),
+            let segment = match kind {
+                CacheKind::Committed => Arc::clone(
+                    &self
+                        .cache
+                        .get(&paragraph.id)
+                        .expect("prepared committed geometry must remain resident")
+                        .segment,
+                ),
+                CacheKind::Composition => Arc::clone(
+                    &self
+                        .composition_cache
+                        .get(&paragraph.id)
+                        .expect("prepared composition geometry must remain resident")
+                        .segment,
+                ),
             };
-            let geometry = &geometry.geometry;
-            materialize_projected_geometry(
-                geometry,
-                snapshot.revision(),
-                if request.region_flow.is_some() {
-                    0.0
-                } else {
-                    y_offset
-                },
-                &mut lines,
-                &mut fragments,
-                &mut clusters,
-                &mut carets,
-                &mut movements,
-                &mut semantics,
+            debug_assert_eq!(
+                segment.paragraph, paragraph.id,
+                "the projected scene segment must retain its paragraph identity"
             );
-            if request.region_flow.is_none() {
-                y_offset += geometry.height;
-            } else {
-                y_offset = y_offset.max(geometry.height);
+            if let Some(segments) = &mut initial_segments {
+                segments.push(Arc::clone(&segment));
+            } else if !spine
+                .as_ref()
+                .and_then(|spine| spine.segment(paragraph_index))
+                .is_some_and(|retained| Arc::ptr_eq(retained, &segment))
+            {
+                spine = Some(
+                    spine
+                        .as_ref()
+                        .expect("a reused composition spine remains present")
+                        .replace(paragraph_index, Arc::clone(&segment))
+                        .expect("a reused composition spine has matching paragraph count"),
+                );
             }
             self.enforce_budget();
         }
 
+        let spine = initial_segments.map_or_else(
+            || spine.unwrap_or_else(|| SceneSpine::empty(request.region_flow.is_none())),
+            |segments| SceneSpine::from_segments(&segments, request.region_flow.is_none()),
+        );
+        let summary = spine.summary();
         work.paint = StageWork {
             paragraphs: snapshot.paragraphs().len(),
-            records: fragments.len(),
+            records: summary.fragments,
         };
-        let metrics = TextMetrics::from_lines(&lines, y_offset);
+        let metrics = TextMetrics::from_summary(summary);
         let region_attempts = self.scratch.region_attempts.len();
         let region_height_rejections = self
             .scratch
@@ -613,9 +697,7 @@ impl LayoutEngine {
             memory: PreparationMemory {
                 cache_before: cache_before.expect("traced request records initial cache state"),
                 cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: scene_output_capacity_bytes(
-                    &lines, &fragments, &clusters, &carets, &movements, 0, &semantics,
-                ),
+                scene_output_capacity_bytes: 0,
                 scratch_capacity_before: scratch_capacity_before
                     .expect("traced request records initial scratch state"),
                 scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
@@ -623,30 +705,57 @@ impl LayoutEngine {
             region_attempts,
             region_height_rejections,
         });
+        let core = Arc::new(SceneCore {
+            paragraph_count: snapshot.paragraphs().len(),
+            spine,
+            metrics,
+        });
         let output = CompositionSceneOutput {
             scene: CompositionScene {
                 document: snapshot.id(),
                 revision: snapshot.revision(),
                 composition: composition.id(),
                 epoch: composition.epoch(),
-                metrics,
-                lines,
-                fragments,
-                clusters,
-                carets,
-                movements,
                 paint: request.paint.clone(),
-                semantics,
+                core: Arc::clone(&core),
             },
             work,
             trace,
-            region_transcript,
+            region_transcript: region_transcript.clone(),
         };
+        if snapshot.paragraphs().iter().all(|paragraph| {
+            if paragraph.id.index == target.paragraph {
+                self.composition_cache.contains_key(&paragraph.id)
+            } else {
+                self.cache.contains_key(&paragraph.id)
+            }
+        }) {
+            self.published_compositions.insert(
+                snapshot.id(),
+                PublishedComposition {
+                    snapshot: snapshot.clone(),
+                    styles: request.styles.clone(),
+                    constraint: ConstraintKey::from(request.constraint),
+                    region_flow: request.region_flow.cloned(),
+                    composition: composition.clone(),
+                    required_paint_slots,
+                    core,
+                    region_transcript,
+                    region_attempts,
+                    region_height_rejections,
+                },
+            );
+        } else {
+            self.published_compositions.remove(&snapshot.id());
+        }
         Ok(output)
     }
 
     /// Releases every retained geometry and backend entry for one document.
     pub fn release_document(&mut self, document: crate::DocumentId) {
+        self.published.remove(&document);
+        self.published_compositions.remove(&document);
+        self.block_styles.remove(&document);
         let Some(entries) = self.documents.remove(&document) else {
             return;
         };
@@ -678,6 +787,9 @@ impl LayoutEngine {
         self.composition_cache.clear();
         self.recency.clear();
         self.documents.clear();
+        self.published.clear();
+        self.published_compositions.clear();
+        self.block_styles.clear();
         self.shared_preparation.clear();
         self.paragraphs.clear();
         self.cache_work.scene_cache_accounted_bytes = 0;
@@ -723,6 +835,150 @@ impl LayoutEngine {
             .collide_bucket_for_test(source, target);
     }
 
+    fn reuse_published_scene(
+        &self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+    ) -> Option<SceneOutput> {
+        let published = self.published.get(&snapshot.id())?;
+        if !published.snapshot.shares_state_with(snapshot)
+            || !published.styles.shares_state_with(request.styles)
+            || published.constraint != ConstraintKey::from(request.constraint)
+            || !region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
+            || request.paint.len() < published.required_paint_slots
+        {
+            return None;
+        }
+        let paragraph_count = published.core.paragraph_count;
+        let work = WorkReport {
+            reused_paragraphs: paragraph_count,
+            ..WorkReport::default()
+        };
+        let trace = request.trace.then(|| {
+            let diagnostics = self.cache_diagnostics();
+            PreparationTrace {
+                work: work.clone(),
+                reuse: PreparationReuse {
+                    paragraphs: paragraph_count,
+                    preflight_reuses: paragraph_count,
+                    exact_geometry_reuses: paragraph_count,
+                    ..PreparationReuse::default()
+                },
+                memory: PreparationMemory {
+                    cache_before: diagnostics,
+                    cache_after: diagnostics,
+                    scene_output_capacity_bytes: 0,
+                    scratch_capacity_before: self.scratch.accounted_capacity_bytes(),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts: published.region_attempts,
+                region_height_rejections: published.region_height_rejections,
+            }
+        });
+        Some(SceneOutput {
+            scene: TextScene {
+                document: snapshot.id(),
+                revision: snapshot.revision(),
+                paint: request.paint.clone(),
+                core: Arc::clone(&published.core),
+            },
+            work,
+            trace,
+            region_transcript: published.region_transcript.clone(),
+        })
+    }
+
+    fn reusable_scene_spine(
+        &self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+    ) -> Option<SceneSpine> {
+        let published = self.published.get(&snapshot.id())?;
+        (published.styles.shares_state_with(request.styles)
+            && published.constraint == ConstraintKey::from(request.constraint)
+            && region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
+            && published.core.paragraph_count == snapshot.paragraphs().len())
+        .then(|| published.core.spine.clone())
+    }
+
+    fn reuse_published_composition(
+        &self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+        composition: &CompositionSession,
+    ) -> Option<CompositionSceneOutput> {
+        let published = self.published_compositions.get(&snapshot.id())?;
+        if !published.snapshot.shares_state_with(snapshot)
+            || !published.styles.shares_state_with(request.styles)
+            || published.constraint != ConstraintKey::from(request.constraint)
+            || !region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
+            || !published.composition.shares_state_with(composition)
+            || request.paint.len() < published.required_paint_slots
+        {
+            return None;
+        }
+        let paragraph_count = published.core.paragraph_count;
+        let work = WorkReport {
+            reused_paragraphs: paragraph_count,
+            ..WorkReport::default()
+        };
+        let trace = request.trace.then(|| {
+            let diagnostics = self.cache_diagnostics();
+            PreparationTrace {
+                work: work.clone(),
+                reuse: PreparationReuse {
+                    paragraphs: paragraph_count,
+                    preflight_reuses: paragraph_count,
+                    exact_geometry_reuses: paragraph_count,
+                    ..PreparationReuse::default()
+                },
+                memory: PreparationMemory {
+                    cache_before: diagnostics,
+                    cache_after: diagnostics,
+                    scene_output_capacity_bytes: 0,
+                    scratch_capacity_before: self.scratch.accounted_capacity_bytes(),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts: published.region_attempts,
+                region_height_rejections: published.region_height_rejections,
+            }
+        });
+        Some(CompositionSceneOutput {
+            scene: CompositionScene {
+                document: snapshot.id(),
+                revision: snapshot.revision(),
+                composition: composition.id(),
+                epoch: composition.epoch(),
+                paint: request.paint.clone(),
+                core: Arc::clone(&published.core),
+            },
+            work,
+            trace,
+            region_transcript: published.region_transcript.clone(),
+        })
+    }
+
+    fn reusable_composition_spine(
+        &self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+    ) -> Option<SceneSpine> {
+        self.published_compositions
+            .get(&snapshot.id())
+            .filter(|published| {
+                published.snapshot.shares_state_with(snapshot)
+                    && published.styles.shares_state_with(request.styles)
+                    && published.constraint == ConstraintKey::from(request.constraint)
+                    && region_provenance_matches(
+                        published.region_flow.as_ref(),
+                        request.region_flow,
+                    )
+                    && published.core.paragraph_count == snapshot.paragraphs().len()
+            })
+            .map(|published| published.core.spine.clone())
+            .or_else(|| self.reusable_scene_spine(snapshot, request))
+    }
+
     fn record_access(&mut self, kind: CacheKind, access: &CacheAccess) {
         if access.previous_accounted_bytes != access.current_accounted_bytes {
             self.cache_work.scene_cache_accounted_bytes = self
@@ -754,6 +1010,12 @@ impl LayoutEngine {
             let Some((_, kind, paragraph)) = self.recency.pop_first() else {
                 break;
             };
+            // An exact root is retainable only while every segment it names is
+            // inside the coordinated paragraph budget. Caller-held scenes may
+            // keep their own root alive, but the engine must stop pinning it
+            // before evicting any constituent segment.
+            self.published.remove(&paragraph.document);
+            self.published_compositions.remove(&paragraph.document);
             let removed = match kind {
                 CacheKind::Committed => self.cache.remove(&paragraph),
                 CacheKind::Composition => self.composition_cache.remove(&paragraph),
@@ -768,6 +1030,7 @@ impl LayoutEngine {
                 entries.remove(&(kind, paragraph));
                 if entries.is_empty() {
                     self.documents.remove(&paragraph.document);
+                    self.block_styles.remove(&paragraph.document);
                 }
             }
             self.cache_work.evictions += 1;
@@ -818,7 +1081,7 @@ fn reuse_paragraph_geometry(
         current_use,
         previous_accounted_bytes: entry.accounted_bytes,
         current_accounted_bytes: entry.accounted_bytes,
-        region_transcript: entry.region_transcript.clone(),
+        region_transcript: entry.segment.region_transcript.clone(),
     })
 }
 
@@ -874,7 +1137,8 @@ fn prepare_paragraph_geometry(
         entry.last_used = current_use;
         entry.preflight_key = preflight_key;
         if let Some((id, epoch)) = projection.composition_identity() {
-            rebind_composition_geometry(&mut entry.geometry, id, epoch);
+            let segment = Arc::make_mut(&mut entry.segment);
+            rebind_composition_geometry(Arc::make_mut(&mut segment.geometry), id, epoch);
         }
         work.reused_paragraphs += 1;
         reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(1);
@@ -884,7 +1148,7 @@ fn prepare_paragraph_geometry(
             current_use,
             previous_accounted_bytes: entry.accounted_bytes,
             current_accounted_bytes: entry.accounted_bytes,
-            region_transcript: entry.region_transcript.clone(),
+            region_transcript: entry.segment.region_transcript.clone(),
         });
     }
 
@@ -1066,8 +1330,11 @@ fn prepare_paragraph_geometry(
             entry.preflight_key = preflight_key;
             entry.formation_key = formation_key;
             entry.paint_runs = projection.paint_runs.clone();
-            entry.region_transcript = region_transcript.clone();
-            entry.geometry = geometry;
+            entry.segment = Arc::new(ParagraphSceneSegment::new(
+                paragraph.id,
+                Arc::new(geometry),
+                region_transcript.clone(),
+            ));
             entry.accounted_bytes = entry.calculate_accounted_owned_bytes();
             (
                 previous_use,
@@ -1080,8 +1347,11 @@ fn prepare_paragraph_geometry(
                 preflight_key,
                 formation_key,
                 paint_runs: projection.paint_runs.clone(),
-                region_transcript: region_transcript.clone(),
-                geometry,
+                segment: Arc::new(ParagraphSceneSegment::new(
+                    paragraph.id,
+                    Arc::new(geometry),
+                    region_transcript.clone(),
+                )),
                 accounted_bytes: 0,
             };
             entry.accounted_bytes = entry.calculate_accounted_owned_bytes();
@@ -1273,8 +1543,7 @@ struct ParagraphCache {
     preflight_key: ParagraphPreflightKey,
     formation_key: FormationKey,
     paint_runs: Vec<PaintRun>,
-    region_transcript: Option<RegionTranscript>,
-    geometry: CachedGeometry,
+    segment: Arc<ParagraphSceneSegment>,
     accounted_bytes: usize,
 }
 
@@ -1286,10 +1555,15 @@ impl ParagraphCache {
             ))
             .saturating_add(self.formation_key.accounted_owned_bytes())
             .saturating_add(vec_bytes::<PaintRun>(self.paint_runs.capacity()))
-            .saturating_add(self.region_transcript.as_ref().map_or(0, |transcript| {
-                vec_bytes::<crate::RegionAttempt>(transcript.attempts().len())
-            }))
-            .saturating_add(self.geometry.accounted_owned_bytes())
+            .saturating_add(
+                self.segment
+                    .region_transcript
+                    .as_ref()
+                    .map_or(0, |transcript| {
+                        vec_bytes::<crate::RegionAttempt>(transcript.attempts().len())
+                    }),
+            )
+            .saturating_add(self.segment.geometry.accounted_owned_bytes())
     }
 }
 
@@ -1307,52 +1581,6 @@ impl FormationKey {
             ))
             .saturating_add(vec_bytes::<InlineFlowRun>(self.inline_flow_runs.capacity()))
     }
-}
-
-fn scene_output_capacity_bytes<RangeSource, UnitSource, Position>(
-    lines: &Vec<SceneLine<RangeSource>>,
-    fragments: &Vec<SceneFragment<RangeSource>>,
-    clusters: &Vec<SceneCluster<UnitSource, Position>>,
-    carets: &Vec<SceneCaretStop<Position>>,
-    movements: &Vec<SceneCursorMovement<UnitSource, Position>>,
-    text_capacity: usize,
-    semantics: &Vec<SemanticFragment>,
-) -> usize {
-    let mut bytes = vec_bytes::<SceneLine<RangeSource>>(lines.capacity())
-        .saturating_add(vec_bytes::<SceneFragment<RangeSource>>(
-            fragments.capacity(),
-        ))
-        .saturating_add(vec_bytes::<SceneCluster<UnitSource, Position>>(
-            clusters.capacity(),
-        ))
-        .saturating_add(vec_bytes::<SceneCaretStop<Position>>(carets.capacity()))
-        .saturating_add(vec_bytes::<SceneCursorMovement<UnitSource, Position>>(
-            movements.capacity(),
-        ))
-        .saturating_add(vec_bytes::<SnapshotTextRange>(text_capacity))
-        .saturating_add(vec_bytes::<SemanticFragment>(semantics.capacity()));
-    for line in lines {
-        bytes = bytes.saturating_add(vec_bytes::<RangeSource>(line.sources.capacity()));
-    }
-    for fragment in fragments {
-        bytes = bytes
-            .saturating_add(vec_bytes::<SceneGlyph<RangeSource>>(
-                fragment.glyphs.capacity(),
-            ))
-            .saturating_add(vec_bytes::<RangeSource>(
-                fragment.additional_sources.capacity(),
-            ))
-            .saturating_add(vec_bytes::<i16>(fragment.normalized_coords.len()));
-        for glyph in &fragment.glyphs {
-            bytes = bytes.saturating_add(vec_bytes::<RangeSource>(
-                glyph.additional_sources.capacity(),
-            ));
-        }
-    }
-    for cluster in clusters {
-        bytes = bytes.saturating_add(vec_bytes::<SceneHitSlice>(cluster.hit_slices.capacity()));
-    }
-    bytes
 }
 
 const fn vec_bytes<T>(capacity: usize) -> usize {

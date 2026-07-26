@@ -24,91 +24,91 @@ pub(super) struct CachedGeometry {
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedLine {
-    bounds: Rect,
-    advance: f64,
-    sources: Vec<LocalRange>,
-    fragments: Range<usize>,
-    break_reason: LineBreakReason,
-    baseline: f64,
-    content_ascent: f64,
-    content_descent: f64,
-    adjustment: LineAdjustment,
+    pub(super) bounds: Rect,
+    pub(super) advance: f64,
+    pub(super) sources: Vec<LocalRange>,
+    pub(super) fragments: Range<usize>,
+    pub(super) break_reason: LineBreakReason,
+    pub(super) baseline: f64,
+    pub(super) content_ascent: f64,
+    pub(super) content_descent: f64,
+    pub(super) adjustment: LineAdjustment,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedFragment {
-    id: SceneFragmentId,
-    glyphs: Vec<CachedGlyph>,
-    paint: PaintSlot,
-    transform: Affine,
-    sources: Vec<LocalRange>,
-    paint_clip: Option<Rect>,
-    font: FontData,
-    font_size: f32,
-    synthesis: FontSynthesis,
-    normalized_coords: Arc<[i16]>,
-    bidi_level: u8,
-    script: [u8; 4],
+    pub(super) id: SceneFragmentId,
+    pub(super) glyphs: Vec<CachedGlyph>,
+    pub(super) paint: PaintSlot,
+    pub(super) transform: Affine,
+    pub(super) sources: Vec<LocalRange>,
+    pub(super) paint_clip: Option<Rect>,
+    pub(super) font: FontData,
+    pub(super) font_size: f32,
+    pub(super) synthesis: FontSynthesis,
+    pub(super) normalized_coords: Arc<[i16]>,
+    pub(super) bidi_level: u8,
+    pub(super) script: [u8; 4],
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGlyph {
-    instance: usize,
-    id: u32,
-    position: Point,
-    advance: Vec2,
-    sources: Vec<LocalRange>,
+    pub(super) instance: usize,
+    pub(super) id: u32,
+    pub(super) position: Point,
+    pub(super) advance: Vec2,
+    pub(super) sources: Vec<LocalRange>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCluster {
-    sources: Vec<LocalRange>,
-    semantic_id: SemanticId,
-    boundary: ClusterBoundary,
-    whitespace: ClusterWhitespace,
-    hit_slices: Vec<CachedHitSlice>,
-    bounds: Rect,
-    line: usize,
-    left: LocalPosition,
-    right: LocalPosition,
-    bidi_level: u8,
+    pub(super) sources: Vec<LocalRange>,
+    pub(super) semantic_id: SemanticId,
+    pub(super) boundary: ClusterBoundary,
+    pub(super) whitespace: ClusterWhitespace,
+    pub(super) hit_slices: Vec<CachedHitSlice>,
+    pub(super) bounds: Rect,
+    pub(super) line: usize,
+    pub(super) left: LocalPosition,
+    pub(super) right: LocalPosition,
+    pub(super) bidi_level: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CachedHitSlice {
-    semantic_id: SemanticId,
-    x0: f64,
-    x1: f64,
+    pub(super) semantic_id: SemanticId,
+    pub(super) x0: f64,
+    pub(super) x1: f64,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCaret {
-    position: LocalPosition,
-    bounds: Rect,
+    pub(super) position: LocalPosition,
+    pub(super) bounds: Rect,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCursorMovement {
-    position: LocalPosition,
-    previous_visual: Option<CachedCursorStep>,
-    next_visual: Option<CachedCursorStep>,
-    previous_logical: Option<CachedCursorStep>,
-    next_logical: Option<CachedCursorStep>,
+    pub(super) position: LocalPosition,
+    pub(super) previous_visual: Option<CachedCursorStep>,
+    pub(super) next_visual: Option<CachedCursorStep>,
+    pub(super) previous_logical: Option<CachedCursorStep>,
+    pub(super) next_logical: Option<CachedCursorStep>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedCursorStep {
-    target: LocalPosition,
-    source: Option<Vec<LocalRange>>,
+    pub(super) target: LocalPosition,
+    pub(super) source: Option<Vec<LocalRange>>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedSemantic {
-    semantic_id: SemanticId,
-    paragraph_role: Option<ParagraphRole>,
-    inline_role: Option<InlineRole>,
-    source: Option<Vec<LocalRange>>,
-    bounds: Rect,
+    pub(super) semantic_id: SemanticId,
+    pub(super) paragraph_role: Option<ParagraphRole>,
+    pub(super) inline_role: Option<InlineRole>,
+    pub(super) source: Option<Vec<LocalRange>>,
+    pub(super) bounds: Rect,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -715,262 +715,6 @@ pub(super) fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 
     identity
 }
 
-pub(super) fn materialize_geometry(
-    geometry: &CachedGeometry,
-    revision: DocumentRevision,
-    y_offset: f64,
-    lines: &mut Vec<SceneLine>,
-    fragments: &mut Vec<SceneFragment>,
-    clusters: &mut Vec<SceneCluster>,
-    carets: &mut Vec<SceneCaretStop>,
-    movements: &mut Vec<SceneCursorMovement>,
-    texts: &mut Vec<SnapshotTextRange>,
-    semantics: &mut Vec<SemanticFragment>,
-) {
-    let translate = Vec2::new(0.0, y_offset);
-    let line_base = lines.len();
-    let fragment_base = fragments.len();
-    lines.extend(geometry.lines.iter().map(|line| {
-        SceneLine {
-            bounds: line.bounds + translate,
-            advance: line.advance,
-            sources: line
-                .sources
-                .iter()
-                .map(|source| materialize_range(source, revision))
-                .collect(),
-            fragments: fragment_base + line.fragments.start..fragment_base + line.fragments.end,
-            break_reason: line.break_reason,
-            baseline: line.baseline + y_offset,
-            content_ascent: line.content_ascent,
-            content_descent: line.content_descent,
-            adjustment: line.adjustment,
-        }
-    }));
-    fragments.extend(geometry.fragments.iter().map(|fragment| {
-        let (source, additional_sources) = materialize_sources(&fragment.sources, revision);
-        SceneFragment {
-            id: fragment.id,
-            glyphs: fragment
-                .glyphs
-                .iter()
-                .map(|glyph| {
-                    let (source, additional_sources) =
-                        materialize_sources(&glyph.sources, revision);
-                    SceneGlyph {
-                        instance: SceneGlyphInstanceId(fragment_base + glyph.instance),
-                        id: glyph.id,
-                        position: glyph.position + translate,
-                        advance: glyph.advance,
-                        source,
-                        additional_sources,
-                    }
-                })
-                .collect(),
-            paint: fragment.paint,
-            transform: fragment.transform,
-            source,
-            additional_sources,
-            paint_clip: fragment.paint_clip.map(|clip| clip + translate),
-            font: fragment.font.clone(),
-            font_size: fragment.font_size,
-            synthesis: fragment.synthesis.clone(),
-            normalized_coords: Arc::clone(&fragment.normalized_coords),
-            bidi_level: fragment.bidi_level,
-            script: fragment.script,
-        }
-    }));
-    clusters.extend(geometry.clusters.iter().map(|cluster| {
-        SceneCluster {
-            source: materialize_snapshot_unit(&cluster.sources, revision),
-            semantic_id: cluster.semantic_id,
-            boundary: cluster.boundary,
-            whitespace: cluster.whitespace,
-            hit_slices: cluster
-                .hit_slices
-                .iter()
-                .map(|slice| SceneHitSlice {
-                    semantic_id: slice.semantic_id,
-                    x0: slice.x0,
-                    x1: slice.x1,
-                })
-                .collect(),
-            bounds: cluster.bounds + translate,
-            line: line_base + cluster.line,
-            left: materialize_position(cluster.left, revision),
-            right: materialize_position(cluster.right, revision),
-            bidi_level: cluster.bidi_level,
-        }
-    }));
-    carets.extend(geometry.carets.iter().map(|caret| SceneCaretStop {
-        position: materialize_position(caret.position, revision),
-        bounds: caret.bounds + translate,
-    }));
-    movements.extend(
-        geometry
-            .movements
-            .iter()
-            .map(|movement| SceneCursorMovement {
-                position: materialize_position(movement.position, revision),
-                previous_visual: materialize_cursor_step(
-                    movement.previous_visual.as_ref(),
-                    revision,
-                ),
-                next_visual: materialize_cursor_step(movement.next_visual.as_ref(), revision),
-                previous_logical: materialize_cursor_step(
-                    movement.previous_logical.as_ref(),
-                    revision,
-                ),
-                next_logical: materialize_cursor_step(movement.next_logical.as_ref(), revision),
-            }),
-    );
-    texts.extend(
-        geometry
-            .texts
-            .iter()
-            .map(|range| materialize_range(range, revision)),
-    );
-    semantics.extend(geometry.semantics.iter().map(|semantic| {
-        SemanticFragment {
-            semantic_id: semantic.semantic_id,
-            paragraph_role: semantic.paragraph_role,
-            inline_role: semantic.inline_role,
-            source: semantic
-                .source
-                .as_ref()
-                .map(|source| materialize_snapshot_range(source, revision)),
-            bounds: semantic.bounds + translate,
-        }
-    }));
-}
-
-pub(super) fn materialize_projected_geometry(
-    geometry: &CachedGeometry,
-    revision: DocumentRevision,
-    y_offset: f64,
-    lines: &mut Vec<SceneLine<ProjectedTextRange>>,
-    fragments: &mut Vec<SceneFragment<ProjectedTextRange>>,
-    clusters: &mut Vec<SceneCluster<ProjectedTextRange, ProjectedTextPosition>>,
-    carets: &mut Vec<SceneCaretStop<ProjectedTextPosition>>,
-    movements: &mut Vec<SceneCursorMovement<ProjectedTextRange, ProjectedTextPosition>>,
-    semantics: &mut Vec<SemanticFragment>,
-) {
-    let translate = Vec2::new(0.0, y_offset);
-    let line_base = lines.len();
-    let fragment_base = fragments.len();
-    lines.extend(geometry.lines.iter().map(|line| {
-        SceneLine {
-            bounds: line.bounds + translate,
-            advance: line.advance,
-            sources: line
-                .sources
-                .iter()
-                .map(|source| projected_range(core::slice::from_ref(source), revision))
-                .collect(),
-            fragments: fragment_base + line.fragments.start..fragment_base + line.fragments.end,
-            break_reason: line.break_reason,
-            baseline: line.baseline + y_offset,
-            content_ascent: line.content_ascent,
-            content_descent: line.content_descent,
-            adjustment: line.adjustment,
-        }
-    }));
-    fragments.extend(geometry.fragments.iter().map(|fragment| {
-        SceneFragment {
-            id: fragment.id,
-            glyphs: fragment
-                .glyphs
-                .iter()
-                .map(|glyph| SceneGlyph {
-                    instance: SceneGlyphInstanceId(fragment_base + glyph.instance),
-                    id: glyph.id,
-                    position: glyph.position + translate,
-                    advance: glyph.advance,
-                    source: projected_range(&glyph.sources, revision),
-                    additional_sources: Vec::new(),
-                })
-                .collect(),
-            paint: fragment.paint,
-            transform: fragment.transform,
-            source: projected_range(&fragment.sources, revision),
-            additional_sources: Vec::new(),
-            paint_clip: fragment.paint_clip.map(|clip| clip + translate),
-            font: fragment.font.clone(),
-            font_size: fragment.font_size,
-            synthesis: fragment.synthesis.clone(),
-            normalized_coords: Arc::clone(&fragment.normalized_coords),
-            bidi_level: fragment.bidi_level,
-            script: fragment.script,
-        }
-    }));
-    clusters.extend(geometry.clusters.iter().map(|cluster| {
-        SceneCluster {
-            source: projected_range(&cluster.sources, revision),
-            semantic_id: cluster.semantic_id,
-            boundary: cluster.boundary,
-            whitespace: cluster.whitespace,
-            hit_slices: cluster
-                .hit_slices
-                .iter()
-                .map(|slice| SceneHitSlice {
-                    semantic_id: slice.semantic_id,
-                    x0: slice.x0,
-                    x1: slice.x1,
-                })
-                .collect(),
-            bounds: cluster.bounds + translate,
-            line: line_base + cluster.line,
-            left: projected_position(cluster.left, revision),
-            right: projected_position(cluster.right, revision),
-            bidi_level: cluster.bidi_level,
-        }
-    }));
-    carets.extend(geometry.carets.iter().map(|caret| SceneCaretStop {
-        position: projected_position(caret.position, revision),
-        bounds: caret.bounds + translate,
-    }));
-    movements.extend(
-        geometry
-            .movements
-            .iter()
-            .map(|movement| SceneCursorMovement {
-                position: projected_position(movement.position, revision),
-                previous_visual: projected_cursor_step(movement.previous_visual.as_ref(), revision),
-                next_visual: projected_cursor_step(movement.next_visual.as_ref(), revision),
-                previous_logical: projected_cursor_step(
-                    movement.previous_logical.as_ref(),
-                    revision,
-                ),
-                next_logical: projected_cursor_step(movement.next_logical.as_ref(), revision),
-            }),
-    );
-    semantics.extend(geometry.semantics.iter().map(|semantic| {
-        SemanticFragment {
-            semantic_id: semantic.semantic_id,
-            paragraph_role: semantic.paragraph_role,
-            inline_role: semantic.inline_role,
-            source: semantic
-                .source
-                .as_ref()
-                .and_then(|sources| materialize_optional_snapshot_range(sources, revision)),
-            bounds: semantic.bounds + translate,
-        }
-    }));
-}
-
-pub(super) fn projected_cursor_step(
-    step: Option<&CachedCursorStep>,
-    revision: DocumentRevision,
-) -> Option<SceneCursorStep<ProjectedTextRange, ProjectedTextPosition>> {
-    step.map(|step| SceneCursorStep {
-        target: projected_position(step.target, revision),
-        source: step
-            .source
-            .as_ref()
-            .map(|source| projected_range(source, revision)),
-    })
-}
-
 pub(super) fn projected_range(
     ranges: &[LocalRange],
     revision: DocumentRevision,
@@ -978,16 +722,23 @@ pub(super) fn projected_range(
     ProjectedTextRange::new(
         ranges
             .iter()
-            .map(|range| match range {
-                LocalRange::Snapshot { text, bytes } => ProjectedTextSource::Snapshot(
-                    SnapshotTextRange::new(revision, *text, bytes.clone()),
-                ),
-                LocalRange::Composition { id, epoch, bytes } => ProjectedTextSource::Composition(
-                    crate::CompositionTextRange::new(*id, *epoch, bytes.clone()),
-                ),
-            })
+            .map(|range| materialize_projected_source(range, revision))
             .collect(),
     )
+}
+
+pub(super) fn materialize_projected_source(
+    range: &LocalRange,
+    revision: DocumentRevision,
+) -> ProjectedTextSource {
+    match range {
+        LocalRange::Snapshot { text, bytes } => {
+            ProjectedTextSource::Snapshot(SnapshotTextRange::new(revision, *text, bytes.clone()))
+        }
+        LocalRange::Composition { id, epoch, bytes } => ProjectedTextSource::Composition(
+            crate::CompositionTextRange::new(*id, *epoch, bytes.clone()),
+        ),
+    }
 }
 
 pub(super) fn projected_position(
@@ -1046,16 +797,6 @@ pub(super) fn materialize_range(
     SnapshotTextRange::new(revision, *text, bytes.clone())
 }
 
-pub(super) fn materialize_snapshot_range(
-    ranges: &[LocalRange],
-    revision: DocumentRevision,
-) -> SnapshotTextRange {
-    let [range] = ranges else {
-        unreachable!("committed geometry source must remain within one semantic text leaf")
-    };
-    materialize_range(range, revision)
-}
-
 pub(super) fn materialize_snapshot_unit(
     ranges: &[LocalRange],
     revision: DocumentRevision,
@@ -1066,19 +807,6 @@ pub(super) fn materialize_snapshot_unit(
             .map(|range| materialize_range(range, revision))
             .collect(),
     )
-}
-
-pub(super) fn materialize_sources(
-    ranges: &[LocalRange],
-    revision: DocumentRevision,
-) -> (SnapshotTextRange, Vec<SnapshotTextRange>) {
-    let mut sources = ranges
-        .iter()
-        .map(|source| materialize_range(source, revision));
-    let source = sources
-        .next()
-        .expect("validated scene observations always retain source");
-    (source, sources.collect())
 }
 
 pub(super) fn materialize_position(

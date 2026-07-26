@@ -16,11 +16,11 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
         .expect("max-content formation succeeds");
     assert_eq!(max.scene().lines().len(), 2);
     assert_eq!(
-        max.scene().lines()[0].break_reason(),
+        max.scene().line(0).expect("line exists").break_reason(),
         TestLineBreakReason::Mandatory
     );
     assert_eq!(
-        max.scene().lines()[1].break_reason(),
+        max.scene().line(1).expect("line exists").break_reason(),
         TestLineBreakReason::End
     );
     assert_eq!(
@@ -37,11 +37,11 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
     );
     assert_eq!(
         max.scene().metrics().first_baseline(),
-        Some(max.scene().lines()[0].baseline())
+        Some(max.scene().line(0).expect("line exists").baseline())
     );
     assert_eq!(
         max.scene().metrics().last_baseline(),
-        Some(max.scene().lines()[1].baseline())
+        Some(max.scene().line(1).expect("line exists").baseline())
     );
 
     let min = engine
@@ -225,7 +225,11 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     assert_eq!(retained.work().analysis().paragraphs(), 0);
     assert_eq!(retained.work().shape().paragraphs(), 0);
     assert_eq!(retained.work().flow().paragraphs(), 0);
-    assert_eq!(engine.cache_diagnostics().hits(), 1);
+    assert_eq!(
+        engine.cache_diagnostics().hits(),
+        0,
+        "an exact published-root hit must not fabricate a paragraph lookup"
+    );
 
     engine.release_document(blocks[1].id());
     let after_release = engine.cache_diagnostics();
@@ -446,8 +450,16 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
     let second_committed = layout
         .prepare(&second_snapshot, &request)
         .expect("second committed scene prepares");
-    let first_line = first_committed.scene().lines()[0].bounds();
-    let second_line = second_committed.scene().lines()[0].bounds();
+    let first_line = first_committed
+        .scene()
+        .line(0)
+        .expect("line exists")
+        .bounds();
+    let second_line = second_committed
+        .scene()
+        .line(0)
+        .expect("line exists")
+        .bounds();
     let first_end = *first_committed
         .scene()
         .hit_test_closest(Point::new(first_line.x1, first_line.center().y))
@@ -517,27 +529,23 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
         second_output.scene().composition()
     );
     assert!(first_output.scene().fragments().iter().any(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source.sources().iter().any(|segment| {
-                matches!(
-                    segment,
-                    ProjectedTextSource::Composition(range)
-                        if range.id() == first_session.id()
-                            && range.epoch() == first_session.epoch()
-                )
-            })
+        fragment.sources().any(|source| {
+            matches!(
+                source,
+                ProjectedTextSource::Composition(range)
+                    if range.id() == first_session.id()
+                        && range.epoch() == first_session.epoch()
+            )
         })
     }));
     assert!(second_output.scene().fragments().iter().any(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source.sources().iter().any(|segment| {
-                matches!(
-                    segment,
-                    ProjectedTextSource::Composition(range)
-                        if range.id() == second_session.id()
-                            && range.epoch() == second_session.epoch()
-                )
-            })
+        fragment.sources().any(|source| {
+            matches!(
+                source,
+                ProjectedTextSource::Composition(range)
+                    if range.id() == second_session.id()
+                        && range.epoch() == second_session.epoch()
+            )
         })
     }));
 }

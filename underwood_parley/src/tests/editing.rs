@@ -119,7 +119,7 @@ fn visual_bidi_selection_retains_disjoint_ranges_and_set_ownership() {
         .find(|hit| hit.source.start == trailing_start)
         .expect("trailing Latin cluster is visible");
     let prefix_hit = hits.first().expect("prefix cluster is visible");
-    let y = scene.lines()[0].bounds().center().y;
+    let y = scene.line(0).expect("line exists").bounds().center().y;
     let anchor = *scene
         .hit_test(Point::new(anchor_hit.min_x + 0.01, y))
         .expect("Arabic anchor must hit")
@@ -354,11 +354,17 @@ fn multi_paragraph_selection_edit_reshapes_only_affected_paragraphs() {
     assert_eq!(initial.work().shape().paragraphs(), 3);
     let scene = initial.scene();
     let first = *scene
-        .hit_test_closest(Point::new(10_000.0, scene.lines()[0].bounds().center().y))
+        .hit_test_closest(Point::new(
+            10_000.0,
+            scene.line(0).expect("line exists").bounds().center().y,
+        ))
         .expect("first paragraph end resolves")
         .position();
     let last = *scene
-        .hit_test_closest(Point::new(10_000.0, scene.lines()[2].bounds().center().y))
+        .hit_test_closest(Point::new(
+            10_000.0,
+            scene.line(2).expect("line exists").bounds().center().y,
+        ))
         .expect("last paragraph end resolves")
         .position();
     let selections = scene
@@ -435,8 +441,8 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
         .prepare(&snapshot, &request)
         .expect("committed scene must prepare");
     let scene = committed.scene();
-    let first_y = scene.lines()[0].bounds().center().y;
-    let last_y = scene.lines()[2].bounds().center().y;
+    let first_y = scene.line(0).expect("line exists").bounds().center().y;
+    let last_y = scene.line(2).expect("line exists").bounds().center().y;
     let start = *scene
         .hit_test_closest(Point::new(-100.0, first_y))
         .expect("paragraph start must resolve")
@@ -484,11 +490,9 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     assert_eq!(transient.work().reused_paragraphs(), 2);
     assert!(transient.scene().fragments().iter().any(|fragment| {
         fragment.script() == *b"Arab"
-            && fragment.source().is_some_and(|source| {
-                source.sources().iter().any(|segment| {
-                    matches!(segment, ProjectedTextSource::Composition(range)
+            && fragment.sources().any(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
                             if range.id() == session.id() && range.epoch() == session.epoch())
-                })
             })
     }));
     assert_eq!(snapshot.text(start.text()), Some("alpha"));
@@ -539,7 +543,7 @@ fn host_driven_queries_share_the_exact_parley_composition_epoch() {
         .prepare(&snapshot, &request)
         .expect("committed host surface must prepare");
     let scene = committed.scene();
-    let y = scene.lines()[0].bounds().center().y;
+    let y = scene.line(0).expect("line exists").bounds().center().y;
     let end = *scene
         .hit_test_closest(Point::new(10_000.0, y))
         .expect("host insertion point must resolve")
@@ -618,7 +622,7 @@ fn host_driven_queries_share_the_exact_parley_composition_epoch() {
         .offset_for_point(marked_rect.center())
         .expect("point hit must map back to the same surface");
     assert!((1..=6).contains(&hit_offset));
-    let line = transient.scene().lines()[0].bounds();
+    let line = transient.scene().line(0).expect("line exists").bounds();
     let mut x = line.x0;
     let mut generated_step = None;
     while x <= line.x1 && generated_step.is_none() {
@@ -653,7 +657,7 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
         .prepare(&snapshot, &request)
         .expect("committed base must prepare");
     let scene = committed.scene();
-    let y = scene.lines()[0].bounds().center().y;
+    let y = scene.line(0).expect("line exists").bounds().center().y;
     let start = *scene
         .hit_test_closest(Point::new(-100.0, y))
         .expect("base start must resolve")
@@ -715,14 +719,11 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
         "generated provenance must not split the shaping run or change glyph geometry"
     );
     assert!(transient.scene().fragments().iter().any(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source
-                .sources()
-                .iter()
-                .any(|segment| matches!(segment, ProjectedTextSource::Composition(_)))
-        })
+        fragment
+            .sources()
+            .any(|source| matches!(source, ProjectedTextSource::Composition(_)))
     }));
-    let line = transient.scene().lines()[0].bounds();
+    let line = transient.scene().line(0).expect("line exists").bounds();
     let mut unit_source = None;
     let mut unit_positions = Vec::new();
     let mut x = line.x0;

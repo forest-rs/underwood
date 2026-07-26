@@ -16,21 +16,15 @@ pub struct CompositionScene {
     pub(super) revision: DocumentRevision,
     pub(super) composition: CompositionId,
     pub(super) epoch: crate::CompositionEpoch,
-    pub(super) metrics: TextMetrics,
-    pub(super) lines: Vec<SceneLine<ProjectedTextRange>>,
-    pub(super) fragments: Vec<SceneFragment<ProjectedTextRange>>,
-    pub(super) clusters: Vec<SceneCluster<ProjectedTextRange, ProjectedTextPosition>>,
-    pub(super) carets: Vec<SceneCaretStop<ProjectedTextPosition>>,
-    pub(super) movements: Vec<SceneCursorMovement<ProjectedTextRange, ProjectedTextPosition>>,
     pub(super) paint: PaintTable,
-    pub(super) semantics: Vec<SemanticFragment>,
+    pub(super) core: Arc<SceneCore>,
 }
 
 impl CompositionScene {
     /// Returns exact intrinsic metrics for this projected scene.
     #[must_use]
-    pub const fn metrics(&self) -> TextMetrics {
-        self.metrics
+    pub fn metrics(&self) -> TextMetrics {
+        self.core.metrics
     }
 
     /// Returns the immutable document identity below the transient projection.
@@ -59,14 +53,38 @@ impl CompositionScene {
 
     /// Returns visual lines in flow order.
     #[must_use]
-    pub fn lines(&self) -> &[SceneLine<ProjectedTextRange>] {
-        &self.lines
+    pub fn lines(&self) -> ProjectedSceneLines<'_> {
+        ProjectedSceneLines::new(self.revision, &self.core.spine)
+    }
+
+    /// Returns one visual line by its global flow-order index.
+    #[must_use]
+    pub fn line(&self, index: usize) -> Option<ProjectedSceneLineView<'_>> {
+        self.lines().get(index)
+    }
+
+    /// Returns the number of visual lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.core.spine.summary().lines
     }
 
     /// Returns paint-homogeneous projected glyph fragments.
     #[must_use]
-    pub fn fragments(&self) -> &[SceneFragment<ProjectedTextRange>] {
-        &self.fragments
+    pub fn fragments(&self) -> ProjectedSceneFragments<'_> {
+        ProjectedSceneFragments::new(self.revision, &self.core.spine)
+    }
+
+    /// Returns one projected glyph fragment by its global visual index.
+    #[must_use]
+    pub fn fragment(&self, index: usize) -> Option<ProjectedSceneFragmentView<'_>> {
+        self.fragments().get(index)
+    }
+
+    /// Returns the number of projected paint fragments.
+    #[must_use]
+    pub fn fragment_count(&self) -> usize {
+        self.core.spine.summary().fragments
     }
 
     /// Returns immutable paint values referenced by fragment slots.
@@ -76,8 +94,8 @@ impl CompositionScene {
     }
 
     /// Iterates semantic fragments in document order.
-    pub fn semantics(&self) -> impl Iterator<Item = &SemanticFragment> {
-        self.semantics.iter()
+    pub fn semantics(&self) -> SceneSemantics<'_> {
+        SceneSemantics::new(self.revision, &self.core.spine)
     }
 
     /// Returns the exact projected interaction unit under a point.
@@ -86,10 +104,13 @@ impl CompositionScene {
         &self,
         point: Point,
     ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
-        self.clusters
-            .iter()
-            .find(|cluster| cluster.bounds.contains(point))
-            .map(|cluster| cluster.hit(point))
+        self.positioned_clusters()
+            .find_map(|(positioned, cluster)| {
+                let origin = Vec2::new(0.0, positioned.position.block_origin);
+                (cluster.bounds + origin)
+                    .contains(point)
+                    .then(|| cached_projected_hit(cluster, positioned, self.revision, point))
+            })
     }
 
     /// Returns the closest projected interaction-unit side for native point queries.
@@ -98,21 +119,20 @@ impl CompositionScene {
         &self,
         point: Point,
     ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
-        let mut closest: Option<(
-            &SceneCluster<ProjectedTextRange, ProjectedTextPosition>,
-            f64,
-            f64,
-        )> = None;
-        for cluster in &self.clusters {
-            let (block_distance, inline_distance) = distance_to_rect_axes(point, cluster.bounds);
-            if closest.is_none_or(|(_, current_block, current_inline)| {
+        let mut closest: Option<(PositionedSegment<'_>, &CachedCluster, f64, f64)> = None;
+        for (positioned, cluster) in self.positioned_clusters() {
+            let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
+            let (block_distance, inline_distance) = distance_to_rect_axes(point, bounds);
+            if closest.is_none_or(|(_, _, current_block, current_inline)| {
                 block_distance < current_block
                     || (block_distance == current_block && inline_distance < current_inline)
             }) {
-                closest = Some((cluster, block_distance, inline_distance));
+                closest = Some((positioned, cluster, block_distance, inline_distance));
             }
         }
-        closest.map(|(cluster, _, _)| cluster.hit(point))
+        closest.map(|(positioned, cluster, _, _)| {
+            cached_projected_hit(cluster, positioned, self.revision, point)
+        })
     }
 
     /// Resolves exact scene geometry for one projected caret position.
@@ -121,13 +141,13 @@ impl CompositionScene {
         &self,
         position: &ProjectedTextPosition,
     ) -> Option<SceneCaret<ProjectedTextPosition>> {
-        self.carets
-            .iter()
-            .find(|caret| caret.position == *position)
-            .map(|caret| SceneCaret {
-                position: caret.position,
-                bounds: caret.bounds,
+        self.positioned_carets().find_map(|(positioned, caret)| {
+            let candidate = projected_position(caret.position, self.revision);
+            (candidate == *position).then(|| SceneCaret {
+                position: candidate,
+                bounds: caret.bounds + Vec2::new(0.0, positioned.position.block_origin),
             })
+        })
     }
 
     /// Moves one position through the adapter-produced interaction map.
@@ -138,16 +158,16 @@ impl CompositionScene {
         movement: TextMovement,
     ) -> Option<ProjectedTextPosition> {
         let record = self
-            .movements
-            .iter()
-            .find(|record| record.position == *position)?;
+            .positioned_movements()
+            .map(|(_, record)| record)
+            .find(|record| projected_position(record.position, self.revision) == *position)?;
         let step = match movement {
             TextMovement::PreviousVisual => record.previous_visual.as_ref(),
             TextMovement::NextVisual => record.next_visual.as_ref(),
             TextMovement::PreviousLogical => record.previous_logical.as_ref(),
             TextMovement::NextLogical => record.next_logical.as_ref(),
         }?;
-        Some(step.target)
+        Some(projected_position(step.target, self.revision))
     }
 
     /// Resolves highlight rectangles for the selected range inside preedit.
@@ -193,26 +213,28 @@ impl CompositionScene {
 
     fn composition_range_geometry(&self, bytes: Range<u32>) -> Vec<SceneCompositionRect> {
         let mut geometry: Vec<SceneCompositionRect> = Vec::new();
-        for cluster in &self.clusters {
-            if !cluster.source.sources().iter().any(|source| {
-                matches!(source, ProjectedTextSource::Composition(source_range)
-                    if source_range.id() == self.composition
-                        && source_range.epoch() == self.epoch
-                        && source_range.bytes().start < bytes.end
-                        && bytes.start < source_range.bytes().end)
+        for (positioned, cluster) in self.positioned_clusters() {
+            if !cluster.sources.iter().any(|source| {
+                matches!(source, LocalRange::Composition { id, epoch, bytes: source }
+                    if *id == self.composition
+                        && *epoch == self.epoch
+                        && source.start < bytes.end
+                        && bytes.start < source.end)
             }) {
                 continue;
             }
+            let line = positioned.position.line_base + cluster.line;
+            let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
             if let Some(previous) = geometry.last_mut()
-                && previous.line == cluster.line
+                && previous.line == line
                 && previous.bidi_level == cluster.bidi_level
-                && nearly_equal(previous.bounds.x1, cluster.bounds.x0)
+                && nearly_equal(previous.bounds.x1, bounds.x0)
             {
-                previous.bounds.x1 = cluster.bounds.x1;
+                previous.bounds.x1 = bounds.x1;
             } else {
                 geometry.push(SceneCompositionRect {
-                    line: cluster.line,
-                    bounds: cluster.bounds,
+                    line,
+                    bounds,
                     bidi_level: cluster.bidi_level,
                 });
             }
@@ -221,11 +243,55 @@ impl CompositionScene {
     }
 
     pub(crate) fn range_geometry(&self, range: &ProjectedTextRange) -> Vec<(usize, Rect)> {
-        self.clusters
-            .iter()
-            .filter(|cluster| projected_ranges_overlap(&cluster.source, range))
-            .map(|cluster| (cluster.line, cluster.bounds))
+        self.positioned_clusters()
+            .filter(|(_, cluster)| {
+                cluster
+                    .sources
+                    .iter()
+                    .any(|source| local_range_overlaps_projected(source, range, self.revision))
+            })
+            .map(|(positioned, cluster)| {
+                (
+                    positioned.position.line_base + cluster.line,
+                    cluster.bounds + Vec2::new(0.0, positioned.position.block_origin),
+                )
+            })
             .collect()
+    }
+
+    fn positioned_clusters(&self) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCluster)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .clusters
+                .iter()
+                .map(move |cluster| (positioned, cluster))
+        })
+    }
+
+    fn positioned_carets(&self) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCaret)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .carets
+                .iter()
+                .map(move |caret| (positioned, caret))
+        })
+    }
+
+    fn positioned_movements(
+        &self,
+    ) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCursorMovement)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .movements
+                .iter()
+                .map(move |movement| (positioned, movement))
+        })
     }
 }
 
@@ -234,22 +300,22 @@ impl CompositionScene {
 pub struct TextScene {
     pub(super) document: crate::DocumentId,
     pub(super) revision: DocumentRevision,
-    pub(super) metrics: TextMetrics,
-    pub(super) lines: Vec<SceneLine>,
-    pub(super) fragments: Vec<SceneFragment>,
-    pub(super) clusters: Vec<SceneCluster>,
-    pub(super) carets: Vec<SceneCaretStop>,
-    pub(super) movements: Vec<SceneCursorMovement>,
-    pub(super) texts: Vec<SnapshotTextRange>,
     pub(super) paint: PaintTable,
-    pub(super) semantics: Vec<SemanticFragment>,
+    pub(super) core: Arc<SceneCore>,
+}
+
+#[derive(Debug)]
+pub(super) struct SceneCore {
+    pub(super) paragraph_count: usize,
+    pub(super) spine: SceneSpine,
+    pub(super) metrics: TextMetrics,
 }
 
 impl TextScene {
     /// Returns exact intrinsic metrics for this scene.
     #[must_use]
-    pub const fn metrics(&self) -> TextMetrics {
-        self.metrics
+    pub fn metrics(&self) -> TextMetrics {
+        self.core.metrics
     }
 
     /// Returns the document identity represented by this scene.
@@ -408,32 +474,32 @@ impl TextScene {
         }
         let mut geometry: Vec<SceneSelectionRect> = Vec::new();
         for (selection_index, selection) in selections.selections().iter().enumerate() {
-            for cluster in &self.clusters {
+            for (positioned, cluster) in self.positioned_clusters() {
                 let Some((range_index, _)) =
                     selection.ranges().iter().enumerate().find(|(_, range)| {
-                        cluster
-                            .source
-                            .sources()
-                            .iter()
-                            .any(|source| ranges_overlap(range, source))
+                        cluster.sources.iter().any(|source| {
+                            ranges_overlap(range, &materialize_range(source, self.revision))
+                        })
                     })
                 else {
                     continue;
                 };
+                let line = positioned.position.line_base + cluster.line;
+                let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
                 if let Some(previous) = geometry.last_mut()
                     && previous.selection == selection_index
                     && previous.range == range_index
-                    && previous.line == cluster.line
+                    && previous.line == line
                     && previous.bidi_level == cluster.bidi_level
-                    && nearly_equal(previous.bounds.x1, cluster.bounds.x0)
+                    && nearly_equal(previous.bounds.x1, bounds.x0)
                 {
-                    previous.bounds.x1 = cluster.bounds.x1;
+                    previous.bounds.x1 = bounds.x1;
                 } else {
                     geometry.push(SceneSelectionRect {
                         selection: selection_index,
                         range: range_index,
-                        line: cluster.line,
-                        bounds: cluster.bounds,
+                        line,
+                        bounds,
                         bidi_level: cluster.bidi_level,
                     });
                 }
@@ -444,14 +510,38 @@ impl TextScene {
 
     /// Returns visual lines in flow order.
     #[must_use]
-    pub fn lines(&self) -> &[SceneLine] {
-        &self.lines
+    pub fn lines(&self) -> SceneLines<'_> {
+        SceneLines::new(self.revision, &self.core.spine)
+    }
+
+    /// Returns one visual line by global index.
+    #[must_use]
+    pub fn line(&self, index: usize) -> Option<SceneLineView<'_>> {
+        self.lines().get(index)
+    }
+
+    /// Returns the number of visual lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.core.spine.summary().lines
     }
 
     /// Returns paint-homogeneous glyph fragments in visual order.
     #[must_use]
-    pub fn fragments(&self) -> &[SceneFragment] {
-        &self.fragments
+    pub fn fragments(&self) -> SceneFragments<'_> {
+        SceneFragments::new(self.revision, &self.core.spine)
+    }
+
+    /// Returns one paint-homogeneous fragment by global visual index.
+    #[must_use]
+    pub fn fragment(&self, index: usize) -> Option<SceneFragmentView<'_>> {
+        self.fragments().get(index)
+    }
+
+    /// Returns the number of paint fragments.
+    #[must_use]
+    pub fn fragment_count(&self) -> usize {
+        self.core.spine.summary().fragments
     }
 
     /// Returns immutable paint values referenced by fragment slots.
@@ -461,8 +551,8 @@ impl TextScene {
     }
 
     /// Iterates semantic fragments in document order.
-    pub fn semantics(&self) -> impl Iterator<Item = &SemanticFragment> {
-        self.semantics.iter()
+    pub fn semantics(&self) -> SceneSemantics<'_> {
+        SceneSemantics::new(self.revision, &self.core.spine)
     }
 
     /// Returns an exact interaction-unit hit under a scene-space point.
@@ -471,10 +561,13 @@ impl TextScene {
     /// geometry to the nearest line edge.
     #[must_use]
     pub fn hit_test(&self, point: Point) -> Option<TextHit> {
-        self.clusters
-            .iter()
-            .find(|cluster| cluster.bounds.contains(point))
-            .map(|cluster| cluster.hit(point))
+        self.positioned_clusters()
+            .find_map(|(positioned, cluster)| {
+                let origin = Vec2::new(0.0, positioned.position.block_origin);
+                (cluster.bounds + origin)
+                    .contains(point)
+                    .then(|| cached_snapshot_hit(cluster, positioned, self.revision, point))
+            })
     }
 
     /// Returns the closest interaction-unit side for pointer selection.
@@ -483,17 +576,20 @@ impl TextScene {
     /// painted glyph fragment.
     #[must_use]
     pub fn hit_test_closest(&self, point: Point) -> Option<TextHit> {
-        let mut closest: Option<(&SceneCluster, f64, f64)> = None;
-        for cluster in &self.clusters {
-            let (block_distance, inline_distance) = distance_to_rect_axes(point, cluster.bounds);
-            if closest.is_none_or(|(_, current_block, current_inline)| {
+        let mut closest: Option<(PositionedSegment<'_>, &CachedCluster, f64, f64)> = None;
+        for (positioned, cluster) in self.positioned_clusters() {
+            let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
+            let (block_distance, inline_distance) = distance_to_rect_axes(point, bounds);
+            if closest.is_none_or(|(_, _, current_block, current_inline)| {
                 block_distance < current_block
                     || (block_distance == current_block && inline_distance < current_inline)
             }) {
-                closest = Some((cluster, block_distance, inline_distance));
+                closest = Some((positioned, cluster, block_distance, inline_distance));
             }
         }
-        closest.map(|(cluster, _, _)| cluster.hit(point))
+        closest.map(|(positioned, cluster, _, _)| {
+            cached_snapshot_hit(cluster, positioned, self.revision, point)
+        })
     }
 
     /// Resolves exact scene-space caret geometry for a snapshot position.
@@ -502,13 +598,13 @@ impl TextScene {
     /// affinity, or a valid snapshot position not represented by this scene.
     #[must_use]
     pub fn caret(&self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
-        self.carets
-            .iter()
-            .find(|caret| caret.position == *position)
-            .map(|caret| SceneCaret {
-                position: caret.position,
-                bounds: caret.bounds,
+        self.positioned_carets().find_map(|(positioned, caret)| {
+            let candidate = materialize_position(caret.position, self.revision);
+            (candidate == *position).then(|| SceneCaret {
+                position: candidate,
+                bounds: caret.bounds + Vec2::new(0.0, positioned.position.block_origin),
             })
+        })
     }
 
     /// Returns the first logical caret position in the complete scene.
@@ -517,11 +613,10 @@ impl TextScene {
     /// treating every paragraph-local start as a document start.
     #[must_use]
     pub fn start_position(&self) -> Option<SnapshotTextPosition> {
-        self.movements
-            .iter()
-            .filter(|movement| movement.previous_logical.is_none())
-            .min_by_key(|movement| logical_position_key(&movement.position))
-            .map(|movement| movement.position)
+        self.positioned_movements()
+            .filter(|(_, movement)| movement.previous_logical.is_none())
+            .map(|(_, movement)| materialize_position(movement.position, self.revision))
+            .min_by_key(logical_position_key)
     }
 
     /// Returns the final logical caret position in the complete scene.
@@ -530,11 +625,10 @@ impl TextScene {
     /// treating every paragraph-local end as a document end.
     #[must_use]
     pub fn end_position(&self) -> Option<SnapshotTextPosition> {
-        self.movements
-            .iter()
-            .filter(|movement| movement.next_logical.is_none())
-            .max_by_key(|movement| logical_position_key(&movement.position))
-            .map(|movement| movement.position)
+        self.positioned_movements()
+            .filter(|(_, movement)| movement.next_logical.is_none())
+            .map(|(_, movement)| materialize_position(movement.position, self.revision))
+            .max_by_key(logical_position_key)
     }
 
     /// Resolves a represented caret at one leaf-local UTF-8 boundary.
@@ -554,19 +648,17 @@ impl TextScene {
         } else {
             TextAffinity::Upstream
         };
-        self.movements
-            .iter()
-            .find(|movement| {
-                movement.position.text() == text
-                    && movement.position.byte() == byte
-                    && movement.position.affinity() == preferred
-            })
-            .or_else(|| {
-                self.movements.iter().find(|movement| {
-                    movement.position.text() == text && movement.position.byte() == byte
-                })
-            })
-            .map(|movement| movement.position)
+        let mut fallback = None;
+        for (_, movement) in self.positioned_movements() {
+            let position = materialize_position(movement.position, self.revision);
+            if position.text() == text && position.byte() == byte {
+                if position.affinity() == preferred {
+                    return Some(position);
+                }
+                fallback = Some(position);
+            }
+        }
+        fallback
     }
 
     /// Returns the preceding logical word start, or the scene start.
@@ -597,11 +689,9 @@ impl TextScene {
         if position.revision() != self.revision || position.text().document != self.document {
             return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
         }
-        if self
-            .movements
-            .iter()
-            .any(|movement| movement.position == *position)
-        {
+        if self.positioned_movements().any(|(_, movement)| {
+            materialize_position(movement.position, self.revision) == *position
+        }) {
             Ok(())
         } else {
             Err(SelectionError::new(SelectionErrorKind::UnknownPosition))
@@ -616,14 +706,15 @@ impl TextScene {
         self.validate_position(position).ok()?;
         let current = logical_position_key(position);
         let candidates = self
-            .clusters
-            .iter()
+            .positioned_clusters()
+            .map(|(_, cluster)| cluster)
             .filter(|cluster| {
                 cluster.boundary != ClusterBoundary::None
                     && cluster.whitespace == ClusterWhitespace::None
             })
             .filter_map(|cluster| {
-                let source = cluster.source.sources().first()?;
+                let source = cluster.sources.first()?;
+                let source = materialize_range(source, self.revision);
                 let key = logical_text_key(source.text(), source.bytes().start);
                 Some((key, source.text(), source.bytes().start))
             })
@@ -669,7 +760,10 @@ impl TextScene {
         }
         let mut ranges = Vec::new();
         for index in start_text..=end_text {
-            let text = &self.texts[index];
+            let text = self
+                .positioned_texts()
+                .nth(index)
+                .expect("validated text rank remains represented");
             let bytes = if start_text == end_text {
                 start.byte()..end.byte()
             } else if index == start_text {
@@ -722,7 +816,7 @@ impl TextScene {
                 SelectionErrorKind::DisconnectedMovement,
             ));
         };
-        canonicalize_ranges(&mut ranges, &self.texts);
+        canonicalize_ranges(&mut ranges);
         if ranges.is_empty() {
             ranges.push(SnapshotTextRange::new(
                 self.revision,
@@ -741,7 +835,7 @@ impl TextScene {
     ) -> Result<Option<Vec<SnapshotTextRange>>, SelectionError> {
         let mut position = *start;
         let mut ranges = Vec::new();
-        for _ in 0..=self.movements.len() {
+        for _ in 0..=self.core.spine.summary().movements {
             if position == *end {
                 return Ok(Some(ranges));
             }
@@ -763,16 +857,17 @@ impl TextScene {
     ) -> Result<Option<SceneCursorStep>, SelectionError> {
         self.validate_position(position)?;
         let record = self
-            .movements
-            .iter()
-            .find(|record| record.position == *position)
+            .positioned_movements()
+            .map(|(_, record)| record)
+            .find(|record| materialize_position(record.position, self.revision) == *position)
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
         let step = match movement {
-            TextMovement::PreviousVisual => record.previous_visual.clone(),
-            TextMovement::NextVisual => record.next_visual.clone(),
-            TextMovement::PreviousLogical => record.previous_logical.clone(),
-            TextMovement::NextLogical => record.next_logical.clone(),
+            TextMovement::PreviousVisual => record.previous_visual.as_ref(),
+            TextMovement::NextVisual => record.next_visual.as_ref(),
+            TextMovement::PreviousLogical => record.previous_logical.as_ref(),
+            TextMovement::NextLogical => record.next_logical.as_ref(),
         };
+        let step = materialize_cursor_step(step, self.revision);
         Ok(step.or_else(|| self.adjacent_paragraph_step(position, movement)))
     }
 
@@ -787,9 +882,11 @@ impl TextScene {
             TextMovement::PreviousVisual | TextMovement::PreviousLogical
         );
         let paragraph = self
-            .movements
-            .iter()
-            .map(|movement| movement.position.text().paragraph)
+            .positioned_movements()
+            .filter_map(|(_, movement)| match movement.position {
+                LocalPosition::Snapshot { text, .. } => Some(text.paragraph),
+                LocalPosition::Composition { .. } => None,
+            })
             .filter(|paragraph| {
                 if previous {
                     *paragraph < current
@@ -804,16 +901,20 @@ impl TextScene {
                     candidate.min(paragraph)
                 }
             })?;
-        let mut candidates = self.movements.iter().filter(|record| {
-            record.position.text().paragraph == paragraph
+        let mut candidates = self.positioned_movements().filter_map(|(_, record)| {
+            let LocalPosition::Snapshot { text, .. } = record.position else {
+                return None;
+            };
+            (text.paragraph == paragraph
                 && match movement {
                     TextMovement::PreviousVisual => record.next_visual.is_none(),
                     TextMovement::NextVisual => record.previous_visual.is_none(),
                     TextMovement::PreviousLogical => record.next_logical.is_none(),
                     TextMovement::NextLogical => record.previous_logical.is_none(),
-                }
+                })
+            .then_some(record)
         });
-        let target = candidates.next()?.position;
+        let target = materialize_position(candidates.next()?.position, self.revision);
         if candidates.next().is_some() {
             return None;
         }
@@ -875,7 +976,7 @@ impl TextScene {
         movement: TextMovement,
     ) -> Result<bool, SelectionError> {
         let mut position = *start;
-        for _ in 0..=self.movements.len() {
+        for _ in 0..=self.core.spine.summary().movements {
             if position == *end {
                 return Ok(true);
             }
@@ -897,24 +998,73 @@ impl TextScene {
     }
 
     fn text_rank(&self, text: TextId) -> Result<usize, SelectionError> {
-        self.texts
-            .iter()
+        self.positioned_texts()
             .position(|range| range.text() == text)
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))
     }
 
     pub(crate) fn range_geometry(&self, range: &SnapshotTextRange) -> Vec<(usize, Rect)> {
-        self.clusters
-            .iter()
-            .filter(|cluster| {
+        self.positioned_clusters()
+            .filter(|(_, cluster)| {
                 cluster
-                    .source
-                    .sources()
+                    .sources
                     .iter()
-                    .any(|source| ranges_overlap(range, source))
+                    .any(|source| ranges_overlap(range, &materialize_range(source, self.revision)))
             })
-            .map(|cluster| (cluster.line, cluster.bounds))
+            .map(|(positioned, cluster)| {
+                (
+                    positioned.position.line_base + cluster.line,
+                    cluster.bounds + Vec2::new(0.0, positioned.position.block_origin),
+                )
+            })
             .collect()
+    }
+
+    fn positioned_clusters(&self) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCluster)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .clusters
+                .iter()
+                .map(move |cluster| (positioned, cluster))
+        })
+    }
+
+    fn positioned_carets(&self) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCaret)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .carets
+                .iter()
+                .map(move |caret| (positioned, caret))
+        })
+    }
+
+    fn positioned_movements(
+        &self,
+    ) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCursorMovement)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .movements
+                .iter()
+                .map(move |movement| (positioned, movement))
+        })
+    }
+
+    fn positioned_texts(&self) -> impl Iterator<Item = SnapshotTextRange> {
+        let revision = self.revision;
+        self.core.spine.segments().flat_map(move |positioned| {
+            positioned
+                .segment
+                .geometry
+                .texts
+                .iter()
+                .map(move |range| materialize_range(range, revision))
+        })
     }
 }
 
@@ -926,22 +1076,32 @@ fn logical_text_key(text: TextId, byte: u32) -> (u32, u32, u32) {
     (text.paragraph, text.index, byte)
 }
 
-fn projected_ranges_overlap(first: &ProjectedTextRange, second: &ProjectedTextRange) -> bool {
-    first.sources().iter().any(|first| {
-        second.sources().iter().any(|second| match (first, second) {
-            (ProjectedTextSource::Snapshot(first), ProjectedTextSource::Snapshot(second)) => {
-                ranges_overlap(first, second)
+fn local_range_overlaps_projected(
+    local: &LocalRange,
+    projected: &ProjectedTextRange,
+    revision: DocumentRevision,
+) -> bool {
+    projected
+        .sources()
+        .iter()
+        .any(|source| match (local, source) {
+            (LocalRange::Snapshot { text, bytes }, ProjectedTextSource::Snapshot(projected)) => {
+                projected.revision() == revision
+                    && projected.text() == *text
+                    && bytes.start < projected.bytes().end
+                    && projected.bytes().start < bytes.end
             }
-            (ProjectedTextSource::Composition(first), ProjectedTextSource::Composition(second))
-                if first.id() == second.id() && first.epoch() == second.epoch() =>
-            {
-                let first = first.bytes();
-                let second = second.bytes();
-                first.start < second.end && second.start < first.end
+            (
+                LocalRange::Composition { id, epoch, bytes },
+                ProjectedTextSource::Composition(projected),
+            ) => {
+                projected.id() == *id
+                    && projected.epoch() == *epoch
+                    && bytes.start < projected.bytes().end
+                    && projected.bytes().start < bytes.end
             }
             _ => false,
         })
-    })
 }
 
 fn movement_mode(movement: TextMovement) -> TextSelectionMode {
@@ -951,13 +1111,11 @@ fn movement_mode(movement: TextMovement) -> TextSelectionMode {
     }
 }
 
-fn canonicalize_ranges(ranges: &mut Vec<SnapshotTextRange>, texts: &[SnapshotTextRange]) {
+fn canonicalize_ranges(ranges: &mut Vec<SnapshotTextRange>) {
     ranges.sort_by_key(|range| {
         (
-            texts
-                .iter()
-                .position(|text| text.text() == range.text())
-                .unwrap_or(usize::MAX),
+            range.text().paragraph,
+            range.text().index,
             range.bytes().start,
         )
     });
@@ -1026,65 +1184,70 @@ fn nearly_equal(first: f64, second: f64) -> bool {
     (first - second).abs() <= f64::max(1.0, first.abs().max(second.abs())) * 1.0e-9
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct SceneCluster<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
-    pub(super) source: Source,
-    pub(super) semantic_id: SemanticId,
-    pub(super) boundary: ClusterBoundary,
-    pub(super) whitespace: ClusterWhitespace,
-    pub(super) hit_slices: Vec<SceneHitSlice>,
-    pub(super) bounds: Rect,
-    pub(super) line: usize,
-    pub(super) left: Position,
-    pub(super) right: Position,
-    pub(super) bidi_level: u8,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SceneHitSlice {
-    pub(super) semantic_id: SemanticId,
-    pub(super) x0: f64,
-    pub(super) x1: f64,
-}
-
-impl<Source: Clone, Position: Copy> SceneCluster<Source, Position> {
-    fn hit(&self, point: Point) -> TextHit<Source, Position> {
-        let midpoint = self.bounds.x0 + self.bounds.width() * 0.5;
-        let semantic_id = self
-            .hit_slices
-            .iter()
-            .filter(|slice| slice.x0 < slice.x1)
-            .min_by(|first, second| {
-                distance_to_interval(point.x, first.x0, first.x1)
-                    .total_cmp(&distance_to_interval(point.x, second.x0, second.x1))
-            })
-            .map_or(self.semantic_id, |slice| slice.semantic_id);
-        TextHit {
-            source: self.source.clone(),
-            position: if point.x <= midpoint {
-                self.left
+fn cached_snapshot_hit(
+    cluster: &CachedCluster,
+    positioned: PositionedSegment<'_>,
+    revision: DocumentRevision,
+    point: Point,
+) -> TextHit {
+    let origin = Vec2::new(0.0, positioned.position.block_origin);
+    let bounds = cluster.bounds + origin;
+    let midpoint = bounds.x0 + bounds.width() * 0.5;
+    let semantic_id = cluster
+        .hit_slices
+        .iter()
+        .filter(|slice| slice.x0 < slice.x1)
+        .min_by(|first, second| {
+            distance_to_interval(point.x, first.x0, first.x1)
+                .total_cmp(&distance_to_interval(point.x, second.x0, second.x1))
+        })
+        .map_or(cluster.semantic_id, |slice| slice.semantic_id);
+    TextHit {
+        source: materialize_snapshot_unit(&cluster.sources, revision),
+        position: materialize_position(
+            if point.x <= midpoint {
+                cluster.left
             } else {
-                self.right
+                cluster.right
             },
-            semantic_id,
-            bidi_level: self.bidi_level,
-        }
+            revision,
+        ),
+        semantic_id,
+        bidi_level: cluster.bidi_level,
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SceneCaretStop<Position = SnapshotTextPosition> {
-    pub(super) position: Position,
-    pub(super) bounds: Rect,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct SceneCursorMovement<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
-    pub(super) position: Position,
-    pub(super) previous_visual: Option<SceneCursorStep<Source, Position>>,
-    pub(super) next_visual: Option<SceneCursorStep<Source, Position>>,
-    pub(super) previous_logical: Option<SceneCursorStep<Source, Position>>,
-    pub(super) next_logical: Option<SceneCursorStep<Source, Position>>,
+fn cached_projected_hit(
+    cluster: &CachedCluster,
+    positioned: PositionedSegment<'_>,
+    revision: DocumentRevision,
+    point: Point,
+) -> TextHit<ProjectedTextRange, ProjectedTextPosition> {
+    let origin = Vec2::new(0.0, positioned.position.block_origin);
+    let bounds = cluster.bounds + origin;
+    let midpoint = bounds.x0 + bounds.width() * 0.5;
+    let semantic_id = cluster
+        .hit_slices
+        .iter()
+        .filter(|slice| slice.x0 < slice.x1)
+        .min_by(|first, second| {
+            distance_to_interval(point.x, first.x0, first.x1)
+                .total_cmp(&distance_to_interval(point.x, second.x0, second.x1))
+        })
+        .map_or(cluster.semantic_id, |slice| slice.semantic_id);
+    TextHit {
+        source: projected_range(&cluster.sources, revision),
+        position: projected_position(
+            if point.x <= midpoint {
+                cluster.left
+            } else {
+                cluster.right
+            },
+            revision,
+        ),
+        semantic_id,
+        bidi_level: cluster.bidi_level,
+    }
 }
 
 #[derive(Clone, Debug)]

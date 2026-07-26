@@ -54,12 +54,14 @@ fn main() -> Result<(), AnyError> {
     );
     let committed = fixture.layout.prepare(&snapshot, &request)?;
     let scene = committed.scene();
+    let first_line = scene.line(0).expect("first paragraph has a line");
+    let last_line = scene.line(2).expect("last paragraph has a line");
     let primary = *scene
-        .hit_test_closest(Point::new(-100.0, scene.lines()[0].bounds().center().y))
+        .hit_test_closest(Point::new(-100.0, first_line.bounds().center().y))
         .expect("first paragraph has a primary insertion point")
         .position();
     let secondary = *scene
-        .hit_test_closest(Point::new(10_000.0, scene.lines()[2].bounds().center().y))
+        .hit_test_closest(Point::new(10_000.0, last_line.bounds().center().y))
         .expect("last paragraph has a secondary insertion point")
         .position();
     let selections = scene.selection_set([

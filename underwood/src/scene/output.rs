@@ -17,22 +17,11 @@ pub struct TextMetrics {
 }
 
 impl TextMetrics {
-    pub(super) fn from_lines<Source>(lines: &[SceneLine<Source>], height: f64) -> Self {
-        let mut min_x = 0.0_f64;
-        let mut max_x = 0.0_f64;
-        let mut min_y = 0.0_f64;
-        let mut max_y = height;
-        for line in lines {
-            let bounds = line.bounds();
-            min_x = min_x.min(bounds.x0);
-            max_x = max_x.max(bounds.x0 + line.advance());
-            min_y = min_y.min(bounds.y0);
-            max_y = max_y.max(bounds.y1);
-        }
+    pub(super) fn from_summary(summary: SceneSummary) -> Self {
         Self {
-            size: Size::new(max_x - min_x, max_y - min_y),
-            first_baseline: lines.first().map(SceneLine::baseline),
-            last_baseline: lines.last().map(SceneLine::baseline),
+            size: Size::new(summary.max_x - summary.min_x, summary.max_y - summary.min_y),
+            first_baseline: summary.first_baseline,
+            last_baseline: summary.last_baseline,
         }
     }
 

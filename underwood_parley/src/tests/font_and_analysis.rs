@@ -228,7 +228,7 @@ fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
             .prepare(&document.snapshot(), &request)
             .expect("Parley analysis boundaries must prepare through the public scene path");
         let scene = output.scene();
-        let y = scene.lines()[0].bounds().center().y;
+        let y = scene.line(0).expect("line exists").bounds().center().y;
         let start = *scene
             .hit_test_closest(Point::new(-100.0, y))
             .expect("the unit start must resolve")

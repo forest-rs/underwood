@@ -8,9 +8,12 @@ use imaging::kurbo::{Affine, Circle, Line, Rect, RoundedRect, Stroke};
 use imaging::peniko::{Color, Fill, Gradient, Style};
 use imaging::{PaintSink, Painter, record};
 use underwood::{
-    CompositionScene, InlineRole, PaintTable, ParagraphRole, Point, RegionAttemptOutcome,
-    RegionTranscript, SceneFragment, SceneLine, SemanticFragment, TextScene, Vec2,
-    adapter::LineBreakReason,
+    CompositionScene, FontData, InlineRole, PaintSlot, PaintTable, ParagraphRole, Point,
+    ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,
+    ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, RegionAttemptOutcome,
+    RegionTranscript, SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs,
+    SceneLineView, SceneLines, SceneSemantics, SemanticFragmentView, TextScene, Vec2,
+    adapter::{FontSynthesis, LineBreakReason},
 };
 
 const BACKGROUND: Color = Color::from_rgb8(0x08, 0x0d, 0x14);
@@ -22,6 +25,262 @@ const GOLD: Color = Color::from_rgb8(0xf5, 0xc4, 0x51);
 const SELECTION_PRIMARY: Color = Color::from_rgba8(0x4d, 0xd5, 0xe7, 0x58);
 const SELECTION_SECONDARY: Color = Color::from_rgba8(0xff, 0x6b, 0x67, 0x52);
 const PREEDIT_SELECTION: Color = Color::from_rgba8(0xf5, 0xc4, 0x51, 0x62);
+
+#[derive(Clone)]
+enum AnyLines<'a> {
+    Committed(SceneLines<'a>),
+    Projected(ProjectedSceneLines<'a>),
+}
+
+impl<'a> Iterator for AnyLines<'a> {
+    type Item = AnyLine<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Committed(lines) => lines.next().map(AnyLine::Committed),
+            Self::Projected(lines) => lines.next().map(AnyLine::Projected),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AnyLine<'a> {
+    Committed(SceneLineView<'a>),
+    Projected(ProjectedSceneLineView<'a>),
+}
+
+impl AnyLine<'_> {
+    fn bounds(self) -> Rect {
+        match self {
+            Self::Committed(line) => line.bounds(),
+            Self::Projected(line) => line.bounds(),
+        }
+    }
+
+    fn break_reason(self) -> LineBreakReason {
+        match self {
+            Self::Committed(line) => line.break_reason(),
+            Self::Projected(line) => line.break_reason(),
+        }
+    }
+
+    fn baseline(self) -> f64 {
+        match self {
+            Self::Committed(line) => line.baseline(),
+            Self::Projected(line) => line.baseline(),
+        }
+    }
+
+    fn content_ascent(self) -> f64 {
+        match self {
+            Self::Committed(line) => line.content_ascent(),
+            Self::Projected(line) => line.content_ascent(),
+        }
+    }
+
+    fn content_descent(self) -> f64 {
+        match self {
+            Self::Committed(line) => line.content_descent(),
+            Self::Projected(line) => line.content_descent(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum AnyFragments<'a> {
+    Committed(SceneFragments<'a>),
+    Projected(ProjectedSceneFragments<'a>),
+}
+
+impl<'a> Iterator for AnyFragments<'a> {
+    type Item = AnyFragment<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Committed(fragments) => fragments.next().map(AnyFragment::Committed),
+            Self::Projected(fragments) => fragments.next().map(AnyFragment::Projected),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AnyFragment<'a> {
+    Committed(SceneFragmentView<'a>),
+    Projected(ProjectedSceneFragmentView<'a>),
+}
+
+impl<'a> AnyFragment<'a> {
+    fn glyphs(self) -> AnyGlyphs<'a> {
+        match self {
+            Self::Committed(fragment) => AnyGlyphs::Committed(fragment.glyphs()),
+            Self::Projected(fragment) => AnyGlyphs::Projected(fragment.glyphs()),
+        }
+    }
+
+    fn paint(self) -> PaintSlot {
+        match self {
+            Self::Committed(fragment) => fragment.paint(),
+            Self::Projected(fragment) => fragment.paint(),
+        }
+    }
+
+    fn transform(self) -> Affine {
+        match self {
+            Self::Committed(fragment) => fragment.transform(),
+            Self::Projected(fragment) => fragment.transform(),
+        }
+    }
+
+    fn paint_clip(self) -> Option<Rect> {
+        match self {
+            Self::Committed(fragment) => fragment.paint_clip(),
+            Self::Projected(fragment) => fragment.paint_clip(),
+        }
+    }
+
+    fn font(self) -> &'a FontData {
+        match self {
+            Self::Committed(fragment) => fragment.font(),
+            Self::Projected(fragment) => fragment.font(),
+        }
+    }
+
+    fn font_size(self) -> f32 {
+        match self {
+            Self::Committed(fragment) => fragment.font_size(),
+            Self::Projected(fragment) => fragment.font_size(),
+        }
+    }
+
+    fn synthesis(self) -> &'a FontSynthesis {
+        match self {
+            Self::Committed(fragment) => fragment.synthesis(),
+            Self::Projected(fragment) => fragment.synthesis(),
+        }
+    }
+
+    fn normalized_coords(self) -> &'a [i16] {
+        match self {
+            Self::Committed(fragment) => fragment.normalized_coords(),
+            Self::Projected(fragment) => fragment.normalized_coords(),
+        }
+    }
+
+    fn bidi_level(self) -> u8 {
+        match self {
+            Self::Committed(fragment) => fragment.bidi_level(),
+            Self::Projected(fragment) => fragment.bidi_level(),
+        }
+    }
+
+    fn script(self) -> [u8; 4] {
+        match self {
+            Self::Committed(fragment) => fragment.script(),
+            Self::Projected(fragment) => fragment.script(),
+        }
+    }
+
+    fn owns_multiple_sources(self) -> bool {
+        match self {
+            Self::Committed(fragment) => fragment.sources().nth(1).is_some(),
+            Self::Projected(fragment) => fragment.sources().nth(1).is_some(),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum AnyGlyphs<'a> {
+    Committed(SceneGlyphs<'a>),
+    Projected(ProjectedSceneGlyphs<'a>),
+}
+
+impl<'a> Iterator for AnyGlyphs<'a> {
+    type Item = AnyGlyph<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Committed(glyphs) => glyphs.next().map(AnyGlyph::Committed),
+            Self::Projected(glyphs) => glyphs.next().map(AnyGlyph::Projected),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AnyGlyph<'a> {
+    Committed(SceneGlyphView<'a>),
+    Projected(ProjectedSceneGlyphView<'a>),
+}
+
+impl AnyGlyph<'_> {
+    fn id(self) -> u32 {
+        match self {
+            Self::Committed(glyph) => glyph.id(),
+            Self::Projected(glyph) => glyph.id(),
+        }
+    }
+
+    fn position(self) -> Point {
+        match self {
+            Self::Committed(glyph) => glyph.position(),
+            Self::Projected(glyph) => glyph.position(),
+        }
+    }
+
+    fn advance(self) -> Vec2 {
+        match self {
+            Self::Committed(glyph) => glyph.advance(),
+            Self::Projected(glyph) => glyph.advance(),
+        }
+    }
+
+    fn owns_multiple_sources(self) -> bool {
+        match self {
+            Self::Committed(glyph) => glyph.sources().nth(1).is_some(),
+            Self::Projected(glyph) => glyph.sources().nth(1).is_some(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AnySemantics<'a> {
+    committed: Option<SceneSemantics<'a>>,
+}
+
+impl<'a> Iterator for AnySemantics<'a> {
+    type Item = AnySemantic<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.committed
+            .as_mut()
+            .and_then(SceneSemantics::next)
+            .map(AnySemantic::Committed)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AnySemantic<'a> {
+    Committed(SemanticFragmentView<'a>),
+}
+
+impl AnySemantic<'_> {
+    fn paragraph_role(self) -> Option<ParagraphRole> {
+        match self {
+            Self::Committed(semantic) => semantic.paragraph_role(),
+        }
+    }
+
+    fn inline_role(self) -> Option<InlineRole> {
+        match self {
+            Self::Committed(semantic) => semantic.inline_role(),
+        }
+    }
+
+    fn bounds(self) -> Rect {
+        match self {
+            Self::Committed(semantic) => semantic.bounds(),
+        }
+    }
+}
 
 /// Presentation-only inspection layer over public scene observations.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -133,15 +392,16 @@ impl FrameLayout {
 
     /// Reports when the flowing document extends below the page's visible area.
     pub(crate) fn document_is_clipped(self, document: &TextScene) -> bool {
-        self.lines_are_clipped(document.lines())
+        self.lines_are_clipped(AnyLines::Committed(document.lines()))
     }
 
-    /// Reports whether arbitrary committed or projected lines exceed the page.
-    pub(crate) fn lines_are_clipped<Source>(self, lines: &[SceneLine<Source>]) -> bool {
-        let content_bottom = lines
-            .iter()
-            .map(|line| line.bounds().y1)
-            .fold(0.0_f64, f64::max);
+    /// Reports whether transient projected lines exceed the page.
+    pub(crate) fn composition_lines_are_clipped(self, lines: ProjectedSceneLines<'_>) -> bool {
+        self.lines_are_clipped(AnyLines::Projected(lines))
+    }
+
+    fn lines_are_clipped(self, lines: AnyLines<'_>) -> bool {
+        let content_bottom = lines.map(|line| line.bounds().y1).fold(0.0_f64, f64::max);
         self.origin_y + content_bottom > self.page_rect().y1 - 20.0
     }
 
@@ -166,15 +426,17 @@ pub(crate) fn record_frame(
     overlay: &EditorOverlay,
 ) -> Result<record::Scene, record::ValidateError> {
     let semantics = if diagnostics == DiagnosticsMode::Semantics {
-        document.semantics().collect()
+        AnySemantics {
+            committed: Some(document.semantics()),
+        }
     } else {
-        Vec::new()
+        AnySemantics { committed: None }
     };
     record_scene(
-        document.lines(),
-        document.fragments(),
+        AnyLines::Committed(document.lines()),
+        AnyFragments::Committed(document.fragments()),
         document.paint(),
-        &semantics,
+        semantics,
         page,
         transcript,
         layout,
@@ -193,15 +455,17 @@ pub(crate) fn record_composition_frame(
     overlay: &EditorOverlay,
 ) -> Result<record::Scene, record::ValidateError> {
     let semantics = if diagnostics == DiagnosticsMode::Semantics {
-        document.semantics().collect()
+        AnySemantics {
+            committed: Some(document.semantics()),
+        }
     } else {
-        Vec::new()
+        AnySemantics { committed: None }
     };
     record_scene(
-        document.lines(),
-        document.fragments(),
+        AnyLines::Projected(document.lines()),
+        AnyFragments::Projected(document.fragments()),
         document.paint(),
-        &semantics,
+        semantics,
         page,
         transcript,
         layout,
@@ -210,11 +474,11 @@ pub(crate) fn record_composition_frame(
     )
 }
 
-fn record_scene<Source>(
-    lines: &[SceneLine<Source>],
-    fragments: &[SceneFragment<Source>],
+fn record_scene(
+    lines: AnyLines<'_>,
+    fragments: AnyFragments<'_>,
     paint: &PaintTable,
-    semantics: &[&SemanticFragment],
+    semantics: AnySemantics<'_>,
     page_plan: &LivingPagePlan,
     transcript: &RegionTranscript,
     layout: FrameLayout,
@@ -423,20 +687,20 @@ fn paint_flow_diagnostics<S: PaintSink + ?Sized>(
     }
 }
 
-struct TextSceneAdapter<'a, Source> {
-    lines: &'a [SceneLine<Source>],
-    fragments: &'a [SceneFragment<Source>],
+struct TextSceneAdapter<'a> {
+    lines: AnyLines<'a>,
+    fragments: AnyFragments<'a>,
     paint: &'a PaintTable,
-    semantics: &'a [&'a SemanticFragment],
+    semantics: AnySemantics<'a>,
     placement: Affine,
 }
 
-impl<'a, Source> TextSceneAdapter<'a, Source> {
+impl<'a> TextSceneAdapter<'a> {
     fn new(
-        lines: &'a [SceneLine<Source>],
-        fragments: &'a [SceneFragment<Source>],
+        lines: AnyLines<'a>,
+        fragments: AnyFragments<'a>,
         paint: &'a PaintTable,
-        semantics: &'a [&'a SemanticFragment],
+        semantics: AnySemantics<'a>,
         layout: FrameLayout,
     ) -> Self {
         Self {
@@ -467,12 +731,12 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
         self.paint_selection_backgrounds(painter, overlay);
 
         let fill = Style::Fill(Fill::NonZero);
-        for fragment in self.fragments {
+        for fragment in self.fragments.clone() {
             let brush = self
                 .paint
                 .brush(fragment.paint())
                 .expect("validated scene paint slot must exist");
-            let glyphs = fragment.glyphs().iter().map(|glyph| record::Glyph {
+            let glyphs = fragment.glyphs().map(|glyph| record::Glyph {
                 id: glyph.id(),
                 x: finite_f32(glyph.position().x),
                 y: finite_f32(glyph.position().y),
@@ -564,7 +828,7 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
 
     fn paint_line_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
         let dashed = Stroke::new(1.0).with_dashes(0.0, [5.0, 5.0]);
-        for line in self.lines {
+        for line in self.lines.clone() {
             let color = match line.break_reason() {
                 LineBreakReason::Regular => CYAN,
                 LineBreakReason::Mandatory => CORAL,
@@ -604,13 +868,13 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
     }
 
     fn paint_fragment_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        for fragment in self.fragments {
-            let Some(bounds) = fragment_advance_envelope(fragment, self.lines) else {
+        for fragment in self.fragments.clone() {
+            let Some(bounds) = fragment_advance_envelope(fragment, self.lines.clone()) else {
                 continue;
             };
             let script = script_color(fragment.script());
             let direction = bidi_color(fragment.bidi_level());
-            let owns_multiple_sources = fragment.sources().nth(1).is_some();
+            let owns_multiple_sources = fragment.owns_multiple_sources();
             painter
                 .fill(bounds, script.with_alpha(0.075))
                 .transform(self.placement)
@@ -637,12 +901,12 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
     }
 
     fn paint_glyph_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        for fragment in self.fragments {
+        for fragment in self.fragments.clone() {
             let transform = self.placement * fragment.transform();
             for glyph in fragment.glyphs() {
                 let origin = glyph.position();
                 let end = origin + glyph.advance();
-                let owns_multiple_sources = glyph.sources().nth(1).is_some();
+                let owns_multiple_sources = glyph.owns_multiple_sources();
                 let color = if owns_multiple_sources {
                     GOLD
                 } else {
@@ -674,7 +938,7 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
     fn paint_semantic_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
         let paragraph_stroke = Stroke::new(1.0).with_dashes(0.0, [7.0, 4.0]);
         let inline_stroke = Stroke::new(0.8);
-        for semantic in self.semantics {
+        for semantic in self.semantics.clone() {
             let (color, stroke) = if let Some(role) = semantic.paragraph_role() {
                 let color = if role == ParagraphRole::HEADING_1 {
                     GOLD
@@ -700,23 +964,21 @@ impl<'a, Source> TextSceneAdapter<'a, Source> {
     }
 }
 
-fn fragment_advance_envelope<Source>(
-    fragment: &SceneFragment<Source>,
-    lines: &[SceneLine<Source>],
-) -> Option<Rect> {
-    let first = fragment.glyphs().first()?;
+fn fragment_advance_envelope(fragment: AnyFragment<'_>, lines: AnyLines<'_>) -> Option<Rect> {
+    let mut glyphs = fragment.glyphs();
+    let first = glyphs.next()?;
     let transform = fragment.transform();
     let first_origin = transform * first.position();
     let first_end = transform * (first.position() + first.advance());
     let mut x0 = first_origin.x.min(first_end.x);
     let mut x1 = first_origin.x.max(first_end.x);
-    for glyph in fragment.glyphs().iter().skip(1) {
+    for glyph in glyphs {
         let origin = transform * glyph.position();
         let end = transform * (glyph.position() + glyph.advance());
         x0 = x0.min(origin.x.min(end.x));
         x1 = x1.max(origin.x.max(end.x));
     }
-    let line = lines.iter().min_by(|left, right| {
+    let line = lines.min_by(|left, right| {
         (left.baseline() - first_origin.y)
             .abs()
             .total_cmp(&(right.baseline() - first_origin.y).abs())

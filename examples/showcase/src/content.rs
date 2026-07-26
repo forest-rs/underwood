@@ -940,7 +940,7 @@ mod tests {
             .sources()
             .iter()
             .filter(|source| source.text() == text)
-            .map(underwood::SnapshotTextRange::bytes)
+            .map(|source| source.bytes())
             .collect();
         assert_eq!(sources.len(), 1);
         assert_eq!(
@@ -1023,7 +1023,7 @@ mod tests {
                     .source()
                     .is_none_or(|source| !editable.contains(&source.text()))
             })
-            .map(underwood::SceneFragment::id)
+            .map(|fragment| fragment.id())
             .collect();
         content.toggle_edit();
         let edited = content.prepare(760.0, 0.5).expect("edit must prepare");
@@ -1038,7 +1038,7 @@ mod tests {
                     .source()
                     .is_none_or(|source| !editable.contains(&source.text()))
             })
-            .map(underwood::SceneFragment::id)
+            .map(|fragment| fragment.id())
             .collect();
         assert_eq!(edited_sibling_ids, sibling_ids);
     }

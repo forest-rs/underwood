@@ -1071,7 +1071,10 @@ fn profile_alignment_churn(
                 assert_adjustment_only(&output);
                 if alignment == TextAlignment::Justify {
                     assert!(
-                        output.scene().lines()[0]
+                        output
+                            .scene()
+                            .line(0)
+                            .expect("justified label has a line")
                             .adjustment()
                             .opportunity_expansion()
                             > 0.0,

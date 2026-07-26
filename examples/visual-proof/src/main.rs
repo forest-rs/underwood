@@ -184,7 +184,10 @@ impl<'a> TextSceneAdapter<'a> {
             .iter()
             .filter(|fragment| is_zero_advance_glyph(fragment))
         {
-            let glyph = &fragment.glyphs()[0];
+            let glyph = fragment
+                .glyphs()
+                .first()
+                .expect("zero-advance fragment has one glyph");
             let origin = glyph.position();
             let advance_end = origin.x + glyph.advance().x;
             let rail_x1 = if origin.x == advance_end {
@@ -307,26 +310,40 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         "the mixed-direction specimen must prove finite-width formation"
     );
     assert_eq!(
-        mixed_direction.lines()[0].break_reason(),
+        mixed_direction
+            .line(0)
+            .expect("first mixed-direction line")
+            .break_reason(),
         LineBreakReason::Regular,
         "the specimen must wrap at a legal Parley opportunity"
     );
     assert_eq!(
-        mixed_direction.lines()[1].break_reason(),
+        mixed_direction
+            .line(1)
+            .expect("second mixed-direction line")
+            .break_reason(),
         LineBreakReason::End,
         "the second line must end with the paragraph"
     );
     assert_eq!(
-        mixed_direction.lines()[0].adjustment().alignment(),
+        mixed_direction
+            .line(0)
+            .expect("first mixed-direction line")
+            .adjustment()
+            .alignment(),
         TextAlignment::Justify,
         "the mixed-direction specimen must use public paragraph alignment"
     );
     assert!(
-        mixed_direction.lines()[0]
+        mixed_direction
+            .line(0)
+            .expect("first mixed-direction line")
             .adjustment()
             .expanded_opportunities()
             > 0
-            && mixed_direction.lines()[0]
+            && mixed_direction
+                .line(0)
+                .expect("first mixed-direction line")
                 .adjustment()
                 .opportunity_expansion()
                 > 0.0,
@@ -706,8 +723,8 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
     assert!(
         scene
             .lines()
-            .windows(2)
-            .any(|lines| lines[0].bounds().height() != lines[1].bounds().height()),
+            .zip(scene.lines().skip(1))
+            .any(|(first, second)| first.bounds().height() != second.bounds().height()),
         "the specimen must execute heterogeneous line heights"
     );
     Ok(scene.clone())
@@ -840,8 +857,12 @@ fn poster_paints() -> PaintTable {
     ])
 }
 
-fn is_zero_advance_glyph(fragment: &underwood::SceneFragment) -> bool {
-    fragment.glyphs().len() == 1 && fragment.glyphs()[0].advance().x == 0.0
+fn is_zero_advance_glyph(fragment: &underwood::SceneFragmentView<'_>) -> bool {
+    fragment.glyphs().len() == 1
+        && fragment
+            .glyphs()
+            .first()
+            .is_some_and(|glyph| glyph.advance().x == 0.0)
 }
 
 fn paint_backdrop<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>) {

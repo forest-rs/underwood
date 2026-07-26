@@ -206,6 +206,7 @@ pub struct CompositionSession {
     text: Arc<str>,
     selection: Option<Range<u32>>,
     clauses: Arc<[CompositionClause]>,
+    provenance: Arc<()>,
 }
 
 impl CompositionSession {
@@ -219,6 +220,7 @@ impl CompositionSession {
             text: Arc::from(""),
             selection: None,
             clauses: Arc::from([]),
+            provenance: Arc::new(()),
         }
     }
 
@@ -295,7 +297,12 @@ impl CompositionSession {
         self.text = Arc::from(update.text);
         self.selection = update.selection;
         self.clauses = update.clauses.into();
+        self.provenance = Arc::new(());
         Ok(self.epoch)
+    }
+
+    pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.provenance, &other.provenance)
     }
 
     /// Commits one replacement transaction and ends this session.

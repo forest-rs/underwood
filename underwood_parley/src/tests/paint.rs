@@ -19,7 +19,16 @@ fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
         .scene()
         .fragments()
         .iter()
-        .find(|fragment| fragment.glyphs()[0].advance().x == 0.0)
+        .find(|fragment| {
+            fragment
+                .glyphs()
+                .iter()
+                .next()
+                .expect("glyph exists")
+                .advance()
+                .x
+                == 0.0
+        })
         .expect("Noto Kufi beh must expose its zero-advance dot glyph");
     assert_eq!(mark.paint(), PaintSlot::new(0));
     assert_eq!(
@@ -197,7 +206,15 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
         .expect("bidi format controls must not become phantom glyphs or source gaps");
     assert_eq!(output.scene().lines().len(), 1);
     assert_eq!(
-        output.scene().lines()[0].sources()[0].bytes(),
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
         0..u32::try_from(text.len()).expect("fixture length fits")
     );
     let isolate =

@@ -1,7 +1,7 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::{rc::Rc, vec, vec::Vec};
+use alloc::{rc::Rc, sync::Arc, vec, vec::Vec};
 use core::cell::Cell;
 
 use peniko::Blob;
@@ -945,12 +945,16 @@ fn fragment_identity_is_distinct_across_documents() {
         .prepare(&second.snapshot(), &second_request)
         .expect("second scene must prepare");
     assert_ne!(
-        first_scene.scene().fragments()[0].id(),
-        second_scene.scene().fragments()[0].id(),
+        first_scene.scene().fragment(0).expect("fragment").id(),
+        second_scene.scene().fragment(0).expect("fragment").id(),
         "document identity must participate in retained fragment identity"
     );
     assert_eq!(
-        first_scene.scene().fragments()[0].paint_clip(),
+        first_scene
+            .scene()
+            .fragment(0)
+            .expect("fragment")
+            .paint_clip(),
         None,
         "ordinary whole-glyph paint must not create a renderer clip"
     );
@@ -1037,10 +1041,13 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
     let transient = layout
         .prepare_composition(&snapshot, &request, &session)
         .expect("collapsed whitespace preedit must prepare");
-    let source = transient.scene().fragments()[0]
-        .source()
-        .expect("generated glyph must retain provenance");
-    let [ProjectedTextSource::Composition(range)] = source.sources() else {
+    let sources: Vec<_> = transient
+        .scene()
+        .fragment(0)
+        .expect("generated fragment exists")
+        .sources()
+        .collect();
+    let [ProjectedTextSource::Composition(range)] = sources.as_slice() else {
         panic!("collapsed preedit must have one generated source range");
     };
     assert_eq!(
@@ -1097,19 +1104,23 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     let output = layout
         .prepare(&document.snapshot(), &request)
         .expect("explicitly clipped split paint must lower");
-    let [first, second] = output.scene().fragments() else {
-        panic!("one split glyph must lower to exactly two draw fragments");
-    };
+    let mut fragments = output.scene().fragments();
+    let first = fragments.next().expect("first split fragment");
+    let second = fragments.next().expect("second split fragment");
+    assert!(fragments.next().is_none());
 
-    assert_eq!(first.glyphs()[0].id(), second.glyphs()[0].id());
     assert_eq!(
-        first.glyphs()[0].instance_id(),
-        second.glyphs()[0].instance_id(),
+        first.glyphs().first().expect("first glyph").id(),
+        second.glyphs().first().expect("second glyph").id()
+    );
+    assert_eq!(
+        first.glyphs().first().expect("first glyph").instance_id(),
+        second.glyphs().first().expect("second glyph").instance_id(),
         "partial-paint observations must retain one shaped-glyph identity"
     );
     assert_eq!(
-        first.glyphs()[0].position(),
-        second.glyphs()[0].position(),
+        first.glyphs().first().expect("first glyph").position(),
+        second.glyphs().first().expect("second glyph").position(),
         "paint splitting must not duplicate shaping or move the glyph"
     );
     assert_eq!(first.paint(), PaintSlot::new(0));
@@ -1117,7 +1128,7 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     assert_eq!(first.source().expect("first source").text(), first_text);
     assert_eq!(second.source().expect("second source").text(), second_text);
     assert!(first.synthesis().skew_transform().is_some());
-    let origin = first.glyphs()[0].position();
+    let origin = first.glyphs().first().expect("first glyph").position();
     assert_eq!(first.paint_clip().expect("first clip").x0, origin.x);
     assert_eq!(first.paint_clip().expect("first clip").x1, origin.x + 5.0);
     assert_eq!(first.paint_clip().expect("first clip").y0, origin.y - 8.0);
@@ -1130,7 +1141,7 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     assert_eq!(second.paint_clip().expect("second clip").y0, origin.y - 8.0);
     assert_eq!(second.paint_clip().expect("second clip").y1, origin.y + 2.0);
     assert_eq!(
-        output.scene().lines()[0].fragment_range(),
+        output.scene().line(0).expect("line").fragment_range(),
         0..2,
         "the line must identify both paint fragments directly"
     );
@@ -1282,8 +1293,14 @@ fn empty_paragraph_line_height_has_a_flow_identity() {
         .expect("spacious scene must prepare");
     assert_eq!(spacious_scene.work().shape().paragraphs(), 0);
     assert_eq!(spacious_scene.work().flow().paragraphs(), 1);
-    assert_eq!(compact_scene.scene().lines()[0].bounds().y0, 10.0);
-    assert_eq!(spacious_scene.scene().lines()[0].bounds().y0, 20.0);
+    assert_eq!(
+        compact_scene.scene().line(0).expect("line").bounds().y0,
+        10.0
+    );
+    assert_eq!(
+        spacious_scene.scene().line(0).expect("line").bounds().y0,
+        20.0
+    );
 }
 
 #[test]
@@ -1393,11 +1410,9 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
     assert_eq!(first.work().shape().paragraphs(), 1);
     assert_eq!(first.scene().epoch(), first_epoch);
     assert!(first.scene().fragments().iter().all(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source.sources().iter().all(|segment| {
-                matches!(segment, ProjectedTextSource::Composition(range)
+        fragment.sources().all(|source| {
+            matches!(source, ProjectedTextSource::Composition(range)
                         if range.id() == session.id() && range.epoch() == first_epoch)
-            })
         })
     }));
     assert!(
@@ -1427,6 +1442,10 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         .expect("same epoch must reuse transient work");
     assert_eq!(repeated.work().shape().paragraphs(), 0);
     assert_eq!(repeated.work().reused_paragraphs(), 1);
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &repeated.scene().core),
+        "an exact composition epoch must return the published scene core"
+    );
 
     let selection_epoch = session
         .update(
@@ -1441,11 +1460,9 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
     assert_eq!(selection_only.work().geometry().paragraphs(), 0);
     assert_eq!(selection_only.work().reused_paragraphs(), 1);
     assert!(selection_only.scene().fragments().iter().all(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source.sources().iter().all(|segment| {
-                matches!(segment, ProjectedTextSource::Composition(range)
+        fragment.sources().all(|source| {
+            matches!(source, ProjectedTextSource::Composition(range)
                         if range.epoch() == selection_epoch)
-            })
         })
     }));
     assert!(
@@ -1602,6 +1619,318 @@ fn unrelated_equal_styles_use_checked_value_preflight() {
 }
 
 #[test]
+fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-local-path"));
+    let mut edit = document.edit();
+    let mut texts = Vec::new();
+    for value in ["before", "target", "after"] {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        texts.push(
+            edit.append_text(paragraph, InlineRole::TEXT, value)
+                .expect("fixture text appends"),
+        );
+    }
+    let first_publication = edit.commit().expect("fixture publishes");
+    let first_snapshot = first_publication.snapshot().clone();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let dark = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let light = PaintTable::from_brushes([Brush::Solid(Color::WHITE)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(16),
+    );
+    let first = layout
+        .prepare(
+            &first_snapshot,
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark),
+        )
+        .expect("initial scene prepares");
+    let first_target_glyph = first
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[1]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("old target glyph exists")
+        .instance_id();
+    let first_after_glyph = first
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[2]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("old trailing glyph exists")
+        .instance_id();
+    let repainted = layout
+        .prepare(
+            &first_snapshot,
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &light),
+        )
+        .expect("paint-only scene prepares");
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &repainted.scene().core),
+        "paint values must rebind one persistent geometry root"
+    );
+
+    let mut edit = document.edit();
+    edit.replace_text(texts[1], "changed")
+        .expect("middle paragraph edits");
+    let second_publication = edit.commit().expect("localized edit publishes");
+    let second = layout
+        .prepare(
+            second_publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark),
+        )
+        .expect("localized scene prepares");
+    assert_eq!(second.work().shape().paragraphs(), 1);
+    assert_eq!(second.work().reused_paragraphs(), 2);
+    for index in [0, 2] {
+        assert!(
+            Arc::ptr_eq(
+                first
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("old sibling exists"),
+                second
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("new sibling exists"),
+            ),
+            "localized publication must share unchanged paragraph segments"
+        );
+    }
+    assert!(
+        !Arc::ptr_eq(
+            first
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("old target exists"),
+            second
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("new target exists"),
+        ),
+        "localized publication must replace the changed paragraph segment"
+    );
+    let second_target_glyph = second
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[1]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("new target glyph exists")
+        .instance_id();
+    let second_after_glyph = second
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[2]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("new trailing glyph exists")
+        .instance_id();
+    assert_ne!(
+        first_target_glyph, second_target_glyph,
+        "replaced paragraph geometry must receive distinct glyph identities"
+    );
+    assert_eq!(
+        first_after_glyph, second_after_glyph,
+        "shared paragraph geometry must retain glyph identities despite changed prefixes"
+    );
+    assert!(
+        first.scene().fragments().all(|fragment| {
+            fragment
+                .sources()
+                .all(|source| source.revision() == first_snapshot.revision())
+        }),
+        "caller-retained old geometry must mint only its original revision"
+    );
+    assert!(
+        second.scene().fragments().all(|fragment| {
+            fragment
+                .sources()
+                .all(|source| source.revision() == second_publication.snapshot().revision())
+        }),
+        "new geometry must mint only the new revision"
+    );
+}
+
+#[test]
+fn composition_replaces_only_its_persistent_paragraph_path() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-comp-spine"));
+    let mut edit = document.edit();
+    let mut texts = Vec::new();
+    for value in ["before", "target", "after"] {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        texts.push(
+            edit.append_text(paragraph, InlineRole::TEXT, value)
+                .expect("fixture text appends"),
+        );
+    }
+    edit.commit().expect("fixture publishes");
+    let snapshot = document.snapshot();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(16),
+    );
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed fixture prepares");
+    let target = committed
+        .scene()
+        .position_at(texts[1], 0)
+        .expect("target start is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&target)
+        .expect("target caret validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("target selection validates");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"scene-comp-path1"))
+        .expect("composition starts")
+        .into_session();
+    session
+        .update(
+            session.epoch(),
+            CompositionUpdate::new("generated").with_selection(9..9),
+        )
+        .expect("first epoch updates");
+
+    let first = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("first projected scene prepares");
+    assert_eq!(first.work().reused_paragraphs(), 2);
+    for index in [0, 2] {
+        assert!(
+            Arc::ptr_eq(
+                committed
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("committed sibling exists"),
+                first
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("projected sibling exists"),
+            ),
+            "composition must share every unchanged committed sibling"
+        );
+    }
+    assert!(
+        !Arc::ptr_eq(
+            committed
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("committed target exists"),
+            first
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("projected target exists"),
+        ),
+        "composition must replace its target segment"
+    );
+
+    let repeated = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("same epoch reuses its root");
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &repeated.scene().core),
+        "an exact composition request must reuse its root"
+    );
+
+    let first_epoch = session.epoch();
+    session
+        .update(
+            first_epoch,
+            CompositionUpdate::new("generated").with_selection(0..0),
+        )
+        .expect("selection-only epoch updates");
+    let second = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("next projected epoch prepares");
+    for index in [0, 2] {
+        assert!(
+            Arc::ptr_eq(
+                first
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("first sibling exists"),
+                second
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("second sibling exists"),
+            ),
+            "a new epoch must continue sharing unchanged siblings"
+        );
+    }
+    assert!(
+        first.scene().fragments().any(|fragment| {
+            fragment.sources().any(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
+                    if range.epoch() == first_epoch)
+            })
+        }),
+        "the caller-retained old scene must keep its original generated epoch"
+    );
+    assert!(
+        second.scene().fragments().any(|fragment| {
+            fragment.sources().any(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
+                    if range.epoch() == session.epoch())
+            })
+        }),
+        "the new scene must bind generated provenance to the new epoch"
+    );
+}
+
+#[test]
 fn visual_selection_uses_the_reciprocal_caret_path() {
     let mut document = Document::new(DocumentId::from_bytes(*b"scene-visual-dir"));
     let mut edit = document.edit();
@@ -1616,36 +1945,58 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
     let start = SnapshotTextPosition::new(snapshot.revision(), text, 0, TextAffinity::Downstream);
     let end = SnapshotTextPosition::new(snapshot.revision(), text, 2, TextAffinity::Upstream);
     let source = SnapshotTextRange::new(snapshot.revision(), text, 0..2);
+    let local_start = super::LocalPosition::Snapshot {
+        text,
+        byte: 0,
+        affinity: TextAffinity::Downstream,
+    };
+    let local_end = super::LocalPosition::Snapshot {
+        text,
+        byte: 2,
+        affinity: TextAffinity::Upstream,
+    };
+    let local_source = super::LocalRange::Snapshot { text, bytes: 0..2 };
+    let segment = Arc::new(super::ParagraphSceneSegment::new(
+        paragraph,
+        Arc::new(super::CachedGeometry {
+            height: 0.0,
+            lines: Vec::new(),
+            fragments: Vec::new(),
+            clusters: Vec::new(),
+            carets: Vec::new(),
+            movements: vec![
+                super::CachedCursorMovement {
+                    position: local_start,
+                    previous_visual: None,
+                    next_visual: None,
+                    previous_logical: None,
+                    next_logical: None,
+                },
+                super::CachedCursorMovement {
+                    position: local_end,
+                    previous_visual: Some(super::CachedCursorStep {
+                        target: local_start,
+                        source: Some(vec![local_source.clone()]),
+                    }),
+                    next_visual: None,
+                    previous_logical: None,
+                    next_logical: None,
+                },
+            ],
+            texts: vec![local_source],
+            semantics: Vec::new(),
+        }),
+        None,
+    ));
     let scene = super::TextScene {
         document: snapshot.id(),
         revision: snapshot.revision(),
-        metrics: super::TextMetrics::default(),
-        lines: Vec::new(),
-        fragments: Vec::new(),
-        clusters: Vec::new(),
-        carets: Vec::new(),
-        movements: vec![
-            super::SceneCursorMovement {
-                position: start,
-                previous_visual: None,
-                next_visual: None,
-                previous_logical: None,
-                next_logical: None,
-            },
-            super::SceneCursorMovement {
-                position: end,
-                previous_visual: Some(super::SceneCursorStep {
-                    target: start,
-                    source: Some(crate::SnapshotTextUnit::new(vec![source.clone()])),
-                }),
-                next_visual: None,
-                previous_logical: None,
-                next_logical: None,
-            },
-        ],
-        texts: vec![source.clone()],
         paint: PaintTable::from_brushes([Brush::Solid(Color::BLACK)]),
-        semantics: Vec::new(),
+        core: Arc::new(super::SceneCore {
+            paragraph_count: 1,
+            spine: super::SceneSpine::from_segments(&[segment], true),
+            metrics: super::TextMetrics::default(),
+        }),
     };
 
     let forward = scene

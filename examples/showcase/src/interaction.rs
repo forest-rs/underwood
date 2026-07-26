@@ -72,7 +72,7 @@ impl ActionRegistry {
                         .source()
                         .is_some_and(|source| source.text() == text)
                 })
-                .map(underwood::SemanticFragment::semantic_id)
+                .map(|semantic| semantic.semantic_id())
                 .ok_or_else(|| String::from("action text is absent from the prepared scene"))?;
             if entries
                 .iter()

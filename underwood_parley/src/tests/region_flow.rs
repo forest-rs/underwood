@@ -42,9 +42,27 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
         transcript.attempts()[1].outcome(),
         RegionAttemptOutcome::Accepted
     );
-    assert_eq!(output.scene().lines()[0].bounds().x0, 100.0);
-    assert_eq!(output.scene().lines()[0].bounds().y0, 0.0);
-    assert_eq!(output.scene().lines()[0].sources()[0].bytes().start, 0);
+    assert_eq!(
+        output.scene().line(0).expect("line exists").bounds().x0,
+        100.0
+    );
+    assert_eq!(
+        output.scene().line(0).expect("line exists").bounds().y0,
+        0.0
+    );
+    assert_eq!(
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes()
+            .start,
+        0
+    );
     assert!(output.work().rejected_line_candidates() >= 1);
     assert!(output.work().line_checkpoint_restores() >= 1);
     let trace = output.trace().expect("trace was requested");
@@ -88,13 +106,33 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
     let lines = output.scene().lines();
 
     assert!(lines.len() >= 2);
-    assert_eq!(lines[0].bounds().y0, lines[1].bounds().y0);
-    assert!(lines[0].bounds().x1 <= 70.0);
-    assert!(lines[1].bounds().x0 >= 110.0);
-    let left_source = lines[0].sources()[0].bytes();
-    let right_source = lines[1].sources()[0].bytes();
+    assert_eq!(
+        lines.get(0).expect("line exists").bounds().y0,
+        lines.get(1).expect("line exists").bounds().y0
+    );
+    assert!(lines.get(0).expect("line exists").bounds().x1 <= 70.0);
+    assert!(lines.get(1).expect("line exists").bounds().x0 >= 110.0);
+    let left_source = lines
+        .get(0)
+        .expect("line exists")
+        .sources()
+        .iter()
+        .next()
+        .expect("source exists")
+        .bytes();
+    let right_source = lines
+        .get(1)
+        .expect("line exists")
+        .sources()
+        .iter()
+        .next()
+        .expect("source exists")
+        .bytes();
     assert_eq!(left_source.end, right_source.start);
-    for (line, source) in [(&lines[0], left_source), (&lines[1], right_source)] {
+    for (line, source) in [
+        (&lines.get(0).expect("line exists"), left_source),
+        (&lines.get(1).expect("line exists"), right_source),
+    ] {
         let hit = output
             .scene()
             .hit_test(line.bounds().center())
@@ -202,8 +240,14 @@ fn paragraphs_resume_one_cursor_across_region_boundaries() {
         .expect("paragraphs must share the region cursor");
 
     assert_eq!(output.scene().lines().len(), 2);
-    assert_eq!(output.scene().lines()[0].bounds().x0, 0.0);
-    assert_eq!(output.scene().lines()[1].bounds().x0, 120.0);
+    assert_eq!(
+        output.scene().line(0).expect("line exists").bounds().x0,
+        0.0
+    );
+    assert_eq!(
+        output.scene().line(1).expect("line exists").bounds().x0,
+        120.0
+    );
     let transcript = output
         .region_transcript()
         .expect("document transcript exists");
@@ -219,8 +263,14 @@ fn paragraphs_resume_one_cursor_across_region_boundaries() {
         .expect("cached paragraph transcripts resume the same cursor");
     assert_eq!(retained.work().reused_paragraphs(), 2);
     assert_eq!(retained.work().flow().paragraphs(), 0);
-    assert_eq!(retained.scene().lines()[0].bounds().x0, 0.0);
-    assert_eq!(retained.scene().lines()[1].bounds().x0, 120.0);
+    assert_eq!(
+        retained.scene().line(0).expect("line exists").bounds().x0,
+        0.0
+    );
+    assert_eq!(
+        retained.scene().line(1).expect("line exists").bounds().x0,
+        120.0
+    );
     assert_eq!(
         retained
             .region_transcript()
@@ -328,7 +378,10 @@ fn line_height_change_retries_regions_without_reshaping() {
     let compact = engine
         .prepare(&document.snapshot(), &compact_request)
         .expect("compact line fits first region");
-    assert_eq!(compact.scene().lines()[0].bounds().x0, 0.0);
+    assert_eq!(
+        compact.scene().line(0).expect("line exists").bounds().x0,
+        0.0
+    );
 
     let spacious_request = SceneRequest::new(
         TextConstraint::Wrap(FiniteWidth::new(120.0).expect("fallback width is valid")),
@@ -339,7 +392,10 @@ fn line_height_change_retries_regions_without_reshaping() {
     let spacious = engine
         .prepare(&document.snapshot(), &spacious_request)
         .expect("spacious line retries second region");
-    assert_eq!(spacious.scene().lines()[0].bounds().x0, 140.0);
+    assert_eq!(
+        spacious.scene().line(0).expect("line exists").bounds().x0,
+        140.0
+    );
     assert_eq!(spacious.work().analysis().paragraphs(), 0);
     assert_eq!(spacious.work().shape().paragraphs(), 0);
     assert_eq!(spacious.work().line_shape().paragraphs(), 0);
@@ -380,11 +436,13 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
 
     assert_eq!(plain_scene.lines().len(), shifted_scene.lines().len());
     assert_eq!(
-        shifted_scene.lines()[0].bounds().x0 - plain_scene.lines()[0].bounds().x0,
+        shifted_scene.line(0).expect("line exists").bounds().x0
+            - plain_scene.line(0).expect("line exists").bounds().x0,
         80.0
     );
     assert_eq!(
-        shifted_scene.lines()[0].bounds().y0 - plain_scene.lines()[0].bounds().y0,
+        shifted_scene.line(0).expect("line exists").bounds().y0
+            - plain_scene.line(0).expect("line exists").bounds().y0,
         40.0
     );
     assert_eq!(
@@ -417,13 +475,24 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
         assert!((shifted.max_x - plain.max_x - 80.0).abs() <= 0.06);
     }
 
-    let y = plain_scene.lines()[0].bounds().center().y;
+    let y = plain_scene
+        .line(0)
+        .expect("line exists")
+        .bounds()
+        .center()
+        .y;
     let anchor = *plain_scene
-        .hit_test_closest(Point::new(plain_scene.lines()[0].bounds().x0, y))
+        .hit_test_closest(Point::new(
+            plain_scene.line(0).expect("line exists").bounds().x0,
+            y,
+        ))
         .expect("plain start resolves")
         .position();
     let extent = *plain_scene
-        .hit_test_closest(Point::new(plain_scene.lines()[0].bounds().x1, y))
+        .hit_test_closest(Point::new(
+            plain_scene.line(0).expect("line exists").bounds().x1,
+            y,
+        ))
         .expect("plain end resolves")
         .position();
     let selection = plain_scene
@@ -466,7 +535,7 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
     let committed = engine
         .prepare(&snapshot, &request)
         .expect("committed region scene prepares");
-    let line = &committed.scene().lines()[0];
+    let line = &committed.scene().line(0).expect("line exists");
     let end = *committed
         .scene()
         .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
@@ -511,14 +580,12 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
             .all(|line| line.bounds().x0 >= 40.0 && line.bounds().y0 >= 20.0)
     );
     assert!(transient.scene().fragments().iter().any(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source.sources().iter().any(|segment| {
-                matches!(
-                    segment,
-                    ProjectedTextSource::Composition(range)
-                        if range.id() == session.id() && range.epoch() == session.epoch()
-                )
-            })
+        fragment.sources().any(|source| {
+            matches!(
+                source,
+                ProjectedTextSource::Composition(range)
+                    if range.id() == session.id() && range.epoch() == session.epoch()
+            )
         })
     }));
 }

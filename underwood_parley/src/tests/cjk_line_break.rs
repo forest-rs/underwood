@@ -168,7 +168,15 @@ fn public_scene_path_preserves_cjk_word_break_policy() {
         .expect("native Han fallback must prepare the normal line policy");
     assert_eq!(normal.scene().lines().len(), 2);
     assert_eq!(
-        normal.scene().lines()[0].sources()[0].bytes(),
+        normal
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
         0..3,
         "normal CJK text must expose the ordinary inter-ideograph opportunity"
     );

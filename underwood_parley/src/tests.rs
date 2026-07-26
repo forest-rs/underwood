@@ -205,7 +205,7 @@ struct ScannedHit {
 }
 
 fn scan_line_hits(scene: &TextScene, line_index: usize) -> Vec<ScannedHit> {
-    let bounds = scene.lines()[line_index].bounds();
+    let bounds = scene.line(line_index).expect("line exists").bounds();
     let y = bounds.center().y;
     let mut hits: Vec<ScannedHit> = Vec::new();
     let mut x = bounds.x0;

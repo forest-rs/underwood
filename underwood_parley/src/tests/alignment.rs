@@ -28,7 +28,7 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
             .with_region_flow(&flow),
         )
         .expect("logical start alignment prepares");
-    let start_line = &start.scene().lines()[0];
+    let start_line = &start.scene().line(0).expect("line exists");
     assert_eq!(start_line.adjustment().direction(), ResolvedDirection::Rtl);
     assert_eq!(start_line.adjustment().alignment(), TextAlignment::Start);
     assert!((start_line.bounds().x1 - 340.0).abs() <= 1.0e-6);
@@ -48,7 +48,7 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
             .with_region_flow(&flow),
         )
         .expect("logical end alignment prepares");
-    let end_line = &end.scene().lines()[0];
+    let end_line = &end.scene().line(0).expect("line exists");
     assert_eq!(end_line.adjustment().direction(), ResolvedDirection::Rtl);
     assert!((end_line.bounds().x0 - 40.0).abs() <= 1.0e-6);
     assert_eq!(end.work().analysis().paragraphs(), 0);
@@ -84,10 +84,14 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
         )
         .expect("physical left alignment prepares");
     assert_eq!(
-        left.scene().lines()[0].adjustment().direction(),
+        left.scene()
+            .line(0)
+            .expect("line exists")
+            .adjustment()
+            .direction(),
         ResolvedDirection::Rtl
     );
-    assert!((left.scene().lines()[0].bounds().x0 - 40.0).abs() <= 1.0e-6);
+    assert!((left.scene().line(0).expect("line exists").bounds().x0 - 40.0).abs() <= 1.0e-6);
 
     styles.set_paragraph_style(
         paragraph,
@@ -104,7 +108,7 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
             .with_region_flow(&flow),
         )
         .expect("physical right alignment prepares");
-    assert!((right.scene().lines()[0].bounds().x1 - 340.0).abs() <= 1.0e-6);
+    assert!((right.scene().line(0).expect("line exists").bounds().x1 - 340.0).abs() <= 1.0e-6);
     assert_eq!(right.work().analysis().paragraphs(), 0);
     assert_eq!(right.work().shape().paragraphs(), 0);
     assert_eq!(right.work().flow().paragraphs(), 0);
@@ -157,7 +161,7 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
             &SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint),
         )
         .expect("committed scene prepares");
-    let line = &committed.scene().lines()[0];
+    let line = &committed.scene().line(0).expect("line exists");
     let end = *committed
         .scene()
         .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
@@ -200,7 +204,12 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
             &session,
         )
         .expect("centered composition prepares");
-    let delta = centered.scene().lines()[0].adjustment().inline_offset();
+    let delta = centered
+        .scene()
+        .line(0)
+        .expect("line exists")
+        .adjustment()
+        .inline_offset();
     assert!(delta > 0.0);
     assert_eq!(centered.work().analysis().paragraphs(), 0);
     assert_eq!(centered.work().font_selection().paragraphs(), 0);
@@ -274,10 +283,15 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
         .expect("centered scene prepares");
     let start_scene = start.scene();
     let centered_scene = centered.scene();
-    let delta = centered_scene.lines()[0].adjustment().inline_offset();
+    let delta = centered_scene
+        .line(0)
+        .expect("line exists")
+        .adjustment()
+        .inline_offset();
     assert!(delta > 0.0);
     assert_eq!(
-        centered_scene.lines()[0].bounds().x0 - start_scene.lines()[0].bounds().x0,
+        centered_scene.line(0).expect("line exists").bounds().x0
+            - start_scene.line(0).expect("line exists").bounds().x0,
         delta
     );
     for (plain, shifted) in start_scene
@@ -312,13 +326,24 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
         assert!((shifted.max_x - plain.max_x - delta).abs() <= 0.06);
     }
 
-    let y = start_scene.lines()[0].bounds().center().y;
+    let y = start_scene
+        .line(0)
+        .expect("line exists")
+        .bounds()
+        .center()
+        .y;
     let anchor = *start_scene
-        .hit_test_closest(Point::new(start_scene.lines()[0].bounds().x0, y))
+        .hit_test_closest(Point::new(
+            start_scene.line(0).expect("line exists").bounds().x0,
+            y,
+        ))
         .expect("line start resolves")
         .position();
     let extent = *start_scene
-        .hit_test_closest(Point::new(start_scene.lines()[0].bounds().x1, y))
+        .hit_test_closest(Point::new(
+            start_scene.line(0).expect("line exists").bounds().x1,
+            y,
+        ))
         .expect("line end resolves")
         .position();
     assert_eq!(
@@ -385,20 +410,47 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         .expect("justified scene prepares");
     let lines = justified.scene().lines();
     assert!(lines.len() >= 2);
-    assert_eq!(lines[0].break_reason(), TestLineBreakReason::Regular);
-    assert!(lines[0].adjustment().opportunity_expansion() > 0.0);
-    assert!(lines[0].adjustment().expanded_opportunities() > 0);
+    assert_eq!(
+        lines.get(0).expect("line exists").break_reason(),
+        TestLineBreakReason::Regular
+    );
     assert!(
-        (lines[0].bounds().x1 - lines[0].adjustment().trailing_whitespace_advance() - 150.0).abs()
+        lines
+            .get(0)
+            .expect("line exists")
+            .adjustment()
+            .opportunity_expansion()
+            > 0.0
+    );
+    assert!(
+        lines
+            .get(0)
+            .expect("line exists")
+            .adjustment()
+            .expanded_opportunities()
+            > 0
+    );
+    assert!(
+        (lines.get(0).expect("line exists").bounds().x1
+            - lines
+                .get(0)
+                .expect("line exists")
+                .adjustment()
+                .trailing_whitespace_advance()
+            - 150.0)
+            .abs()
             <= 1.0e-6
     );
     assert_eq!(
-        lines.last().expect("final line exists").break_reason(),
+        lines
+            .get(lines.len() - 1)
+            .expect("final line exists")
+            .break_reason(),
         TestLineBreakReason::End
     );
     assert_eq!(
         lines
-            .last()
+            .get(lines.len() - 1)
             .expect("final line exists")
             .adjustment()
             .opportunity_expansion(),
@@ -422,11 +474,18 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         )
         .expect("mandatory line prepares");
     assert_eq!(
-        mandatory.scene().lines()[0].break_reason(),
+        mandatory
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .break_reason(),
         TestLineBreakReason::Mandatory
     );
     assert_eq!(
-        mandatory.scene().lines()[0]
+        mandatory
+            .scene()
+            .line(0)
+            .expect("line exists")
             .adjustment()
             .opportunity_expansion(),
         0.0
@@ -453,11 +512,14 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         "fixture must expose a soft-wrapped Arabic line"
     );
     assert_eq!(
-        arabic.scene().lines()[0].break_reason(),
+        arabic.scene().line(0).expect("line exists").break_reason(),
         TestLineBreakReason::Regular
     );
     assert_eq!(
-        arabic.scene().lines()[0]
+        arabic
+            .scene()
+            .line(0)
+            .expect("line exists")
             .adjustment()
             .expanded_opportunities(),
         0,

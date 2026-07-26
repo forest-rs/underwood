@@ -56,7 +56,10 @@ fn scene_movement_crosses_semantic_paragraph_boundaries() {
     assert_eq!(scene.previous_word_position(&second_start), Some(start));
 
     let end = *scene
-        .hit_test_closest(Point::new(10_000.0, scene.lines()[0].bounds().center().y))
+        .hit_test_closest(Point::new(
+            10_000.0,
+            scene.line(0).expect("line exists").bounds().center().y,
+        ))
         .expect("first paragraph end must resolve")
         .position();
     assert_eq!(end.text(), first);
@@ -252,7 +255,7 @@ fn exact_interaction_uses_ligature_components_not_glyph_ink() {
         "each ligature component must retain its own hit interval: {hits:?}"
     );
 
-    let y = scene.lines()[0].bounds().center().y;
+    let y = scene.line(0).expect("line exists").bounds().center().y;
     let first = scene
         .hit_test(Point::new(0.1, y))
         .expect("the first cluster must be hittable");
@@ -335,7 +338,7 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
         .prepare(&document.snapshot(), &request)
         .expect("cross-leaf whitespace collapse must prepare");
     let scene = output.scene();
-    let line = &scene.lines()[0];
+    let line = &scene.line(0).expect("line exists");
     let y = line.bounds().center().y;
 
     let mut collapsed_hits = Vec::new();
@@ -350,10 +353,34 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
             {
                 collapsed_hits.push(*hit.position());
             }
-            assert_eq!(hit.source().sources()[0].text(), first);
-            assert_eq!(hit.source().sources()[0].bytes(), 1..2);
-            assert_eq!(hit.source().sources()[1].text(), second);
-            assert_eq!(hit.source().sources()[1].bytes(), 0..4);
+            assert_eq!(
+                hit.source()
+                    .sources()
+                    .first()
+                    .expect("source exists")
+                    .text(),
+                first
+            );
+            assert_eq!(
+                hit.source()
+                    .sources()
+                    .first()
+                    .expect("source exists")
+                    .bytes(),
+                1..2
+            );
+            assert_eq!(
+                hit.source().sources().get(1).expect("source exists").text(),
+                second
+            );
+            assert_eq!(
+                hit.source()
+                    .sources()
+                    .get(1)
+                    .expect("source exists")
+                    .bytes(),
+                0..4
+            );
         }
         x += 0.05;
     }
@@ -432,15 +459,42 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
         texts.contains(&base) && texts.contains(&mark)
     }));
     let scene = output.scene();
-    let y = scene.lines()[0].bounds().center().y;
+    let y = scene.line(0).expect("line exists").bounds().center().y;
     let hit = scene
-        .hit_test(Point::new(scene.lines()[0].bounds().x0, y))
+        .hit_test(Point::new(
+            scene.line(0).expect("line exists").bounds().x0,
+            y,
+        ))
         .expect("the source-complete grapheme must be hittable");
     assert_eq!(hit.source().sources().len(), 2);
-    assert_eq!(hit.source().sources()[0].text(), base);
-    assert_eq!(hit.source().sources()[0].bytes(), 0..1);
-    assert_eq!(hit.source().sources()[1].text(), mark);
-    assert_eq!(hit.source().sources()[1].bytes(), 0..2);
+    assert_eq!(
+        hit.source()
+            .sources()
+            .first()
+            .expect("source exists")
+            .text(),
+        base
+    );
+    assert_eq!(
+        hit.source()
+            .sources()
+            .first()
+            .expect("source exists")
+            .bytes(),
+        0..1
+    );
+    assert_eq!(
+        hit.source().sources().get(1).expect("source exists").text(),
+        mark
+    );
+    assert_eq!(
+        hit.source()
+            .sources()
+            .get(1)
+            .expect("source exists")
+            .bytes(),
+        0..2
+    );
     let base_semantic = scene
         .semantics()
         .find(|semantic| {
@@ -547,14 +601,26 @@ fn soft_wrap_exposes_both_affinities_for_one_logical_boundary() {
         .scene()
         .hit_test(Point::new(
             at_end.max_x,
-            output.scene().lines()[0].bounds().center().y,
+            output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .center()
+                .y,
         ))
         .expect("line-end cluster must be hittable");
     let start_hit = output
         .scene()
         .hit_test(Point::new(
             at_start.min_x,
-            output.scene().lines()[1].bounds().center().y,
+            output
+                .scene()
+                .line(1)
+                .expect("line exists")
+                .bounds()
+                .center()
+                .y,
         ))
         .expect("next-line cluster must be hittable");
     assert_eq!(end_hit.position().byte(), start_hit.position().byte());
@@ -668,11 +734,11 @@ fn semantic_leaf_boundary_ownership_follows_affinity() {
         .prepare(&document.snapshot(), &request)
         .expect("multi-leaf interaction must prepare");
     let scene = output.scene();
-    let y = scene.lines()[0].bounds().center().y;
+    let y = scene.line(0).expect("line exists").bounds().center().y;
     let mut first_right = None;
     let mut second_left = None;
-    let mut x = scene.lines()[0].bounds().x0;
-    while x <= scene.lines()[0].bounds().x1 {
+    let mut x = scene.line(0).expect("line exists").bounds().x0;
+    while x <= scene.line(0).expect("line exists").bounds().x1 {
         if let Some(hit) = scene.hit_test(Point::new(x, y)) {
             let source = sole_unit_source(hit.source());
             if source.text() == first_text {
@@ -718,7 +784,13 @@ fn caret_rejects_a_position_from_another_revision() {
         .scene()
         .hit_test(Point::new(
             0.0,
-            old_output.scene().lines()[0].bounds().center().y,
+            old_output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .center()
+                .y,
         ))
         .expect("old scene must be hittable");
     let old_position = *old_hit.position();
@@ -753,7 +825,13 @@ fn closest_hit_selects_the_nearest_line_before_its_inline_edge() {
         .scene()
         .hit_test_closest(Point::new(
             10_000.0,
-            output.scene().lines()[0].bounds().center().y,
+            output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .center()
+                .y,
         ))
         .expect("first line must clamp despite a much wider later line");
     assert!(
@@ -779,14 +857,26 @@ fn mandatory_break_keeps_before_and_after_carets_on_distinct_lines() {
         .scene()
         .hit_test_closest(Point::new(
             10_000.0,
-            output.scene().lines()[0].bounds().center().y,
+            output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .center()
+                .y,
         ))
         .expect("the broken line must clamp before the control");
     let after = output
         .scene()
         .hit_test_closest(Point::new(
             10_000.0,
-            output.scene().lines()[1].bounds().center().y,
+            output
+                .scene()
+                .line(1)
+                .expect("line exists")
+                .bounds()
+                .center()
+                .y,
         ))
         .expect("the final empty line must expose the post-break caret");
     assert_eq!(before.position().byte(), 1);
