@@ -292,6 +292,25 @@ staging.
 6. Compact common-case source, paint, and interaction records with matched
    before/after allocation and query evidence.
 
+Step 5 is implemented and measured in
+`docs/proof/retained-document-cow-2026-07-26.md`: one-byte staging performs 20
+allocation calls at both 64 and 1,000 paragraphs, with only one bounded
+32-way sequence path distinguishing their retained bytes. Full campaign gates
+remain before the epic closes.
+
+The localized normal-flow preparation scan is also removed:
+`docs/proof/retained-localized-preparation-2026-07-26.md` records 612 versus
+615 allocation calls at 64 versus 1,000 paragraphs. Shared document and scene
+subtrees are skipped by identity; region-flow suffix convergence remains an
+explicit separate law.
+
+Before steps 4 and 6 are considered complete, ratify capability-scaled scene
+retention. Display-only labels must not retain maximal editable facts, and
+authored provenance should live in one paragraph-local source map rather than
+being repeated in every record. The proposed request, sidecar, upgrade, and
+typed-table design is recorded in
+`docs/design/0018-capability-scaled-scenes.md`.
+
 The proposed representation and public migration are recorded in
 `docs/design/0017-retained-scene-lifecycle.md`.
 
