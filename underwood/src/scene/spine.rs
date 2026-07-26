@@ -217,11 +217,21 @@ impl SceneSpine {
     }
 
     pub(super) fn accounted_node_bytes(&self) -> usize {
-        let paragraphs = self.summary().paragraphs;
-        if paragraphs == 0 {
+        accounted_node_bytes(self.summary().paragraphs)
+    }
+
+    pub(super) fn unshared_node_bytes_from(&self, previous: Option<&Self>) -> usize {
+        let Some(current) = &self.root else {
             return 0;
-        }
-        size_of::<SceneNode>().saturating_mul(paragraphs.saturating_mul(2).saturating_sub(1))
+        };
+        let Some(previous) = previous.filter(|previous| previous.normal_flow == self.normal_flow)
+        else {
+            return self.accounted_node_bytes();
+        };
+        let Some(previous) = &previous.root else {
+            return self.accounted_node_bytes();
+        };
+        unshared_node_count(current, previous).saturating_mul(size_of::<SceneNode>())
     }
 
     pub(super) fn positioned_line(&self, index: usize) -> Option<PositionedLine<'_>> {
@@ -261,6 +271,41 @@ impl SceneSpine {
                 }
             }
         }
+    }
+}
+
+fn accounted_node_bytes(paragraphs: usize) -> usize {
+    if paragraphs == 0 {
+        return 0;
+    }
+    size_of::<SceneNode>().saturating_mul(paragraphs.saturating_mul(2).saturating_sub(1))
+}
+
+fn unshared_node_count(current: &Arc<SceneNode>, previous: &Arc<SceneNode>) -> usize {
+    if Arc::ptr_eq(current, previous) {
+        return 0;
+    }
+    match (current.as_ref(), previous.as_ref()) {
+        (
+            SceneNode::Branch {
+                left: current_left,
+                right: current_right,
+                ..
+            },
+            SceneNode::Branch {
+                left: previous_left,
+                right: previous_right,
+                ..
+            },
+        ) => 1_usize
+            .saturating_add(unshared_node_count(current_left, previous_left))
+            .saturating_add(unshared_node_count(current_right, previous_right)),
+        (SceneNode::Leaf { .. }, SceneNode::Leaf { .. }) => 1,
+        _ => current
+            .summary()
+            .paragraphs
+            .saturating_mul(2)
+            .saturating_sub(1),
     }
 }
 
@@ -491,5 +536,20 @@ mod tests {
             .collect();
         assert_eq!(origins, [0.0, 10.0, 35.0]);
         assert_eq!(changed.summary().block_extent, 65.0);
+        assert_eq!(
+            spine.accounted_node_bytes(),
+            5 * size_of::<SceneNode>(),
+            "three paragraphs retain three leaves and two branch nodes"
+        );
+        assert_eq!(
+            spine.unshared_node_bytes_from(Some(&spine)),
+            0,
+            "an exact spine retains no new nodes"
+        );
+        assert_eq!(
+            changed.unshared_node_bytes_from(Some(&spine)),
+            3 * size_of::<SceneNode>(),
+            "replacing the middle paragraph retains one new leaf and its two-node root path"
+        );
     }
 }

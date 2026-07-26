@@ -129,3 +129,34 @@ scan were subsequently resolved in
 `retained-document-cow-2026-07-26.md` and
 `retained-localized-preparation-2026-07-26.md`. The historical numbers above
 remain the before-observation for those independent Design-0017 slices.
+
+## Completion-audit corrections — 2026-07-26
+
+An adversarial pass found two post-migration diagnostics and lifecycle
+contracts that the initial persistent-scene proof had not earned:
+
+- `PreparationMemory::scene_output_capacity_bytes` still described flat
+  newly owned vectors, reported the complete binary spine for a localized
+  publication, and reported zero for a newly retained composition path. It
+  now charges only scene-spine node payload newly retained relative to the
+  reusable prior spine. Exact roots charge zero, a localized or composition
+  update charges its unshared root path, and cold publication charges the
+  complete spine. Paragraph geometry remains in scene-cache accounting.
+- `prepare_composition` promised not to evict committed work while one
+  combined LRU allowed exactly that at a full budget. `CacheBudget` now
+  enforces committed and transient-composition entry limits independently.
+  The transient limit defaults to the committed limit and can be set to zero;
+  zero retains the committed exact root while making repeated composition
+  preparation observably cold.
+
+Focused traps prove exact and localized spine charges, first and repeated
+composition charges, simultaneous one-entry committed and composition
+residency, committed-root identity after composition, and the zero-transient
+degradation rule. The public budget-semantic migration is recorded in
+Design-0017 rather than hidden behind the old total-entry interpretation.
+
+The post-correction allocator rerun is identical to the localized proof:
+exact repeat remains 0 calls / 0 bytes at both 64 and 1,000 paragraphs, while
+localized preparation remains 612 calls / 158,771 bytes and 615 calls /
+159,275 bytes respectively. Splitting the recency structures therefore fixes
+the transient lifetime law without adding normal-flow event allocation.

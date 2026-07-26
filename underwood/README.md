@@ -21,10 +21,10 @@ The first draft public slice is deliberately complete end to end:
   paragraph shaping for unchanged siblings, paint-value changes, and
   constraint-only changes; wrapped constraint changes expose their separate
   line-final shaping work;
-  an explicit [`CacheBudget`] bounds retained geometry and coordinated backend
-  state and can separately bound exact identity-free preparation shared by
-  equivalent labels, while release operations and [`CacheDiagnostics`] expose
-  lifecycle facts to hosts;
+  an explicit [`CacheBudget`] independently bounds committed and transient
+  composition geometry plus coordinated backend state, and can separately
+  bound exact identity-free preparation shared by equivalent labels, while
+  release operations and [`CacheDiagnostics`] expose lifecycle facts to hosts;
 - [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
   and font-derived metrics behind the paragraph-engine boundary instead of
   hiding text preparation in scene construction; formed lines retain complete

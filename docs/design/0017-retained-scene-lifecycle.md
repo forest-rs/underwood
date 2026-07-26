@@ -436,7 +436,10 @@ The coordinated cache will account for:
 - scratch capacities, separately from immutable residency.
 
 One latest committed root and relevant composition roots may be retained per
-document only while their complete segment set fits the coordinated budget.
+document only while their complete segment set fits its coordinated lane
+budget. Committed and transient-composition limits are independent so
+transient work cannot evict the committed scene needed when composition is
+cancelled.
 Paragraph cache entries and retained roots share the same `Arc` segments; the
 engine registry charges each unique segment once and charges persistent root
 metadata separately. Before evicting a segment, the engine drops every
@@ -523,6 +526,13 @@ capability.
   Cloning becomes cheap and mutations become copy-on-write.
 - `LayoutEngine::prepare` and `prepare_block` retain their result-oriented
   call shape.
+- `CacheBudget::new(entries)` applies `entries` independently to committed and
+  transient-composition geometry so composition cannot evict committed work.
+  `with_composition_entries` selects a different transient limit, including
+  zero for caller-owned composition output without engine retention.
+  Consequently `CacheDiagnostics::current_entries()` may be the sum of two
+  full lanes; `budget()` reports the committed limit and
+  `composition_budget()` reports the transient limit.
 - `ParagraphFormation::release(ParagraphId)` becomes
   `release(ParagraphPreparationId)`. Backends key retained work by
   `ParagraphInput::preparation()` so committed and transient composition lanes

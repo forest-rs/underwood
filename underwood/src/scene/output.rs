@@ -257,7 +257,12 @@ impl PreparationMemory {
         self.cache_after
     }
 
-    /// Returns the capacity charge for the newly published scene's owned vectors.
+    /// Returns the payload-byte charge for scene-spine nodes newly retained by
+    /// this publication relative to its reusable prior spine.
+    ///
+    /// Shared spine nodes contribute zero. Paragraph geometry and its owned
+    /// collection capacities are reported through the scene-cache diagnostics
+    /// instead.
     #[must_use]
     pub const fn scene_output_capacity_bytes(self) -> usize {
         self.scene_output_capacity_bytes

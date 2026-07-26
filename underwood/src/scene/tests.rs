@@ -1878,7 +1878,8 @@ fn composition_replaces_only_its_persistent_paragraph_path() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
@@ -1920,6 +1921,15 @@ fn composition_replaces_only_its_persistent_paragraph_path() {
         .prepare_composition(&snapshot, &request, &session)
         .expect("first projected scene prepares");
     assert_eq!(first.work().reused_paragraphs(), 2);
+    assert!(
+        first
+            .trace()
+            .expect("trace was requested")
+            .memory()
+            .scene_output_capacity_bytes()
+            > 0,
+        "the first composition publication must account for its unshared spine path"
+    );
     for index in [0, 2] {
         assert!(
             Arc::ptr_eq(
@@ -1963,6 +1973,15 @@ fn composition_replaces_only_its_persistent_paragraph_path() {
     assert!(
         Arc::ptr_eq(&first.scene().core, &repeated.scene().core),
         "an exact composition request must reuse its root"
+    );
+    assert_eq!(
+        repeated
+            .trace()
+            .expect("trace was requested")
+            .memory()
+            .scene_output_capacity_bytes(),
+        0,
+        "an exact composition publication retains no new spine nodes"
     );
 
     let first_epoch = session.epoch();
@@ -2011,6 +2030,119 @@ fn composition_replaces_only_its_persistent_paragraph_path() {
             })
         }),
         "the new scene must bind generated provenance to the new epoch"
+    );
+}
+
+#[test]
+fn composition_residency_never_evicts_committed_geometry() {
+    let (document, styles, paint) = one_leaf_document(*b"comp-budget-doc1", "committed");
+    let snapshot = document.snapshot();
+    let text = snapshot.paragraphs()[0].leaves[0].id;
+    let request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_preparation_trace();
+    let adapter = || EchoAdapter {
+        split_utf8: false,
+        split_paint: false,
+        mismatched_paint: false,
+        glyphless: false,
+        interior_cursor: false,
+    };
+    let mut layout = LayoutEngine::new(adapter(), CacheBudget::new(1));
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed scene prepares");
+    let position = committed
+        .scene()
+        .position_at(text, 0)
+        .expect("composition target is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&position)
+        .expect("composition selection validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("composition selection set validates");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"comp-budget-0001"))
+        .expect("composition begins")
+        .into_session();
+    session
+        .update(session.epoch(), CompositionUpdate::new("generated"))
+        .expect("composition text updates");
+
+    layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("composition scene prepares");
+    let retained = layout.cache_diagnostics();
+    assert_eq!(retained.budget(), 1);
+    assert_eq!(retained.composition_budget(), 1);
+    assert_eq!(retained.committed_entries(), 1);
+    assert_eq!(retained.composition_entries(), 1);
+    assert_eq!(
+        retained.current_entries(),
+        2,
+        "independent lanes may each retain their configured limit"
+    );
+
+    let cancelled = layout
+        .prepare(&snapshot, &request)
+        .expect("cancelling composition reuses committed geometry");
+    assert!(
+        Arc::ptr_eq(&committed.scene().core, &cancelled.scene().core),
+        "composition residency must not evict the exact committed root"
+    );
+    assert_eq!(cancelled.work().shape().paragraphs(), 0);
+    assert_eq!(cancelled.work().geometry().paragraphs(), 0);
+
+    let mut unretained =
+        LayoutEngine::new(adapter(), CacheBudget::new(1).with_composition_entries(0));
+    let committed = unretained
+        .prepare(&snapshot, &request)
+        .expect("zero-composition-budget fixture prepares");
+    let position = committed
+        .scene()
+        .position_at(text, 0)
+        .expect("composition target is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&position)
+        .expect("composition selection validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("composition selection set validates");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"comp-budget-0002"))
+        .expect("composition begins")
+        .into_session();
+    session
+        .update(session.epoch(), CompositionUpdate::new("generated"))
+        .expect("composition text updates");
+    let first = unretained
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("zero-budget composition still materializes");
+    assert!(!first.scene().fragments().is_empty());
+    let diagnostics = unretained.cache_diagnostics();
+    assert_eq!(diagnostics.committed_entries(), 1);
+    assert_eq!(diagnostics.composition_entries(), 0);
+    assert_eq!(diagnostics.composition_budget(), 0);
+    let repeated = unretained
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("unretained composition may prepare again");
+    assert_eq!(
+        repeated.work().shape().paragraphs(),
+        1,
+        "a zero transient budget trades residency for observable re-formation"
+    );
+    let cancelled = unretained
+        .prepare(&snapshot, &request)
+        .expect("zero transient retention preserves the committed root");
+    assert!(
+        Arc::ptr_eq(&committed.scene().core, &cancelled.scene().core),
+        "evicting transient geometry must not invalidate committed publication"
     );
 }
 

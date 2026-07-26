@@ -9,23 +9,39 @@
 use super::*;
 use core::mem::size_of;
 
-/// Maximum number of retained committed and composition geometry entries.
+/// Independent retained-geometry limits for committed and composition lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheBudget {
     max_entries: usize,
+    max_composition_entries: usize,
     shared_preparation_bytes: usize,
 }
 
 impl CacheBudget {
-    /// Creates a budget with the given maximum retained geometry entries.
+    /// Creates a budget with the given maximum in each geometry lane.
     ///
-    /// A zero budget materializes owned outputs without retaining cache entries.
+    /// Committed and transient composition geometry are enforced independently
+    /// so composition cannot evict committed work. Use
+    /// [`Self::with_composition_entries`] to give the transient lane a
+    /// different limit. A zero lane budget still materializes caller-owned
+    /// outputs without retaining entries in that lane.
     #[must_use]
     pub const fn new(max_entries: usize) -> Self {
         Self {
             max_entries,
+            max_composition_entries: max_entries,
             shared_preparation_bytes: 0,
         }
+    }
+
+    /// Returns a budget with a distinct transient-composition entry limit.
+    ///
+    /// Zero disables engine-owned composition retention without affecting
+    /// committed geometry.
+    #[must_use]
+    pub const fn with_composition_entries(mut self, max_entries: usize) -> Self {
+        self.max_composition_entries = max_entries;
+        self
     }
 
     /// Returns a budget that may retain this many bytes of exact shared
@@ -38,10 +54,16 @@ impl CacheBudget {
         self
     }
 
-    /// Returns the maximum number of retained geometry entries.
+    /// Returns the maximum number of retained committed geometry entries.
     #[must_use]
     pub const fn max_entries(self) -> usize {
         self.max_entries
+    }
+
+    /// Returns the maximum number of retained transient-composition entries.
+    #[must_use]
+    pub const fn max_composition_entries(self) -> usize {
+        self.max_composition_entries
     }
 
     /// Returns the maximum accounting charge for shared preparation entries.
@@ -55,6 +77,7 @@ impl CacheBudget {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheDiagnostics {
     budget: usize,
+    composition_budget: usize,
     committed_entries: usize,
     composition_entries: usize,
     backend_entries: Option<usize>,
@@ -75,10 +98,16 @@ pub struct CacheDiagnostics {
 }
 
 impl CacheDiagnostics {
-    /// Returns the configured maximum retained geometry entries.
+    /// Returns the configured maximum retained committed geometry entries.
     #[must_use]
     pub const fn budget(self) -> usize {
         self.budget
+    }
+
+    /// Returns the configured maximum retained composition geometry entries.
+    #[must_use]
+    pub const fn composition_budget(self) -> usize {
+        self.composition_budget
     }
 
     /// Returns resident committed geometry entries.
@@ -93,7 +122,8 @@ impl CacheDiagnostics {
         self.composition_entries
     }
 
-    /// Returns all resident geometry entries.
+    /// Returns all resident geometry entries across the independently
+    /// budgeted committed and composition lanes.
     #[must_use]
     pub const fn current_entries(self) -> usize {
         self.committed_entries + self.composition_entries
@@ -271,7 +301,8 @@ pub struct LayoutEngine {
     paragraphs: Box<dyn ParagraphFormation>,
     cache: BTreeMap<ParagraphId, ParagraphCache>,
     composition_cache: BTreeMap<ParagraphId, ParagraphCache>,
-    recency: BTreeSet<(u64, CacheKind, ParagraphId)>,
+    committed_recency: BTreeSet<(u64, ParagraphId)>,
+    composition_recency: BTreeSet<(u64, ParagraphId)>,
     documents: BTreeMap<crate::DocumentId, BTreeSet<(CacheKind, ParagraphId)>>,
     clock: u64,
     budget: CacheBudget,
@@ -308,7 +339,8 @@ impl LayoutEngine {
             paragraphs: Box::new(paragraphs),
             cache: BTreeMap::new(),
             composition_cache: BTreeMap::new(),
-            recency: BTreeSet::new(),
+            committed_recency: BTreeSet::new(),
+            composition_recency: BTreeSet::new(),
             documents: BTreeMap::new(),
             clock: 0,
             budget,
@@ -334,7 +366,8 @@ impl LayoutEngine {
             return Ok(output);
         }
         let required_paint_slots = validate_styles(snapshot, request)?;
-        let mut spine = self.reusable_scene_spine(snapshot, request);
+        let previous_spine = self.reusable_scene_spine(snapshot, request);
+        let mut spine = previous_spine.clone();
         let mut initial_segments = spine
             .is_none()
             .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
@@ -450,7 +483,8 @@ impl LayoutEngine {
             memory: PreparationMemory {
                 cache_before: cache_before.expect("traced request records initial cache state"),
                 cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: spine.accounted_node_bytes(),
+                scene_output_capacity_bytes: spine
+                    .unshared_node_bytes_from(previous_spine.as_ref()),
                 scratch_capacity_before: scratch_capacity_before
                     .expect("traced request records initial scratch state"),
                 scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
@@ -562,7 +596,8 @@ impl LayoutEngine {
         let target = composition.target_text().ok_or_else(|| {
             SceneError::for_document(SceneErrorKind::InvalidComposition, snapshot.id())
         })?;
-        let mut spine = self.reusable_composition_spine(snapshot, request);
+        let previous_spine = self.reusable_composition_spine(snapshot, request);
+        let mut spine = previous_spine.clone();
         let mut initial_segments = spine
             .is_none()
             .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
@@ -718,7 +753,8 @@ impl LayoutEngine {
             memory: PreparationMemory {
                 cache_before: cache_before.expect("traced request records initial cache state"),
                 cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: 0,
+                scene_output_capacity_bytes: spine
+                    .unshared_node_bytes_from(previous_spine.as_ref()),
                 scratch_capacity_before: scratch_capacity_before
                     .expect("traced request records initial scratch state"),
                 scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
@@ -788,7 +824,15 @@ impl LayoutEngine {
             };
             if let Some(entry) = removed {
                 preparations.insert(entry.preparation);
-                self.recency.remove(&(entry.last_used, kind, paragraph));
+                match kind {
+                    CacheKind::Committed => {
+                        self.committed_recency.remove(&(entry.last_used, paragraph));
+                    }
+                    CacheKind::Composition => {
+                        self.composition_recency
+                            .remove(&(entry.last_used, paragraph));
+                    }
+                }
                 self.cache_work.scene_cache_accounted_bytes = self
                     .cache_work
                     .scene_cache_accounted_bytes
@@ -806,7 +850,8 @@ impl LayoutEngine {
         self.cache_work.releases += self.cache.len() + self.composition_cache.len();
         self.cache.clear();
         self.composition_cache.clear();
-        self.recency.clear();
+        self.committed_recency.clear();
+        self.composition_recency.clear();
         self.documents.clear();
         self.published.clear();
         self.published_compositions.clear();
@@ -822,6 +867,7 @@ impl LayoutEngine {
         let shared = self.shared_preparation.diagnostics();
         CacheDiagnostics {
             budget: self.budget.max_entries,
+            composition_budget: self.budget.max_composition_entries,
             committed_entries: self.cache.len(),
             composition_entries: self.composition_cache.len(),
             backend_entries: self.paragraphs.retained_entries(),
@@ -1025,7 +1071,8 @@ impl LayoutEngine {
             memory: PreparationMemory {
                 cache_before: cache_before.expect("traced request records initial cache state"),
                 cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: spine.accounted_node_bytes(),
+                scene_output_capacity_bytes: spine
+                    .unshared_node_bytes_from(Some(&previous_core.spine)),
                 scratch_capacity_before: scratch_capacity_before
                     .expect("traced request records initial scratch state"),
                 scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
@@ -1170,7 +1217,15 @@ impl LayoutEngine {
                 .saturating_add(access.current_accounted_bytes);
         }
         if let Some(previous) = access.previous_use {
-            self.recency.remove(&(previous, kind, access.paragraph));
+            match kind {
+                CacheKind::Committed => {
+                    self.committed_recency.remove(&(previous, access.paragraph));
+                }
+                CacheKind::Composition => {
+                    self.composition_recency
+                        .remove(&(previous, access.paragraph));
+                }
+            }
             self.cache_work.hits += 1;
         } else {
             self.cache_work.misses += 1;
@@ -1179,8 +1234,16 @@ impl LayoutEngine {
                 .or_default()
                 .insert((kind, access.paragraph));
         }
-        self.recency
-            .insert((access.current_use, kind, access.paragraph));
+        match kind {
+            CacheKind::Committed => {
+                self.committed_recency
+                    .insert((access.current_use, access.paragraph));
+            }
+            CacheKind::Composition => {
+                self.composition_recency
+                    .insert((access.current_use, access.paragraph));
+            }
+        }
         self.cache_work.peak_entries = self
             .cache_work
             .peak_entries
@@ -1188,16 +1251,37 @@ impl LayoutEngine {
     }
 
     fn enforce_budget(&mut self) {
-        while self.cache.len() + self.composition_cache.len() > self.budget.max_entries {
-            let Some((_, kind, paragraph)) = self.recency.pop_first() else {
+        self.enforce_lane_budget(CacheKind::Committed, self.budget.max_entries);
+        self.enforce_lane_budget(CacheKind::Composition, self.budget.max_composition_entries);
+    }
+
+    fn enforce_lane_budget(&mut self, kind: CacheKind, max_entries: usize) {
+        while match kind {
+            CacheKind::Committed => self.cache.len(),
+            CacheKind::Composition => self.composition_cache.len(),
+        } > max_entries
+        {
+            let next = match kind {
+                CacheKind::Committed => self.committed_recency.pop_first(),
+                CacheKind::Composition => self.composition_recency.pop_first(),
+            };
+            let Some((_, paragraph)) = next else {
                 break;
             };
             // An exact root is retainable only while every segment it names is
-            // inside the coordinated paragraph budget. Caller-held scenes may
-            // keep their own root alive, but the engine must stop pinning it
-            // before evicting any constituent segment.
-            self.published.remove(&paragraph.document);
-            self.published_compositions.remove(&paragraph.document);
+            // inside its coordinated lane budget. A committed eviction also
+            // invalidates composition roots that share committed siblings;
+            // evicting a transient target cannot invalidate the independent
+            // committed root.
+            match kind {
+                CacheKind::Committed => {
+                    self.published.remove(&paragraph.document);
+                    self.published_compositions.remove(&paragraph.document);
+                }
+                CacheKind::Composition => {
+                    self.published_compositions.remove(&paragraph.document);
+                }
+            }
             let removed = match kind {
                 CacheKind::Committed => self.cache.remove(&paragraph),
                 CacheKind::Composition => self.composition_cache.remove(&paragraph),

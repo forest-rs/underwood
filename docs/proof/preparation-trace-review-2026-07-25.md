@@ -118,6 +118,13 @@ These are capacity charges, not process allocation or live-byte claims. The
 existing `profile-allocations.sh` and `malloc_history` path remains the
 allocation authority.
 
+Design-0017 subsequently replaced flat output vectors with a persistent scene
+spine. `scene_output_capacity_bytes` now reports only the spine-node payload
+newly retained relative to a reusable prior publication; exact shared roots
+report zero, and paragraph geometry remains in scene-cache accounting. The
+follow-on law and its composition correction are recorded in
+`retained-lifecycle-progress-2026-07-25.md`.
+
 ## Host timing and product path
 
 The native showcase already measures preparation and rendering with separate
