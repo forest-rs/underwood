@@ -323,6 +323,48 @@ are within ordinary machine noise of the prior checkpoint; the representation
 change is an allocation and residency improvement, not a claimed CPU
 improvement.
 
+## Packed scene-hit checkpoint
+
+Scene lowering previously repeated the same shape one layer later: every
+`CachedCluster` owned a `Vec<CachedHitSlice>`. The packed scene representation
+stores a range in each cluster and one exact-capacity hit-slice table for the
+paragraph. Clusters and slices share one `Arc<CachedHitGeometry>` because they
+are one independently reusable capability sidecar: paint-only publication and
+capability supersets share the pair without copying, and dropping the last
+paragraph segment reclaims both tables together. Two separate shared arrays or
+a global arena would add ownership machinery without improving this lifetime.
+
+For the mixed editable paragraph, deterministic hit-testing residency falls
+from 4,704 to 2,880 bytes, a reduction of 1,824 bytes. The complete mixed scene
+falls by the same amount at 64, 1,000, and 2,048 paragraphs because only the
+editor retains hit facts.
+
+Matched typing traces against the immediately preceding packed-adapter
+checkpoint are:
+
+| Paragraphs | Adapter-packed calls/bytes | Adapter + scene packed calls/bytes |
+|---:|---:|---:|
+| 1 | 144 / 47,488 | 116 / 43,224 |
+| 64 | 152 / 49,864 | 124 / 45,600 |
+| 1,000 | 155 / 50,896 | 127–128 / 46,632–48,296 |
+| 2,048 | 160 / 52,192 | 133 / 48,056 |
+
+The repeated 1,000-paragraph process differed by one runtime allocation and
+1,664 bytes; both observations are retained rather than selecting one silently.
+The second trace reproduces the 28-call/4,264-byte representation delta seen at
+1 and 64 paragraphs. At 2,048 paragraphs the matched exact-repeat process is
+within one call/128 bytes of its baseline, the same documented cross-process
+noise floor.
+
+Against the pre-compaction checkpoint, the 64-paragraph event has fallen from
+176 calls/52,752 bytes to 124 calls/45,600 bytes while preserving exactly one
+changed paragraph. Exact-repeat work remains O(1) and allocation-free.
+
+The 64/1,000/2,048 timing rerun reports 64/78/63 ns per exact repeat and
+24.155/34.098/45.342 microseconds per typed edit. Those single-run values do
+not establish a CPU speedup; they show no measured regression from replacing
+nested vectors with flat indexed traversal.
+
 The checkpoint passes:
 
 ```sh

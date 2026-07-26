@@ -2537,7 +2537,7 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
             source_map: Some(Arc::new(super::ParagraphSourceMap::snapshot_leaf(text, 2))),
             line_sources: super::CachedSidecar::from_records(Vec::new()),
             paint_sources: super::CachedSidecar::from_records(Vec::new()),
-            clusters: super::CachedSidecar::from_records(Vec::new()),
+            hit_geometry: super::CachedHitSidecar::from_records(Vec::new(), Vec::new()),
             carets: super::CachedSidecar::from_records(Vec::new()),
             movements: super::CachedSidecar::from_records(vec![
                 super::CachedCursorMovement {
@@ -2687,7 +2687,7 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
     let geometry = layout
         .cached_geometry_for_test(paragraph)
         .expect("display geometry remains resident");
-    assert!(geometry.clusters.is_empty());
+    assert!(geometry.hit_geometry.is_empty());
     assert!(geometry.carets.is_empty());
     assert!(geometry.movements.is_empty());
     assert!(geometry.source_map.is_none());
@@ -2720,7 +2720,7 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
         .cached_geometry_for_test(paragraph.paragraph())
         .expect("accessible geometry remains resident");
     assert!(
-        geometry.clusters.is_empty(),
+        geometry.hit_geometry.is_empty(),
         "transient semantic-bound construction must not retain hit clusters"
     );
 }

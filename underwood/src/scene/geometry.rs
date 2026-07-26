@@ -20,7 +20,7 @@ pub(super) struct CachedGeometry {
     pub(super) source_map: Option<Arc<ParagraphSourceMap>>,
     pub(super) line_sources: CachedSidecar<SourceSpan>,
     pub(super) paint_sources: CachedSidecar<SourceSpan>,
-    pub(super) clusters: CachedSidecar<CachedCluster>,
+    pub(super) hit_geometry: CachedHitSidecar,
     pub(super) carets: CachedSidecar<CachedCaret>,
     pub(super) movements: CachedSidecar<CachedCursorMovement>,
     pub(super) semantics: CachedSidecar<CachedSemantic>,
@@ -86,6 +86,85 @@ impl<'a, T> IntoIterator for &'a CachedSidecar<T> {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct CachedHitSidecar {
+    records: Option<Arc<CachedHitGeometry>>,
+}
+
+#[derive(Clone, Debug)]
+struct CachedHitGeometry {
+    clusters: Vec<CachedCluster>,
+    slices: Vec<CachedHitSlice>,
+}
+
+impl CachedHitSidecar {
+    pub(super) fn new(
+        retain: bool,
+        clusters: Vec<CachedCluster>,
+        slices: Vec<CachedHitSlice>,
+    ) -> Self {
+        debug_assert!(
+            retain || clusters.is_empty() && slices.is_empty(),
+            "discarded hit geometry must not be built"
+        );
+        Self {
+            records: retain.then(|| Arc::new(CachedHitGeometry { clusters, slices })),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_records(clusters: Vec<CachedCluster>, slices: Vec<CachedHitSlice>) -> Self {
+        Self {
+            records: Some(Arc::new(CachedHitGeometry { clusters, slices })),
+        }
+    }
+
+    fn cluster_capacity(&self) -> usize {
+        self.records
+            .as_ref()
+            .map_or(0, |records| records.clusters.capacity())
+    }
+
+    fn slice_capacity(&self) -> usize {
+        self.records
+            .as_ref()
+            .map_or(0, |records| records.slices.capacity())
+    }
+
+    fn retain_from(&mut self, retained: &Self) {
+        if self.records.is_none() {
+            self.records.clone_from(&retained.records);
+        }
+    }
+
+    pub(super) fn slices_for(&self, cluster: &CachedCluster) -> &[CachedHitSlice] {
+        let records = self
+            .records
+            .as_ref()
+            .expect("a cached cluster belongs to retained hit geometry");
+        &records.slices[cluster.hit_slices.clone()]
+    }
+}
+
+impl Deref for CachedHitSidecar {
+    type Target = [CachedCluster];
+
+    fn deref(&self) -> &Self::Target {
+        self.records
+            .as_deref()
+            .map_or(&[], |records| records.clusters.as_slice())
+    }
+}
+
+impl<'a> IntoIterator for &'a CachedHitSidecar {
+    type Item = &'a CachedCluster;
+    type IntoIter = core::slice::Iter<'a, CachedCluster>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl Deref for CachedGeometry {
     type Target = CachedGeometryFacts;
 
@@ -145,7 +224,7 @@ pub(super) struct CachedCluster {
     pub(super) semantic_id: SemanticId,
     pub(super) boundary: ClusterBoundary,
     pub(super) whitespace: ClusterWhitespace,
-    pub(super) hit_slices: Vec<CachedHitSlice>,
+    pub(super) hit_slices: Range<usize>,
     pub(super) bounds: Rect,
     pub(super) line: usize,
     pub(super) left: SourcePosition,
@@ -226,7 +305,7 @@ impl CachedGeometry {
         }
         self.line_sources.retain_from(&retained.line_sources);
         self.paint_sources.retain_from(&retained.paint_sources);
-        self.clusters.retain_from(&retained.clusters);
+        self.hit_geometry.retain_from(&retained.hit_geometry);
         self.carets.retain_from(&retained.carets);
         self.movements.retain_from(&retained.movements);
         self.semantics.retain_from(&retained.semantics);
@@ -249,11 +328,10 @@ impl CachedGeometry {
                     .as_ref()
                     .map_or(0, |map| map.accounted_owned_bytes()),
             );
-        let mut hit_testing = vec_bytes::<CachedCluster>(self.clusters.capacity());
-        for cluster in self.clusters.iter() {
-            hit_testing = hit_testing
-                .saturating_add(vec_bytes::<CachedHitSlice>(cluster.hit_slices.capacity()));
-        }
+        let hit_testing = vec_bytes::<CachedCluster>(self.hit_geometry.cluster_capacity())
+            .saturating_add(vec_bytes::<CachedHitSlice>(
+                self.hit_geometry.slice_capacity(),
+            ));
         SceneResidencyBytes::from_categories(
             layout,
             paint,
@@ -331,11 +409,40 @@ pub(super) fn build_geometry(
     let mut line_top = 0.0;
     let mut lines = Vec::new();
     let mut line_sources = Vec::new();
-    let mut clusters = Vec::new();
-    let mut carets = Vec::new();
-    let mut caret_maps = Vec::new();
     let retains_clusters = features.has_hit_testing() || features.has_selection();
     let builds_semantics = features.has_semantics();
+    let cluster_capacity = if !retains_clusters {
+        0
+    } else if prepared.lines().is_empty() {
+        usize::from(projection.mapping.text().is_empty() && !projection.spans.is_empty())
+    } else {
+        prepared
+            .lines()
+            .iter()
+            .map(|line| {
+                let units = line.units().len();
+                if units == 0 && !projection.spans.is_empty() {
+                    1
+                } else {
+                    units
+                }
+            })
+            .sum()
+    };
+    let hit_slice_capacity = if retains_clusters {
+        prepared
+            .lines()
+            .iter()
+            .flat_map(|line| line.units())
+            .map(|unit| unit.slices().len())
+            .sum()
+    } else {
+        0
+    };
+    let mut clusters = Vec::with_capacity(cluster_capacity);
+    let mut hit_slices = Vec::with_capacity(hit_slice_capacity);
+    let mut carets = Vec::new();
+    let mut caret_maps = Vec::new();
     let mut semantic_bounds: Vec<Option<Rect>> = Vec::with_capacity(if builds_semantics {
         projection.spans.len()
     } else {
@@ -400,11 +507,7 @@ pub(super) fn build_geometry(
                 .then(|| projection.source_position(unit.right().offset(), unit.right().affinity()))
                 .transpose()?;
             let mut slice_x = unit_x;
-            let mut hit_slices = Vec::with_capacity(if retains_clusters {
-                unit.slices().len()
-            } else {
-                0
-            });
+            let hit_slice_start = hit_slices.len();
             for slice in unit.slices() {
                 let next_x = slice_x + slice.advance();
                 let source = slice.source();
@@ -419,13 +522,16 @@ pub(super) fn build_geometry(
                 }
                 slice_x = next_x;
             }
+            let hit_slice_end = hit_slices.len();
             if unit_expansion > 0.0
-                && let Some(last) = hit_slices.last_mut()
+                && let Some(last) = hit_slices
+                    .get_mut(hit_slice_start..hit_slice_end)
+                    .and_then(<[CachedHitSlice]>::last_mut)
             {
                 last.x1 += unit_expansion;
             }
             let semantic_id = if retains_clusters {
-                hit_slices.first().map_or_else(
+                hit_slices.get(hit_slice_start).map_or_else(
                     || projection.semantic_for_range(paragraph_source),
                     |slice| Ok(slice.semantic_id),
                 )?
@@ -459,7 +565,7 @@ pub(super) fn build_geometry(
                     semantic_id,
                     boundary: unit.boundary(),
                     whitespace: unit.whitespace(),
-                    hit_slices,
+                    hit_slices: hit_slice_start..hit_slice_end,
                     bounds,
                     line: line_index,
                     left: left.expect("cluster construction resolves the left position"),
@@ -518,7 +624,7 @@ pub(super) fn build_geometry(
                     source: local_source,
                     boundary: ClusterBoundary::None,
                     whitespace: ClusterWhitespace::None,
-                    hit_slices: Vec::new(),
+                    hit_slices: hit_slices.len()..hit_slices.len(),
                     bounds,
                     line: line_index,
                     left: position,
@@ -571,7 +677,7 @@ pub(super) fn build_geometry(
             source,
             boundary: ClusterBoundary::None,
             whitespace: ClusterWhitespace::None,
-            hit_slices: Vec::new(),
+            hit_slices: hit_slices.len()..hit_slices.len(),
             bounds: empty_bounds,
             line: 0,
             left: position,
@@ -723,7 +829,7 @@ pub(super) fn build_geometry(
         source_map,
         line_sources: CachedSidecar::new(features.has_sources(), line_sources),
         paint_sources: CachedSidecar::new(features.has_sources(), paint.sources),
-        clusters: CachedSidecar::new(retains_clusters, clusters),
+        hit_geometry: CachedHitSidecar::new(retains_clusters, clusters, hit_slices),
         carets: CachedSidecar::new(features.has_selection(), carets),
         movements: CachedSidecar::new(features.has_navigation(), movements),
         semantics: CachedSidecar::new(features.has_semantics(), semantics),
@@ -745,7 +851,7 @@ pub(super) fn repaint_geometry(
         source_map: retained.source_map.clone(),
         line_sources: retained.line_sources.clone(),
         paint_sources: CachedSidecar::new(retained.features.has_sources(), paint.sources),
-        clusters: retained.clusters.clone(),
+        hit_geometry: retained.hit_geometry.clone(),
         carets: retained.carets.clone(),
         movements: retained.movements.clone(),
         semantics: retained.semantics.clone(),

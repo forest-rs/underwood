@@ -177,7 +177,7 @@ impl CompositionScene {
             return positioned
                 .segment
                 .geometry
-                .clusters
+                .hit_geometry
                 .iter()
                 .find(|cluster| {
                     let origin = Vec2::new(0.0, positioned.position.block_origin);
@@ -392,7 +392,7 @@ impl CompositionScene {
             positioned
                 .segment
                 .geometry
-                .clusters
+                .hit_geometry
                 .iter()
                 .map(move |cluster| (positioned, cluster))
         })
@@ -776,7 +776,7 @@ impl TextScene {
             return positioned
                 .segment
                 .geometry
-                .clusters
+                .hit_geometry
                 .iter()
                 .find(|cluster| {
                     let origin = Vec2::new(0.0, positioned.position.block_origin);
@@ -1326,7 +1326,7 @@ impl TextScene {
             positioned
                 .segment
                 .geometry
-                .clusters
+                .hit_geometry
                 .iter()
                 .map(move |cluster| (positioned, cluster))
         })
@@ -1483,7 +1483,7 @@ fn closest_cluster<'a>(
     positioned
         .segment
         .geometry
-        .clusters
+        .hit_geometry
         .iter()
         .min_by(|first, second| {
             let origin = Vec2::new(0.0, positioned.position.block_origin);
@@ -1511,8 +1511,11 @@ fn cached_snapshot_hit<'a>(
     let origin = Vec2::new(0.0, positioned.position.block_origin);
     let bounds = cluster.bounds + origin;
     let midpoint = bounds.x0 + bounds.width() * 0.5;
-    let semantic_id = cluster
-        .hit_slices
+    let semantic_id = positioned
+        .segment
+        .geometry
+        .hit_geometry
+        .slices_for(cluster)
         .iter()
         .filter(|slice| slice.x0 < slice.x1)
         .min_by(|first, second| {
@@ -1551,8 +1554,11 @@ fn cached_projected_hit<'a>(
     let origin = Vec2::new(0.0, positioned.position.block_origin);
     let bounds = cluster.bounds + origin;
     let midpoint = bounds.x0 + bounds.width() * 0.5;
-    let semantic_id = cluster
-        .hit_slices
+    let semantic_id = positioned
+        .segment
+        .geometry
+        .hit_geometry
+        .slices_for(cluster)
         .iter()
         .filter(|slice| slice.x0 < slice.x1)
         .min_by(|first, second| {

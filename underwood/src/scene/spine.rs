@@ -132,7 +132,7 @@ impl SceneSummary {
             block_extent: geometry.height,
             lines: geometry.lines.len(),
             fragments: geometry.fragments.len(),
-            clusters: geometry.clusters.len(),
+            clusters: geometry.hit_geometry.len(),
             carets: geometry.carets.len(),
             movements: geometry.movements.len(),
             texts: geometry
@@ -844,7 +844,7 @@ mod tests {
                 source_map: None,
                 line_sources: CachedSidecar::new(false, Vec::new()),
                 paint_sources: CachedSidecar::new(false, Vec::new()),
-                clusters: CachedSidecar::new(false, Vec::new()),
+                hit_geometry: CachedHitSidecar::new(false, Vec::new(), Vec::new()),
                 carets: CachedSidecar::new(false, Vec::new()),
                 movements: CachedSidecar::new(false, Vec::new()),
                 semantics: CachedSidecar::new(false, Vec::new()),
