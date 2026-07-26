@@ -268,6 +268,7 @@ struct PublishedScene {
     styles: StyleMap,
     constraint: ConstraintKey,
     region_flow: Option<RegionFlow>,
+    last_used: u64,
     required_paint_slots: usize,
     core: Arc<SceneCore>,
     region_transcript: Option<RegionTranscript>,
@@ -282,6 +283,8 @@ struct PublishedComposition {
     constraint: ConstraintKey,
     region_flow: Option<RegionFlow>,
     composition: CompositionSession,
+    target: ParagraphId,
+    last_used: u64,
     required_paint_slots: usize,
     core: Arc<SceneCore>,
     region_transcript: Option<RegionTranscript>,
@@ -513,6 +516,7 @@ impl LayoutEngine {
             .iter()
             .all(|paragraph| self.cache.contains_key(&paragraph.id))
         {
+            self.clock = self.clock.saturating_add(1);
             self.published.insert(
                 snapshot.id(),
                 PublishedScene {
@@ -520,6 +524,7 @@ impl LayoutEngine {
                     styles: request.styles.clone(),
                     constraint: ConstraintKey::from(request.constraint),
                     region_flow: request.region_flow.cloned(),
+                    last_used: self.clock,
                     required_paint_slots,
                     core,
                     region_transcript,
@@ -596,6 +601,15 @@ impl LayoutEngine {
         let target = composition.target_text().ok_or_else(|| {
             SceneError::for_document(SceneErrorKind::InvalidComposition, snapshot.id())
         })?;
+        let target_paragraph = usize::try_from(target.paragraph)
+            .ok()
+            .and_then(|index| snapshot.paragraphs().get(index))
+            .filter(|paragraph| paragraph.id.index == target.paragraph)
+            .map(|paragraph| paragraph.id)
+            .filter(|_| snapshot.text(target).is_some())
+            .ok_or_else(|| {
+                SceneError::for_document(SceneErrorKind::InvalidComposition, snapshot.id())
+            })?;
         let previous_spine = self.reusable_composition_spine(snapshot, request);
         let mut spine = previous_spine.clone();
         let mut initial_segments = spine
@@ -613,7 +627,7 @@ impl LayoutEngine {
         let mut region_cursor = region_start;
 
         for (paragraph_index, paragraph) in snapshot.paragraphs().iter().enumerate() {
-            let transient = paragraph.id.index == target.paragraph;
+            let transient = paragraph.id == target_paragraph;
             self.clock = self.clock.saturating_add(1);
             let (kind, access) = if !transient
                 && let Some(access) = reuse_paragraph_geometry(
@@ -781,12 +795,13 @@ impl LayoutEngine {
             region_transcript: region_transcript.clone(),
         };
         if snapshot.paragraphs().iter().all(|paragraph| {
-            if paragraph.id.index == target.paragraph {
+            if paragraph.id == target_paragraph {
                 self.composition_cache.contains_key(&paragraph.id)
             } else {
                 self.cache.contains_key(&paragraph.id)
             }
         }) {
+            self.clock = self.clock.saturating_add(1);
             self.published_compositions.insert(
                 snapshot.id(),
                 PublishedComposition {
@@ -795,6 +810,8 @@ impl LayoutEngine {
                     constraint: ConstraintKey::from(request.constraint),
                     region_flow: request.region_flow.cloned(),
                     composition: composition.clone(),
+                    target: target_paragraph,
+                    last_used: self.clock,
                     required_paint_slots,
                     core,
                     region_transcript,
@@ -913,7 +930,7 @@ impl LayoutEngine {
     }
 
     fn reuse_published_scene(
-        &self,
+        &mut self,
         snapshot: &DocumentSnapshot,
         request: &SceneRequest<'_>,
     ) -> Option<SceneOutput> {
@@ -926,6 +943,15 @@ impl LayoutEngine {
         {
             return None;
         }
+        self.clock = self.clock.saturating_add(1);
+        self.published
+            .get_mut(&snapshot.id())
+            .expect("the validated published scene remains present")
+            .last_used = self.clock;
+        let published = self
+            .published
+            .get(&snapshot.id())
+            .expect("the refreshed published scene remains present");
         let paragraph_count = published.core.paragraph_count;
         let work = WorkReport {
             reused_paragraphs: paragraph_count,
@@ -1100,6 +1126,7 @@ impl LayoutEngine {
             trace,
             region_transcript: None,
         };
+        self.clock = self.clock.saturating_add(1);
         self.published.insert(
             snapshot.id(),
             PublishedScene {
@@ -1107,6 +1134,7 @@ impl LayoutEngine {
                 styles: request.styles.clone(),
                 constraint: ConstraintKey::from(request.constraint),
                 region_flow: None,
+                last_used: self.clock,
                 required_paint_slots,
                 core,
                 region_transcript: None,
@@ -1131,7 +1159,7 @@ impl LayoutEngine {
     }
 
     fn reuse_published_composition(
-        &self,
+        &mut self,
         snapshot: &DocumentSnapshot,
         request: &SceneRequest<'_>,
         composition: &CompositionSession,
@@ -1146,6 +1174,15 @@ impl LayoutEngine {
         {
             return None;
         }
+        self.clock = self.clock.saturating_add(1);
+        self.published_compositions
+            .get_mut(&snapshot.id())
+            .expect("the validated published composition remains present")
+            .last_used = self.clock;
+        let published = self
+            .published_compositions
+            .get(&snapshot.id())
+            .expect("the refreshed published composition remains present");
         let paragraph_count = published.core.paragraph_count;
         let work = WorkReport {
             reused_paragraphs: paragraph_count,
@@ -1265,9 +1302,28 @@ impl LayoutEngine {
                 CacheKind::Committed => self.committed_recency.pop_first(),
                 CacheKind::Composition => self.composition_recency.pop_first(),
             };
-            let Some((_, paragraph)) = next else {
+            let Some((last_used, paragraph)) = next else {
                 break;
             };
+            let root_use = self.root_use_for(kind, paragraph);
+            if root_use > last_used {
+                let cache = match kind {
+                    CacheKind::Committed => &mut self.cache,
+                    CacheKind::Composition => &mut self.composition_cache,
+                };
+                if let Some(entry) = cache.get_mut(&paragraph) {
+                    entry.last_used = root_use;
+                    match kind {
+                        CacheKind::Committed => {
+                            self.committed_recency.insert((root_use, paragraph));
+                        }
+                        CacheKind::Composition => {
+                            self.composition_recency.insert((root_use, paragraph));
+                        }
+                    }
+                    continue;
+                }
+            }
             // An exact root is retainable only while every segment it names is
             // inside its coordinated lane budget. A committed eviction also
             // invalidates composition roots that share committed siblings;
@@ -1276,7 +1332,13 @@ impl LayoutEngine {
             match kind {
                 CacheKind::Committed => {
                     self.published.remove(&paragraph.document);
-                    self.published_compositions.remove(&paragraph.document);
+                    if self
+                        .published_compositions
+                        .get(&paragraph.document)
+                        .is_some_and(|published| published.target != paragraph)
+                    {
+                        self.published_compositions.remove(&paragraph.document);
+                    }
                 }
                 CacheKind::Composition => {
                     self.published_compositions.remove(&paragraph.document);
@@ -1301,6 +1363,22 @@ impl LayoutEngine {
                 }
             }
             self.cache_work.evictions += 1;
+        }
+    }
+
+    fn root_use_for(&self, kind: CacheKind, paragraph: ParagraphId) -> u64 {
+        let committed = self
+            .published
+            .get(&paragraph.document)
+            .map_or(0, |published| published.last_used);
+        let composition = self.published_compositions.get(&paragraph.document);
+        match kind {
+            CacheKind::Committed => composition
+                .filter(|published| published.target != paragraph)
+                .map_or(committed, |published| committed.max(published.last_used)),
+            CacheKind::Composition => composition
+                .filter(|published| published.target == paragraph)
+                .map_or(0, |published| published.last_used),
         }
     }
 }

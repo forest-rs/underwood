@@ -454,7 +454,11 @@ retention is unmeasured. They never present engine-controlled residency as
 whole-process memory.
 
 Exact scene hits update scene-level recency in O(1). They do not walk every
-paragraph merely to refresh individual LRU timestamps.
+paragraph merely to refresh individual LRU timestamps. Paragraph eviction
+lazily folds a newer root timestamp into stale candidate entries while it is
+already enforcing a budget. A composition root refresh protects its transient
+target and the committed sibling segments that root actually names, but not
+the superseded committed target segment.
 
 The present entry-count budget is retained during migration, then supplemented
 or replaced by explicit byte categories only with measured accounting. Cache

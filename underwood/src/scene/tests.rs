@@ -2147,6 +2147,152 @@ fn composition_residency_never_evicts_committed_geometry() {
 }
 
 #[test]
+fn exact_scene_hits_refresh_root_recency_lazily() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: Rc::new(Cell::new(None)),
+        },
+        CacheBudget::new(2),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-lru-doc-01", "first");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-lru-doc-02", "second");
+    let (third, third_styles, third_paint) = one_leaf_document(*b"scene-lru-doc-03", "third");
+    let first_request = SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint);
+    let second_request =
+        SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint);
+    let third_request = SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint);
+
+    let first_output = layout
+        .prepare(&first.snapshot(), &first_request)
+        .expect("first document prepares");
+    layout
+        .prepare(&second.snapshot(), &second_request)
+        .expect("second document prepares");
+    let exact = layout
+        .prepare(&first.snapshot(), &first_request)
+        .expect("first exact root is reused");
+    assert!(Arc::ptr_eq(&first_output.scene().core, &exact.scene().core));
+    assert_eq!(calls.get(), 2);
+
+    layout
+        .prepare(&third.snapshot(), &third_request)
+        .expect("third document creates cache pressure");
+    assert_eq!(layout.cache_diagnostics().evictions(), 1);
+    let retained = layout
+        .prepare(&first.snapshot(), &first_request)
+        .expect("recently reused first root survives pressure");
+    assert!(
+        Arc::ptr_eq(&first_output.scene().core, &retained.scene().core),
+        "root-level recency must be folded into stale paragraph entries during eviction"
+    );
+    assert_eq!(calls.get(), 3);
+
+    layout
+        .prepare(&second.snapshot(), &second_request)
+        .expect("the genuinely oldest document prepares again");
+    assert_eq!(
+        calls.get(),
+        4,
+        "the untouched second root, rather than the exact-hit first root, must be evicted"
+    );
+}
+
+#[test]
+fn composition_root_recency_protects_only_segments_it_names() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: Rc::new(Cell::new(None)),
+        },
+        CacheBudget::new(3),
+    );
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-lru-comp01"));
+    let mut edit = document.edit();
+    let mut texts = Vec::new();
+    for text in ["target", "sibling"] {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph appends");
+        texts.push(
+            edit.append_text(paragraph, InlineRole::TEXT, text)
+                .expect("test text appends"),
+        );
+    }
+    edit.commit().expect("test document commits");
+    let snapshot = document.snapshot();
+    let styles = StyleMap::new(ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    ));
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed document prepares");
+    let caret = committed
+        .scene()
+        .position_at(texts[0], 0)
+        .expect("target start is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&caret)
+        .expect("composition selection validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("composition selection set validates");
+    let mut composition = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"scene-lru-comp02"))
+        .expect("composition begins")
+        .into_session();
+    composition
+        .update(composition.epoch(), CompositionUpdate::new("generated"))
+        .expect("composition updates");
+    let projected = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition scene prepares");
+    let repeated = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition root is reused");
+    assert!(Arc::ptr_eq(&projected.scene().core, &repeated.scene().core));
+
+    let (second, second_styles, second_paint) =
+        one_leaf_document(*b"scene-lru-comp03", "pressure one");
+    let (third, third_styles, third_paint) =
+        one_leaf_document(*b"scene-lru-comp04", "pressure two");
+    layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("first pressure document prepares");
+    layout
+        .prepare(
+            &third.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint),
+        )
+        .expect("second pressure document prepares");
+
+    let retained = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition survives eviction of its superseded committed target");
+    assert!(
+        Arc::ptr_eq(&projected.scene().core, &retained.scene().core),
+        "composition root must retain its transient target and committed sibling"
+    );
+    assert_eq!(
+        calls.get(),
+        5,
+        "the exact composition reuse must not return to the adapter"
+    );
+}
+
+#[test]
 fn visual_selection_uses_the_reciprocal_caret_path() {
     let mut document = Document::new(DocumentId::from_bytes(*b"scene-visual-dir"));
     let mut edit = document.edit();
