@@ -3,7 +3,8 @@
 
 //! Shared fixtures for adapter unit tests.
 
-use alloc::{vec, vec::Vec};
+use alloc::{rc::Rc, vec, vec::Vec};
+use core::cell::RefCell;
 
 use fontique::{Blob, Synthesis};
 use parley_engine::{FontInstance, ShapeOptions, ShapedText, Shaper};
@@ -50,6 +51,40 @@ const LATIN_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
 const ARABIC_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/NotoKufiArabic-Regular.otf");
+
+#[derive(Debug)]
+struct PreparedFactsProbe {
+    inner: ParleyParagraphEngine,
+    outputs: Rc<RefCell<Vec<PreparedParagraph>>>,
+}
+
+impl ParagraphFormation for PreparedFactsProbe {
+    fn form(
+        &mut self,
+        input: underwood::adapter::ParagraphInput<'_>,
+        constraints: ParagraphConstraints,
+    ) -> Result<ParagraphFormationOutput, underwood::adapter::PreparationError> {
+        let output = self.inner.form(input, constraints)?;
+        self.outputs.borrow_mut().push(output.paragraph().clone());
+        Ok(output)
+    }
+
+    fn shared_preparation_epoch(&self) -> Option<u64> {
+        self.inner.shared_preparation_epoch()
+    }
+
+    fn release(&mut self, preparation: underwood::adapter::ParagraphPreparationId) {
+        self.inner.release(preparation);
+    }
+
+    fn clear(&mut self) {
+        self.inner.clear();
+    }
+
+    fn retained_entries(&self) -> Option<usize> {
+        self.inner.retained_entries()
+    }
+}
 
 #[derive(Debug)]
 struct AnalysisCursorProof;
@@ -245,6 +280,14 @@ fn fixture_engine_with_budget(budget: usize) -> LayoutEngine {
 }
 
 fn fixture_engine_with_budgets(budget: usize, shared_preparation_bytes: usize) -> LayoutEngine {
+    let paragraphs = fixture_paragraph_engine();
+    LayoutEngine::new(
+        paragraphs,
+        CacheBudget::new(budget).with_shared_preparation_bytes(shared_preparation_bytes),
+    )
+}
+
+fn fixture_paragraph_engine() -> ParleyParagraphEngine {
     let fonts = FontSet::try_from_fonts([
         Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
         Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
@@ -252,10 +295,7 @@ fn fixture_engine_with_budgets(budget: usize, shared_preparation_bytes: usize) -
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
     .expect("Arabic fallback is valid");
-    LayoutEngine::new(
-        ParleyParagraphEngine::new(fonts),
-        CacheBudget::new(budget).with_shared_preparation_bytes(shared_preparation_bytes),
-    )
+    ParleyParagraphEngine::new(fonts)
 }
 
 fn fixture_document(text: &str, line_height: f32) -> (Document, StyleMap, PaintTable) {

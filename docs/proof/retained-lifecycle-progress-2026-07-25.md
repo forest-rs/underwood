@@ -123,10 +123,9 @@ Focused tests establish that:
 
 ### What remains
 
-This slice earns O(1) exact repeats and eliminates document-scale scene
-publication. It does not yet earn O(change) localized preparation as a whole.
-The engine still traverses all paragraphs, adapter misses still rebuild owned
-lowered output, and `Document::edit` still clones the document paragraph
-spine. The matched one-byte edit-staging observation remains 79 calls at 64
-paragraphs and 1,015 calls at 1,000 paragraphs. Those are the next independent
-Design-0017 slices, not work hidden inside this result.
+This slice earned O(1) exact repeats and eliminated document-scale scene
+publication. Its then-remaining document clone and all-paragraph localized
+scan were subsequently resolved in
+`retained-document-cow-2026-07-26.md` and
+`retained-localized-preparation-2026-07-26.md`. The historical numbers above
+remain the before-observation for those independent Design-0017 slices.

@@ -169,8 +169,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|fragment| {
             fragment
-                .source()
-                .is_some_and(|source| source.text() == first_arabic)
+                .sources()
+                .any(|source| source.text() == first_arabic)
         })
         .expect("Arabic fallback leaf must produce a scene fragment");
     assert_eq!(
@@ -189,12 +189,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|fragment| {
             fragment
-                .source()
-                .is_some_and(|source| source.text() == first_arabic)
+                .sources()
+                .any(|source| source.text() == first_arabic)
                 && fragment
                     .glyphs()
-                    .first()
-                    .is_some_and(|glyph| glyph.advance().x == 0.0)
+                    .iter()
+                    .any(|glyph| glyph.advance().x == 0.0)
         })
         .expect("Noto Kufi must expose a zero-advance Arabic mark");
     assert!(
@@ -205,11 +205,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .scene()
         .fragments()
         .iter()
-        .filter_map(|fragment| {
-            fragment
-                .source()
-                .filter(|source| source.text() == first_arabic)
-                .map(|source| source.bytes())
+        .flat_map(|fragment| fragment.glyphs())
+        .filter_map(|glyph| {
+            let source = glyph.source();
+            (source.text() == first_arabic).then(|| source.bytes())
         })
         .collect();
     assert!(
@@ -233,8 +232,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|fragment| {
             fragment
-                .source()
-                .is_some_and(|source| source.text() == direct_arabic)
+                .sources()
+                .any(|source| source.text() == direct_arabic)
         })
         .expect("direct named-family leaf must produce a scene fragment");
     assert_eq!(
@@ -291,9 +290,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert!(
         first_scene.scene().fragments().iter().any(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == ligatures_on && source.bytes() == (1..4))
+            fragment.glyphs().iter().any(|glyph| {
+                let source = glyph.source();
+                source.text() == ligatures_on && source.bytes() == (1..4)
+            })
         }),
         "the retained ffi glyph must own the full three-character source range"
     );
@@ -408,8 +408,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .iter()
             .filter(|fragment| {
                 fragment
-                    .source()
-                    .is_some_and(|source| source.text() == first_suffix)
+                    .sources()
+                    .any(|source| source.text() == first_suffix)
             })
             .all(|fragment| fragment.paint() == PaintSlot::new(0)),
         "retained geometry must still receive the new paint-slot assignment"
@@ -683,24 +683,16 @@ fn glyph_count(scene: &TextScene, text: TextId) -> usize {
     scene
         .fragments()
         .iter()
-        .filter(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
-        })
-        .map(|fragment| fragment.glyphs().len())
-        .sum()
+        .flat_map(|fragment| fragment.glyphs())
+        .filter(|glyph| glyph.sources().any(|source| source.text() == text))
+        .count()
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
     scene
         .fragments()
         .iter()
-        .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
-        })
+        .find(|fragment| fragment.sources().any(|source| source.text() == text))
         .map(|fragment| fragment.normalized_coords().to_vec())
         .unwrap_or_default()
 }
@@ -709,11 +701,7 @@ fn synthesis_variations(scene: &TextScene, text: TextId) -> Vec<FontVariation> {
     scene
         .fragments()
         .iter()
-        .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
-        })
+        .find(|fragment| fragment.sources().any(|source| source.text() == text))
         .map(|fragment| fragment.synthesis().variations().to_vec())
         .unwrap_or_default()
 }

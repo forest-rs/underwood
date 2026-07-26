@@ -110,7 +110,7 @@ pub struct PreparedLine {
     height: f64,
     content_ascent: f64,
     content_descent: f64,
-    units: Vec<PreparedInteractionUnit>,
+    units: Arc<Vec<PreparedInteractionUnit>>,
     runs: Vec<PreparedRun>,
 }
 
@@ -174,7 +174,7 @@ impl PreparedLine {
         {
             return Err(PreparationError::invalid_output());
         }
-        let units: Vec<_> = units.into_iter().collect();
+        let units = Arc::new(units.into_iter().collect::<Vec<_>>());
         let runs: Vec<_> = runs.into_iter().collect();
         let mut coverage: Vec<_> = runs.iter().map(|run| run.source.clone()).collect();
         coverage.sort_unstable_by_key(|range| range.start);
@@ -338,7 +338,7 @@ pub(crate) struct PreparedParagraphFacts {
     text_len: u32,
     resolved_direction: ResolvedDirection,
     lines: Vec<PreparedLine>,
-    movements: Vec<PreparedCursorMovement>,
+    movements: Arc<Vec<PreparedCursorMovement>>,
 }
 
 /// Validated owned formed lines for one paragraph.
@@ -385,7 +385,7 @@ impl PreparedParagraph {
                     PreparedClusterSide::new(line.source.start, affinity),
                 );
             } else {
-                for unit in &line.units {
+                for unit in line.units.iter() {
                     push_unique_position(&mut positions, unit.left());
                     push_unique_position(&mut positions, unit.right());
                 }
@@ -394,7 +394,7 @@ impl PreparedParagraph {
         if positions.is_empty() && text_len == 0 {
             positions.push(PreparedClusterSide::new(0, TextAffinity::Downstream));
         }
-        let movements: Vec<_> = movements.into_iter().collect();
+        let movements = Arc::new(movements.into_iter().collect::<Vec<_>>());
         let movement_positions: Vec<_> = movements
             .iter()
             .map(PreparedCursorMovement::position)
@@ -491,6 +491,68 @@ impl PreparedParagraph {
     pub fn movements(&self) -> &[PreparedCursorMovement] {
         &self.facts.movements
     }
+
+    /// Replaces only glyph paint coverage while retaining all other prepared facts.
+    ///
+    /// The original paragraph has already proved line, interaction, source,
+    /// and cursor invariants. Each replacement coverage is validated against
+    /// its glyph source; line and movement validation is intentionally not
+    /// repeated.
+    pub fn try_map_glyph_paint(
+        &self,
+        mut map: impl FnMut(&PreparedGlyph) -> Result<GlyphPaintCoverage, PreparationError>,
+    ) -> Result<Self, PreparationError> {
+        let mut lines = Vec::with_capacity(self.facts.lines.len());
+        for line in &self.facts.lines {
+            let mut runs = Vec::with_capacity(line.runs.len());
+            for run in &line.runs {
+                let mut glyphs = Vec::with_capacity(run.glyphs.len());
+                for glyph in &run.glyphs {
+                    glyphs.push(PreparedGlyph::try_new(
+                        glyph.id,
+                        glyph.source.clone(),
+                        glyph.advance,
+                        glyph.offset,
+                        map(glyph)?,
+                    )?);
+                }
+                runs.push(PreparedRun {
+                    source: run.source.clone(),
+                    bidi_level: run.bidi_level,
+                    script: run.script,
+                    font: run.font.clone(),
+                    font_size: run.font_size,
+                    synthesis: run.synthesis.clone(),
+                    normalized_coords: Arc::clone(&run.normalized_coords),
+                    unrendered_source: Arc::clone(&run.unrendered_source),
+                    glyphs,
+                });
+            }
+            lines.push(PreparedLine {
+                slot: line.slot,
+                source: line.source.clone(),
+                break_reason: line.break_reason,
+                advance: line.advance,
+                trailing_whitespace_start: line.trailing_whitespace_start,
+                trailing_whitespace_advance: line.trailing_whitespace_advance,
+                baseline: line.baseline,
+                height: line.height,
+                content_ascent: line.content_ascent,
+                content_descent: line.content_descent,
+                units: Arc::clone(&line.units),
+                runs,
+            });
+        }
+        Ok(Self {
+            paragraph: self.paragraph,
+            facts: Arc::new(PreparedParagraphFacts {
+                text_len: self.facts.text_len,
+                resolved_direction: self.facts.resolved_direction,
+                lines,
+                movements: Arc::clone(&self.facts.movements),
+            }),
+        })
+    }
 }
 
 impl PreparedParagraphFacts {
@@ -504,7 +566,7 @@ impl PreparedParagraphFacts {
             bytes = bytes
                 .saturating_add(vec_bytes::<PreparedInteractionUnit>(line.units.capacity()))
                 .saturating_add(vec_bytes::<PreparedRun>(line.runs.capacity()));
-            for unit in &line.units {
+            for unit in line.units.iter() {
                 bytes = bytes.saturating_add(
                     size_of::<PreparedInteractionSlice>().saturating_mul(unit.slice_capacity()),
                 );
@@ -555,8 +617,8 @@ pub struct PreparedRun {
     font: FontData,
     font_size: f32,
     synthesis: FontSynthesis,
-    normalized_coords: Vec<i16>,
-    unrendered_source: Vec<Range<u32>>,
+    normalized_coords: Arc<Vec<i16>>,
+    unrendered_source: Arc<Vec<Range<u32>>>,
     glyphs: Vec<PreparedGlyph>,
 }
 
@@ -604,8 +666,8 @@ impl PreparedRun {
             font,
             font_size,
             synthesis,
-            normalized_coords: normalized_coords.into_iter().collect(),
-            unrendered_source,
+            normalized_coords: Arc::new(normalized_coords.into_iter().collect()),
+            unrendered_source: Arc::new(unrendered_source),
             glyphs,
         })
     }

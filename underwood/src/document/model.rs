@@ -6,7 +6,7 @@
 //! This module owns persistent semantic document state; it explicitly does not
 //! own edit validation or staged transaction algorithms.
 
-use super::sequence::ParagraphSequence;
+use super::sequence::{ChangedParagraphs, ParagraphSequence};
 use super::*;
 
 /// Opaque identity of one document.
@@ -289,6 +289,19 @@ impl DocumentSnapshot {
 
     pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    pub(crate) fn changed_paragraphs_from<'a>(
+        &'a self,
+        previous: &'a Self,
+    ) -> Option<ChangedParagraphs<'a>> {
+        (self.id() == previous.id())
+            .then(|| {
+                self.state
+                    .paragraphs
+                    .changed_indices(&previous.state.paragraphs)
+            })
+            .flatten()
     }
 
     pub(crate) fn leaf(&self, id: TextId) -> Option<&TextLeaf> {

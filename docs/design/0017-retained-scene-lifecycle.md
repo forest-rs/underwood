@@ -523,6 +523,21 @@ capability.
   Cloning becomes cheap and mutations become copy-on-write.
 - `LayoutEngine::prepare` and `prepare_block` retain their result-oriented
   call shape.
+- `ParagraphFormation::release(ParagraphId)` becomes
+  `release(ParagraphPreparationId)`. Backends key retained work by
+  `ParagraphInput::preparation()` so committed and transient composition lanes
+  cannot displace one another.
+- `ParagraphInput::change()` reports the validated formation facets changed
+  since that exact preparation lane last ran. A backend may skip
+  deep-comparison only when it still owns the matching cache entry; a missing
+  entry remains cold regardless of the change record.
+- `ParagraphInput::reusable_preparation()` is an optional exact-output reuse
+  opportunity across lanes. Backends may ignore it, but must not infer broader
+  semantic identity from the shared `ParagraphId`.
+- Paint fragments are run-sized in the common case. Consumers that previously
+  assumed one fragment per glyph must iterate `fragment.glyphs()`. A fragment
+  may span several authored owners, so glyph-specific provenance comes from
+  the glyph view while `fragment.sources()` describes the whole fragment.
 
 All repository examples, PDF export, showcase rendering, tests, and benchmarks
 will migrate in the same coherent change. There will be no compatibility

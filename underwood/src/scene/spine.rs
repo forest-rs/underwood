@@ -61,7 +61,7 @@ impl SceneSummary {
         let mut max_x = 0.0_f64;
         let mut min_y = 0.0_f64;
         let mut max_y = geometry.height;
-        for line in &geometry.lines {
+        for line in geometry.lines.iter() {
             min_x = min_x.min(line.bounds.x0);
             max_x = max_x.max(line.bounds.x0 + line.advance);
             min_y = min_y.min(line.bounds.y0);
@@ -217,7 +217,11 @@ impl SceneSpine {
     }
 
     pub(super) fn accounted_node_bytes(&self) -> usize {
-        self.root.as_deref().map_or(0, accounted_node_bytes)
+        let paragraphs = self.summary().paragraphs;
+        if paragraphs == 0 {
+            return 0;
+        }
+        size_of::<SceneNode>().saturating_mul(paragraphs.saturating_mul(2).saturating_sub(1))
     }
 
     pub(super) fn positioned_line(&self, index: usize) -> Option<PositionedLine<'_>> {
@@ -258,15 +262,6 @@ impl SceneSpine {
             }
         }
     }
-}
-
-fn accounted_node_bytes(node: &SceneNode) -> usize {
-    size_of::<SceneNode>().saturating_add(match node {
-        SceneNode::Leaf { .. } => 0,
-        SceneNode::Branch { left, right, .. } => {
-            accounted_node_bytes(left).saturating_add(accounted_node_bytes(right))
-        }
-    })
 }
 
 fn build_balanced(
@@ -454,13 +449,16 @@ mod tests {
             },
             Arc::new(CachedGeometry {
                 height,
-                lines: Vec::new(),
+                facts: Arc::new(CachedGeometryFacts {
+                    lines: Vec::new(),
+                    clusters: Vec::new(),
+                    carets: Vec::new(),
+                    movements: Vec::new(),
+                    texts: Vec::new(),
+                    semantics: Vec::new(),
+                }),
+                line_fragments: Vec::new(),
                 fragments: Vec::new(),
-                clusters: Vec::new(),
-                carets: Vec::new(),
-                movements: Vec::new(),
-                texts: Vec::new(),
-                semantics: Vec::new(),
             }),
             None,
         ))

@@ -818,10 +818,8 @@ fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
         .fragments()
         .iter()
         .filter(|fragment| fragment.bidi_level() & 1 == 1)
-        .map(|fragment| {
-            let glyph = &fragment.glyphs().iter().next().expect("glyph exists");
-            (glyph.position().x, glyph.source().bytes().start)
-        })
+        .flat_map(|fragment| fragment.glyphs())
+        .map(|glyph| (glyph.position().x, glyph.source().bytes().start))
         .collect();
     assert!(arabic.len() > 1, "Arabic run must expose multiple glyphs");
     assert!(

@@ -6,8 +6,8 @@
 //! Successful outputs own every retained font, coordinate, and glyph record.
 //! No backend-specific type crosses this boundary.
 
-use alloc::sync::Arc;
 use alloc::vec::Vec;
+use alloc::{boxed::Box, sync::Arc};
 use core::fmt;
 use core::mem::size_of;
 use core::ops::Range;
@@ -27,8 +27,8 @@ mod prepared;
 pub use error::{PreparationError, PreparationErrorKind};
 pub use formation::{
     AnalysisRun, AnalysisStyleId, FormationWork, InlineFlowRun, InlineFlowStyleId, LineShapingWork,
-    PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphFormationOutput, ParagraphInput,
-    ShapingRun, ShapingStyleId,
+    PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphFormationChange,
+    ParagraphFormationOutput, ParagraphInput, ParagraphPreparationId, ShapingRun, ShapingStyleId,
 };
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedCaret, PreparedClusterSide,

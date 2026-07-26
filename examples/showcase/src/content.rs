@@ -964,11 +964,7 @@ mod tests {
                 .scene
                 .fragments()
                 .iter()
-                .filter(|fragment| {
-                    fragment
-                        .source()
-                        .is_some_and(|source| source.text() == text)
-                })
+                .filter(|fragment| fragment.sources().any(|source| source.text() == text))
                 .collect();
             assert!(!fragments.is_empty());
             assert!(fragments.iter().all(|fragment| {
@@ -1019,9 +1015,9 @@ mod tests {
             .fragments()
             .iter()
             .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_none_or(|source| !editable.contains(&source.text()))
+                !fragment
+                    .sources()
+                    .any(|source| editable.contains(&source.text()))
             })
             .map(|fragment| fragment.id())
             .collect();
@@ -1034,9 +1030,9 @@ mod tests {
             .fragments()
             .iter()
             .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_none_or(|source| !editable.contains(&source.text()))
+                !fragment
+                    .sources()
+                    .any(|source| editable.contains(&source.text()))
             })
             .map(|fragment| fragment.id())
             .collect();
@@ -1071,8 +1067,8 @@ mod tests {
         let mut title_fragments = 0;
         for fragment in frame.scene.fragments() {
             if fragment
-                .source()
-                .is_some_and(|source| source.text() == content.leaves.title)
+                .sources()
+                .any(|source| source.text() == content.leaves.title)
             {
                 assert_eq!(fragment.paint(), TITLE);
                 title_fragments += 1;
@@ -1134,8 +1130,8 @@ mod tests {
             .iter()
             .filter(|fragment| {
                 fragment
-                    .source()
-                    .is_some_and(|source| source.text() == content.leaves.arabic)
+                    .sources()
+                    .any(|source| source.text() == content.leaves.arabic)
             })
             .collect();
         assert!(!arabic.is_empty());
@@ -1153,7 +1149,11 @@ mod tests {
         }));
         let visual_sources: Vec<_> = arabic
             .iter()
-            .filter_map(|fragment| fragment.source().map(|source| source.bytes()))
+            .flat_map(|fragment| fragment.glyphs())
+            .filter_map(|glyph| {
+                let source = glyph.source();
+                (source.text() == content.leaves.arabic).then(|| source.bytes())
+            })
             .collect();
         assert!(
             visual_sources.len() > 1
@@ -1189,8 +1189,8 @@ mod tests {
             .expect("the Arabic-styled leaf must accept inserted Latin");
         assert!(mixed.scene.fragments().iter().any(|fragment| {
             fragment
-                .source()
-                .is_some_and(|source| source.text() == content.leaves.arabic)
+                .sources()
+                .any(|source| source.text() == content.leaves.arabic)
                 && fragment.script() == *b"Latn"
                 && fragment.font().data.as_ref() == LATIN_FONT_BYTES
         }));
@@ -1200,11 +1200,7 @@ mod tests {
         scene
             .fragments()
             .iter()
-            .find(|fragment| {
-                fragment
-                    .source()
-                    .is_some_and(|source| source.text() == title)
-            })
+            .find(|fragment| fragment.sources().any(|source| source.text() == title))
             .expect("title must produce a fragment")
             .normalized_coords()
             .to_vec()
@@ -1214,13 +1210,9 @@ mod tests {
         scene
             .fragments()
             .iter()
-            .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_some_and(|source| source.text() == text)
-            })
-            .map(|fragment| fragment.glyphs().len())
-            .sum()
+            .flat_map(|fragment| fragment.glyphs())
+            .filter(|glyph| glyph.sources().any(|source| source.text() == text))
+            .count()
     }
 
     fn line_count_for_any(scene: &TextScene, texts: &[TextId]) -> usize {

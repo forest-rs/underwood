@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if scenario == "--help" || scenario == "-h" {
         println!(
-            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
+            "usage: underwood_label_benchmark [setup-identical|setup-identity|setup-cross-identical|setup-cross-distinct|setup-shared-hit|primed-identical|primed-paint|primed-paint-slot|primed-unique|primed-region|primed-adjustment|cold-identical|cross-identical|cross-distinct|shared-hit|retained-identical|traced-retained|retained-adjustment|paint-change|paint-slot-churn|alignment-churn|justification-churn|localized-edit|interaction-materialization|width-churn|region-ready|region-churn|identity-churn|projection-identity-setup|projection-identity|projection-collapse-setup|projection-collapse|projection-expansion-setup|projection-expansion] [rounds] [labels]"
         );
         return Ok(());
     }
@@ -355,6 +355,7 @@ fn run_profile(
         "primed-paint" | "p1" => {
             profile_primed_identical("primed-paint", rounds, labels, &style, &paint, true)
         }
+        "primed-paint-slot" | "p5" => profile_primed_paint_slot(rounds, labels, &style),
         "primed-unique" | "p2" => profile_primed_unique(rounds, labels, &style, &paint),
         "primed-region" | "p3" => profile_primed_region(rounds, labels, &style, &paint),
         "primed-adjustment" | "p4" => profile_primed_adjustment(rounds, labels, &style, &paint),
@@ -372,6 +373,7 @@ fn run_profile(
         "traced-retained" | "t0" => profile_traced_retained(rounds, labels, &style, &paint),
         "retained-adjustment" | "r1" => profile_retained_adjustment(rounds, labels, &style, &paint),
         "paint-change" | "a0" => profile_paint_change(rounds, labels, &style, &paint),
+        "paint-slot-churn" | "a3" => profile_paint_slot_churn(rounds, labels, &style),
         "alignment-churn" | "a1" => profile_alignment_churn(rounds, labels, &style, &paint, false),
         "justification-churn" | "a2" => {
             profile_alignment_churn(rounds, labels, &style, &paint, true)
@@ -706,6 +708,32 @@ fn profile_primed_unique(
     Ok(())
 }
 
+fn profile_primed_paint_slot(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let paint = PaintTable::from_brushes([
+        Brush::Solid(Color::from_rgb8(0x20, 0x24, 0x2b)),
+        Brush::Solid(Color::from_rgb8(0x74, 0x48, 0xe8)),
+    ]);
+    let alternate = style.clone().with_paint(PaintSlot::new(1));
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, &paint),
+        )?;
+    }
+    black_box((&labels, &layout, paint, alternate));
+    report_profile("primed-paint-slot", rounds, label_count, Duration::ZERO);
+    Ok(())
+}
+
 fn profile_primed_region(
     rounds: usize,
     label_count: usize,
@@ -1023,6 +1051,81 @@ fn profile_paint_change(
         }
     });
     report_profile("paint-change", rounds, label_count, elapsed);
+    Ok(())
+}
+
+fn profile_paint_slot_churn(
+    rounds: usize,
+    label_count: usize,
+    style: &ComputedInlineStyle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let labels = identical_labels_with_count(label_count)?;
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts()?),
+        CacheBudget::new(label_count),
+    );
+    let paint = PaintTable::from_brushes([
+        Brush::Solid(Color::from_rgb8(0x20, 0x24, 0x2b)),
+        Brush::Solid(Color::from_rgb8(0x74, 0x48, 0xe8)),
+    ]);
+    let alternate = style.clone().with_paint(PaintSlot::new(1));
+    for label in &labels {
+        layout.prepare_block(
+            &label.snapshot(),
+            &BlockRequest::new(TextConstraint::MaxContent, style, &paint),
+        )?;
+    }
+    let elapsed = measure(|| {
+        for round in 0..rounds {
+            let current = if round.is_multiple_of(2) {
+                &alternate
+            } else {
+                style
+            };
+            for label in &labels {
+                let output = layout
+                    .prepare_block(
+                        &label.snapshot(),
+                        &BlockRequest::new(TextConstraint::MaxContent, current, &paint),
+                    )
+                    .expect("paint-slot-only label must prepare");
+                assert_eq!(
+                    output.work().analysis().paragraphs(),
+                    0,
+                    "paint-slot churn must retain analysis"
+                );
+                assert_eq!(
+                    output.work().font_selection().paragraphs(),
+                    0,
+                    "paint-slot churn must retain font selection"
+                );
+                assert_eq!(
+                    output.work().shape().paragraphs(),
+                    0,
+                    "paint-slot churn must retain shaping"
+                );
+                assert_eq!(
+                    output.work().flow().paragraphs(),
+                    0,
+                    "paint-slot churn must retain line formation"
+                );
+                assert_eq!(
+                    output.work().paint().paragraphs(),
+                    1,
+                    "paint-slot churn must re-slot exactly one paragraph"
+                );
+                assert!(
+                    output
+                        .scene()
+                        .fragments()
+                        .iter()
+                        .all(|fragment| fragment.paint() == current.paint()),
+                    "every fragment must expose the current paint slot"
+                );
+            }
+        }
+    });
+    report_profile("paint-slot-churn", rounds, label_count, elapsed);
     Ok(())
 }
 

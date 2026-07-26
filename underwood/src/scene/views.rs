@@ -275,7 +275,8 @@ impl<'a> SceneLineView<'a> {
     #[must_use]
     pub fn fragment_range(self) -> Range<usize> {
         let base = self.positioned.position.position.fragment_base;
-        let local = &self.local().fragments;
+        let local =
+            &self.positioned.position.segment.geometry.line_fragments[self.positioned.local];
         base + local.start..base + local.end
     }
 

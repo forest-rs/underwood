@@ -25,7 +25,7 @@ use underwood::{
 };
 
 use crate::font::FontSet;
-use crate::line_break::LineShapeOutput;
+use crate::line_break::LineShapeWork;
 
 #[cfg(test)]
 pub(crate) fn analyze_text(
@@ -166,9 +166,11 @@ pub(crate) fn shape_line(
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_indices: &[u16],
     source: Range<usize>,
-) -> Result<LineShapeOutput, PreparationError> {
-    let mut shaped_text = ShapedText::new();
-    let mut scripts = Vec::new();
+    shaped_text: &mut ShapedText,
+    scripts: &mut Vec<[u8; 4]>,
+) -> Result<LineShapeWork, PreparationError> {
+    shaped_text.clear();
+    scripts.clear();
     let selected_clusters = shape_range(
         shaper,
         analysis,
@@ -179,13 +181,11 @@ pub(crate) fn shape_line(
         inline_flow_styles,
         inline_flow_indices,
         source,
-        &mut shaped_text,
-        &mut scripts,
-    )?;
-    let shaped_glyphs = shaped_glyph_count(&shaped_text);
-    Ok(LineShapeOutput {
         shaped_text,
         scripts,
+    )?;
+    let shaped_glyphs = shaped_glyph_count(shaped_text);
+    Ok(LineShapeWork {
         resolved_clusters: selected_clusters,
         shaped_glyphs,
     })

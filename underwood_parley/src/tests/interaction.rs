@@ -242,9 +242,10 @@ fn exact_interaction_uses_ligature_components_not_glyph_ink() {
         .prepare(&document.snapshot(), &request)
         .expect("ligature interaction must prepare");
     let scene = output.scene();
-    assert!(
-        scene.fragments().len() < 6,
-        "the fixture must contain a substituted multi-source glyph"
+    assert_eq!(
+        scene.fragments().len(),
+        1,
+        "one paint-homogeneous shaped run must lower as one scene fragment"
     );
 
     let hits = scan_line_hits(scene, 0);
@@ -406,7 +407,12 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
     let collapsed_fragment = scene
         .fragments()
         .iter()
-        .find(|fragment| fragment.sources().count() == 2)
+        .find(|fragment| {
+            fragment
+                .glyphs()
+                .iter()
+                .any(|glyph| glyph.sources().count() == 2)
+        })
         .expect("the collapsed space must retain both source leaves");
     assert_eq!(
         collapsed_fragment.paint(),

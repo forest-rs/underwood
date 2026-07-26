@@ -1553,8 +1553,8 @@ mod tests {
         assert_ne!(prepared.scene.revision(), revision);
         assert!(prepared.scene.fragments().iter().any(|fragment| {
             fragment
-                .source()
-                .is_some_and(|source| source.text() == content.editable_text())
+                .sources()
+                .any(|source| source.text() == content.editable_text())
                 && fragment.script() == *b"Hani"
         }));
         assert!(editor.status().contains("committed once"));

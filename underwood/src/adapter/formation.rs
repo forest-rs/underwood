@@ -31,7 +31,7 @@ pub trait ParagraphFormation {
     /// Releases retained preparation for one paragraph identity.
     ///
     /// Stateless implementations may keep the default no-op behavior.
-    fn release(&mut self, _paragraph: ParagraphId) {}
+    fn release(&mut self, _preparation: ParagraphPreparationId) {}
 
     /// Releases all retained paragraph preparation.
     ///
@@ -45,9 +45,157 @@ pub trait ParagraphFormation {
     }
 }
 
+/// Opaque identity of one retained paragraph-preparation lane.
+///
+/// A committed paragraph and a transient composition over that paragraph have
+/// distinct identities even though they share one semantic [`ParagraphId`].
+/// [`LayoutEngine`](crate::LayoutEngine) creates and releases these identities;
+/// backends use them only as exact retained-cache keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ParagraphPreparationId {
+    paragraph: ParagraphId,
+    lane: u8,
+}
+
+impl ParagraphPreparationId {
+    pub(crate) const fn new(paragraph: ParagraphId, lane: u8) -> Self {
+        Self { paragraph, lane }
+    }
+
+    /// Returns the semantic paragraph whose projected preparation this key owns.
+    #[must_use]
+    pub const fn paragraph(self) -> ParagraphId {
+        self.paragraph
+    }
+}
+
+/// Facets proven changed since one retained backend preparation.
+///
+/// This record is constructed only by `LayoutEngine` after comparing its
+/// validated retained inputs. A backend may therefore use unchanged facets
+/// without rebuilding or deep-comparing them. A missing backend cache entry
+/// still requires an ordinary cold preparation regardless of these values.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParagraphFormationChange {
+    analysis: bool,
+    font_selection: bool,
+    ligature_policy: bool,
+    inline_flow_projection: bool,
+    spacing: bool,
+    line_metrics: bool,
+    break_policy: bool,
+    constraints: bool,
+    paint: bool,
+}
+
+impl ParagraphFormationChange {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the fields are the complete portable formation invalidation contract"
+    )]
+    pub(crate) const fn new(
+        analysis: bool,
+        font_selection: bool,
+        ligature_policy: bool,
+        inline_flow_projection: bool,
+        spacing: bool,
+        line_metrics: bool,
+        break_policy: bool,
+        constraints: bool,
+        paint: bool,
+    ) -> Self {
+        Self {
+            analysis,
+            font_selection,
+            ligature_policy,
+            inline_flow_projection,
+            spacing,
+            line_metrics,
+            break_policy,
+            constraints,
+            paint,
+        }
+    }
+
+    pub(crate) const fn all() -> Self {
+        Self::new(true, true, true, true, true, true, true, true, true)
+    }
+
+    /// Returns whether projected text or Unicode-analysis inputs changed.
+    #[must_use]
+    pub const fn analysis_changed(self) -> bool {
+        self.analysis
+    }
+
+    /// Returns whether font-selection or shaping-style inputs changed.
+    #[must_use]
+    pub const fn font_selection_changed(self) -> bool {
+        self.font_selection
+    }
+
+    /// Returns whether spacing changed ligature-formation policy.
+    #[must_use]
+    pub const fn ligature_policy_changed(self) -> bool {
+        self.ligature_policy
+    }
+
+    /// Returns whether inline-flow run partitioning or values changed.
+    #[must_use]
+    pub const fn inline_flow_projection_changed(self) -> bool {
+        self.inline_flow_projection
+    }
+
+    /// Returns whether authored letter or word spacing changed.
+    #[must_use]
+    pub const fn spacing_changed(self) -> bool {
+        self.spacing
+    }
+
+    /// Returns whether line-height inputs changed.
+    #[must_use]
+    pub const fn line_metrics_changed(self) -> bool {
+        self.line_metrics
+    }
+
+    /// Returns whether wrapping or overflow policy changed.
+    #[must_use]
+    pub const fn break_policy_changed(self) -> bool {
+        self.break_policy
+    }
+
+    /// Returns whether width, intrinsic, empty-line, or region constraints changed.
+    #[must_use]
+    pub const fn constraints_changed(self) -> bool {
+        self.constraints
+    }
+
+    /// Returns whether projected paint-slot coverage changed.
+    #[must_use]
+    pub const fn paint_changed(self) -> bool {
+        self.paint
+    }
+
+    /// Returns whether the exact validated prepared output remains reusable.
+    #[must_use]
+    pub const fn output_retained(self) -> bool {
+        !self.analysis
+            && !self.font_selection
+            && !self.ligature_policy
+            && !self.inline_flow_projection
+            && !self.spacing
+            && !self.line_metrics
+            && !self.break_policy
+            && !self.constraints
+            && !self.paint
+    }
+}
+
 /// Borrowed projection of one semantic paragraph.
 #[derive(Clone, Copy, Debug)]
 pub struct ParagraphInput<'a> {
+    preparation: ParagraphPreparationId,
+    reuse_preparation: Option<ParagraphPreparationId>,
+    change: ParagraphFormationChange,
     paragraph: ParagraphId,
     paragraph_style: ParagraphStyle,
     text: &'a str,
@@ -62,6 +210,9 @@ pub struct ParagraphInput<'a> {
 
 impl<'a> ParagraphInput<'a> {
     pub(crate) const fn new(
+        preparation: ParagraphPreparationId,
+        reuse_preparation: Option<ParagraphPreparationId>,
+        change: ParagraphFormationChange,
         paragraph: ParagraphId,
         paragraph_style: ParagraphStyle,
         text: &'a str,
@@ -74,6 +225,9 @@ impl<'a> ParagraphInput<'a> {
         paint_runs: &'a [PaintRun],
     ) -> Self {
         Self {
+            preparation,
+            reuse_preparation,
+            change,
             paragraph,
             paragraph_style,
             text,
@@ -85,6 +239,27 @@ impl<'a> ParagraphInput<'a> {
             inline_flow_runs,
             paint_runs,
         }
+    }
+
+    /// Returns the exact retained-cache identity for this preparation lane.
+    #[must_use]
+    pub const fn preparation(&self) -> ParagraphPreparationId {
+        self.preparation
+    }
+
+    /// Returns another lane whose exact prepared output may be rebound here.
+    ///
+    /// `LayoutEngine` supplies this only after proving every backend-visible
+    /// formation and paint facet equal. Backends may ignore the opportunity.
+    #[must_use]
+    pub const fn reusable_preparation(&self) -> Option<ParagraphPreparationId> {
+        self.reuse_preparation
+    }
+
+    /// Returns facets proven changed since this preparation identity last ran.
+    #[must_use]
+    pub const fn change(&self) -> ParagraphFormationChange {
+        self.change
     }
 
     /// Returns the paragraph-local table of unique Unicode-analysis values.

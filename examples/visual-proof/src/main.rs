@@ -178,16 +178,13 @@ impl<'a> TextSceneAdapter<'a> {
     }
 
     fn paint_diagnostics_above<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        for fragment in self
+        for glyph in self
             .scene
             .fragments()
             .iter()
-            .filter(|fragment| is_zero_advance_glyph(fragment))
+            .flat_map(|fragment| fragment.glyphs())
+            .filter(|glyph| glyph.advance().x == 0.0)
         {
-            let glyph = fragment
-                .glyphs()
-                .first()
-                .expect("zero-advance fragment has one glyph");
             let origin = glyph.position();
             let advance_end = origin.x + glyph.advance().x;
             let rail_x1 = if origin.x == advance_end {
@@ -251,7 +248,8 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     let zero_advance_glyphs = hero
         .fragments()
         .iter()
-        .filter(|fragment| is_zero_advance_glyph(fragment))
+        .flat_map(|fragment| fragment.glyphs())
+        .filter(|glyph| glyph.advance().x == 0.0)
         .count();
     assert!(
         zero_advance_glyphs > 0,
@@ -511,9 +509,10 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     );
     assert!(
         initial.scene().fragments().iter().any(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == suffix && source.bytes() == (1..4))
+            fragment.glyphs().iter().any(|glyph| {
+                let source = glyph.source();
+                source.text() == suffix && source.bytes() == (1..4)
+            })
         }),
         "the retained ffi glyph must own its complete source range"
     );
@@ -684,8 +683,8 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         .iter()
         .find(|fragment| {
             fragment
-                .source()
-                .is_some_and(|source| source.text() == arabic_text)
+                .sources()
+                .any(|source| source.text() == arabic_text)
         })
         .expect("Fontique fallback specimen must produce a fragment");
     assert_eq!(
@@ -754,24 +753,16 @@ fn glyph_count(scene: &TextScene, text: TextId) -> usize {
     scene
         .fragments()
         .iter()
-        .filter(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
-        })
-        .map(|fragment| fragment.glyphs().len())
-        .sum()
+        .flat_map(|fragment| fragment.glyphs())
+        .filter(|glyph| glyph.sources().any(|source| source.text() == text))
+        .count()
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
     scene
         .fragments()
         .iter()
-        .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
-        })
+        .find(|fragment| fragment.sources().any(|source| source.text() == text))
         .map(|fragment| fragment.normalized_coords().to_vec())
         .unwrap_or_default()
 }
@@ -855,14 +846,6 @@ fn poster_paints() -> PaintTable {
         Brush::Solid(GOLD_COLOR),
         Brush::Solid(MUTED_COLOR),
     ])
-}
-
-fn is_zero_advance_glyph(fragment: &underwood::SceneFragmentView<'_>) -> bool {
-    fragment.glyphs().len() == 1
-        && fragment
-            .glyphs()
-            .first()
-            .is_some_and(|glyph| glyph.advance().x == 0.0)
 }
 
 fn paint_backdrop<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>) {

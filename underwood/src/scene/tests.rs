@@ -290,7 +290,7 @@ impl ParagraphFormation for RetainingInvalidAdapter {
         .form(input, constraints)
     }
 
-    fn release(&mut self, _paragraph: crate::ParagraphId) {
+    fn release(&mut self, _preparation: crate::adapter::ParagraphPreparationId) {
         self.retained = false;
     }
 
@@ -654,6 +654,10 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
     assert_eq!(adjusted_trace.reuse().formation_invalidations(), 0);
     assert_eq!(adjusted_trace.reuse().adjustment_invalidations(), 1);
     assert_eq!(adjusted_trace.reuse().paint_invalidations(), 0);
+    let paragraph = document.snapshot().paragraphs()[0].id;
+    let adjusted_geometry = layout
+        .cached_geometry_for_test(paragraph)
+        .expect("adjusted paragraph remains cached");
 
     let painted_styles =
         StyleMap::new(styles.default_style().clone().with_paint(PaintSlot::new(1)))
@@ -671,6 +675,18 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
     assert_eq!(painted_trace.reuse().formation_invalidations(), 0);
     assert_eq!(painted_trace.reuse().adjustment_invalidations(), 0);
     assert_eq!(painted_trace.reuse().paint_invalidations(), 1);
+    let painted_geometry = layout
+        .cached_geometry_for_test(paragraph)
+        .expect("painted paragraph remains cached");
+    assert!(
+        Arc::ptr_eq(&adjusted_geometry.facts, &painted_geometry.facts),
+        "paint-only preparation must share all non-paint scene facts"
+    );
+    assert_eq!(
+        painted.scene().fragment(0).expect("paint fragment").paint(),
+        PaintSlot::new(1),
+        "the paint sidecar must still expose the new slot"
+    );
 
     let mut untraced = LayoutEngine::new(
         EchoAdapter {
@@ -1690,11 +1706,16 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
     let second = layout
         .prepare(
             second_publication.snapshot(),
-            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark).with_preparation_trace(),
         )
         .expect("localized scene prepares");
     assert_eq!(second.work().shape().paragraphs(), 1);
     assert_eq!(second.work().reused_paragraphs(), 2);
+    assert_eq!(second.work().paint().paragraphs(), 1);
+    let localized_reuse = second.trace().expect("trace was requested").reuse();
+    assert_eq!(localized_reuse.adapter_calls(), 1);
+    assert_eq!(localized_reuse.preflight_reuses(), 2);
+    assert_eq!(localized_reuse.exact_geometry_reuses(), 2);
     for index in [0, 2] {
         assert!(
             Arc::ptr_eq(
@@ -1769,6 +1790,69 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
         }),
         "new geometry must mint only the new revision"
     );
+}
+
+#[test]
+fn no_op_publication_reuses_the_exact_scene_core_at_the_new_revision() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-noop-revis"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("paragraph appends");
+    edit.append_text(paragraph, InlineRole::TEXT, "stable")
+        .expect("text appends");
+    edit.commit().expect("fixture publishes");
+
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(4),
+    );
+    let first = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    let publication = document
+        .edit()
+        .commit()
+        .expect("an empty transaction still publishes its revision");
+    let second = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("the new revision reuses its unchanged paragraph root");
+
+    assert_ne!(first.scene().revision(), second.scene().revision());
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &second.scene().core),
+        "a metadata-only revision must retain the exact scene core"
+    );
+    assert_eq!(second.work().reused_paragraphs(), 1);
+    assert_eq!(second.work().analysis().paragraphs(), 0);
+    assert_eq!(second.work().shape().paragraphs(), 0);
+    assert_eq!(second.work().geometry().paragraphs(), 0);
+    assert_eq!(second.work().paint().paragraphs(), 0);
+    let reuse = second.trace().expect("trace was requested").reuse();
+    assert_eq!(reuse.preflight_reuses(), 1);
+    assert_eq!(reuse.exact_geometry_reuses(), 1);
+    assert_eq!(reuse.adapter_calls(), 0);
 }
 
 #[test]
@@ -1960,31 +2044,34 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
         paragraph,
         Arc::new(super::CachedGeometry {
             height: 0.0,
-            lines: Vec::new(),
+            facts: Arc::new(super::CachedGeometryFacts {
+                lines: Vec::new(),
+                clusters: Vec::new(),
+                carets: Vec::new(),
+                movements: vec![
+                    super::CachedCursorMovement {
+                        position: local_start,
+                        previous_visual: None,
+                        next_visual: None,
+                        previous_logical: None,
+                        next_logical: None,
+                    },
+                    super::CachedCursorMovement {
+                        position: local_end,
+                        previous_visual: Some(super::CachedCursorStep {
+                            target: local_start,
+                            source: Some(vec![local_source.clone()]),
+                        }),
+                        next_visual: None,
+                        previous_logical: None,
+                        next_logical: None,
+                    },
+                ],
+                texts: vec![local_source],
+                semantics: Vec::new(),
+            }),
+            line_fragments: Vec::new(),
             fragments: Vec::new(),
-            clusters: Vec::new(),
-            carets: Vec::new(),
-            movements: vec![
-                super::CachedCursorMovement {
-                    position: local_start,
-                    previous_visual: None,
-                    next_visual: None,
-                    previous_logical: None,
-                    next_logical: None,
-                },
-                super::CachedCursorMovement {
-                    position: local_end,
-                    previous_visual: Some(super::CachedCursorStep {
-                        target: local_start,
-                        source: Some(vec![local_source.clone()]),
-                    }),
-                    next_visual: None,
-                    previous_logical: None,
-                    next_logical: None,
-                },
-            ],
-            texts: vec![local_source],
-            semantics: Vec::new(),
         }),
         None,
     ));

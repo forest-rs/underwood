@@ -76,6 +76,13 @@ impl ParagraphSequence {
     pub(crate) fn iter(&self) -> ParagraphIter<'_> {
         ParagraphIter::new(self)
     }
+
+    pub(crate) fn changed_indices<'a>(
+        &'a self,
+        previous: &'a Self,
+    ) -> Option<ChangedParagraphs<'a>> {
+        (self.len == previous.len).then(|| ChangedParagraphs::new(previous, self))
+    }
 }
 
 impl Index<usize> for ParagraphSequence {
@@ -171,6 +178,127 @@ impl<'a> Iterator for ParagraphIter<'a> {
 }
 
 impl ExactSizeIterator for ParagraphIter<'_> {}
+
+#[derive(Clone, Copy)]
+struct DiffFrame<'a> {
+    previous: &'a ParagraphNode,
+    current: &'a ParagraphNode,
+    base: usize,
+    next: usize,
+    child_base: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct ChangedParagraphs<'a> {
+    stack: [Option<DiffFrame<'a>>; MAX_DEPTH],
+    depth: usize,
+    fallback: core::ops::Range<usize>,
+}
+
+impl<'a> ChangedParagraphs<'a> {
+    fn new(previous: &'a ParagraphSequence, current: &'a ParagraphSequence) -> Self {
+        let mut this = Self {
+            stack: [None; MAX_DEPTH],
+            depth: 0,
+            fallback: 0..0,
+        };
+        match (previous.root.as_deref(), current.root.as_deref()) {
+            (Some(previous), Some(current)) => this.push(previous, current, 0),
+            (None, None) => {}
+            (None, Some(_)) | (Some(_), None) => {
+                this.fallback = 0..current.len;
+            }
+        }
+        this
+    }
+
+    fn push(&mut self, previous: &'a ParagraphNode, current: &'a ParagraphNode, base: usize) {
+        debug_assert!(
+            self.depth < MAX_DEPTH,
+            "paragraph diff must fit the persistent sequence depth"
+        );
+        self.stack[self.depth] = Some(DiffFrame {
+            previous,
+            current,
+            base,
+            next: 0,
+            child_base: base,
+        });
+        self.depth += 1;
+    }
+
+    fn pop(&mut self) {
+        self.depth -= 1;
+        self.stack[self.depth] = None;
+    }
+}
+
+impl Iterator for ChangedParagraphs<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(index) = self.fallback.next() {
+            return Some(index);
+        }
+        while self.depth != 0 {
+            let frame = self.stack[self.depth - 1]
+                .as_mut()
+                .expect("every live paragraph diff depth has one frame");
+            if core::ptr::eq(frame.previous, frame.current) {
+                self.pop();
+                continue;
+            }
+            match (frame.previous, frame.current) {
+                (ParagraphNode::Leaf(previous), ParagraphNode::Leaf(current))
+                    if previous.len() == current.len() =>
+                {
+                    while frame.next < current.len() {
+                        let index = frame.next;
+                        frame.next += 1;
+                        if !Arc::ptr_eq(&previous[index], &current[index]) {
+                            return Some(frame.base + index);
+                        }
+                    }
+                    self.pop();
+                }
+                (
+                    ParagraphNode::Branch {
+                        children: previous, ..
+                    },
+                    ParagraphNode::Branch {
+                        children: current, ..
+                    },
+                ) if previous.len() == current.len() => {
+                    if frame.next == current.len() {
+                        self.pop();
+                        continue;
+                    }
+                    let child_index = frame.next;
+                    let child_base = frame.child_base;
+                    let previous_child = previous[child_index].as_ref();
+                    let current_child = current[child_index].as_ref();
+                    if node_len(previous_child) != node_len(current_child) {
+                        let end = frame.base.saturating_add(node_len(frame.current));
+                        self.pop();
+                        self.fallback = child_base..end;
+                        return self.fallback.next();
+                    }
+                    frame.next += 1;
+                    frame.child_base = frame.child_base.saturating_add(node_len(current_child));
+                    self.push(previous_child, current_child, child_base);
+                }
+                _ => {
+                    let start = frame.base;
+                    let end = start.saturating_add(node_len(frame.current));
+                    self.pop();
+                    self.fallback = start..end;
+                    return self.fallback.next();
+                }
+            }
+        }
+        None
+    }
+}
 
 fn get_node(node: &ParagraphNode, height: u8, index: usize) -> Option<&Paragraph> {
     match node {
@@ -315,6 +443,33 @@ mod tests {
         assert!(
             core::ptr::eq(&original[999], &edited[999]),
             "an untouched distant paragraph must remain pointer-shared"
+        );
+        assert_eq!(
+            edited
+                .changed_indices(&original)
+                .expect("lengths match")
+                .collect::<Vec<_>>(),
+            [511],
+            "the structural diff must skip every shared subtree"
+        );
+    }
+
+    #[test]
+    fn structural_diff_reports_multiple_paths_in_document_order() {
+        let mut original = ParagraphSequence::default();
+        for index in 0..2_048_u32 {
+            original.push(paragraph(index));
+        }
+        let mut edited = original.clone();
+        for index in [0, 31, 32, 1_023, 1_024, 2_047] {
+            edited.get_mut(index).expect("target exists").version = 2;
+        }
+        assert_eq!(
+            edited
+                .changed_indices(&original)
+                .expect("lengths match")
+                .collect::<Vec<_>>(),
+            [0, 31, 32, 1_023, 1_024, 2_047]
         );
     }
 }

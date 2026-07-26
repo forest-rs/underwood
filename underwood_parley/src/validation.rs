@@ -15,6 +15,16 @@ use underwood::adapter::{
 pub(crate) fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), PreparationError> {
     let text_len =
         u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
+    validate_analysis_runs(input, text_len)?;
+    validate_shaping_runs(input, text_len)?;
+    validate_inline_flow_runs(input, text_len)?;
+    validate_paint_runs(input, text_len)
+}
+
+pub(crate) fn validate_analysis_runs(
+    input: &ParagraphInput<'_>,
+    text_len: u32,
+) -> Result<(), PreparationError> {
     validate_run_coverage(
         input,
         input.analysis_runs().iter().map(AnalysisRun::bytes),
@@ -29,6 +39,13 @@ pub(crate) fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), Prep
     {
         return Err(PreparationError::invalid_output());
     }
+    Ok(())
+}
+
+pub(crate) fn validate_shaping_runs(
+    input: &ParagraphInput<'_>,
+    text_len: u32,
+) -> Result<(), PreparationError> {
     validate_run_coverage(
         input,
         input.shaping_runs().iter().map(ShapingRun::bytes),
@@ -43,6 +60,13 @@ pub(crate) fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), Prep
     {
         return Err(PreparationError::invalid_output());
     }
+    Ok(())
+}
+
+pub(crate) fn validate_inline_flow_runs(
+    input: &ParagraphInput<'_>,
+    text_len: u32,
+) -> Result<(), PreparationError> {
     validate_run_coverage(
         input,
         input.inline_flow_runs().iter().map(InlineFlowRun::bytes),
@@ -57,6 +81,13 @@ pub(crate) fn validate_input_runs(input: &ParagraphInput<'_>) -> Result<(), Prep
     {
         return Err(PreparationError::invalid_output());
     }
+    Ok(())
+}
+
+pub(crate) fn validate_paint_runs(
+    input: &ParagraphInput<'_>,
+    text_len: u32,
+) -> Result<(), PreparationError> {
     validate_run_coverage(
         input,
         input.paint_runs().iter().map(|run| run.bytes()),

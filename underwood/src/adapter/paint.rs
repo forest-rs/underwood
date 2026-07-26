@@ -11,17 +11,28 @@ use super::*;
 /// Complete source-ordered paint coverage for one glyph.
 #[derive(Clone, Debug)]
 pub struct GlyphPaintCoverage {
-    segments: Vec<GlyphPaintSegment>,
+    segments: GlyphPaintSegments,
+}
+
+#[derive(Clone, Debug)]
+enum GlyphPaintSegments {
+    Whole(GlyphPaintSegment),
+    Split(Box<[GlyphPaintSegment]>),
 }
 
 impl GlyphPaintCoverage {
     pub(crate) fn segment_capacity(&self) -> usize {
-        self.segments.capacity()
+        match &self.segments {
+            GlyphPaintSegments::Whole(_) => 0,
+            GlyphPaintSegments::Split(segments) => segments.len(),
+        }
     }
 
     /// Creates whole-glyph coverage with no renderer clip.
     pub fn whole(source: Range<u32>, slot: PaintSlot) -> Result<Self, PreparationError> {
-        Self::try_from_segments([GlyphPaintSegment::whole(source, slot)?])
+        Ok(Self {
+            segments: GlyphPaintSegments::Whole(GlyphPaintSegment::whole(source, slot)?),
+        })
     }
 
     /// Validates non-empty, contiguous, source-ordered segments.
@@ -47,13 +58,24 @@ impl GlyphPaintCoverage {
         {
             return Err(PreparationError::unsupported_paint_coverage());
         }
+        let segments = if clipped == 0 {
+            let [segment] = segments
+                .try_into()
+                .map_err(|_| PreparationError::unsupported_paint_coverage())?;
+            GlyphPaintSegments::Whole(segment)
+        } else {
+            GlyphPaintSegments::Split(segments.into_boxed_slice())
+        };
         Ok(Self { segments })
     }
 
     /// Returns source-ordered coverage segments.
     #[must_use]
     pub fn segments(&self) -> &[GlyphPaintSegment] {
-        &self.segments
+        match &self.segments {
+            GlyphPaintSegments::Whole(segment) => core::slice::from_ref(segment),
+            GlyphPaintSegments::Split(segments) => segments,
+        }
     }
 }
 

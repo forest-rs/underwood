@@ -64,6 +64,7 @@ setup-shared-hit y0 1 2
 shared-hit y1 1 2
 primed-identical p0
 primed-paint p1
+primed-paint-slot p5
 primed-unique p2
 primed-region p3
 primed-adjustment p4
@@ -71,6 +72,7 @@ cold-identical c0
 retained-identical r0
 retained-adjustment r1
 paint-change a0
+paint-slot-churn a3
 alignment-churn a1
 justification-churn a2
 localized-edit e0
@@ -118,6 +120,9 @@ awk '
         print "paint-change", \
             calls["paint-change"] - calls["primed-paint"], \
             bytes["paint-change"] - bytes["primed-paint"]
+        print "paint-slot-churn", \
+            calls["paint-slot-churn"] - calls["primed-paint-slot"], \
+            bytes["paint-slot-churn"] - bytes["primed-paint-slot"]
         print "alignment-churn", \
             calls["alignment-churn"] - calls["primed-adjustment"], \
             bytes["alignment-churn"] - bytes["primed-adjustment"]

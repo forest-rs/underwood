@@ -220,6 +220,18 @@ enum CacheKind {
     Composition,
 }
 
+impl CacheKind {
+    const fn preparation_id(self, paragraph: ParagraphId) -> ParagraphPreparationId {
+        ParagraphPreparationId::new(
+            paragraph,
+            match self {
+                Self::Committed => 0,
+                Self::Composition => 1,
+            },
+        )
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PublishedScene {
     snapshot: DocumentSnapshot,
@@ -318,6 +330,9 @@ impl LayoutEngine {
         if let Some(output) = self.reuse_published_scene(snapshot, request) {
             return Ok(output);
         }
+        if let Some(output) = self.prepare_localized_normal_flow(snapshot, request)? {
+            return Ok(output);
+        }
         let required_paint_slots = validate_styles(snapshot, request)?;
         let mut spine = self.reusable_scene_spine(snapshot, request);
         let mut initial_segments = spine
@@ -352,6 +367,8 @@ impl LayoutEngine {
                 prepare_paragraph_geometry(
                     self.paragraphs.as_mut(),
                     &mut self.cache,
+                    self.composition_cache.get(&paragraph.id),
+                    CacheKind::Committed,
                     paragraph,
                     &projection,
                     preflight_key,
@@ -587,6 +604,8 @@ impl LayoutEngine {
                         prepare_paragraph_geometry(
                             self.paragraphs.as_mut(),
                             &mut self.composition_cache,
+                            self.cache.get(&paragraph.id),
+                            CacheKind::Composition,
                             paragraph,
                             &projection,
                             preflight_key,
@@ -605,6 +624,8 @@ impl LayoutEngine {
                         prepare_paragraph_geometry(
                             self.paragraphs.as_mut(),
                             &mut self.cache,
+                            self.composition_cache.get(&paragraph.id),
+                            CacheKind::Committed,
                             paragraph,
                             &projection,
                             preflight_key,
@@ -759,13 +780,14 @@ impl LayoutEngine {
         let Some(entries) = self.documents.remove(&document) else {
             return;
         };
-        let mut paragraphs = BTreeSet::new();
+        let mut preparations = BTreeSet::new();
         for (kind, paragraph) in entries {
             let removed = match kind {
                 CacheKind::Committed => self.cache.remove(&paragraph),
                 CacheKind::Composition => self.composition_cache.remove(&paragraph),
             };
             if let Some(entry) = removed {
+                preparations.insert(entry.preparation);
                 self.recency.remove(&(entry.last_used, kind, paragraph));
                 self.cache_work.scene_cache_accounted_bytes = self
                     .cache_work
@@ -773,10 +795,9 @@ impl LayoutEngine {
                     .saturating_sub(entry.accounted_bytes);
                 self.cache_work.releases += 1;
             }
-            paragraphs.insert(paragraph);
         }
-        for paragraph in paragraphs {
-            self.paragraphs.release(paragraph);
+        for preparation in preparations {
+            self.paragraphs.release(preparation);
         }
     }
 
@@ -835,6 +856,16 @@ impl LayoutEngine {
             .collide_bucket_for_test(source, target);
     }
 
+    #[cfg(test)]
+    pub(super) fn cached_geometry_for_test(
+        &self,
+        paragraph: ParagraphId,
+    ) -> Option<Arc<CachedGeometry>> {
+        self.cache
+            .get(&paragraph)
+            .map(|entry| Arc::clone(&entry.segment.geometry))
+    }
+
     fn reuse_published_scene(
         &self,
         snapshot: &DocumentSnapshot,
@@ -886,6 +917,157 @@ impl LayoutEngine {
             trace,
             region_transcript: published.region_transcript.clone(),
         })
+    }
+
+    fn prepare_localized_normal_flow(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+    ) -> Result<Option<SceneOutput>, SceneError> {
+        let Some(published) = self.published.get(&snapshot.id()) else {
+            return Ok(None);
+        };
+        if !published.styles.shares_state_with(request.styles)
+            || published.constraint != ConstraintKey::from(request.constraint)
+            || published.region_flow.is_some()
+            || request.region_flow.is_some()
+            || published.core.paragraph_count != snapshot.paragraphs().len()
+            || request.paint.len() < published.required_paint_slots
+        {
+            return Ok(None);
+        }
+        let previous = published.snapshot.clone();
+        let previous_core = Arc::clone(&published.core);
+        let mut changed = snapshot.changed_paragraphs_from(&previous).ok_or_else(|| {
+            SceneError::for_document(SceneErrorKind::SourceCoverage, snapshot.id())
+        })?;
+        if changed.any(|index| {
+            let Some(previous) = previous.paragraphs().get(index) else {
+                return true;
+            };
+            let Some(current) = snapshot.paragraphs().get(index) else {
+                return true;
+            };
+            !paragraph_source_structure_matches(previous, current)
+                || !self.cache.contains_key(&current.id)
+        }) {
+            return Ok(None);
+        }
+
+        let mut spine = published.core.spine.clone();
+        let required_paint_slots = published.required_paint_slots;
+        let cache_before = request.trace.then(|| self.cache_diagnostics());
+        let scratch_capacity_before = request
+            .trace
+            .then(|| self.scratch.accounted_capacity_bytes());
+        let mut work = WorkReport::default();
+        let mut reuse = PreparationReuse::default();
+        let mut changed_count = 0_usize;
+        let mut paint_records = 0_usize;
+
+        for paragraph_index in snapshot
+            .changed_paragraphs_from(&previous)
+            .expect("the preflight proved matching paragraph sequences")
+        {
+            let paragraph = snapshot
+                .paragraphs()
+                .get(paragraph_index)
+                .expect("the structural diff yields an existing paragraph");
+            self.clock = self.clock.saturating_add(1);
+            let projection = Projection::new(paragraph, request)?;
+            let preflight_key = ParagraphPreflightKey::new(paragraph, request, None);
+            let access = prepare_paragraph_geometry(
+                self.paragraphs.as_mut(),
+                &mut self.cache,
+                self.composition_cache.get(&paragraph.id),
+                CacheKind::Committed,
+                paragraph,
+                &projection,
+                preflight_key,
+                request.constraint,
+                None,
+                None,
+                self.clock,
+                &mut self.shared_preparation,
+                &mut work,
+                &mut reuse,
+            )?;
+            self.record_access(CacheKind::Committed, &access);
+            let segment = Arc::clone(
+                &self
+                    .cache
+                    .get(&paragraph.id)
+                    .expect("localized preparation retains its paragraph segment")
+                    .segment,
+            );
+            paint_records = paint_records.saturating_add(segment.geometry.fragments.len());
+            spine = spine
+                .replace(paragraph_index, segment)
+                .expect("the retained spine has the same paragraph count");
+            self.enforce_budget();
+            changed_count = changed_count.saturating_add(1);
+        }
+
+        let paragraph_count = snapshot.paragraphs().len();
+        let unchanged = paragraph_count.saturating_sub(changed_count);
+        work.reused_paragraphs = work.reused_paragraphs.saturating_add(unchanged);
+        reuse.paragraphs = reuse.paragraphs.saturating_add(unchanged);
+        reuse.preflight_reuses = reuse.preflight_reuses.saturating_add(unchanged);
+        reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(unchanged);
+        let summary = spine.summary();
+        work.paint = StageWork {
+            paragraphs: changed_count,
+            records: paint_records,
+        };
+        let trace = request.trace.then(|| PreparationTrace {
+            work: work.clone(),
+            reuse,
+            memory: PreparationMemory {
+                cache_before: cache_before.expect("traced request records initial cache state"),
+                cache_after: self.cache_diagnostics(),
+                scene_output_capacity_bytes: spine.accounted_node_bytes(),
+                scratch_capacity_before: scratch_capacity_before
+                    .expect("traced request records initial scratch state"),
+                scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+            },
+            region_attempts: 0,
+            region_height_rejections: 0,
+        });
+        let core = if changed_count == 0 {
+            previous_core
+        } else {
+            Arc::new(SceneCore {
+                paragraph_count,
+                metrics: TextMetrics::from_summary(summary),
+                spine,
+            })
+        };
+        let output = SceneOutput {
+            scene: TextScene {
+                document: snapshot.id(),
+                revision: snapshot.revision(),
+                paint: request.paint.clone(),
+                core: Arc::clone(&core),
+            },
+            work,
+            trace,
+            region_transcript: None,
+        };
+        self.published.insert(
+            snapshot.id(),
+            PublishedScene {
+                snapshot: snapshot.clone(),
+                styles: request.styles.clone(),
+                constraint: ConstraintKey::from(request.constraint),
+                region_flow: None,
+                required_paint_slots,
+                core,
+                region_transcript: None,
+                region_attempts: 0,
+                region_height_rejections: 0,
+            },
+        );
+        Ok(Some(output))
     }
 
     fn reusable_scene_spine(
@@ -1021,6 +1203,7 @@ impl LayoutEngine {
                 CacheKind::Composition => self.composition_cache.remove(&paragraph),
             };
             if let Some(entry) = removed {
+                self.paragraphs.release(entry.preparation);
                 self.cache_work.scene_cache_accounted_bytes = self
                     .cache_work
                     .scene_cache_accounted_bytes
@@ -1034,13 +1217,18 @@ impl LayoutEngine {
                 }
             }
             self.cache_work.evictions += 1;
-            if !self.cache.contains_key(&paragraph)
-                && !self.composition_cache.contains_key(&paragraph)
-            {
-                self.paragraphs.release(paragraph);
-            }
         }
     }
+}
+
+fn paragraph_source_structure_matches(previous: &Paragraph, current: &Paragraph) -> bool {
+    previous.id == current.id
+        && previous.leaves.len() == current.leaves.len()
+        && previous
+            .leaves
+            .iter()
+            .zip(&current.leaves)
+            .all(|(previous, current)| previous.id == current.id)
 }
 
 #[derive(Clone, Debug)]
@@ -1088,6 +1276,8 @@ fn reuse_paragraph_geometry(
 fn prepare_paragraph_geometry(
     paragraphs: &mut dyn ParagraphFormation,
     cache: &mut BTreeMap<ParagraphId, ParagraphCache>,
+    alternate: Option<&ParagraphCache>,
+    cache_kind: CacheKind,
     paragraph: &Paragraph,
     projection: &Projection<'_>,
     preflight_key: ParagraphPreflightKey,
@@ -1100,6 +1290,36 @@ fn prepare_paragraph_geometry(
     reuse: &mut PreparationReuse,
 ) -> Result<CacheAccess, SceneError> {
     reuse.paragraphs = reuse.paragraphs.saturating_add(1);
+    let preparation = cache.get(&paragraph.id).map_or_else(
+        || cache_kind.preparation_id(paragraph.id),
+        |entry| entry.preparation,
+    );
+    let formation_change =
+        cache
+            .get(&paragraph.id)
+            .map_or_else(ParagraphFormationChange::all, |entry| {
+                entry.formation_key.adapter_change(
+                    projection,
+                    constraint,
+                    region_flow,
+                    region_cursor,
+                    entry.paint_runs != projection.paint_runs,
+                )
+            });
+    let reusable_preparation = alternate
+        .filter(|entry| {
+            entry
+                .formation_key
+                .adapter_change(
+                    projection,
+                    constraint,
+                    region_flow,
+                    region_cursor,
+                    entry.paint_runs != projection.paint_runs,
+                )
+                .output_retained()
+        })
+        .map(|entry| entry.preparation);
     let cached = cache.contains_key(&paragraph.id);
     let formation_matches = cache.get(&paragraph.id).is_some_and(|entry| {
         entry.formation_key.matches(
@@ -1116,6 +1336,16 @@ fn prepare_paragraph_geometry(
     let adjustment_matches = cache.get(&paragraph.id).is_some_and(|entry| {
         entry.formation_key.paragraph_style.alignment() == projection.paragraph_style.alignment()
     });
+    let retained_paint_geometry =
+        (formation_matches && adjustment_matches && !paint_matches).then(|| {
+            Arc::clone(
+                &cache
+                    .get(&paragraph.id)
+                    .expect("paint-only reuse requires retained geometry")
+                    .segment
+                    .geometry,
+            )
+        });
     if !cached {
         reuse.cold_paragraphs = reuse.cold_paragraphs.saturating_add(1);
     } else {
@@ -1174,6 +1404,10 @@ fn prepare_paragraph_geometry(
         .as_ref()
         .and_then(|query| shared_preparation.lookup(query, current_use));
     let (prepared, candidate_transcript, backend_called) = if let Some(hit) = shared_hit {
+        // The shared result may represent a state the identity-bound backend
+        // never observed. Drop any older lane-local facts so a later call
+        // cannot apply a relative change record to the wrong base.
+        paragraphs.release(preparation);
         work.shared_preparations = work.shared_preparations.saturating_add(1);
         reuse.shared_preparation_reuses = reuse.shared_preparation_reuses.saturating_add(1);
         let transcript = hit.region_transcript(paragraph.id, region_flow)?;
@@ -1193,7 +1427,6 @@ fn prepare_paragraph_geometry(
             ),
             (None, None) => ParagraphConstraints::new(constraint, projection.empty_line_height()),
             _ => {
-                release_untracked_backend(paragraphs, cache, paragraph.id);
                 return Err(SceneError::for_paragraph(
                     SceneErrorKind::Flow,
                     paragraph.id,
@@ -1202,6 +1435,9 @@ fn prepare_paragraph_geometry(
         };
         let output = match paragraphs.form(
             ParagraphInput::new(
+                preparation,
+                reusable_preparation,
+                formation_change,
                 paragraph.id,
                 projection.paragraph_style,
                 projection.mapping.text(),
@@ -1217,7 +1453,7 @@ fn prepare_paragraph_geometry(
         ) {
             Ok(output) => output,
             Err(error) => {
-                release_untracked_backend(paragraphs, cache, paragraph.id);
+                paragraphs.release(preparation);
                 return Err(SceneError::from_preparation(paragraph.id, error.kind()));
             }
         };
@@ -1230,7 +1466,7 @@ fn prepare_paragraph_geometry(
     };
     if prepared.paragraph() != paragraph.id || prepared.text_len() != text_len {
         if backend_called {
-            release_untracked_backend(paragraphs, cache, paragraph.id);
+            paragraphs.release(preparation);
         }
         return Err(SceneError::for_paragraph(
             SceneErrorKind::SourceCoverage,
@@ -1239,7 +1475,7 @@ fn prepare_paragraph_geometry(
     }
     if let Err(error) = validate_prepared(&prepared, projection) {
         if backend_called {
-            release_untracked_backend(paragraphs, cache, paragraph.id);
+            paragraphs.release(preparation);
         }
         return Err(error);
     }
@@ -1254,7 +1490,7 @@ fn prepare_paragraph_geometry(
         (None, None, None) => None,
         _ => {
             if backend_called {
-                release_untracked_backend(paragraphs, cache, paragraph.id);
+                paragraphs.release(preparation);
             }
             return Err(SceneError::for_paragraph(
                 SceneErrorKind::Flow,
@@ -1268,7 +1504,7 @@ fn prepare_paragraph_geometry(
         .all(|line| line.slot().is_some() == region_flow.is_some());
     if !slots_match {
         if backend_called {
-            release_untracked_backend(paragraphs, cache, paragraph.id);
+            paragraphs.release(preparation);
         }
         return Err(SceneError::for_paragraph(
             SceneErrorKind::Flow,
@@ -1278,16 +1514,21 @@ fn prepare_paragraph_geometry(
     if backend_called && projection.mapping.text().is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
-    let geometry = match build_geometry(
-        &prepared,
-        projection,
-        constraint,
-        region_transcript.as_ref(),
+    let geometry = match retained_paint_geometry.as_ref().map_or_else(
+        || {
+            build_geometry(
+                &prepared,
+                projection,
+                constraint,
+                region_transcript.as_ref(),
+            )
+        },
+        |retained| repaint_geometry(&prepared, projection, retained),
     ) {
         Ok(geometry) => geometry,
         Err(error) => {
             if backend_called {
-                release_untracked_backend(paragraphs, cache, paragraph.id);
+                paragraphs.release(preparation);
             }
             return Err(error);
         }
@@ -1344,6 +1585,7 @@ fn prepare_paragraph_geometry(
         } else {
             let mut entry = ParagraphCache {
                 last_used: current_use,
+                preparation,
                 preflight_key,
                 formation_key,
                 paint_runs: projection.paint_runs.clone(),
@@ -1367,16 +1609,6 @@ fn prepare_paragraph_geometry(
         current_accounted_bytes,
         region_transcript,
     })
-}
-
-fn release_untracked_backend(
-    paragraphs: &mut dyn ParagraphFormation,
-    cache: &BTreeMap<ParagraphId, ParagraphCache>,
-    paragraph: ParagraphId,
-) {
-    if !cache.contains_key(&paragraph) {
-        paragraphs.release(paragraph);
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -1518,6 +1750,123 @@ impl FormationKey {
             && self.region_cursor == region_cursor
             && self.empty_line_height == projection.empty_line_height_key()
     }
+
+    fn adapter_change(
+        &self,
+        projection: &Projection<'_>,
+        constraint: TextConstraint,
+        region_flow: Option<&RegionFlow>,
+        region_cursor: Option<RegionCursor>,
+        paint: bool,
+    ) -> ParagraphFormationChange {
+        let analysis = self.text != projection.mapping.text()
+            || self.analysis_styles != projection.analysis_styles
+            || self.analysis_runs != projection.analysis_runs
+            || self.paragraph_style.base_direction() != projection.paragraph_style.base_direction();
+        let font_selection =
+            !shaping_styles_match(&self.shaping_styles, &projection.shaping_styles)
+                || self.shaping_runs != projection.shaping_runs;
+        let ligature_policy = !inline_flow_values_match(
+            &self.inline_flow_styles,
+            &self.inline_flow_runs,
+            &projection.inline_flow_styles,
+            &projection.inline_flow_runs,
+            |left, right| (left.spacing().letter() == 0.0) == (right.spacing().letter() == 0.0),
+        );
+        let inline_flow_projection = self.inline_flow_styles != projection.inline_flow_styles
+            || self.inline_flow_runs != projection.inline_flow_runs;
+        let spacing = !inline_flow_values_match(
+            &self.inline_flow_styles,
+            &self.inline_flow_runs,
+            &projection.inline_flow_styles,
+            &projection.inline_flow_runs,
+            |left, right| left.spacing() == right.spacing(),
+        );
+        let line_metrics = !inline_flow_values_match(
+            &self.inline_flow_styles,
+            &self.inline_flow_runs,
+            &projection.inline_flow_styles,
+            &projection.inline_flow_runs,
+            |left, right| left.line_height() == right.line_height(),
+        );
+        let break_policy = !inline_flow_values_match(
+            &self.inline_flow_styles,
+            &self.inline_flow_runs,
+            &projection.inline_flow_styles,
+            &projection.inline_flow_runs,
+            |left, right| {
+                left.overflow_wrap() == right.overflow_wrap()
+                    && left.text_wrap_mode() == right.text_wrap_mode()
+            },
+        );
+        let constraints = self.constraint != ConstraintKey::from(constraint)
+            || !option_ref_eq(self.region_flow.as_ref(), region_flow)
+            || self.region_cursor != region_cursor
+            || (projection.mapping.text().is_empty()
+                && self.empty_line_height != projection.empty_line_height_key());
+        ParagraphFormationChange::new(
+            analysis,
+            font_selection,
+            ligature_policy,
+            inline_flow_projection,
+            spacing,
+            line_metrics,
+            break_policy,
+            constraints,
+            paint,
+        )
+    }
+}
+
+fn shaping_styles_match(left: &[ShapingStyle], right: &[&ShapingStyle]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(cached, projected)| cached == *projected)
+}
+
+fn inline_flow_values_match(
+    left_styles: &[InlineFlowStyle],
+    left_runs: &[InlineFlowRun],
+    right_styles: &[InlineFlowStyle],
+    right_runs: &[InlineFlowRun],
+    values_match: impl Fn(InlineFlowStyle, InlineFlowStyle) -> bool,
+) -> bool {
+    if left_runs.is_empty() || right_runs.is_empty() {
+        return left_runs.is_empty() && right_runs.is_empty();
+    }
+    let mut left = 0_usize;
+    let mut right = 0_usize;
+    let mut source = 0_u32;
+    while let (Some(left_run), Some(right_run)) = (left_runs.get(left), right_runs.get(right)) {
+        let left_range = left_run.bytes();
+        let right_range = right_run.bytes();
+        if left_range.start > source
+            || source >= left_range.end
+            || right_range.start > source
+            || source >= right_range.end
+        {
+            return false;
+        }
+        let Some(left_style) = left_styles.get(left_run.style().index()).copied() else {
+            return false;
+        };
+        let Some(right_style) = right_styles.get(right_run.style().index()).copied() else {
+            return false;
+        };
+        if !values_match(left_style, right_style) {
+            return false;
+        }
+        source = left_range.end.min(right_range.end);
+        if source == left_range.end {
+            left += 1;
+        }
+        if source == right_range.end {
+            right += 1;
+        }
+    }
+    left == left_runs.len() && right == right_runs.len()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1540,6 +1889,7 @@ impl From<TextConstraint> for ConstraintKey {
 #[derive(Clone, Debug)]
 struct ParagraphCache {
     last_used: u64,
+    preparation: ParagraphPreparationId,
     preflight_key: ParagraphPreflightKey,
     formation_key: FormationKey,
     paint_runs: Vec<PaintRun>,

@@ -8,13 +8,19 @@
 
 use super::*;
 use crate::adapter::{ClusterBoundary, ClusterWhitespace};
-use core::mem::size_of;
+use core::{mem::size_of, ops::Deref};
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGeometry {
     pub(super) height: f64,
-    pub(super) lines: Vec<CachedLine>,
+    pub(super) facts: Arc<CachedGeometryFacts>,
+    pub(super) line_fragments: Vec<Range<usize>>,
     pub(super) fragments: Vec<CachedFragment>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct CachedGeometryFacts {
+    pub(super) lines: Vec<CachedLine>,
     pub(super) clusters: Vec<CachedCluster>,
     pub(super) carets: Vec<CachedCaret>,
     pub(super) movements: Vec<CachedCursorMovement>,
@@ -22,12 +28,19 @@ pub(super) struct CachedGeometry {
     pub(super) semantics: Vec<CachedSemantic>,
 }
 
+impl Deref for CachedGeometry {
+    type Target = CachedGeometryFacts;
+
+    fn deref(&self) -> &Self::Target {
+        &self.facts
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct CachedLine {
     pub(super) bounds: Rect,
     pub(super) advance: f64,
     pub(super) sources: Vec<LocalRange>,
-    pub(super) fragments: Range<usize>,
     pub(super) break_reason: LineBreakReason,
     pub(super) baseline: f64,
     pub(super) content_ascent: f64,
@@ -142,13 +155,14 @@ pub(super) enum LocalPosition {
 impl CachedGeometry {
     pub(super) fn accounted_owned_bytes(&self) -> usize {
         let mut bytes = vec_bytes::<CachedLine>(self.lines.capacity())
+            .saturating_add(vec_bytes::<Range<usize>>(self.line_fragments.capacity()))
             .saturating_add(vec_bytes::<CachedFragment>(self.fragments.capacity()))
             .saturating_add(vec_bytes::<CachedCluster>(self.clusters.capacity()))
             .saturating_add(vec_bytes::<CachedCaret>(self.carets.capacity()))
             .saturating_add(vec_bytes::<CachedCursorMovement>(self.movements.capacity()))
             .saturating_add(vec_bytes::<LocalRange>(self.texts.capacity()))
             .saturating_add(vec_bytes::<CachedSemantic>(self.semantics.capacity()));
-        for line in &self.lines {
+        for line in self.lines.iter() {
             bytes = bytes.saturating_add(vec_bytes::<LocalRange>(line.sources.capacity()));
         }
         for fragment in &self.fragments {
@@ -160,19 +174,19 @@ impl CachedGeometry {
                 bytes = bytes.saturating_add(vec_bytes::<LocalRange>(glyph.sources.capacity()));
             }
         }
-        for cluster in &self.clusters {
+        for cluster in self.clusters.iter() {
             bytes = bytes
                 .saturating_add(vec_bytes::<LocalRange>(cluster.sources.capacity()))
                 .saturating_add(vec_bytes::<CachedHitSlice>(cluster.hit_slices.capacity()));
         }
-        for movement in &self.movements {
+        for movement in self.movements.iter() {
             bytes = bytes
                 .saturating_add(cursor_step_bytes(movement.previous_visual.as_ref()))
                 .saturating_add(cursor_step_bytes(movement.next_visual.as_ref()))
                 .saturating_add(cursor_step_bytes(movement.previous_logical.as_ref()))
                 .saturating_add(cursor_step_bytes(movement.next_logical.as_ref()));
         }
-        for semantic in &self.semantics {
+        for semantic in self.semantics.iter() {
             bytes = bytes.saturating_add(
                 semantic
                     .source
@@ -198,7 +212,8 @@ pub(super) fn rebind_composition_geometry(
     id: CompositionId,
     epoch: crate::CompositionEpoch,
 ) {
-    for line in &mut geometry.lines {
+    let facts = Arc::make_mut(&mut geometry.facts);
+    for line in &mut facts.lines {
         rebind_ranges(&mut line.sources, id, epoch);
     }
     for fragment in &mut geometry.fragments {
@@ -207,15 +222,15 @@ pub(super) fn rebind_composition_geometry(
             rebind_ranges(&mut glyph.sources, id, epoch);
         }
     }
-    for cluster in &mut geometry.clusters {
+    for cluster in &mut facts.clusters {
         rebind_ranges(&mut cluster.sources, id, epoch);
         rebind_position(&mut cluster.left, id, epoch);
         rebind_position(&mut cluster.right, id, epoch);
     }
-    for caret in &mut geometry.carets {
+    for caret in &mut facts.carets {
         rebind_position(&mut caret.position, id, epoch);
     }
-    for movement in &mut geometry.movements {
+    for movement in &mut facts.movements {
         rebind_position(&mut movement.position, id, epoch);
         for step in [
             &mut movement.previous_visual,
@@ -232,8 +247,8 @@ pub(super) fn rebind_composition_geometry(
             }
         }
     }
-    rebind_ranges(&mut geometry.texts, id, epoch);
-    for semantic in &mut geometry.semantics {
+    rebind_ranges(&mut facts.texts, id, epoch);
+    for semantic in &mut facts.semantics {
         if let Some(source) = &mut semantic.source {
             rebind_ranges(source, id, epoch);
         }
@@ -312,15 +327,12 @@ pub(super) fn build_geometry(
     );
     let mut line_top = 0.0;
     let mut lines = Vec::new();
-    let mut fragments = Vec::new();
     let mut clusters = Vec::new();
     let mut carets = Vec::new();
-    let mut glyph_index = 0;
     let mut caret_maps = Vec::new();
 
     for line in prepared.lines() {
         let line_index = lines.len();
-        let fragment_start = fragments.len();
         let slot_start = line.slot().map_or(0.0, crate::LineSlot::inline_start);
         let slot_size = line
             .slot()
@@ -439,82 +451,6 @@ pub(super) fn build_geometry(
                 bidi_level: 0,
             });
         }
-        let mut opportunity_glyphs = alloc::vec![None; opportunity_sources.len()];
-        let mut line_glyph_index = 0_usize;
-        for run in line.runs() {
-            for glyph in run.glyphs() {
-                for (index, source) in opportunity_sources.iter().enumerate() {
-                    if glyph.source() == *source {
-                        if opportunity_glyphs[index].is_some() {
-                            return Err(SceneError::for_paragraph(
-                                SceneErrorKind::SourceCoverage,
-                                prepared.paragraph(),
-                            ));
-                        }
-                        opportunity_glyphs[index] = Some(line_glyph_index);
-                    }
-                }
-                line_glyph_index += 1;
-            }
-        }
-        if expansion > 0.0 && opportunity_glyphs.iter().any(Option::is_none) {
-            return Err(SceneError::for_paragraph(
-                SceneErrorKind::SourceCoverage,
-                prepared.paragraph(),
-            ));
-        }
-        let mut x = inline_start;
-        line_glyph_index = 0;
-        for run in line.runs() {
-            let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
-            for glyph in run.glyphs() {
-                let glyph_expansion = if opportunity_glyphs.contains(&Some(line_glyph_index)) {
-                    expansion
-                } else {
-                    0.0
-                };
-                let glyph_advance =
-                    Vec2::new(glyph.advance().x + glyph_expansion, glyph.advance().y);
-                let instance = glyph_index;
-                glyph_index += 1;
-                let position = Point::new(x + glyph.offset().x, baseline - glyph.offset().y);
-                for segment in glyph.paint().segments() {
-                    let sources = projection.local_ranges(segment.source())?;
-                    let paint_clip = segment.clip().map(|clip| {
-                        Rect::new(
-                            position.x + clip.x0,
-                            position.y + clip.y0,
-                            position.x + clip.x1,
-                            position.y + clip.y1,
-                        )
-                    });
-                    let id =
-                        SceneFragmentId(fragment_identity(prepared.paragraph(), fragments.len()));
-                    fragments.push(CachedFragment {
-                        id,
-                        glyphs: alloc::vec![CachedGlyph {
-                            instance,
-                            id: glyph.id(),
-                            position,
-                            advance: glyph_advance,
-                            sources: sources.clone(),
-                        }],
-                        paint: segment.slot(),
-                        transform: Affine::IDENTITY,
-                        sources,
-                        paint_clip,
-                        font: run.font().clone(),
-                        font_size: run.font_size(),
-                        synthesis: run.synthesis().clone(),
-                        normalized_coords: Arc::clone(&normalized_coords),
-                        bidi_level: run.bidi_level(),
-                        script: run.script(),
-                    });
-                }
-                x += glyph_advance.x;
-                line_glyph_index += 1;
-            }
-        }
         let adjusted_advance = line.advance()
             + expansion
                 * f64::from(u32::try_from(opportunity_sources.len()).map_err(|_| {
@@ -529,7 +465,6 @@ pub(super) fn build_geometry(
             ),
             advance: adjusted_advance,
             sources: projection.local_ranges(line.source())?,
-            fragments: fragment_start..fragments.len(),
             break_reason: line.break_reason(),
             baseline,
             content_ascent: line.content_ascent(),
@@ -538,6 +473,7 @@ pub(super) fn build_geometry(
         });
         line_top = line_top.max(current_line_top + line.height());
     }
+    let (fragments, line_fragments) = build_paint_fragments(prepared, projection, &lines)?;
 
     if prepared.lines().is_empty()
         && projection.mapping.text().is_empty()
@@ -674,14 +610,154 @@ pub(super) fn build_geometry(
         } else {
             line_top
         },
-        lines,
+        facts: Arc::new(CachedGeometryFacts {
+            lines,
+            clusters,
+            carets,
+            movements,
+            texts,
+            semantics,
+        }),
+        line_fragments,
         fragments,
-        clusters,
-        carets,
-        movements,
-        texts,
-        semantics,
     })
+}
+
+pub(super) fn repaint_geometry(
+    prepared: &PreparedParagraph,
+    projection: &Projection<'_>,
+    retained: &CachedGeometry,
+) -> Result<CachedGeometry, SceneError> {
+    let (fragments, line_fragments) = build_paint_fragments(prepared, projection, &retained.lines)?;
+    Ok(CachedGeometry {
+        height: retained.height,
+        facts: Arc::clone(&retained.facts),
+        line_fragments,
+        fragments,
+    })
+}
+
+fn build_paint_fragments(
+    prepared: &PreparedParagraph,
+    projection: &Projection<'_>,
+    lines: &[CachedLine],
+) -> Result<(Vec<CachedFragment>, Vec<Range<usize>>), SceneError> {
+    if prepared.lines().len() != lines.len() {
+        return Err(SceneError::for_paragraph(
+            SceneErrorKind::SourceCoverage,
+            prepared.paragraph(),
+        ));
+    }
+    let mut fragments: Vec<CachedFragment> = Vec::new();
+    let mut line_fragments = Vec::with_capacity(lines.len());
+    let mut glyph_index = 0_usize;
+    for (line, cached_line) in prepared.lines().iter().zip(lines) {
+        let fragment_start = fragments.len();
+        let expansion = cached_line.adjustment.opportunity_expansion();
+        let opportunity_sources: Vec<_> = if expansion > 0.0 {
+            line.western_justification_opportunity_sources().collect()
+        } else {
+            Vec::new()
+        };
+        let mut opportunity_glyphs = alloc::vec![None; opportunity_sources.len()];
+        let mut line_glyph_index = 0_usize;
+        for run in line.runs() {
+            for glyph in run.glyphs() {
+                for (index, source) in opportunity_sources.iter().enumerate() {
+                    if glyph.source() == *source {
+                        if opportunity_glyphs[index].is_some() {
+                            return Err(SceneError::for_paragraph(
+                                SceneErrorKind::SourceCoverage,
+                                prepared.paragraph(),
+                            ));
+                        }
+                        opportunity_glyphs[index] = Some(line_glyph_index);
+                    }
+                }
+                line_glyph_index += 1;
+            }
+        }
+        if expansion > 0.0 && opportunity_glyphs.iter().any(Option::is_none) {
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::SourceCoverage,
+                prepared.paragraph(),
+            ));
+        }
+
+        let mut x = cached_line.bounds.x0;
+        line_glyph_index = 0;
+        for run in line.runs() {
+            let normalized_coords: Arc<[i16]> = Arc::from(run.normalized_coords());
+            let run_fragment_start = fragments.len();
+            for glyph in run.glyphs() {
+                let glyph_expansion = if opportunity_glyphs.contains(&Some(line_glyph_index)) {
+                    expansion
+                } else {
+                    0.0
+                };
+                let glyph_advance =
+                    Vec2::new(glyph.advance().x + glyph_expansion, glyph.advance().y);
+                let instance = glyph_index;
+                glyph_index += 1;
+                let position = Point::new(
+                    x + glyph.offset().x,
+                    cached_line.baseline - glyph.offset().y,
+                );
+                for segment in glyph.paint().segments() {
+                    let sources = projection.local_ranges(segment.source())?;
+                    let paint_clip = segment.clip().map(|clip| {
+                        Rect::new(
+                            position.x + clip.x0,
+                            position.y + clip.y0,
+                            position.x + clip.x1,
+                            position.y + clip.y1,
+                        )
+                    });
+                    let cached_glyph = CachedGlyph {
+                        instance,
+                        id: glyph.id(),
+                        position,
+                        advance: glyph_advance,
+                        sources: sources.clone(),
+                    };
+                    let preceding = fragments
+                        .get_mut(run_fragment_start..)
+                        .and_then(|run_fragments| run_fragments.last_mut());
+                    if paint_clip.is_none()
+                        && let Some(preceding) = preceding
+                        && preceding.paint_clip.is_none()
+                        && preceding.paint == segment.slot()
+                    {
+                        preceding.glyphs.push(cached_glyph);
+                        preceding.sources.extend(sources);
+                    } else {
+                        let id = SceneFragmentId(fragment_identity(
+                            prepared.paragraph(),
+                            fragments.len(),
+                        ));
+                        fragments.push(CachedFragment {
+                            id,
+                            glyphs: alloc::vec![cached_glyph],
+                            paint: segment.slot(),
+                            transform: Affine::IDENTITY,
+                            sources,
+                            paint_clip,
+                            font: run.font().clone(),
+                            font_size: run.font_size(),
+                            synthesis: run.synthesis().clone(),
+                            normalized_coords: Arc::clone(&normalized_coords),
+                            bidi_level: run.bidi_level(),
+                            script: run.script(),
+                        });
+                    }
+                }
+                x += glyph_advance.x;
+                line_glyph_index += 1;
+            }
+        }
+        line_fragments.push(fragment_start..fragments.len());
+    }
+    Ok((fragments, line_fragments))
 }
 
 pub(super) fn cached_cursor_step(

@@ -44,12 +44,17 @@ pub(crate) struct FormedLine {
     pub(crate) scripts: Vec<[u8; 4]>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct LineShapeOutput {
-    pub(crate) shaped_text: ShapedText,
-    pub(crate) scripts: Vec<[u8; 4]>,
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LineShapeWork {
     pub(crate) resolved_clusters: u32,
     pub(crate) shaped_glyphs: u32,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LineFormationScratch {
+    shaped_text: ShapedText,
+    scripts: Vec<[u8; 4]>,
+    clusters: Vec<LogicalCluster>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -79,7 +84,12 @@ pub(crate) fn form_lines(
     inline_flow_runs: &[InlineFlowRun],
     constraints: &ParagraphConstraints,
     lines: &mut Vec<FormedLine>,
-    mut shape_line: impl FnMut(Range<usize>) -> Result<LineShapeOutput, PreparationError>,
+    scratch: &mut LineFormationScratch,
+    mut shape_line: impl FnMut(
+        Range<usize>,
+        &mut ShapedText,
+        &mut Vec<[u8; 4]>,
+    ) -> Result<LineShapeWork, PreparationError>,
 ) -> Result<(LineFormationWork, Option<RegionTranscript>), PreparationError> {
     lines.clear();
     if text.is_empty() {
@@ -147,6 +157,7 @@ pub(crate) fn form_lines(
             inline_flow_runs,
             constraints,
             lines,
+            scratch,
             shape_line,
         );
     }
@@ -205,38 +216,41 @@ pub(crate) fn form_lines(
         loop {
             validate_candidate(candidate)?;
             let source = candidate.source();
-            let output = shape_line(source.clone())?;
-            let LineShapeOutput {
-                shaped_text,
-                scripts,
+            scratch.shaped_text.clear();
+            scratch.scripts.clear();
+            let LineShapeWork {
                 resolved_clusters,
                 shaped_glyphs,
-            } = output;
+            } = shape_line(
+                source.clone(),
+                &mut scratch.shaped_text,
+                &mut scratch.scripts,
+            )?;
             work.reshapes = work.reshapes.saturating_add(1);
             work.resolved_clusters = work.resolved_clusters.saturating_add(resolved_clusters);
-            work.shaped_runs = work
-                .shaped_runs
-                .saturating_add(u32::try_from(shaped_text.runs().len()).unwrap_or(u32::MAX));
+            work.shaped_runs = work.shaped_runs.saturating_add(
+                u32::try_from(scratch.shaped_text.runs().len()).unwrap_or(u32::MAX),
+            );
             work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
-            let formed_clusters = collect_logical_clusters(text, &shaped_text)?;
-            if formed_clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
-                || formed_clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
+            collect_logical_clusters_into(text, &scratch.shaped_text, &mut scratch.clusters)?;
+            if scratch.clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
+                || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
             {
                 return Err(PreparationError::invalid_output());
             }
-            let advance = formed_clusters.iter().map(|cluster| cluster.advance).sum();
+            let advance = scratch.clusters.iter().map(|cluster| cluster.advance).sum();
             let plan = make_line_plan(
-                &shaped_text,
-                &formed_clusters,
+                &scratch.shaped_text,
+                &scratch.clusters,
                 inline_flow_styles,
                 inline_flow_runs,
-                0..formed_clusters.len(),
+                0..scratch.clusters.len(),
                 line_break_reason(candidate.reason()),
                 advance,
                 None,
                 None,
             )?;
-            if scripts.len() != shaped_text.runs().len() {
+            if scratch.scripts.len() != scratch.shaped_text.runs().len() {
                 return Err(PreparationError::invalid_output());
             }
             match former
@@ -253,8 +267,8 @@ pub(crate) fn form_lines(
                 CommitOutcome::Accepted(_) => {
                     lines.push(FormedLine {
                         plan,
-                        shaped_text,
-                        scripts,
+                        shaped_text: core::mem::take(&mut scratch.shaped_text),
+                        scripts: core::mem::take(&mut scratch.scripts),
                     });
                     break;
                 }
@@ -312,7 +326,12 @@ fn form_region_lines(
     inline_flow_runs: &[InlineFlowRun],
     constraints: &ParagraphConstraints,
     lines: &mut Vec<FormedLine>,
-    mut shape_line: impl FnMut(Range<usize>) -> Result<LineShapeOutput, PreparationError>,
+    scratch: &mut LineFormationScratch,
+    mut shape_line: impl FnMut(
+        Range<usize>,
+        &mut ShapedText,
+        &mut Vec<[u8; 4]>,
+    ) -> Result<LineShapeWork, PreparationError>,
 ) -> Result<(LineFormationWork, Option<RegionTranscript>), PreparationError> {
     let flow = constraints
         .region_flow()
@@ -352,10 +371,16 @@ fn form_region_lines(
             let (shaped_text, scripts, resolved_clusters, shaped_glyphs) = if uses_canonical {
                 (canonical_text.clone(), canonical_scripts.to_vec(), 0, 0)
             } else {
-                let output = shape_line(source.clone())?;
+                scratch.shaped_text.clear();
+                scratch.scripts.clear();
+                let output = shape_line(
+                    source.clone(),
+                    &mut scratch.shaped_text,
+                    &mut scratch.scripts,
+                )?;
                 (
-                    output.shaped_text,
-                    output.scripts,
+                    core::mem::take(&mut scratch.shaped_text),
+                    core::mem::take(&mut scratch.scripts),
                     output.resolved_clusters,
                     output.shaped_glyphs,
                 )
@@ -368,19 +393,19 @@ fn form_region_lines(
                     .saturating_add(u32::try_from(shaped_text.runs().len()).unwrap_or(u32::MAX));
                 work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
             }
-            let formed_clusters = collect_logical_clusters(text, &shaped_text)?;
-            if formed_clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
-                || formed_clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
+            collect_logical_clusters_into(text, &shaped_text, &mut scratch.clusters)?;
+            if scratch.clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
+                || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
             {
                 return Err(PreparationError::invalid_output());
             }
-            let advance = formed_clusters.iter().map(|cluster| cluster.advance).sum();
+            let advance = scratch.clusters.iter().map(|cluster| cluster.advance).sum();
             let plan = make_line_plan(
                 &shaped_text,
-                &formed_clusters,
+                &scratch.clusters,
                 inline_flow_styles,
                 inline_flow_runs,
-                0..formed_clusters.len(),
+                0..scratch.clusters.len(),
                 line_break_reason(candidate.reason()),
                 advance,
                 None,
@@ -424,8 +449,18 @@ fn form_region_lines(
                     });
                     continue 'slots;
                 }
-                CommitOutcome::Retry(retry) => candidate = retry,
+                CommitOutcome::Retry(retry) => {
+                    if !uses_canonical {
+                        scratch.shaped_text = shaped_text;
+                        scratch.scripts = scripts;
+                    }
+                    candidate = retry;
+                }
                 CommitOutcome::SlotRejected => {
+                    if !uses_canonical {
+                        scratch.shaped_text = shaped_text;
+                        scratch.scripts = scripts;
+                    }
                     attempts.push(
                         RegionAttempt::try_new(
                             paragraph,
@@ -620,7 +655,18 @@ pub(crate) fn collect_logical_clusters(
     text: &str,
     shaped_text: &ShapedText,
 ) -> Result<Vec<LogicalCluster>, PreparationError> {
-    let mut clusters = Vec::with_capacity(shaped_text.clusters().len());
+    let mut clusters = Vec::new();
+    collect_logical_clusters_into(text, shaped_text, &mut clusters)?;
+    Ok(clusters)
+}
+
+fn collect_logical_clusters_into(
+    text: &str,
+    shaped_text: &ShapedText,
+    clusters: &mut Vec<LogicalCluster>,
+) -> Result<(), PreparationError> {
+    clusters.clear();
+    clusters.reserve(shaped_text.clusters().len());
     for (run_index, run) in shaped_text.runs().iter().enumerate() {
         for cluster_index in run.clusters_range.clone() {
             let cluster = shaped_text
@@ -657,7 +703,7 @@ pub(crate) fn collect_logical_clusters(
     if !text.is_empty() && clusters.is_empty() {
         return Err(PreparationError::invalid_output());
     }
-    Ok(clusters)
+    Ok(())
 }
 
 pub(crate) fn apply_wrap_policy(

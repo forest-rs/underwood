@@ -4,6 +4,78 @@
 use super::*;
 
 #[test]
+fn paint_slot_change_retains_non_paint_prepared_facts() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"paint-retain-001"));
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("test paragraph is valid");
+    let text = edit
+        .append_text(paragraph, InlineRole::TEXT, "plain paint")
+        .expect("test text is valid");
+    edit.commit().expect("fixture document is valid");
+    let base = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0).expect("test style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let mut styles = StyleMap::new(base.clone());
+    let paint = PaintTable::from_brushes([
+        Brush::Solid(Color::BLACK),
+        Brush::Solid(Color::from_rgb8(0xcc, 0x44, 0x33)),
+    ]);
+    let outputs = Rc::new(RefCell::new(Vec::new()));
+    let probe = PreparedFactsProbe {
+        inner: fixture_paragraph_engine(),
+        outputs: Rc::clone(&outputs),
+    };
+    let mut engine = LayoutEngine::new(probe, CacheBudget::new(8));
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    engine
+        .prepare(&document.snapshot(), &request)
+        .expect("initial paint prepares");
+
+    styles.set(text, base.with_paint(PaintSlot::new(1)));
+    let repainted = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("paint-slot change prepares");
+    assert_eq!(repainted.work().analysis().paragraphs(), 0);
+    assert_eq!(repainted.work().font_selection().paragraphs(), 0);
+    assert_eq!(repainted.work().shape().paragraphs(), 0);
+    assert_eq!(repainted.work().flow().paragraphs(), 0);
+    assert!(
+        repainted
+            .scene()
+            .fragments()
+            .iter()
+            .all(|fragment| fragment.paint() == PaintSlot::new(1))
+    );
+
+    let outputs = outputs.borrow();
+    let [initial, changed] = outputs.as_slice() else {
+        panic!("initial and paint-only prepared facts must be observed");
+    };
+    assert_eq!(
+        initial.movements().as_ptr(),
+        changed.movements().as_ptr(),
+        "paint-only lowering must retain the complete cursor graph"
+    );
+    assert_eq!(
+        initial.lines()[0].units().as_ptr(),
+        changed.lines()[0].units().as_ptr(),
+        "paint-only lowering must retain interaction units"
+    );
+    assert_eq!(
+        initial.lines()[0].runs()[0].normalized_coords().as_ptr(),
+        changed.lines()[0].runs()[0].normalized_coords().as_ptr(),
+        "paint-only lowering must retain font-instance coordinates"
+    );
+}
+
+#[test]
 fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
     let (document, styles, paint) = fixture_document("ب", 1.2);
     let mut engine = fixture_engine();

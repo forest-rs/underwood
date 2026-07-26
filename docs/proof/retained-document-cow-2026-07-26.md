@@ -118,11 +118,10 @@ That existing crate-level split is not attributed to this core change.
 ## Remaining work exposed by the proof
 
 Document staging is now proportional to touched content plus a bounded tree
-path. Localized scene preparation is not yet O(change): after a revision
-change, `LayoutEngine` still iterates every paragraph to rediscover the one
-changed segment and to confirm publication completeness. Design-0017's
-persistent document and scene roots now provide the exact structural identity
-needed to replace that scan with a shared-subtree diff.
+path. At the point of this isolated measurement, localized scene preparation
+still iterated every paragraph. That follow-on term is now resolved by the
+shared-subtree diff recorded in
+`retained-localized-preparation-2026-07-26.md`.
 
 Capability-scaled adapter and scene residency remains governed by proposed
 Design-0018. This proof neither assumes approval nor treats today's maximal

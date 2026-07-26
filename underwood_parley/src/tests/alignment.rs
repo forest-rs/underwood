@@ -5,6 +5,127 @@ use super::*;
 use underwood::{FlowRegion, RegionFlow, ResolvedDirection, TextAlignment};
 
 #[test]
+fn alignment_only_change_reuses_adapter_prepared_facts() {
+    let (document, paragraph, mut styles, paint) = alignment_fixture("retained output");
+    let outputs = Rc::new(RefCell::new(Vec::new()));
+    let probe = PreparedFactsProbe {
+        inner: fixture_paragraph_engine(),
+        outputs: Rc::clone(&outputs),
+    };
+    let mut engine = LayoutEngine::new(probe, CacheBudget::new(8));
+    let width = FiniteWidth::new(300.0).expect("fixture width is valid");
+    engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::new(BaseDirection::Auto).with_alignment(TextAlignment::Center),
+    );
+    let adjusted = engine
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint),
+        )
+        .expect("alignment-only scene prepares");
+    assert_eq!(adjusted.work().flow().paragraphs(), 0);
+
+    let outputs = outputs.borrow();
+    let [initial, retained] = outputs.as_slice() else {
+        panic!("alignment change must make exactly two adapter observations");
+    };
+    assert_eq!(
+        initial.lines().as_ptr(),
+        retained.lines().as_ptr(),
+        "alignment-only adjustment must clone retained prepared facts instead of lowering again"
+    );
+    assert_eq!(
+        initial.movements().as_ptr(),
+        retained.movements().as_ptr(),
+        "alignment-only adjustment must retain the validated cursor graph"
+    );
+}
+
+#[test]
+fn composition_preparation_does_not_displace_committed_adapter_facts() {
+    let (document, paragraph, mut styles, paint) = alignment_fixture("committed text");
+    let snapshot = document.snapshot();
+    let outputs = Rc::new(RefCell::new(Vec::new()));
+    let probe = PreparedFactsProbe {
+        inner: fixture_paragraph_engine(),
+        outputs: Rc::clone(&outputs),
+    };
+    let mut engine = LayoutEngine::new(probe, CacheBudget::new(8));
+    let width = FiniteWidth::new(300.0).expect("fixture width is valid");
+    let request = SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint);
+    let committed = engine
+        .prepare(&snapshot, &request)
+        .expect("initial committed scene prepares");
+    let line = committed.scene().line(0).expect("line exists");
+    let end = *committed
+        .scene()
+        .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
+        .expect("line end resolves")
+        .position();
+    let selections = committed
+        .scene()
+        .selection_set([committed
+            .scene()
+            .collapsed_selection(&end)
+            .expect("composition insertion point is valid")])
+        .expect("composition selection set is valid");
+    let mut composition = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"retained-compose"))
+        .expect("composition starts")
+        .into_session();
+    composition
+        .update(
+            composition.epoch(),
+            CompositionUpdate::new("generated").with_selection(9..9),
+        )
+        .expect("composition updates");
+    engine
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition scene prepares");
+
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::new(BaseDirection::Auto).with_alignment(TextAlignment::Center),
+    );
+    let adjusted = engine
+        .prepare(
+            &snapshot,
+            &SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint),
+        )
+        .expect("adjusted committed scene prepares");
+    assert_eq!(adjusted.work().flow().paragraphs(), 0);
+
+    let outputs = outputs.borrow();
+    let [initial, composition, retained] = outputs.as_slice() else {
+        panic!("committed, composition, and retained committed facts must be observed");
+    };
+    assert_ne!(
+        initial.lines().as_ptr(),
+        composition.lines().as_ptr(),
+        "composition must own distinct prepared facts"
+    );
+    assert_eq!(
+        initial.lines().as_ptr(),
+        retained.lines().as_ptr(),
+        "composition preparation must not evict the retained committed facts"
+    );
+    assert_eq!(
+        initial.movements().as_ptr(),
+        retained.movements().as_ptr(),
+        "the committed cursor graph must survive composition preparation"
+    );
+}
+
+#[test]
 fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
     let text = "مرحبا بالعالم";
     let (document, paragraph, mut styles, paint) = alignment_fixture(text);
