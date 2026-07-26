@@ -101,6 +101,23 @@ need only to iterate it. A caller that must retain the complete unit uses
 likewise return allocation-free `SnapshotSources` or `ProjectedSources`
 iterators.
 
+The prepared-adapter interaction representation is also intentionally
+breaking. `PreparedLine::{try_new, try_new_in_slot}` now accept one flat visual
+slice table followed by range-indexed interaction-unit records.
+`PreparedInteractionUnit::{try_new, try_new_with_justification}` accept the
+unit's slice-table range and exact advance rather than collecting an owned
+slice vector. Final line construction validates that the ranges partition the
+table, each unit remains source-complete, and recorded advances agree with the
+table. A unit is therefore never observable with a placeholder metric.
+
+`PreparedLine::units` now returns the allocation-free
+`PreparedInteractionUnits` traversal. Its borrowed
+`PreparedInteractionUnitView` dereferences to the unit record and exposes the
+resolved visual slices through `slices()`. Existing adapters should build one
+slice vector per line, append each unit's slices contiguously, and store the
+resulting index range in the unit. There is no compatibility shim that
+recreates one allocation per grapheme.
+
 ## Adapter-fact residency
 
 Published scenes and reusable adapter facts have independent lifetimes.
@@ -267,14 +284,64 @@ benches/labels/profile-allocations.sh \
     target/release/underwood_label_benchmark 1 2048 capabilities
 ```
 
+For the large mixed-document typing proof, the `typing` subset runs only the
+matched primed, exact-repeat, and one-editor typing processes. This avoids
+retaining irrelevant full allocation histories:
+
+```sh
+benches/labels/profile-allocations.sh \
+    target/release/underwood_label_benchmark 1 1000 typing
+```
+
+The profiler script fails closed if `malloc_history` cannot attach or extract a
+trace. An attachment failure must never be rendered as a zero-allocation
+result.
+
+## Packed adapter-interaction checkpoint
+
+Replacing the changed paragraph's independently allocated visual-slice vectors
+with one line-local table removes exactly 24 allocation calls and 2,888
+requested bytes at every measured document scale:
+
+| Paragraphs | Before calls/bytes | Packed calls/bytes | Change |
+|---:|---:|---:|---:|
+| 1 | 168 / 50,376 | 144 / 47,488 | -24 / -2,888 |
+| 64 | 176 / 52,752 | 152 / 49,864 | -24 / -2,888 |
+| 1,000 | 179 / 53,784 | 155 / 50,896 | -24 / -2,888 |
+| 2,048 | 184 / 55,080 | 160 / 52,192 | -24 / -2,888 |
+
+Exact repeat remains zero allocations at 1, 64, and 1,000 paragraphs. At 2,048
+paragraphs its subtraction remains within the same one-call/128-byte
+cross-process profiler noise described above. The constant 24-call reduction
+is the physical proof: the removed calls belong to the changed paragraph's old
+per-unit representation, not unchanged siblings, and those adapter allocations
+no longer exist.
+
+The 64/1,000/2,048 release timing rerun reports 66/73/66 ns per exact repeat and
+25.350/37.033/50.412 microseconds per typed edit. These single-run observations
+are within ordinary machine noise of the prior checkpoint; the representation
+change is an allocation and residency improvement, not a claimed CPU
+improvement.
+
 The checkpoint passes:
 
 ```sh
 cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+cargo +1.88.0 check --workspace --all-targets --all-features \
+    --exclude underwood_showcase \
+    --exclude underwood_visual_proof \
+    --exclude underwood_pdf \
+    --exclude underwood_pdf_proof
+cargo check -p underwood -p underwood_parley \
+    --target x86_64-unknown-none
+cargo check -p underwood -p underwood_parley \
+    --target wasm32-unknown-unknown
+cargo xtask check
 ```
 
-The final proof will add the complete Rust 1.88, `no_std`, rustdoc, repository,
-and matched allocation/residency matrices after the remaining representation
-and wind-tunnel work is complete.
+The final proof will rerun these gates and the complete matched
+allocation/residency matrices after the remaining representation and
+wind-tunnel work is complete.

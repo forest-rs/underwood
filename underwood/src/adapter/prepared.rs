@@ -110,8 +110,14 @@ pub struct PreparedLine {
     height: f64,
     content_ascent: f64,
     content_descent: f64,
-    units: Arc<Vec<PreparedInteractionUnit>>,
+    interaction: Arc<PreparedLineInteraction>,
     runs: Vec<PreparedRun>,
+}
+
+#[derive(Clone, Debug)]
+struct PreparedLineInteraction {
+    slices: Vec<PreparedInteractionSlice>,
+    units: Vec<PreparedInteractionUnit>,
 }
 
 impl PreparedLine {
@@ -124,6 +130,7 @@ impl PreparedLine {
         height: f64,
         content_ascent: f64,
         content_descent: f64,
+        slices: impl IntoIterator<Item = PreparedInteractionSlice>,
         units: impl IntoIterator<Item = PreparedInteractionUnit>,
         runs: impl IntoIterator<Item = PreparedRun>,
     ) -> Result<Self, PreparationError> {
@@ -136,6 +143,7 @@ impl PreparedLine {
             height,
             content_ascent,
             content_descent,
+            slices,
             units,
             runs,
         )
@@ -155,6 +163,7 @@ impl PreparedLine {
         height: f64,
         content_ascent: f64,
         content_descent: f64,
+        slices: impl IntoIterator<Item = PreparedInteractionSlice>,
         units: impl IntoIterator<Item = PreparedInteractionUnit>,
         runs: impl IntoIterator<Item = PreparedRun>,
     ) -> Result<Self, PreparationError> {
@@ -174,7 +183,20 @@ impl PreparedLine {
         {
             return Err(PreparationError::invalid_output());
         }
-        let units = Arc::new(units.into_iter().collect::<Vec<_>>());
+        let slices: Vec<_> = slices.into_iter().collect();
+        let units: Vec<_> = units.into_iter().collect();
+        let mut next_slice = 0;
+        for unit in &units {
+            let range = unit.slice_range();
+            if range.start != next_slice {
+                return Err(PreparationError::invalid_output());
+            }
+            unit.validate_slices(&slices)?;
+            next_slice = range.end;
+        }
+        if next_slice != slices.len() {
+            return Err(PreparationError::invalid_output());
+        }
         let runs: Vec<_> = runs.into_iter().collect();
         let mut coverage: Vec<_> = runs.iter().map(|run| run.source.clone()).collect();
         coverage.sort_unstable_by_key(|range| range.start);
@@ -184,6 +206,7 @@ impl PreparedLine {
             break_reason == LineBreakReason::End
                 && advance == 0.0
                 && runs.is_empty()
+                && slices.is_empty()
                 && units.is_empty()
         } else {
             let mut covered = source.start;
@@ -239,7 +262,7 @@ impl PreparedLine {
             height,
             content_ascent,
             content_descent,
-            units,
+            interaction: Arc::new(PreparedLineInteraction { slices, units }),
             runs,
         })
     }
@@ -287,7 +310,8 @@ impl PreparedLine {
     pub fn western_justification_opportunity_sources(
         &self,
     ) -> impl Iterator<Item = Range<u32>> + '_ {
-        self.units
+        self.interaction
+            .units
             .iter()
             .filter(|unit| {
                 unit.is_western_justification_opportunity()
@@ -322,8 +346,8 @@ impl PreparedLine {
 
     /// Returns extended-grapheme interaction units in line-local visual order.
     #[must_use]
-    pub fn units(&self) -> &[PreparedInteractionUnit] {
-        &self.units
+    pub fn units(&self) -> PreparedInteractionUnits<'_> {
+        PreparedInteractionUnits::new(&self.interaction.units, &self.interaction.slices)
     }
 
     /// Returns shaped runs in line-local visual order.
@@ -398,7 +422,7 @@ impl PreparedParagraph {
         }
         let mut positions = Vec::new();
         for line in &lines {
-            if line.units.is_empty() {
+            if line.interaction.units.is_empty() {
                 let affinity = if line.source.start == 0 {
                     TextAffinity::Downstream
                 } else {
@@ -409,7 +433,7 @@ impl PreparedParagraph {
                     PreparedClusterSide::new(line.source.start, affinity),
                 );
             } else {
-                for unit in line.units.iter() {
+                for unit in &line.interaction.units {
                     push_unique_position(&mut positions, unit.left());
                     push_unique_position(&mut positions, unit.right());
                 }
@@ -428,7 +452,12 @@ impl PreparedParagraph {
             .collect();
         let unit_sources: Vec<_> = lines
             .iter()
-            .flat_map(|line| line.units.iter().map(PreparedInteractionUnit::source))
+            .flat_map(|line| {
+                line.interaction
+                    .units
+                    .iter()
+                    .map(PreparedInteractionUnit::source)
+            })
             .collect();
         if features.has_selection()
             && positions
@@ -585,7 +614,7 @@ impl PreparedParagraph {
                 height: line.height,
                 content_ascent: line.content_ascent,
                 content_descent: line.content_descent,
-                units: Arc::clone(&line.units),
+                interaction: Arc::clone(&line.interaction),
                 runs,
             });
         }
@@ -615,13 +644,13 @@ impl PreparedParagraphFacts {
             ));
         for line in &self.lines {
             bytes = bytes
-                .saturating_add(vec_bytes::<PreparedInteractionUnit>(line.units.capacity()))
+                .saturating_add(vec_bytes::<PreparedInteractionUnit>(
+                    line.interaction.units.capacity(),
+                ))
+                .saturating_add(vec_bytes::<PreparedInteractionSlice>(
+                    line.interaction.slices.capacity(),
+                ))
                 .saturating_add(vec_bytes::<PreparedRun>(line.runs.capacity()));
-            for unit in line.units.iter() {
-                bytes = bytes.saturating_add(
-                    size_of::<PreparedInteractionSlice>().saturating_mul(unit.slice_capacity()),
-                );
-            }
             for run in &line.runs {
                 bytes = bytes
                     .saturating_add(vec_bytes::<i16>(run.normalized_coords.capacity()))

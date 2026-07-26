@@ -67,9 +67,19 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
         "paint-only lowering must retain the complete cursor graph"
     );
     assert_eq!(
-        initial.lines()[0].units().as_ptr(),
-        changed.lines()[0].units().as_ptr(),
-        "paint-only lowering must retain interaction units"
+        initial.lines()[0]
+            .units()
+            .next()
+            .expect("initial line has an interaction unit")
+            .slices()
+            .as_ptr(),
+        changed.lines()[0]
+            .units()
+            .next()
+            .expect("repainted line has an interaction unit")
+            .slices()
+            .as_ptr(),
+        "paint-only lowering must retain the packed interaction table"
     );
     assert_eq!(
         initial.lines()[0].runs()[0].normalized_coords().as_ptr(),

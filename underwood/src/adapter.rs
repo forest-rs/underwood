@@ -34,7 +34,7 @@ pub use formation::{
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedCaret, PreparedClusterSide,
     PreparedCursorMovement, PreparedCursorStep, PreparedInteractionSlice, PreparedInteractionUnit,
-    TextAffinity,
+    PreparedInteractionUnitView, PreparedInteractionUnits, TextAffinity,
 };
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
 pub(crate) use prepared::PreparedParagraphFacts;

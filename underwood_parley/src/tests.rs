@@ -133,13 +133,17 @@ impl ParagraphFormation for AnalysisCursorProof {
             input.analysis_runs(),
         )?;
         let units = collect_analysis_units(input.text(), &analysis)?;
+        let mut prepared_slices = Vec::with_capacity(units.len());
         let mut prepared_units = Vec::with_capacity(units.len());
         let mut glyphs = Vec::with_capacity(units.len());
         for (id, source) in units.into_iter().enumerate() {
             let source = checked_source_range(&source)?;
+            let slice_start = prepared_slices.len();
+            prepared_slices.push(PreparedInteractionSlice::try_new(source.clone(), 1.0)?);
             prepared_units.push(PreparedInteractionUnit::try_new(
                 source.clone(),
-                [PreparedInteractionSlice::try_new(source.clone(), 1.0)?],
+                slice_start..prepared_slices.len(),
+                1.0,
                 0,
                 ClusterBoundary::None,
                 ClusterWhitespace::None,
@@ -188,6 +192,7 @@ impl ParagraphFormation for AnalysisCursorProof {
             1.0,
             0.8,
             0.2,
+            prepared_slices,
             prepared_units,
             [run],
         )?;

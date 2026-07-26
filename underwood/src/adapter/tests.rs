@@ -1,7 +1,7 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::vec;
+use alloc::{vec, vec::Vec};
 
 use peniko::Blob;
 
@@ -252,6 +252,7 @@ fn prepared_paragraph_rejects_a_step_source_that_is_not_an_interaction_unit() {
 
 #[test]
 fn prepared_line_rejects_missing_run_source() {
+    let (slices, units) = interaction(0..2, 1.0);
     let error = PreparedLine::try_new(
         0..2,
         LineBreakReason::End,
@@ -260,7 +261,8 @@ fn prepared_line_rejects_missing_run_source() {
         1.0,
         0.8,
         0.2,
-        [unit(0..2, 1.0)],
+        slices,
+        units,
         [run(0..1)],
     )
     .expect_err("visual runs must cover the complete non-empty line source");
@@ -269,6 +271,7 @@ fn prepared_line_rejects_missing_run_source() {
 
 #[test]
 fn prepared_line_rejects_missing_interaction_unit_source() {
+    let (slices, units) = interaction(0..1, 1.0);
     let error = PreparedLine::try_new(
         0..2,
         LineBreakReason::End,
@@ -277,7 +280,8 @@ fn prepared_line_rejects_missing_interaction_unit_source() {
         1.0,
         0.8,
         0.2,
-        [unit(0..1, 1.0)],
+        slices,
+        units,
         [run(0..2)],
     )
     .expect_err("interaction units must cover the complete line source");
@@ -288,7 +292,8 @@ fn prepared_line_rejects_missing_interaction_unit_source() {
 fn prepared_interaction_unit_rejects_a_side_outside_its_source() {
     let error = PreparedInteractionUnit::try_new(
         1..2,
-        [PreparedInteractionSlice::try_new(1..2, 1.0).expect("the interaction slice is valid")],
+        0..1,
+        1.0,
         0,
         ClusterBoundary::None,
         ClusterWhitespace::None,
@@ -301,38 +306,69 @@ fn prepared_interaction_unit_rejects_a_side_outside_its_source() {
 
 #[test]
 fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage() {
+    let slices = [
+        PreparedInteractionSlice::try_new(1..3, 0.0).expect("zero-advance mark slice is valid"),
+        PreparedInteractionSlice::try_new(0..1, 5.0).expect("base slice is valid"),
+    ];
     let unit = PreparedInteractionUnit::try_new(
         0..3,
-        [
-            PreparedInteractionSlice::try_new(1..3, 0.0).expect("zero-advance mark slice is valid"),
-            PreparedInteractionSlice::try_new(0..1, 5.0).expect("base slice is valid"),
-        ],
+        0..2,
+        5.0,
         1,
         ClusterBoundary::None,
         ClusterWhitespace::None,
         PreparedClusterSide::new(3, TextAffinity::Upstream),
         PreparedClusterSide::new(0, TextAffinity::Downstream),
     )
+    .expect("the packed interaction record is locally valid");
+    let line = PreparedLine::try_new(
+        0..3,
+        LineBreakReason::End,
+        5.0,
+        0.8,
+        1.0,
+        0.8,
+        0.2,
+        slices,
+        [unit],
+        [run(0..3)],
+    )
     .expect("visual slice order may differ from canonical source order");
+    let unit = line.units().next().expect("the line has one unit");
     assert_eq!(unit.source(), 0..3);
     assert_eq!(unit.advance(), 5.0);
     assert_eq!(unit.slices()[0].source(), 1..3);
     assert_eq!(unit.slices()[1].source(), 0..1);
 
-    let error = PreparedInteractionUnit::try_new(
+    let incomplete = PreparedInteractionUnit::try_new(
         0..3,
-        [PreparedInteractionSlice::try_new(0..1, 5.0).expect("the individual slice is valid")],
+        0..1,
+        5.0,
         0,
         ClusterBoundary::None,
         ClusterWhitespace::None,
         PreparedClusterSide::new(0, TextAffinity::Downstream),
         PreparedClusterSide::new(3, TextAffinity::Upstream),
     )
+    .expect("the record is validated against its table by the line");
+    let error = PreparedLine::try_new(
+        0..3,
+        LineBreakReason::End,
+        5.0,
+        0.8,
+        1.0,
+        0.8,
+        0.2,
+        [PreparedInteractionSlice::try_new(0..1, 5.0).expect("the individual slice is valid")],
+        [incomplete],
+        [run(0..3)],
+    )
     .expect_err("missing mark source must fail at the adapter boundary");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
 fn line(source: core::ops::Range<u32>) -> PreparedLine {
+    let (slices, units) = interaction(source.clone(), 1.0);
     PreparedLine::try_new(
         source.clone(),
         LineBreakReason::End,
@@ -341,24 +377,33 @@ fn line(source: core::ops::Range<u32>) -> PreparedLine {
         1.0,
         0.8,
         0.2,
-        [unit(source.clone(), 1.0)],
+        slices,
+        units,
         [run(source)],
     )
     .expect("test line is valid")
 }
 
-fn unit(source: core::ops::Range<u32>, advance: f64) -> PreparedInteractionUnit {
-    PreparedInteractionUnit::try_new(
+fn interaction(
+    source: core::ops::Range<u32>,
+    advance: f64,
+) -> (Vec<PreparedInteractionSlice>, Vec<PreparedInteractionUnit>) {
+    let slices = vec![
+        PreparedInteractionSlice::try_new(source.clone(), advance)
+            .expect("test interaction slice is valid"),
+    ];
+    let unit = PreparedInteractionUnit::try_new(
         source.clone(),
-        [PreparedInteractionSlice::try_new(source.clone(), advance)
-            .expect("test interaction slice is valid")],
+        0..1,
+        advance,
         0,
         ClusterBoundary::None,
         ClusterWhitespace::None,
         PreparedClusterSide::new(source.start, TextAffinity::Downstream),
         PreparedClusterSide::new(source.end, TextAffinity::Upstream),
     )
-    .expect("test interaction unit is valid")
+    .expect("test interaction unit is valid");
+    (slices, vec![unit])
 }
 
 #[test]

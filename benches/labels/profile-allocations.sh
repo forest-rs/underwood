@@ -10,9 +10,9 @@ profile_labels=${3:-1}
 profile_set=${4:-all}
 
 case "$profile_set" in
-all | capabilities) ;;
+all | capabilities | typing) ;;
 *)
-    echo "unknown profile set: $profile_set (expected all or capabilities)" >&2
+    echo "unknown profile set: $profile_set (expected all, capabilities, or typing)" >&2
     exit 1
     ;;
 esac
@@ -40,8 +40,15 @@ run_trace() {
         exit 1
     fi
 
-    malloc_history "$pid" -quiet -allEvents |
-        awk -v scenario="$scenario" '
+    trace=$(mktemp "${TMPDIR:-/tmp}/underwood-malloc-history.XXXXXX")
+    if ! malloc_history "$pid" -quiet -allEvents >"$trace"; then
+        rm -f "$trace"
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        echo "malloc_history failed: $scenario" >&2
+        exit 1
+    fi
+    awk -v scenario="$scenario" '
             /^(ALLOC|CALLOC|REALLOC)/ {
                 fields = split($0, size_start, "\\[size=")
                 if (fields > 1) {
@@ -53,7 +60,8 @@ run_trace() {
             END {
                 printf "%s\t%d\t%d\n", scenario, calls, bytes
             }
-        '
+        ' "$trace"
+    rm -f "$trace"
 
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
@@ -75,12 +83,27 @@ is_capability_scenario() {
     esac
 }
 
+is_typing_scenario() {
+    case "$1" in
+    primed-mixed-editable | mixed-repeat | mixed-typing)
+        return 0
+        ;;
+    *)
+        return 1
+        ;;
+    esac
+}
+
 results=$(mktemp "${TMPDIR:-/tmp}/underwood-allocation-results.XXXXXX")
 trap 'rm -f "$results"' EXIT HUP INT TERM
 
 while read -r scenario code rounds labels; do
     if [ "$profile_set" = capabilities ] &&
         ! is_capability_scenario "$scenario"; then
+        continue
+    fi
+    if [ "$profile_set" = typing ] &&
+        ! is_typing_scenario "$scenario"; then
         continue
     fi
     run_trace "$scenario" "$code" "${rounds:-$profile_rounds}" \
@@ -148,6 +171,15 @@ awk -v profile_set="$profile_set" '
         bytes[$1] = $3
     }
     END {
+        if (profile_set == "typing") {
+            print "mixed-repeat", \
+                calls["mixed-repeat"] - calls["primed-mixed-editable"], \
+                bytes["mixed-repeat"] - bytes["primed-mixed-editable"]
+            print "mixed-typing", \
+                calls["mixed-typing"] - calls["primed-mixed-editable"], \
+                bytes["mixed-typing"] - bytes["primed-mixed-editable"]
+            exit
+        }
         print "cold-identical", \
             calls["cold-identical"] - calls["setup-identical"], \
             bytes["cold-identical"] - bytes["setup-identical"]

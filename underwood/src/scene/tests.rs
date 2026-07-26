@@ -141,38 +141,50 @@ impl ParagraphFormation for EchoAdapter {
         );
         let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
         let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
-        let units = if self.split_paint {
+        let (slices, units) = if self.split_paint {
             let middle = input.paint_runs()[0].bytes().end;
-            vec![
-                PreparedInteractionUnit::try_new(
-                    0..middle,
-                    [PreparedInteractionSlice::try_new(0..middle, 5.0)?],
+            (
+                vec![
+                    PreparedInteractionSlice::try_new(0..middle, 5.0)?,
+                    PreparedInteractionSlice::try_new(middle..text_len, 5.0)?,
+                ],
+                vec![
+                    PreparedInteractionUnit::try_new(
+                        0..middle,
+                        0..1,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        start,
+                        PreparedClusterSide::new(middle, TextAffinity::Upstream),
+                    )?,
+                    PreparedInteractionUnit::try_new(
+                        middle..text_len,
+                        1..2,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        PreparedClusterSide::new(middle, TextAffinity::Upstream),
+                        end,
+                    )?,
+                ],
+            )
+        } else {
+            (
+                vec![PreparedInteractionSlice::try_new(0..text_len, 10.0)?],
+                vec![PreparedInteractionUnit::try_new(
+                    0..text_len,
+                    0..1,
+                    10.0,
                     0,
                     ClusterBoundary::None,
                     ClusterWhitespace::None,
                     start,
-                    PreparedClusterSide::new(middle, TextAffinity::Upstream),
-                )?,
-                PreparedInteractionUnit::try_new(
-                    middle..text_len,
-                    [PreparedInteractionSlice::try_new(middle..text_len, 5.0)?],
-                    0,
-                    ClusterBoundary::None,
-                    ClusterWhitespace::None,
-                    PreparedClusterSide::new(middle, TextAffinity::Upstream),
                     end,
-                )?,
-            ]
-        } else {
-            vec![PreparedInteractionUnit::try_new(
-                0..text_len,
-                [PreparedInteractionSlice::try_new(0..text_len, 10.0)?],
-                0,
-                ClusterBoundary::None,
-                ClusterWhitespace::None,
-                start,
-                end,
-            )?]
+                )?],
+            )
         };
         let line = PreparedLine::try_new(
             0..text_len,
@@ -182,6 +194,7 @@ impl ParagraphFormation for EchoAdapter {
             line_height,
             f64::from(font_size) * 0.75,
             f64::from(font_size) * 0.25,
+            slices,
             units,
             [run],
         )?;

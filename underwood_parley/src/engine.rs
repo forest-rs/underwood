@@ -614,7 +614,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             }
             let mut pieces = line_run_pieces(shaped_text, plan.clusters.clone())?;
             reorder_visual_pieces(shaped_text, &mut pieces);
-            let prepared_units = lower_visual_units(
+            let prepared_interaction = lower_visual_units(
                 input.text(),
                 shaped_text,
                 &formed.scripts,
@@ -693,7 +693,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 plan.height,
                 plan.content_ascent,
                 plan.content_descent,
-                prepared_units,
+                prepared_interaction.slices,
+                prepared_interaction.units,
                 prepared_runs,
             )?);
         }
