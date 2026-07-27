@@ -1033,9 +1033,9 @@ impl LayoutEngine {
             || published.core.paragraph_count != 1
             || !cache.segment.geometry.features.contains(request.features)
             || preflight.version != snapshot.revision().0
-            || preflight.default_style != *request.style
-            || preflight.source_styles.as_slice() != core::slice::from_ref(request.style)
-            || preflight.paragraph_style != request.paragraph_style
+            || preflight.styles.default_style() != request.style
+            || preflight.styles.style_for(snapshot.text_id()) != request.style
+            || preflight.styles.paragraph_style_for(paragraph) != request.paragraph_style
             || preflight.constraint != ConstraintKey::from(request.constraint)
             || preflight.region_cursor != region_cursor
             || !region_provenance_matches(preflight.region_flow.as_ref(), request.region_flow)
@@ -2427,9 +2427,6 @@ fn prepare_paragraph_geometry(
 struct ParagraphPreflightKey {
     version: u64,
     styles: StyleMap,
-    default_style: ComputedInlineStyle,
-    source_styles: Vec<ComputedInlineStyle>,
-    paragraph_style: ParagraphStyle,
     constraint: ConstraintKey,
     region_flow: Option<RegionFlow>,
     region_cursor: Option<RegionCursor>,
@@ -2444,13 +2441,6 @@ impl ParagraphPreflightKey {
         Self {
             version: paragraph.version,
             styles: request.styles.clone(),
-            default_style: request.styles.default_style().clone(),
-            source_styles: paragraph
-                .leaves
-                .iter()
-                .map(|leaf| request.styles.style_for(leaf.id).clone())
-                .collect(),
-            paragraph_style: request.styles.paragraph_style_for(paragraph.id),
             constraint: ConstraintKey::from(request.constraint),
             region_flow: request.region_flow.cloned(),
             region_cursor,
@@ -2468,14 +2458,12 @@ impl ParagraphPreflightKey {
             && self.region_cursor == region_cursor
             && region_provenance_matches(self.region_flow.as_ref(), request.region_flow)
             && (self.styles.shares_state_with(request.styles)
-                || (self.default_style == *request.styles.default_style()
-                    && self.paragraph_style == request.styles.paragraph_style_for(paragraph.id)
-                    && self.source_styles.len() == paragraph.leaves.len()
-                    && self
-                        .source_styles
-                        .iter()
-                        .zip(&paragraph.leaves)
-                        .all(|(cached, leaf)| cached == request.styles.style_for(leaf.id))))
+                || (self.styles.default_style() == request.styles.default_style()
+                    && self.styles.paragraph_style_for(paragraph.id)
+                        == request.styles.paragraph_style_for(paragraph.id)
+                    && paragraph.leaves.iter().all(|leaf| {
+                        self.styles.style_for(leaf.id) == request.styles.style_for(leaf.id)
+                    })))
     }
 }
 
@@ -2712,9 +2700,6 @@ struct ParagraphCache {
 impl ParagraphCache {
     fn calculate_accounted_owned_bytes(&self) -> usize {
         size_of::<Self>()
-            .saturating_add(vec_bytes::<ComputedInlineStyle>(
-                self.preflight_key.source_styles.capacity(),
-            ))
             .saturating_add(self.formation_key.accounted_owned_bytes())
             .saturating_add(vec_bytes::<PaintRun>(self.paint_runs.capacity()))
             .saturating_add(

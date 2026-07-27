@@ -408,3 +408,16 @@ The 1,000-label allocation-counter tunnel changed as follows:
 
 The edited paragraph retains 1,440 net bytes after preparation, while exact
 stable repeat and paint-only preparation remain at zero allocations.
+
+## Borrowed style preflight
+
+The paragraph preflight key no longer clones the default style, paragraph
+style, and one computed style per leaf alongside its retained `StyleMap`.
+Shared maps still match by identity. Equal-but-unshared maps are checked by
+borrowing the cached and requested maps at each represented leaf, with the
+default and paragraph styles checked explicitly for empty-paragraph behavior.
+
+At 1,000 labels this deletes another 1,000 live allocations and 392,536 net
+allocator bytes. Scene-cache accounting falls from 4,126,778 to 3,854,778
+bytes. Exact stable repeat and paint-only preparation remain allocation-free,
+and edited-paragraph preparation still retains 1,440 net bytes.
