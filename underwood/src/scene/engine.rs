@@ -336,9 +336,6 @@ pub struct LayoutEngine {
     paragraphs: Box<dyn ParagraphFormation>,
     cache: BTreeMap<ParagraphId, ParagraphCache>,
     composition_cache: BTreeMap<ParagraphId, ParagraphCache>,
-    committed_recency: BTreeSet<(u64, ParagraphId)>,
-    composition_recency: BTreeSet<(u64, ParagraphId)>,
-    documents: BTreeMap<crate::DocumentId, BTreeSet<(CacheKind, ParagraphId)>>,
     clock: u64,
     budget: CacheBudget,
     cache_work: CacheWork,
@@ -376,9 +373,6 @@ impl LayoutEngine {
             paragraphs,
             cache: BTreeMap::new(),
             composition_cache: BTreeMap::new(),
-            committed_recency: BTreeSet::new(),
-            composition_recency: BTreeSet::new(),
-            documents: BTreeMap::new(),
             clock: 0,
             budget,
             cache_work: CacheWork::default(),
@@ -458,7 +452,7 @@ impl LayoutEngine {
                     &mut reuse,
                 )?
             };
-            self.record_access(CacheKind::Committed, &access);
+            self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
                 region_cursor = Some(transcript.end());
             }
@@ -726,7 +720,7 @@ impl LayoutEngine {
                     )
                 }
             };
-            self.record_access(kind, &access);
+            self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
                 region_cursor = Some(transcript.end());
             }
@@ -864,32 +858,20 @@ impl LayoutEngine {
         self.published.remove(&document);
         self.published_compositions.remove(&document);
         self.published_blocks.remove(&document);
-        let Some(entries) = self.documents.remove(&document) else {
-            return;
-        };
-        let mut preparations = BTreeSet::new();
-        for (kind, paragraph) in entries {
-            let removed = match kind {
-                CacheKind::Committed => self.cache.remove(&paragraph),
-                CacheKind::Composition => self.composition_cache.remove(&paragraph),
-            };
-            if let Some(entry) = removed {
-                preparations.insert(entry.preparation);
-                match kind {
-                    CacheKind::Committed => {
-                        self.committed_recency.remove(&(entry.last_used, paragraph));
-                    }
-                    CacheKind::Composition => {
-                        self.composition_recency
-                            .remove(&(entry.last_used, paragraph));
-                    }
+        let mut preparations = Vec::new();
+        for cache in [&mut self.cache, &mut self.composition_cache] {
+            cache.retain(|paragraph, entry| {
+                if paragraph.document != document {
+                    return true;
                 }
+                preparations.push(entry.preparation);
                 self.cache_work.scene_cache_accounted_bytes = self
                     .cache_work
                     .scene_cache_accounted_bytes
                     .saturating_sub(entry.accounted_bytes);
-                self.cache_work.releases += 1;
-            }
+                self.cache_work.releases = self.cache_work.releases.saturating_add(1);
+                false
+            });
         }
         for preparation in preparations {
             self.paragraphs.release(preparation);
@@ -901,9 +883,6 @@ impl LayoutEngine {
         self.cache_work.releases += self.cache.len() + self.composition_cache.len();
         self.cache.clear();
         self.composition_cache.clear();
-        self.committed_recency.clear();
-        self.composition_recency.clear();
-        self.documents.clear();
         self.published.clear();
         self.published_compositions.clear();
         self.published_blocks.clear();
@@ -1199,7 +1178,7 @@ impl LayoutEngine {
                 &mut work,
                 &mut reuse,
             )?;
-            self.record_access(CacheKind::Committed, &access);
+            self.record_access(&access);
             let segment = Arc::clone(
                 &self
                     .cache
@@ -1372,7 +1351,7 @@ impl LayoutEngine {
                 &mut work,
                 &mut reuse,
             )?;
-            self.record_access(CacheKind::Committed, &access);
+            self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
                 region_cursor = Some(transcript.end());
             }
@@ -1583,7 +1562,7 @@ impl LayoutEngine {
                     &mut work,
                     &mut reuse,
                 )?;
-                self.record_access(CacheKind::Committed, &access);
+                self.record_access(&access);
                 region_cursor = access
                     .region_transcript
                     .as_ref()
@@ -1813,7 +1792,7 @@ impl LayoutEngine {
             })
     }
 
-    fn record_access(&mut self, kind: CacheKind, access: &CacheAccess) {
+    fn record_access(&mut self, access: &CacheAccess) {
         if access.previous_accounted_bytes != access.current_accounted_bytes {
             self.cache_work.scene_cache_accounted_bytes = self
                 .cache_work
@@ -1821,33 +1800,10 @@ impl LayoutEngine {
                 .saturating_sub(access.previous_accounted_bytes)
                 .saturating_add(access.current_accounted_bytes);
         }
-        if let Some(previous) = access.previous_use {
-            match kind {
-                CacheKind::Committed => {
-                    self.committed_recency.remove(&(previous, access.paragraph));
-                }
-                CacheKind::Composition => {
-                    self.composition_recency
-                        .remove(&(previous, access.paragraph));
-                }
-            }
+        if access.previous_use.is_some() {
             self.cache_work.hits += 1;
         } else {
             self.cache_work.misses += 1;
-            self.documents
-                .entry(access.paragraph.document)
-                .or_default()
-                .insert((kind, access.paragraph));
-        }
-        match kind {
-            CacheKind::Committed => {
-                self.committed_recency
-                    .insert((access.current_use, access.paragraph));
-            }
-            CacheKind::Composition => {
-                self.composition_recency
-                    .insert((access.current_use, access.paragraph));
-            }
         }
         self.cache_work.peak_entries = self
             .cache_work
@@ -1866,32 +1822,23 @@ impl LayoutEngine {
             CacheKind::Composition => self.composition_cache.len(),
         } > max_entries
         {
-            let next = match kind {
-                CacheKind::Committed => self.committed_recency.pop_first(),
-                CacheKind::Composition => self.composition_recency.pop_first(),
+            let cache = match kind {
+                CacheKind::Committed => &self.cache,
+                CacheKind::Composition => &self.composition_cache,
             };
-            let Some((last_used, paragraph)) = next else {
+            let Some(paragraph) = cache
+                .iter()
+                .map(|(paragraph, entry)| {
+                    (
+                        entry.last_used.max(self.root_use_for(kind, *paragraph)),
+                        *paragraph,
+                    )
+                })
+                .min()
+                .map(|(_, paragraph)| paragraph)
+            else {
                 break;
             };
-            let root_use = self.root_use_for(kind, paragraph);
-            if root_use > last_used {
-                let cache = match kind {
-                    CacheKind::Committed => &mut self.cache,
-                    CacheKind::Composition => &mut self.composition_cache,
-                };
-                if let Some(entry) = cache.get_mut(&paragraph) {
-                    entry.last_used = root_use;
-                    match kind {
-                        CacheKind::Committed => {
-                            self.committed_recency.insert((root_use, paragraph));
-                        }
-                        CacheKind::Composition => {
-                            self.composition_recency.insert((root_use, paragraph));
-                        }
-                    }
-                    continue;
-                }
-            }
             // An exact root is retainable only while every segment it names is
             // inside its coordinated lane budget. A committed eviction also
             // invalidates composition roots that share committed siblings;
@@ -1923,12 +1870,6 @@ impl LayoutEngine {
                     .cache_work
                     .scene_cache_accounted_bytes
                     .saturating_sub(entry.accounted_bytes);
-            }
-            if let Some(entries) = self.documents.get_mut(&paragraph.document) {
-                entries.remove(&(kind, paragraph));
-                if entries.is_empty() {
-                    self.documents.remove(&paragraph.document);
-                }
             }
             self.cache_work.evictions += 1;
         }
@@ -1997,9 +1938,7 @@ fn validate_paragraph_styles(
 
 #[derive(Clone, Debug)]
 struct CacheAccess {
-    paragraph: ParagraphId,
     previous_use: Option<u64>,
-    current_use: u64,
     previous_accounted_bytes: usize,
     current_accounted_bytes: usize,
     region_transcript: Option<RegionTranscript>,
@@ -2033,9 +1972,7 @@ fn reuse_paragraph_geometry(
     reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(1);
     work.reused_paragraphs = work.reused_paragraphs.saturating_add(1);
     Some(CacheAccess {
-        paragraph: paragraph.id,
         previous_use,
-        current_use,
         previous_accounted_bytes: entry.accounted_bytes,
         current_accounted_bytes: entry.accounted_bytes,
         region_transcript: entry.segment.region_transcript.clone(),
@@ -2155,9 +2092,7 @@ fn prepare_paragraph_geometry(
         work.reused_paragraphs += 1;
         reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(1);
         return Ok(CacheAccess {
-            paragraph: paragraph.id,
             previous_use,
-            current_use,
             previous_accounted_bytes: entry.accounted_bytes,
             current_accounted_bytes: entry.accounted_bytes,
             region_transcript: entry.segment.region_transcript.clone(),
@@ -2481,9 +2416,7 @@ fn prepare_paragraph_geometry(
         paragraphs.commit_preparation(preparation);
     }
     Ok(CacheAccess {
-        paragraph: paragraph.id,
         previous_use,
-        current_use,
         previous_accounted_bytes,
         current_accounted_bytes,
         region_transcript,

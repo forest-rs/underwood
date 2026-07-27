@@ -366,3 +366,22 @@ The two record changes remove 1,632,000 retained bytes and 1,725,000 bytes of
 cold allocation churn without changing the allocation-free stable-repeat or
 paint-only paths. One edited paragraph's net preparation growth falls from
 2,976 to 1,824 bytes.
+
+## Single-owner lifecycle bookkeeping
+
+The layout engine no longer retains three parallel trees for paragraph cache
+membership, document membership, and recency. The paragraph cache entry is the
+authoritative owner:
+
+- document release scans the two bounded cache lanes and removes matching
+  entries;
+- budget overflow scans the affected bounded lane for the least recently used
+  entry, including any newer published-root use;
+- no per-paragraph document-membership set or recency node survives between
+  lifecycle boundaries.
+
+This deliberately spends bounded work on uncommon release and eviction
+boundaries instead of permanent memory on every label. At 1,000 editable
+labels it removes 1,330 live allocations and 420,392 net allocator bytes.
+Exact stable repeat, paint-only preparation, and edited-paragraph allocation
+counts are unchanged.

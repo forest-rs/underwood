@@ -4,7 +4,7 @@
 //! Retained paragraph preparation and immutable renderer-neutral scenes.
 
 use alloc::boxed::Box;
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ops::Range;

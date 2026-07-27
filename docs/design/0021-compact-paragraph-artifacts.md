@@ -825,6 +825,13 @@ with raw evidence.
   every small table receives its own allocation.
 - Better deterministic accounting is theater if live heap, allocation count,
   latency, and churn do not improve.
+
+Lifecycle lookup structures are not exempt from the one-owner rule. A bounded
+paragraph cache may scan at explicit release or overflow rather than retaining
+document-membership and recency trees beside the authoritative entries. If a
+future scale makes that boundary scan measurable, one compact index may be
+introduced with its own byte and churn evidence; parallel default indexes are
+not restored speculatively.
 - A borrowed facade is theater if it allocates an owned joined record before
   returning.
 - “Safety” is theater if the second proof copy can disagree with the first
