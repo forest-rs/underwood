@@ -473,3 +473,14 @@ The allocation-counter tunnel removes another 305,592 net bytes at 1,000
 labels. Stable repeat, repaint, and edited-paragraph retention are unchanged.
 The vector's geometric growth adds nine cold allocation events; those are
 creation-time capacity events, not per-edit or steady-state work.
+
+## Exact immutable paint topology
+
+Published paint fragments now freeze into an exact boxed slice instead of
+retaining `Vec` growth slack. The 1,000-label fixture contains 2,251 fragments
+but previously retained capacity for 4,000. Exact storage removes 139,920
+accounted paint bytes and 148,000 net allocator bytes.
+
+Freezing adds a cold resize in 750 paragraphs whose vector capacity exceeded
+its final length. It does not affect stable repeat or repaint. This is a
+retention win, not yet the final cold-construction allocation shape.

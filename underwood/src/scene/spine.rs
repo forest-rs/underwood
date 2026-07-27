@@ -855,7 +855,7 @@ mod tests {
                 semantics: CachedSidecar::new(false, Vec::new()),
             }),
             PaintTopology {
-                fragments: Vec::new(),
+                fragments: Box::new([]),
             },
             None,
         ))

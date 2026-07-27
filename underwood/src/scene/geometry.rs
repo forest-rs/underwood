@@ -166,7 +166,7 @@ pub(super) struct CachedFragment {
 
 #[derive(Clone, Debug)]
 pub(super) struct PaintTopology {
-    pub(super) fragments: Vec<CachedFragment>,
+    pub(super) fragments: Box<[CachedFragment]>,
 }
 
 #[derive(Clone, Copy)]
@@ -471,7 +471,7 @@ impl CachedGeometry {
 
 impl PaintTopology {
     pub(super) fn residency_bytes(&self) -> usize {
-        vec_bytes::<CachedFragment>(self.fragments.capacity())
+        size_of::<CachedFragment>().saturating_mul(self.fragments.len())
     }
 }
 
@@ -980,7 +980,9 @@ fn build_paint_fragments(
             }
         }
     }
-    Ok(PaintTopology { fragments })
+    Ok(PaintTopology {
+        fragments: fragments.into_boxed_slice(),
+    })
 }
 
 fn push_paint_fragment(
