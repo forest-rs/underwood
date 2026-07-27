@@ -40,12 +40,12 @@ pub use formation::{
     ParagraphFormationChange, ParagraphFormationOutput, ParagraphFormationReuse, ParagraphInput,
     ParagraphPreparationId, ShapingRun, ShapingStyleId,
 };
-pub(crate) use interaction::PreparedInteractionUnitRecord;
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedClusterSide,
     PreparedInteractionSlice, PreparedInteractionSlices, PreparedInteractionUnit,
     PreparedInteractionUnitView, PreparedInteractionUnits, TextAffinity,
 };
+pub(crate) use interaction::{PreparedInteractionSliceSpill, PreparedInteractionUnitRecord};
 pub(crate) use paint::whole_glyph_paint;
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
 pub(crate) use prepared::PreparedParagraphFacts;

@@ -2,18 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{vec, vec::Vec};
+use core::mem::size_of;
 
 use peniko::Blob;
 
 use super::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment,
     LineBreakReason, PreparationErrorKind, PreparedClusterSide, PreparedGlyph,
-    PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
-    PreparedRun, TextAffinity,
+    PreparedInteractionSlice, PreparedInteractionSliceSpill, PreparedInteractionUnit,
+    PreparedInteractionUnitRecord, PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
 };
 use crate::{
     DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, ResolvedDirection, Tag, Vec2,
 };
+
+#[test]
+fn ordinary_interaction_units_do_not_retain_slice_ranges() {
+    assert_eq!(size_of::<PreparedInteractionUnitRecord>(), 16);
+    assert_eq!(size_of::<PreparedInteractionSliceSpill>(), 12);
+}
 
 #[test]
 fn synthesis_evidence_is_validated_canonical_and_last_wins() {

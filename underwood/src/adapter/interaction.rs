@@ -307,13 +307,11 @@ const LEFT_IS_SOURCE_START: u8 = 1 << 0;
 const LEFT_IS_UPSTREAM: u8 = 1 << 1;
 const RIGHT_IS_UPSTREAM: u8 = 1 << 2;
 const WESTERN_JUSTIFICATION: u8 = 1 << 3;
-const DIRECT_SLICE: u8 = 1 << 4;
 
 /// Compact canonical form of one validated interaction unit.
 #[derive(Debug)]
 pub(crate) struct PreparedInteractionUnitRecord {
     source: Range<u32>,
-    slices: Range<u32>,
     advance: f32,
     bidi_level: u8,
     boundary: ClusterBoundary,
@@ -322,11 +320,7 @@ pub(crate) struct PreparedInteractionUnitRecord {
 }
 
 impl PreparedInteractionUnitRecord {
-    pub(crate) fn try_from_unit(
-        unit: PreparedInteractionUnit,
-        slices: Range<u32>,
-        direct_slice: bool,
-    ) -> Result<Self, PreparationError> {
+    pub(crate) fn try_from_unit(unit: PreparedInteractionUnit) -> Result<Self, PreparationError> {
         let advance = compact_shaping_coordinate(unit.advance)
             .ok_or_else(PreparationError::invalid_output)?;
         let mut flags = 0;
@@ -342,12 +336,8 @@ impl PreparedInteractionUnitRecord {
         if unit.western_justification_opportunity {
             flags |= WESTERN_JUSTIFICATION;
         }
-        if direct_slice {
-            flags |= DIRECT_SLICE;
-        }
         Ok(Self {
             source: unit.source,
-            slices,
             advance,
             bidi_level: unit.bidi_level,
             boundary: unit.boundary,
@@ -358,14 +348,6 @@ impl PreparedInteractionUnitRecord {
 
     fn source(&self) -> Range<u32> {
         self.source.clone()
-    }
-
-    fn slices(&self) -> Range<usize> {
-        self.slices.start as usize..self.slices.end as usize
-    }
-
-    const fn has_direct_slice(&self) -> bool {
-        self.flags & DIRECT_SLICE != 0
     }
 
     const fn direct_slice(&self) -> PreparedInteractionSlice {
@@ -411,21 +393,27 @@ impl PreparedInteractionUnitRecord {
     }
 }
 
+/// Exceptional retained shaping slices for one multi-slice interaction unit.
+#[derive(Debug)]
+pub(crate) struct PreparedInteractionSliceSpill {
+    pub(crate) unit: u32,
+    pub(crate) slices: Range<u32>,
+}
+
 /// Borrowed interaction unit with access to its line-local shaping slices.
 #[derive(Clone, Copy, Debug)]
 pub struct PreparedInteractionUnitView<'a> {
     unit: &'a PreparedInteractionUnitRecord,
-    slice_table: &'a [PreparedInteractionSlice],
+    spilled_slices: Option<&'a [PreparedInteractionSlice]>,
 }
 
 impl<'a> PreparedInteractionUnitView<'a> {
     /// Returns every shaping-record contribution in visual order.
     #[must_use]
     pub fn slices(self) -> PreparedInteractionSlices<'a> {
-        if self.unit.has_direct_slice() {
-            PreparedInteractionSlices::direct(self.unit.direct_slice())
-        } else {
-            PreparedInteractionSlices::retained(&self.slice_table[self.unit.slices()])
+        match self.spilled_slices {
+            Some(slices) => PreparedInteractionSlices::retained(slices),
+            None => PreparedInteractionSlices::direct(self.unit.direct_slice()),
         }
     }
 
@@ -559,18 +547,28 @@ impl core::iter::FusedIterator for PreparedInteractionSlices<'_> {}
 /// Allocation-free traversal of line-local interaction units.
 #[derive(Clone, Debug)]
 pub struct PreparedInteractionUnits<'a> {
-    units: core::slice::Iter<'a, PreparedInteractionUnitRecord>,
+    units: &'a [PreparedInteractionUnitRecord],
+    unit_base: u32,
     slices: &'a [PreparedInteractionSlice],
+    spills: &'a [PreparedInteractionSliceSpill],
+    front: usize,
+    back: usize,
 }
 
 impl<'a> PreparedInteractionUnits<'a> {
     pub(crate) fn new(
         units: &'a [PreparedInteractionUnitRecord],
+        unit_base: u32,
         slices: &'a [PreparedInteractionSlice],
+        spills: &'a [PreparedInteractionSliceSpill],
     ) -> Self {
         Self {
-            units: units.iter(),
+            units,
+            unit_base,
             slices,
+            spills,
+            front: 0,
+            back: units.len(),
         }
     }
 
@@ -583,19 +581,34 @@ impl<'a> PreparedInteractionUnits<'a> {
     /// Returns the number of remaining units.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.units.len()
+        self.back - self.front
     }
 
     /// Returns whether no units remain.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.units.len() == 0
+        self.front == self.back
     }
 
-    fn view(&self, unit: &'a PreparedInteractionUnitRecord) -> PreparedInteractionUnitView<'a> {
+    fn view(&self, local_index: usize) -> PreparedInteractionUnitView<'a> {
+        let unit = &self.units[local_index];
+        let local_index =
+            u32::try_from(local_index).expect("validated interaction tables fit u32 indexes");
+        let global_index = self
+            .unit_base
+            .checked_add(local_index)
+            .expect("validated interaction tables fit u32 indexes");
+        let spilled_slices = self
+            .spills
+            .binary_search_by_key(&global_index, |spill| spill.unit)
+            .ok()
+            .map(|index| {
+                let range = self.spills[index].slices.clone();
+                &self.slices[range.start as usize..range.end as usize]
+            });
         PreparedInteractionUnitView {
             unit,
-            slice_table: self.slices,
+            spilled_slices,
         }
     }
 }
@@ -604,29 +617,35 @@ impl<'a> Iterator for PreparedInteractionUnits<'a> {
     type Item = PreparedInteractionUnitView<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let unit = self.units.next()?;
-        Some(self.view(unit))
+        (self.front < self.back).then(|| {
+            let index = self.front;
+            self.front += 1;
+            self.view(index)
+        })
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        let unit = self.units.nth(n)?;
-        Some(self.view(unit))
+        self.front = self.front.saturating_add(n).min(self.back);
+        self.next()
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        self.units.size_hint()
+        let len = self.len();
+        (len, Some(len))
     }
 }
 
 impl<'a> DoubleEndedIterator for PreparedInteractionUnits<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        let unit = self.units.next_back()?;
-        Some(self.view(unit))
+        (self.front < self.back).then(|| {
+            self.back -= 1;
+            self.view(self.back)
+        })
     }
 
     fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-        let unit = self.units.nth_back(n)?;
-        Some(self.view(unit))
+        self.back = self.back.saturating_sub(n).max(self.front);
+        self.next_back()
     }
 }
 

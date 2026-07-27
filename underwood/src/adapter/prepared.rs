@@ -299,6 +299,7 @@ pub(crate) struct PreparedParagraphFacts {
     glyph_placements: Vec<PreparedGlyphPlacement>,
     split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
     interaction_slices: Vec<PreparedInteractionSlice>,
+    interaction_slice_spills: Vec<PreparedInteractionSliceSpill>,
     interaction_units: Vec<PreparedInteractionUnitRecord>,
     source_order: Vec<u32>,
     normalized_coords: Vec<i16>,
@@ -317,7 +318,6 @@ struct PreparedLineRecord {
     height: f64,
     content_ascent: f64,
     content_descent: f64,
-    slices: TableRange,
     units: TableRange,
     source_order: TableRange,
     runs: TableRange,
@@ -562,6 +562,9 @@ impl PreparedParagraphFacts {
             .saturating_add(vec_bytes::<PreparedInteractionSlice>(
                 self.interaction_slices.capacity(),
             ))
+            .saturating_add(vec_bytes::<PreparedInteractionSliceSpill>(
+                self.interaction_slice_spills.capacity(),
+            ))
             .saturating_add(vec_bytes::<PreparedInteractionUnitRecord>(
                 self.interaction_units.capacity(),
             ))
@@ -607,6 +610,11 @@ impl PreparedParagraphFacts {
             .filter(|range| range.len() != 1)
             .map(|range| range.len())
             .sum();
+        let slice_spill_capacity = lines
+            .iter()
+            .flat_map(|line| &line.interaction.units)
+            .filter(|unit| unit.slice_range().len() != 1)
+            .count();
         let unit_capacity = lines.iter().map(|line| line.interaction.units.len()).sum();
         let source_order_capacity = lines
             .iter()
@@ -629,6 +637,7 @@ impl PreparedParagraphFacts {
         let mut glyph_placements = Vec::new();
         let mut split_glyph_paints = Vec::new();
         let mut interaction_slices = Vec::with_capacity(slice_capacity);
+        let mut interaction_slice_spills = Vec::with_capacity(slice_spill_capacity);
         let mut interaction_units = Vec::with_capacity(unit_capacity);
         let mut source_order = Vec::with_capacity(source_order_capacity);
         let mut normalized_coords = Vec::with_capacity(normalized_coord_capacity);
@@ -655,25 +664,25 @@ impl PreparedParagraphFacts {
                 source_order: line_source_order,
             } = interaction;
 
-            let slices_start = interaction_slices.len();
             let units_start = interaction_units.len();
             for unit in units {
                 let unit_slices = slices
                     .get(unit.slice_range())
                     .expect("validated interaction units index the input slice table");
-                let direct_slice = unit_slices.len() == 1;
-                let retained_start = u32::try_from(interaction_slices.len() - slices_start)
+                let unit_index = u32::try_from(interaction_units.len())
                     .map_err(|_| PreparationError::invalid_output())?;
-                if !direct_slice {
+                if unit_slices.len() != 1 {
+                    let retained_start = u32::try_from(interaction_slices.len())
+                        .map_err(|_| PreparationError::invalid_output())?;
                     interaction_slices.extend_from_slice(unit_slices);
+                    let retained_end = u32::try_from(interaction_slices.len())
+                        .map_err(|_| PreparationError::invalid_output())?;
+                    interaction_slice_spills.push(PreparedInteractionSliceSpill {
+                        unit: unit_index,
+                        slices: retained_start..retained_end,
+                    });
                 }
-                let retained_end = u32::try_from(interaction_slices.len() - slices_start)
-                    .map_err(|_| PreparationError::invalid_output())?;
-                interaction_units.push(PreparedInteractionUnitRecord::try_from_unit(
-                    unit,
-                    retained_start..retained_end,
-                    direct_slice,
-                )?);
+                interaction_units.push(PreparedInteractionUnitRecord::try_from_unit(unit)?);
             }
             let source_order_start = source_order.len();
             source_order.extend(line_source_order);
@@ -740,7 +749,6 @@ impl PreparedParagraphFacts {
                 height,
                 content_ascent,
                 content_descent,
-                slices: TableRange::try_from_usize(slices_start..interaction_slices.len())?,
                 units: TableRange::try_from_usize(units_start..interaction_units.len())?,
                 source_order: TableRange::try_from_usize(source_order_start..source_order.len())?,
                 runs: TableRange::try_from_usize(runs_start..run_records.len())?,
@@ -757,6 +765,7 @@ impl PreparedParagraphFacts {
             glyph_placements,
             split_glyph_paints,
             interaction_slices,
+            interaction_slice_spills,
             interaction_units,
             source_order,
             normalized_coords,
@@ -971,9 +980,13 @@ impl<'a> PreparedLineView<'a> {
     #[must_use]
     pub fn units(self) -> PreparedInteractionUnits<'a> {
         let record = self.record();
+        let unit_base = record.units.start;
+        let units = record.units.as_usize();
         PreparedInteractionUnits::new(
-            &self.facts.interaction_units[record.units.as_usize()],
-            &self.facts.interaction_slices[record.slices.as_usize()],
+            &self.facts.interaction_units[units.clone()],
+            unit_base,
+            &self.facts.interaction_slices,
+            &self.facts.interaction_slice_spills,
         )
     }
 

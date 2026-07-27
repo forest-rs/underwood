@@ -484,3 +484,16 @@ accounted paint bytes and 148,000 net allocator bytes.
 Freezing adds a cold resize in 750 paragraphs whose vector capacity exceeded
 its final length. It does not affect stable repeat or repaint. This is a
 retention win, not yet the final cold-construction allocation shape.
+
+## Exceptional interaction slice ranges
+
+Ordinary interaction units no longer retain an eight-byte slice range or a
+flag saying that their only slice duplicates the unit. The canonical unit is
+now 16 bytes. Only multi-slice graphemes retain a 12-byte
+`(unit, slice-range)` spill record, and the global spill ranges make the
+previous per-line slice range redundant.
+
+In the 1,000-label allocation tunnel this removes 174,000 retained bytes.
+Scene-cache accounting falls from 3,202,474 to 3,028,338 bytes and the
+caller-held scene from 2,770,208 to 2,596,072 bytes. Exact repeat and repaint
+remain at zero allocations. Edited-paragraph preparation retains 1,000 bytes.
