@@ -849,7 +849,6 @@ mod tests {
                     height,
                     empty_bounds: Rect::ZERO,
                     lines: Vec::new(),
-                    glyphs: Vec::new(),
                 }),
                 source_map: None,
                 hit_geometry: CachedHitSidecar::new(false, Vec::new()),

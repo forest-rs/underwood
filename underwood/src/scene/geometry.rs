@@ -25,7 +25,6 @@ pub(super) struct CachedGeometryFacts {
     pub(super) height: f64,
     pub(super) empty_bounds: Rect,
     pub(super) lines: Vec<CachedLine>,
-    pub(super) glyphs: Vec<CachedGlyph>,
 }
 
 #[derive(Clone, Debug)]
@@ -159,15 +158,10 @@ pub(super) struct CachedFragment {
     pub(super) run: u32,
     pub(super) glyphs: Range<u32>,
     pub(super) instance_start: usize,
+    pub(super) inline_origin: f64,
     pub(super) segment: u32,
     pub(super) paint: PaintSlot,
     pub(super) paint_clip: Option<Rect>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct CachedGlyph {
-    pub(super) position: Point,
-    pub(super) inline_advance_adjustment: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -452,8 +446,7 @@ impl CachedGeometry {
         let layout = self
             .artifact
             .estimated_owned_bytes()
-            .saturating_add(vec_bytes::<CachedLine>(self.lines.capacity()))
-            .saturating_add(vec_bytes::<CachedGlyph>(self.glyphs.capacity()));
+            .saturating_add(vec_bytes::<CachedLine>(self.lines.capacity()));
         let sources = self
             .source_map
             .as_ref()
@@ -629,6 +622,18 @@ pub(super) fn build_geometry(
         } else {
             Vec::new()
         };
+        if opportunity_sources.iter().any(|source| {
+            line.runs()
+                .flat_map(|run| run.glyphs())
+                .filter(|glyph| glyph.source() == *source)
+                .count()
+                != 1
+        }) {
+            return Err(SceneError::for_paragraph(
+                SceneErrorKind::SourceCoverage,
+                prepared.paragraph(),
+            ));
+        }
         let mut unit_x = inline_start;
         for (unit_index, unit) in line.units().enumerate() {
             let paragraph_source = unit.source();
@@ -778,8 +783,6 @@ pub(super) fn build_geometry(
         });
         line_top = line_top.max(current_line_top + line.height());
     }
-    let glyphs = build_layout_glyphs(prepared, &lines)?;
-
     if retains_clusters
         && prepared.lines().is_empty()
         && projection.mapping.text().is_empty()
@@ -868,7 +871,6 @@ pub(super) fn build_geometry(
             },
             empty_bounds,
             lines,
-            glyphs,
         }),
         source_map,
         hit_geometry: CachedHitSidecar::new(retains_clusters, hit_placements),
@@ -881,107 +883,56 @@ pub(super) fn build_paint_topology(
     projection: &Projection<'_>,
     retained: &CachedGeometry,
 ) -> Result<PaintTopology, SceneError> {
-    build_paint_fragments(prepared, projection, &retained.glyphs)
+    build_paint_fragments(prepared, projection, &retained.lines)
 }
 
-fn build_layout_glyphs(
+fn build_paint_fragments(
     prepared: &PreparedParagraph,
+    projection: &Projection<'_>,
     lines: &[CachedLine],
-) -> Result<Vec<CachedGlyph>, SceneError> {
+) -> Result<PaintTopology, SceneError> {
     if prepared.lines().len() != lines.len() {
         return Err(SceneError::for_paragraph(
             SceneErrorKind::SourceCoverage,
             prepared.paragraph(),
         ));
     }
-    let glyph_count = prepared
-        .lines()
-        .iter()
-        .flat_map(|line| line.runs())
-        .map(|run| run.glyphs().len())
-        .sum();
-    let mut glyphs = Vec::with_capacity(glyph_count);
-    for (line, cached_line) in prepared.lines().iter().zip(lines) {
+    let mut fragments: Vec<CachedFragment> = Vec::new();
+    let mut instance = 0_usize;
+    for (line_index, (line, cached_line)) in prepared.lines().iter().zip(lines).enumerate() {
         let expansion = cached_line.adjustment.opportunity_expansion();
         let opportunity_sources: Vec<_> = if expansion > 0.0 {
             line.western_justification_opportunity_sources().collect()
         } else {
             Vec::new()
         };
-        let mut opportunity_glyphs = alloc::vec![None; opportunity_sources.len()];
-        let mut line_glyph_index = 0_usize;
-        for run in line.runs() {
-            for glyph in run.glyphs() {
-                for (index, source) in opportunity_sources.iter().enumerate() {
-                    if glyph.source() == *source {
-                        if opportunity_glyphs[index].is_some() {
-                            return Err(SceneError::for_paragraph(
-                                SceneErrorKind::SourceCoverage,
-                                prepared.paragraph(),
-                            ));
-                        }
-                        opportunity_glyphs[index] = Some(line_glyph_index);
-                    }
-                }
-                line_glyph_index += 1;
-            }
-        }
-        if expansion > 0.0 && opportunity_glyphs.iter().any(Option::is_none) {
-            return Err(SceneError::for_paragraph(
-                SceneErrorKind::SourceCoverage,
-                prepared.paragraph(),
-            ));
-        }
-
-        let mut x = cached_line.bounds.x0;
-        line_glyph_index = 0;
-        for run in line.runs() {
-            for glyph in run.glyphs() {
-                let glyph_expansion = if opportunity_glyphs.contains(&Some(line_glyph_index)) {
+        let mut inline_origin = cached_line.bounds.x0;
+        for (run_index, run) in line.runs().iter().enumerate() {
+            let run_fragment_start = fragments.len();
+            for (glyph_index, glyph) in run.glyphs().iter().enumerate() {
+                let inline_advance_adjustment = if opportunity_sources
+                    .iter()
+                    .any(|source| glyph.source() == *source)
+                {
                     expansion
                 } else {
                     0.0
                 };
-                let inline_advance_adjustment = glyph_expansion;
-                glyphs.push(CachedGlyph {
-                    position: Point::new(
-                        x + glyph.offset().x,
-                        cached_line.bounds.y0 + line.baseline() - glyph.offset().y,
-                    ),
-                    inline_advance_adjustment,
-                });
-                x += glyph.advance().x + inline_advance_adjustment;
-                line_glyph_index += 1;
-            }
-        }
-    }
-    Ok(glyphs)
-}
-
-fn build_paint_fragments(
-    prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
-    layout_glyphs: &[CachedGlyph],
-) -> Result<PaintTopology, SceneError> {
-    let mut fragments: Vec<CachedFragment> = Vec::new();
-    let mut instance = 0_usize;
-    for (line_index, line) in prepared.lines().iter().enumerate() {
-        for (run_index, run) in line.runs().iter().enumerate() {
-            let run_fragment_start = fragments.len();
-            for (glyph_index, glyph) in run.glyphs().iter().enumerate() {
-                let layout = layout_glyphs.get(instance).ok_or_else(|| {
-                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
-                })?;
+                let offset = glyph.offset();
+                let position = Point::new(
+                    inline_origin + offset.x,
+                    cached_line.bounds.y0 + line.baseline() - offset.y,
+                );
                 if let Some(segments) = glyph.paint().split_segments() {
                     for (segment_index, segment) in segments.iter().enumerate() {
                         let clip = segment
                             .clip()
                             .expect("validated split-paint segments retain explicit clips");
                         let paint_clip = Some(Rect::new(
-                            layout.position.x + clip.x0,
-                            layout.position.y + clip.y0,
-                            layout.position.x + clip.x1,
-                            layout.position.y + clip.y1,
+                            position.x + clip.x0,
+                            position.y + clip.y0,
+                            position.x + clip.x1,
+                            position.y + clip.y1,
                         ));
                         push_paint_fragment(
                             &mut fragments,
@@ -993,6 +944,7 @@ fn build_paint_fragments(
                                 glyph: glyph_index,
                                 instance,
                             },
+                            inline_origin,
                             Some(segment_index),
                             segment.slot(),
                             paint_clip,
@@ -1017,20 +969,16 @@ fn build_paint_fragments(
                             glyph: glyph_index,
                             instance,
                         },
+                        inline_origin,
                         None,
                         paint,
                         None,
                     )?;
                 }
+                inline_origin += glyph.advance().x + inline_advance_adjustment;
                 instance += 1;
             }
         }
-    }
-    if instance != layout_glyphs.len() {
-        return Err(SceneError::for_paragraph(
-            SceneErrorKind::SourceCoverage,
-            prepared.paragraph(),
-        ));
     }
     Ok(PaintTopology { fragments })
 }
@@ -1040,6 +988,7 @@ fn push_paint_fragment(
     run_fragment_start: usize,
     paragraph: ParagraphId,
     index: PaintGlyphIndex,
+    inline_origin: f64,
     segment: Option<usize>,
     paint: PaintSlot,
     paint_clip: Option<Rect>,
@@ -1071,6 +1020,7 @@ fn push_paint_fragment(
                 SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
             })?,
             instance_start: index.instance,
+            inline_origin,
             segment: segment.map_or(Ok(WHOLE_GLYPH_PAINT), |segment| {
                 u32::try_from(segment).map_err(|_| {
                     SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)

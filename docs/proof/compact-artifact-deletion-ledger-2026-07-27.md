@@ -385,3 +385,26 @@ boundaries instead of permanent memory on every label. At 1,000 editable
 labels it removes 1,330 live allocations and 420,392 net allocator bytes.
 Exact stable repeat, paint-only preparation, and edited-paragraph allocation
 counts are unchanged.
+
+## Derived glyph placement
+
+Scene geometry no longer retains one absolute-position record per glyph.
+Canonical glyph advances and offsets, retained line origins and baselines, and
+the line's justification adjustment already determine that value. Paint
+lowering now carries only one inline origin per run-sized fragment, while
+public glyph traversal derives positions with allocation-free iterator state.
+Forward traversal remains constant work per glyph; reverse traversal computes
+its ending origin lazily.
+
+This removes the entire `CachedGlyph` table and `build_layout_glyphs` pass.
+The 1,000-label allocation-counter tunnel changed as follows:
+
+| Cold preparation | Before | After |
+|---|---:|---:|
+| allocation calls | 95,823 | 94,823 |
+| total allocated bytes | 22,507,461 | 21,969,461 |
+| net retained bytes | 7,600,744 | 7,062,744 |
+| scene-cache accounting | 4,641,162 | 4,126,778 |
+
+The edited paragraph retains 1,440 net bytes after preparation, while exact
+stable repeat and paint-only preparation remain at zero allocations.

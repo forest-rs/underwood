@@ -639,13 +639,29 @@ impl<'a> SceneFragmentView<'a> {
         &self.positioned.position.segment.paint.fragments[self.positioned.local]
     }
 
-    fn prepared_run(self) -> PreparedRunView<'a> {
+    fn prepared_line(self) -> PreparedLineView<'a> {
         let geometry = &self.positioned.position.segment.geometry;
         geometry
             .artifact
             .lines()
             .get(self.local().line as usize)
-            .and_then(|line| line.runs().get(self.local().run as usize))
+            .expect("paint fragment indexes the canonical line table")
+    }
+
+    fn cached_line(self) -> &'a CachedLine {
+        self.positioned
+            .position
+            .segment
+            .geometry
+            .lines
+            .get(self.local().line as usize)
+            .expect("paint fragment indexes the retained line table")
+    }
+
+    fn prepared_run(self) -> PreparedRunView<'a> {
+        self.prepared_line()
+            .runs()
+            .get(self.local().run as usize)
             .expect("paint fragment indexes the canonical artifact")
     }
 
@@ -674,6 +690,47 @@ impl<'a> SceneFragmentView<'a> {
         self.local().instance_start + glyph - self.local().glyphs.start as usize
     }
 
+    fn inline_advance_adjustment(self, glyph: PreparedGlyphView<'_>) -> f64 {
+        let expansion = self.cached_line().adjustment.opportunity_expansion();
+        if expansion > 0.0
+            && self
+                .prepared_line()
+                .western_justification_opportunity_sources()
+                .any(|source| source == glyph.source())
+        {
+            expansion
+        } else {
+            0.0
+        }
+    }
+
+    fn observe_glyph(self, local: usize, inline_origin: f64) -> SceneGlyphView<'a> {
+        let inline_advance_adjustment = self.inline_advance_adjustment(self.prepared_glyph(local));
+        SceneGlyphView {
+            revision: self.revision,
+            fragment: self,
+            local,
+            inline_origin,
+            inline_advance_adjustment,
+        }
+    }
+
+    fn advance_inline(self, local: usize, inline_origin: f64) -> f64 {
+        let glyph = self.prepared_glyph(local);
+        inline_origin + glyph.advance().x + self.inline_advance_adjustment(glyph)
+    }
+
+    fn inline_origin_for(self, local: usize) -> f64 {
+        let glyphs = self.local().glyphs.clone();
+        debug_assert!(
+            (glyphs.start as usize..=glyphs.end as usize).contains(&local),
+            "glyph traversal must remain inside its retained fragment"
+        );
+        (glyphs.start as usize..local).fold(self.local().inline_origin, |inline, glyph| {
+            self.advance_inline(glyph, inline)
+        })
+    }
+
     /// Returns the retained fragment identity.
     #[must_use]
     pub fn id(self) -> SceneFragmentId {
@@ -692,6 +749,8 @@ impl<'a> SceneFragmentView<'a> {
             fragment: self,
             front: glyphs.start as usize,
             back: glyphs.end as usize,
+            front_inline: self.local().inline_origin,
+            back_inline: None,
         }
     }
 
@@ -780,19 +839,15 @@ pub struct SceneGlyphs<'a> {
     fragment: SceneFragmentView<'a>,
     front: usize,
     back: usize,
+    front_inline: f64,
+    back_inline: Option<f64>,
 }
 
 impl<'a> SceneGlyphs<'a> {
     /// Returns a fresh iterator over every glyph observation.
     #[must_use]
     pub fn iter(&self) -> Self {
-        let glyphs = self.fragment.local().glyphs.clone();
-        Self {
-            revision: self.revision,
-            fragment: self.fragment,
-            front: glyphs.start as usize,
-            back: glyphs.end as usize,
-        }
+        self.fragment.glyphs()
     }
 
     /// Returns the number of glyph observations.
@@ -811,10 +866,10 @@ impl<'a> SceneGlyphs<'a> {
     #[must_use]
     pub fn get(&self, index: usize) -> Option<SceneGlyphView<'a>> {
         let glyphs = self.fragment.local().glyphs.clone();
-        (index < glyphs.len()).then_some(SceneGlyphView {
-            revision: self.revision,
-            fragment: self.fragment,
-            local: glyphs.start as usize + index,
+        (index < glyphs.len()).then(|| {
+            let local = glyphs.start as usize + index;
+            self.fragment
+                .observe_glyph(local, self.fragment.inline_origin_for(local))
         })
     }
 
@@ -833,12 +888,10 @@ impl<'a> Iterator for SceneGlyphs<'a> {
             return None;
         }
         let local = self.front;
+        let glyph = self.fragment.observe_glyph(local, self.front_inline);
+        self.front_inline += glyph.advance().x;
         self.front += 1;
-        Some(SceneGlyphView {
-            revision: self.revision,
-            fragment: self.fragment,
-            local,
-        })
+        Some(glyph)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -852,11 +905,22 @@ impl DoubleEndedIterator for SceneGlyphs<'_> {
         if self.front == self.back {
             return None;
         }
+        let end = self.back_inline.unwrap_or_else(|| {
+            (self.front..self.back).fold(self.front_inline, |inline, glyph| {
+                self.fragment.advance_inline(glyph, inline)
+            })
+        });
         self.back -= 1;
+        let glyph = self.fragment.prepared_glyph(self.back);
+        let inline_advance_adjustment = self.fragment.inline_advance_adjustment(glyph);
+        let inline_origin = end - glyph.advance().x - inline_advance_adjustment;
+        self.back_inline = Some(inline_origin);
         Some(SceneGlyphView {
             revision: self.revision,
             fragment: self.fragment,
             local: self.back,
+            inline_origin,
+            inline_advance_adjustment,
         })
     }
 }
@@ -978,16 +1042,13 @@ pub struct SceneGlyphView<'a> {
     revision: DocumentRevision,
     fragment: SceneFragmentView<'a>,
     local: usize,
+    inline_origin: f64,
+    inline_advance_adjustment: f64,
 }
 
 impl<'a> SceneGlyphView<'a> {
     fn prepared(self) -> PreparedGlyphView<'a> {
         self.fragment.prepared_glyph(self.local)
-    }
-
-    fn placement(self) -> &'a CachedGlyph {
-        &self.fragment.positioned.position.segment.geometry.glyphs
-            [self.fragment.instance(self.local)]
     }
 
     /// Returns the identity shared by split-paint observations.
@@ -1008,17 +1069,19 @@ impl<'a> SceneGlyphView<'a> {
     /// Returns the scene-space glyph origin.
     #[must_use]
     pub fn position(self) -> Point {
-        self.placement().position + self.fragment.translate()
+        let offset = self.prepared().offset();
+        Point::new(
+            self.inline_origin + offset.x,
+            self.fragment.cached_line().bounds.y0 + self.fragment.prepared_line().baseline()
+                - offset.y,
+        ) + self.fragment.translate()
     }
 
     /// Returns the shaped advance.
     #[must_use]
     pub fn advance(self) -> Vec2 {
         let advance = self.prepared().advance();
-        Vec2::new(
-            advance.x + self.placement().inline_advance_adjustment,
-            advance.y,
-        )
+        Vec2::new(advance.x + self.inline_advance_adjustment, advance.y)
     }
 
     /// Iterates source-complete glyph provenance.
