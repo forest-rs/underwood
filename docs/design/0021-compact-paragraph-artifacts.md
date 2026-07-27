@@ -733,7 +733,9 @@ traversal, whose items are `PreparedGlyphView`, rather than
 value. Final glyph advances and offsets use the shaping pipeline's native
 `f32` precision; the public view converts them to scene-space `f64` values.
 Values outside finite `f32` range are rejected while the paragraph is
-canonicalized.
+canonicalized. The ordinary horizontal record stores inline advance only;
+nonzero block advance or offset spills to a glyph-indexed placement table
+without changing those public observations.
 
 `PreparedInteractionUnitView` is now a direct view rather than dereferencing
 to the wide `PreparedInteractionUnit` construction value. Its method surface

@@ -296,6 +296,7 @@ pub(crate) struct PreparedParagraphFacts {
     lines: Vec<PreparedLineRecord>,
     runs: Vec<PreparedRunRecord>,
     glyphs: Vec<PreparedGlyphRecord>,
+    glyph_placements: Vec<PreparedGlyphPlacement>,
     split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
     interaction_slices: Vec<PreparedInteractionSlice>,
     interaction_units: Vec<PreparedInteractionUnitRecord>,
@@ -339,33 +340,43 @@ struct PreparedRunRecord {
 struct PreparedGlyphRecord {
     id: u32,
     source: Range<u32>,
-    advance: [f32; 2],
+    inline_advance: f32,
+}
+
+#[derive(Debug)]
+struct PreparedGlyphPlacement {
+    glyph: u32,
+    block_advance: f32,
     offset: [f32; 2],
 }
 
 impl PreparedGlyphRecord {
     fn try_from_glyph(
         glyph: PreparedGlyph,
-    ) -> Result<(Self, GlyphPaintCoverage), PreparationError> {
-        let advance = [
-            compact_shaping_coordinate(glyph.advance.x)
-                .ok_or_else(PreparationError::invalid_output)?,
-            compact_shaping_coordinate(glyph.advance.y)
-                .ok_or_else(PreparationError::invalid_output)?,
-        ];
+    ) -> Result<(Self, Option<PreparedGlyphPlacement>, GlyphPaintCoverage), PreparationError> {
+        let inline_advance = compact_shaping_coordinate(glyph.advance.x)
+            .ok_or_else(PreparationError::invalid_output)?;
+        let block_advance = compact_shaping_coordinate(glyph.advance.y)
+            .ok_or_else(PreparationError::invalid_output)?;
         let offset = [
             compact_shaping_coordinate(glyph.offset.x)
                 .ok_or_else(PreparationError::invalid_output)?,
             compact_shaping_coordinate(glyph.offset.y)
                 .ok_or_else(PreparationError::invalid_output)?,
         ];
+        let placement =
+            (block_advance != 0.0 || offset != [0.0, 0.0]).then_some(PreparedGlyphPlacement {
+                glyph: 0,
+                block_advance,
+                offset,
+            });
         Ok((
             Self {
                 id: glyph.id,
                 source: glyph.source,
-                advance,
-                offset,
+                inline_advance,
             },
+            placement,
             glyph.paint,
         ))
     }
@@ -542,6 +553,9 @@ impl PreparedParagraphFacts {
             .saturating_add(vec_bytes::<PreparedLineRecord>(self.lines.capacity()))
             .saturating_add(vec_bytes::<PreparedRunRecord>(self.runs.capacity()))
             .saturating_add(vec_bytes::<PreparedGlyphRecord>(self.glyphs.capacity()))
+            .saturating_add(vec_bytes::<PreparedGlyphPlacement>(
+                self.glyph_placements.capacity(),
+            ))
             .saturating_add(vec_bytes::<PreparedSplitGlyphPaint>(
                 self.split_glyph_paints.capacity(),
             ))
@@ -612,6 +626,7 @@ impl PreparedParagraphFacts {
         let mut line_records = Vec::with_capacity(lines.len());
         let mut run_records = Vec::with_capacity(run_capacity);
         let mut glyphs = Vec::with_capacity(glyph_capacity);
+        let mut glyph_placements = Vec::new();
         let mut split_glyph_paints = Vec::new();
         let mut interaction_slices = Vec::with_capacity(slice_capacity);
         let mut interaction_units = Vec::with_capacity(unit_capacity);
@@ -684,8 +699,12 @@ impl PreparedParagraphFacts {
                 for glyph in run_glyphs {
                     let glyph_index = u32::try_from(glyphs.len())
                         .map_err(|_| PreparationError::invalid_output())?;
-                    let (glyph, paint) = PreparedGlyphRecord::try_from_glyph(glyph)?;
+                    let (glyph, placement, paint) = PreparedGlyphRecord::try_from_glyph(glyph)?;
                     glyphs.push(glyph);
+                    if let Some(mut placement) = placement {
+                        placement.glyph = glyph_index;
+                        glyph_placements.push(placement);
+                    }
                     if !paint.is_whole() {
                         split_glyph_paints.push(PreparedSplitGlyphPaint {
                             glyph: glyph_index,
@@ -735,6 +754,7 @@ impl PreparedParagraphFacts {
             lines: line_records,
             runs: run_records,
             glyphs,
+            glyph_placements,
             split_glyph_paints,
             interaction_slices,
             interaction_units,
@@ -1237,6 +1257,16 @@ impl<'a> PreparedGlyphView<'a> {
         &self.facts.glyphs[self.index]
     }
 
+    fn placement(self) -> Option<&'a PreparedGlyphPlacement> {
+        let index =
+            u32::try_from(self.index).expect("canonical glyph indexes were validated as u32");
+        self.facts
+            .glyph_placements
+            .binary_search_by_key(&index, |placement| placement.glyph)
+            .ok()
+            .map(|index| &self.facts.glyph_placements[index])
+    }
+
     /// Returns the backend glyph identifier.
     #[must_use]
     pub fn id(self) -> u32 {
@@ -1252,15 +1282,22 @@ impl<'a> PreparedGlyphView<'a> {
     /// Returns the shaped advance.
     #[must_use]
     pub fn advance(self) -> Vec2 {
-        let [x, y] = self.record().advance;
-        Vec2::new(f64::from(x), f64::from(y))
+        Vec2::new(
+            f64::from(self.record().inline_advance),
+            self.placement()
+                .map_or(0.0, |placement| f64::from(placement.block_advance)),
+        )
     }
 
     /// Returns the shaped glyph offset.
     #[must_use]
     pub fn offset(self) -> Vec2 {
-        let [x, y] = self.record().offset;
-        Vec2::new(f64::from(x), f64::from(y))
+        self.placement().map_or(Vec2::ZERO, |placement| {
+            Vec2::new(
+                f64::from(placement.offset[0]),
+                f64::from(placement.offset[1]),
+            )
+        })
     }
 
     /// Returns exceptional split-paint coverage.

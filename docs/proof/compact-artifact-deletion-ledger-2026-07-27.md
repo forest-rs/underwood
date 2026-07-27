@@ -439,3 +439,18 @@ An exact matched live-heap checkpoint immediately before this change measured
 7,234,848 bytes above Underwood's font baseline versus 3,378,240 bytes above
 Parley's, or 2.14×. The slice deletion projects the same fixture to about
 2.06×; the matched heap run, rather than that projection, remains the gate.
+
+## Inline horizontal glyph geometry
+
+The canonical glyph record now stores only ID, source, and inline advance.
+The ordinary horizontal glyph therefore pays no fields for a zero block
+advance or zero offset. Glyphs with vertical advance or nonzero placement
+retain one indexed exceptional record, preserving exact public observations
+for marks and future logical-axis work.
+
+On the 1,000-label fixture, 250 paragraphs contain exceptional positioned
+glyphs. The change removes 233,000 retained bytes overall; scene-cache
+accounting falls to 3,342,394 bytes and caller-held scene accounting to
+2,910,128 bytes. Edited-paragraph preparation retains 1,056 net bytes. The
+exception table adds no allocation to paragraphs whose glyphs all use the
+ordinary representation.
