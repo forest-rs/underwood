@@ -150,7 +150,8 @@ same internal paragraph-source view used by document paragraphs.
 | seven duplicate-owner files | 6,161 | 5,317 | in progress; −844 |
 | portable complete cursor graph | present | deleted | complete |
 | copied scene cursor graph | present | deleted | complete |
-| adapter final-output cache | present | — | pending |
+| adapter final-output cache | present | deleted | complete |
+| ordinary per-glyph paint coverage | present | deleted | complete |
 | clone-based repaint | present | — | pending |
 | nested-to-flat final lowering | present | — | pending |
 | plain-block document tree | present | — | pending |
@@ -238,6 +239,16 @@ Underwood font baseline, measured:
 
 Default editable residency is now 3.82× the matched 3,378,240-byte Parley
 layout delta, down from 5.25× before Design-0021 implementation began. This
-still fails the approved 2× gate; the remaining portable per-glyph paint
-coverage and parallel prepared/placement shapes remain active deletion
+still failed the approved 2× gate at that checkpoint; portable per-glyph paint
+coverage and parallel prepared/placement shapes were the next active deletion
 targets.
+
+Ordinary per-glyph paint coverage was the next owner removed.
+`GlyphPaintCoverage::whole()` is now a zero-payload marker: the prepared glyph
+already owns its source, and core binds that source to the authoritative
+projected `PaintRun`. Only a glyph genuinely split across paint boundaries
+retains two or more explicitly clipped segments.
+
+The 1,000-label editable live-heap delta fell another 1,292,000 bytes, from
+12,902,272 to 11,610,272 bytes. That is 3.44× matched Parley. The public
+adapter migration is recorded in Design-0021.

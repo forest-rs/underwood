@@ -175,6 +175,14 @@ struct PaintTopology {
     fragments: Vec<CachedFragment>,
 }
 
+#[derive(Clone, Copy)]
+struct PaintGlyphIndex {
+    line: usize,
+    run: usize,
+    glyph: usize,
+    instance: usize,
+}
+
 const SYNTHETIC_HIT_UNIT: u32 = u32::MAX;
 pub(super) const WHOLE_GLYPH_PAINT: u32 = u32::MAX;
 
@@ -764,7 +772,7 @@ pub(super) fn build_geometry(
         line_top = line_top.max(current_line_top + line.height());
     }
     let glyphs = build_layout_glyphs(prepared, &lines)?;
-    let paint = build_paint_fragments(prepared, &glyphs)?;
+    let paint = build_paint_fragments(prepared, projection, &glyphs)?;
 
     if retains_clusters
         && prepared.lines().is_empty()
@@ -865,10 +873,10 @@ pub(super) fn build_geometry(
 
 pub(super) fn repaint_geometry(
     prepared: &PreparedParagraph,
-    _projection: &Projection<'_>,
+    projection: &Projection<'_>,
     retained: &CachedGeometry,
 ) -> Result<CachedGeometry, SceneError> {
-    let paint = build_paint_fragments(prepared, &retained.glyphs)?;
+    let paint = build_paint_fragments(prepared, projection, &retained.glyphs)?;
     Ok(CachedGeometry {
         features: retained.features,
         artifact: Arc::clone(&retained.artifact),
@@ -956,6 +964,7 @@ fn build_layout_glyphs(
 
 fn build_paint_fragments(
     prepared: &PreparedParagraph,
+    projection: &Projection<'_>,
     layout_glyphs: &[CachedGlyph],
 ) -> Result<PaintTopology, SceneError> {
     let mut fragments: Vec<CachedFragment> = Vec::new();
@@ -967,74 +976,55 @@ fn build_paint_fragments(
                 let layout = layout_glyphs.get(instance).ok_or_else(|| {
                     SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
                 })?;
-                for (segment_index, segment) in glyph.paint().segments().iter().enumerate() {
-                    let paint_clip = segment.clip().map(|clip| {
-                        Rect::new(
+                if let Some(segments) = glyph.paint().split_segments() {
+                    for (segment_index, segment) in segments.iter().enumerate() {
+                        let clip = segment
+                            .clip()
+                            .expect("validated split-paint segments retain explicit clips");
+                        let paint_clip = Some(Rect::new(
                             layout.position.x + clip.x0,
                             layout.position.y + clip.y0,
                             layout.position.x + clip.x1,
                             layout.position.y + clip.y1,
-                        )
-                    });
-                    let preceding = fragments
-                        .get_mut(run_fragment_start..)
-                        .and_then(|run_fragments| run_fragments.last_mut());
-                    if paint_clip.is_none()
-                        && let Some(preceding) = preceding
-                        && preceding.segment == WHOLE_GLYPH_PAINT
-                        && preceding.paint_clip.is_none()
-                        && preceding.paint == segment.slot()
-                        && preceding.glyphs.end
-                            == u32::try_from(glyph_index).map_err(|_| {
-                                SceneError::for_paragraph(
-                                    SceneErrorKind::SourceCoverage,
-                                    prepared.paragraph(),
-                                )
-                            })?
-                    {
-                        preceding.glyphs.end =
-                            preceding.glyphs.end.checked_add(1).ok_or_else(|| {
-                                SceneError::for_paragraph(
-                                    SceneErrorKind::SourceCoverage,
-                                    prepared.paragraph(),
-                                )
-                            })?;
-                    } else {
-                        let glyph = u32::try_from(glyph_index).map_err(|_| {
-                            SceneError::for_paragraph(
-                                SceneErrorKind::SourceCoverage,
-                                prepared.paragraph(),
-                            )
-                        })?;
-                        fragments.push(CachedFragment {
-                            line: u32::try_from(line_index).map_err(|_| {
-                                SceneError::for_paragraph(
-                                    SceneErrorKind::SourceCoverage,
-                                    prepared.paragraph(),
-                                )
-                            })?,
-                            run: u32::try_from(run_index).map_err(|_| {
-                                SceneError::for_paragraph(
-                                    SceneErrorKind::SourceCoverage,
-                                    prepared.paragraph(),
-                                )
-                            })?,
-                            glyphs: glyph..glyph + 1,
-                            instance_start: instance,
-                            segment: if paint_clip.is_some() {
-                                u32::try_from(segment_index).map_err(|_| {
-                                    SceneError::for_paragraph(
-                                        SceneErrorKind::SourceCoverage,
-                                        prepared.paragraph(),
-                                    )
-                                })?
-                            } else {
-                                WHOLE_GLYPH_PAINT
+                        ));
+                        push_paint_fragment(
+                            &mut fragments,
+                            run_fragment_start,
+                            prepared.paragraph(),
+                            PaintGlyphIndex {
+                                line: line_index,
+                                run: run_index,
+                                glyph: glyph_index,
+                                instance,
                             },
-                            paint: segment.slot(),
+                            Some(segment_index),
+                            segment.slot(),
                             paint_clip,
-                        });
+                        )?;
                     }
+                } else {
+                    let source = glyph.source();
+                    let paint = projection.whole_paint_slot(source.clone()).ok_or_else(|| {
+                        SceneError::from_preparation_source(
+                            prepared.paragraph(),
+                            source,
+                            PreparationErrorKind::UnsupportedPaintCoverage,
+                        )
+                    })?;
+                    push_paint_fragment(
+                        &mut fragments,
+                        run_fragment_start,
+                        prepared.paragraph(),
+                        PaintGlyphIndex {
+                            line: line_index,
+                            run: run_index,
+                            glyph: glyph_index,
+                            instance,
+                        },
+                        None,
+                        paint,
+                        None,
+                    )?;
                 }
                 instance += 1;
             }
@@ -1047,6 +1037,54 @@ fn build_paint_fragments(
         ));
     }
     Ok(PaintTopology { fragments })
+}
+
+fn push_paint_fragment(
+    fragments: &mut Vec<CachedFragment>,
+    run_fragment_start: usize,
+    paragraph: ParagraphId,
+    index: PaintGlyphIndex,
+    segment: Option<usize>,
+    paint: PaintSlot,
+    paint_clip: Option<Rect>,
+) -> Result<(), SceneError> {
+    let glyph = u32::try_from(index.glyph)
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?;
+    let preceding = fragments
+        .get_mut(run_fragment_start..)
+        .and_then(|run_fragments| run_fragments.last_mut());
+    if segment.is_none()
+        && let Some(preceding) = preceding
+        && preceding.segment == WHOLE_GLYPH_PAINT
+        && preceding.paint == paint
+        && preceding.glyphs.end == glyph
+    {
+        preceding.glyphs.end =
+            preceding.glyphs.end.checked_add(1).ok_or_else(|| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+            })?;
+    } else {
+        fragments.push(CachedFragment {
+            line: u32::try_from(index.line).map_err(|_| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+            })?,
+            run: u32::try_from(index.run).map_err(|_| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+            })?,
+            glyphs: glyph..glyph.checked_add(1).ok_or_else(|| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+            })?,
+            instance_start: index.instance,
+            segment: segment.map_or(Ok(WHOLE_GLYPH_PAINT), |segment| {
+                u32::try_from(segment).map_err(|_| {
+                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+                })
+            })?,
+            paint,
+            paint_clip,
+        });
+    }
+    Ok(())
 }
 
 pub(super) fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 {

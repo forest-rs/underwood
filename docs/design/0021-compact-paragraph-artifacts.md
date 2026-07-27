@@ -638,8 +638,8 @@ This is a deliberate breaking adapter migration:
   cursor-movement iterator;
 - `PreparedCaret`, `PreparedCursorMovement`, `PreparedCursorStep`, and their
   borrowed topology views are removed;
-- paint-slot coverage leaves adapter-prepared glyph values in favor of
-  source-coverage topology plus core paint binding;
+- ordinary paint-slot and source coverage leave adapter-prepared glyph values
+  in favor of core binding from authoritative paragraph paint runs;
 - `ParagraphFormationOutput` transfers or shares one validated artifact;
 - custom adapters migrate from repeated nested constructors to one checked
   paragraph builder;
@@ -679,6 +679,20 @@ PreparedParagraph::try_new_with_features(
 
 Scene navigation and carets are derived from those units. Adapters must not
 rebuild the removed graph privately.
+
+Ordinary glyph paint construction also changes:
+
+```rust,ignore
+// Before: every glyph retained another source range and paint slot.
+GlyphPaintCoverage::whole(source.clone(), slot)?
+
+// After: PreparedGlyph already owns source; core owns projected paint runs.
+GlyphPaintCoverage::whole()
+```
+
+Only a glyph genuinely split across paint boundaries retains
+`GlyphPaintSegment` records, and every such segment remains explicitly
+clipped. Adapters must not copy ordinary paint runs into glyph records.
 
 ## Required wind tunnels
 

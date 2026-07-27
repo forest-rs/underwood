@@ -645,7 +645,12 @@ impl<'a> SceneFragmentView<'a> {
         let source = if self.local().segment == WHOLE_GLYPH_PAINT {
             self.prepared_glyph(glyph).source()
         } else {
-            self.prepared_glyph(glyph).paint().segments()[self.local().segment as usize].source()
+            self.prepared_glyph(glyph)
+                .paint()
+                .split_segments()
+                .expect("split fragment retains split glyph coverage")
+                [self.local().segment as usize]
+                .source()
         };
         SourceReference::Projected(source.into())
     }
@@ -1288,7 +1293,7 @@ impl SourceReferences<'_> {
             Self::Glyphs { glyphs, segment } => {
                 let glyph = glyphs.get(index)?;
                 let source = match segment {
-                    Some(segment) => glyph.paint().segments().get(segment)?.source(),
+                    Some(segment) => glyph.paint().split_segments()?.get(segment)?.source(),
                     None => glyph.source(),
                 };
                 Some(SourceReference::Projected(source.into()))

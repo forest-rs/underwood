@@ -563,8 +563,12 @@ impl PreparedParagraphFacts {
                 }
                 for glyph in &run.glyphs {
                     bytes = bytes.saturating_add(
-                        size_of::<GlyphPaintSegment>()
-                            .saturating_mul(glyph.paint.segment_capacity()),
+                        size_of::<GlyphPaintSegment>().saturating_mul(
+                            glyph
+                                .paint
+                                .split_segments()
+                                .map_or(0, <[GlyphPaintSegment]>::len),
+                        ),
                     );
                 }
             }
@@ -702,7 +706,7 @@ impl PreparedRun {
     }
 }
 
-/// One shaped glyph with paragraph source and paint coverage.
+/// One shaped glyph with paragraph source and exceptional split-paint coverage.
 #[derive(Clone, Debug)]
 pub struct PreparedGlyph {
     id: u32,
@@ -726,12 +730,13 @@ impl PreparedGlyph {
             || !advance.y.is_finite()
             || !offset.x.is_finite()
             || !offset.y.is_finite()
-            || paint.segments().first().is_none_or(|segment| {
-                segment.source().start != source.start
-                    || paint
-                        .segments()
-                        .last()
-                        .is_none_or(|last| last.source().end != source.end)
+            || paint.split_segments().is_some_and(|segments| {
+                segments.first().is_none_or(|segment| {
+                    segment.source().start != source.start
+                        || segments
+                            .last()
+                            .is_none_or(|last| last.source().end != source.end)
+                })
             })
         {
             return Err(PreparationError::invalid_output());
@@ -769,7 +774,10 @@ impl PreparedGlyph {
         self.offset
     }
 
-    /// Returns complete source-to-paint coverage.
+    /// Returns exceptional split-paint coverage.
+    ///
+    /// Whole glyphs carry no slot or source copy; core binds their existing
+    /// source range to the authoritative paragraph paint runs.
     #[must_use]
     pub const fn paint(&self) -> &GlyphPaintCoverage {
         &self.paint

@@ -150,16 +150,15 @@ impl ParagraphFormation for AnalysisCursorProof {
                 PreparedClusterSide::new(source.start, TextAffinity::Downstream),
                 PreparedClusterSide::new(source.end, TextAffinity::Upstream),
             )?);
-            let slot = input
+            input
                 .paint_runs()
                 .iter()
                 .find(|run| {
                     let bytes = run.bytes();
                     bytes.start <= source.start && source.end <= bytes.end
                 })
-                .ok_or_else(underwood::adapter::PreparationError::invalid_output)?
-                .slot();
-            let paint = GlyphPaintCoverage::whole(source.clone(), slot)?;
+                .ok_or_else(underwood::adapter::PreparationError::invalid_output)?;
+            let paint = GlyphPaintCoverage::whole();
             glyphs.push(PreparedGlyph::try_new(
                 u32::try_from(id).unwrap_or(u32::MAX),
                 source,

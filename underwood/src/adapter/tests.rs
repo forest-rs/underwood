@@ -59,15 +59,10 @@ fn synthesis_evidence_is_validated_canonical_and_last_wins() {
 }
 
 #[test]
-fn whole_glyph_paint_is_exactly_one_unclipped_segment() {
-    let coverage = GlyphPaintCoverage::whole(2..5, PaintSlot::new(3))
-        .expect("whole-glyph coverage must be valid");
-    let [segment] = coverage.segments() else {
-        panic!("whole-glyph coverage must contain exactly one segment");
-    };
-    assert_eq!(segment.source(), 2..5);
-    assert_eq!(segment.slot(), PaintSlot::new(3));
-    assert_eq!(segment.clip(), None);
+fn whole_glyph_paint_retains_no_duplicate_source_or_slot() {
+    let coverage = GlyphPaintCoverage::whole();
+    assert!(coverage.is_whole());
+    assert!(coverage.split_segments().is_none());
 }
 
 #[test]
@@ -83,21 +78,13 @@ fn split_glyph_paint_requires_explicit_clips_for_every_segment() {
     .expect("contiguous explicitly clipped coverage must be valid");
     let glyph = PreparedGlyph::try_new(17, 0..3, Vec2::new(10.0, 0.0), Vec2::ZERO, coverage)
         .expect("split coverage must preserve one shaped glyph");
-    assert_eq!(glyph.paint().segments().len(), 2);
-    assert_eq!(glyph.paint().segments()[0].clip(), Some(left));
-    assert_eq!(glyph.paint().segments()[1].clip(), Some(right));
-}
-
-#[test]
-fn glyph_paint_rejects_mixed_unclipped_and_clipped_segments() {
-    let error = GlyphPaintCoverage::try_from_segments([
-        GlyphPaintSegment::whole(0..1, PaintSlot::new(0))
-            .expect("whole segment must be valid alone"),
-        GlyphPaintSegment::clipped(1..2, PaintSlot::new(1), Rect::new(5.0, -8.0, 10.0, 2.0))
-            .expect("clipped segment must be valid alone"),
-    ])
-    .expect_err("mixed full and partial paint would make clipping ambiguous");
-    assert_eq!(error.kind(), PreparationErrorKind::UnsupportedPaintCoverage);
+    let segments = glyph
+        .paint()
+        .split_segments()
+        .expect("split glyph retains exceptional segments");
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].clip(), Some(left));
+    assert_eq!(segments[1].clip(), Some(right));
 }
 
 #[test]
@@ -318,8 +305,7 @@ fn prepared_run_accepts_control_only_source_without_a_phantom_glyph() {
 }
 
 fn run(source: core::ops::Range<u32>) -> PreparedRun {
-    let paint = GlyphPaintCoverage::whole(source.clone(), PaintSlot::new(0))
-        .expect("whole-glyph paint is valid");
+    let paint = GlyphPaintCoverage::whole();
     let glyph = PreparedGlyph::try_new(1, source.clone(), Vec2::new(1., 0.), Vec2::ZERO, paint)
         .expect("test glyph is valid");
     PreparedRun::try_new(

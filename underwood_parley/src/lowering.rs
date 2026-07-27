@@ -284,5 +284,5 @@ pub(crate) fn paint_coverage(
     {
         return Err(PreparationError::unsupported_paint_coverage());
     }
-    GlyphPaintCoverage::whole(source, paint.slot())
+    Ok(GlyphPaintCoverage::whole())
 }

@@ -83,13 +83,25 @@ impl ParagraphFormation for EchoAdapter {
                         Rect::new(5.0, -8.0, 10.0, 2.0),
                     )?,
                 ])?
+            } else if self.mismatched_paint {
+                if glyph_source.end - glyph_source.start < 2 {
+                    return Err(PreparationError::invalid_output());
+                }
+                let middle = glyph_source.start + 1;
+                GlyphPaintCoverage::try_from_segments([
+                    GlyphPaintSegment::clipped(
+                        glyph_source.start..middle,
+                        PaintSlot::new(99),
+                        Rect::new(0.0, -8.0, 5.0, 2.0),
+                    )?,
+                    GlyphPaintSegment::clipped(
+                        middle..glyph_source.end,
+                        PaintSlot::new(99),
+                        Rect::new(5.0, -8.0, 10.0, 2.0),
+                    )?,
+                ])?
             } else {
-                let slot = if self.mismatched_paint {
-                    PaintSlot::new(99)
-                } else {
-                    input.paint_runs()[0].slot()
-                };
-                GlyphPaintCoverage::whole(glyph_source.clone(), slot)?
+                GlyphPaintCoverage::whole()
             };
             let offset = if self.split_paint {
                 Vec2::new(3.0, 4.0)
@@ -874,7 +886,7 @@ fn layout_reports_adapter_paint_mismatch_as_invalid_preparation() {
         error.preparation(),
         Some(PreparationErrorKind::InvalidOutput)
     );
-    assert_eq!(error.source(), Some(0..2));
+    assert_eq!(error.source(), Some(0..1));
 }
 
 #[test]

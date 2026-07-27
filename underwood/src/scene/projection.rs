@@ -311,6 +311,18 @@ impl<'a> Projection<'a> {
         })
     }
 
+    pub(super) fn whole_paint_slot(&self, source: Range<u32>) -> Option<PaintSlot> {
+        let mut matching = self.paint_runs.iter().filter(|paint| {
+            let paint_source = paint.bytes();
+            paint_source.start < source.end && source.start < paint_source.end
+        });
+        let paint = matching.next()?;
+        (matching.next().is_none()
+            && paint.bytes().start <= source.start
+            && paint.bytes().end >= source.end)
+            .then(|| paint.slot())
+    }
+
     pub(super) fn validate_source_range(&self, paragraph: Range<u32>) -> Result<(), SceneError> {
         let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
             SceneError::for_source(
@@ -784,43 +796,30 @@ pub(super) fn validate_prepared(
                         source,
                     ));
                 }
-                for segment in glyph.paint().segments() {
-                    let source = segment.source();
-                    if projection
-                        .mapping
-                        .text()
-                        .get(source.start as usize..source.end as usize)
-                        .is_none()
-                    {
-                        return Err(SceneError::for_source(
-                            SceneErrorKind::SourceCoverage,
-                            prepared.paragraph(),
-                            source,
-                        ));
+                if let Some(segments) = glyph.paint().split_segments() {
+                    for segment in segments {
+                        let source = segment.source();
+                        if projection
+                            .mapping
+                            .text()
+                            .get(source.start as usize..source.end as usize)
+                            .is_none()
+                            || projection.whole_paint_slot(source.clone()) != Some(segment.slot())
+                        {
+                            return Err(SceneError::from_preparation_source(
+                                prepared.paragraph(),
+                                source,
+                                PreparationErrorKind::InvalidOutput,
+                            ));
+                        }
+                        projection.validate_source_range(source)?;
                     }
-                    let mut matching = projection.paint_runs.iter().filter(|paint| {
-                        let paint_source = paint.bytes();
-                        paint_source.start < source.end && source.start < paint_source.end
-                    });
-                    let Some(paint) = matching.next() else {
-                        return Err(SceneError::from_preparation_source(
-                            prepared.paragraph(),
-                            source,
-                            PreparationErrorKind::InvalidOutput,
-                        ));
-                    };
-                    if matching.next().is_some()
-                        || paint.bytes().start > source.start
-                        || paint.bytes().end < source.end
-                        || paint.slot() != segment.slot()
-                    {
-                        return Err(SceneError::from_preparation_source(
-                            prepared.paragraph(),
-                            source,
-                            PreparationErrorKind::InvalidOutput,
-                        ));
-                    }
-                    projection.validate_source_range(source)?;
+                } else if projection.whole_paint_slot(source.clone()).is_none() {
+                    return Err(SceneError::from_preparation_source(
+                        prepared.paragraph(),
+                        source,
+                        PreparationErrorKind::UnsupportedPaintCoverage,
+                    ));
                 }
             }
             for range in run.unrendered_source() {
