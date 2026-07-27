@@ -7,7 +7,7 @@
 //! explicitly does not own line-breaking, shaping, lowering, or interaction
 //! algorithms.
 
-use alloc::{collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeMap, vec::Vec};
 use core::{
     mem::{self, size_of, size_of_val},
     ops::Range,
@@ -15,29 +15,26 @@ use core::{
 
 use parley_engine::{Analysis, Analyzer, ShapedText, Shaper};
 use underwood::adapter::{
-    AnalysisRun, FormationWork, InlineFlowRun, LineBreakReason, LineShapingWork,
-    ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
-    ParagraphFormationOutput, ParagraphFormationReuse, ParagraphInput, ParagraphPreparationId,
-    PreparationError, PreparedLine, PreparedParagraph, PreparedRun, ShapingRun,
+    FormationWork, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
+    ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphFormationReuse,
+    ParagraphInput, ParagraphPreparationId, PreparationError, PreparedLine, PreparedParagraph,
+    PreparedRun,
 };
-use underwood::{
-    AnalysisStyle, InlineFlowStyle, ParagraphStyle, RegionAttempt, RegionTranscript,
-    ResolvedDirection, ShapingStyle,
-};
+use underwood::{RegionAttempt, RegionTranscript, ResolvedDirection};
 
 use crate::font::FontSet;
-use crate::interaction::{collect_analysis_units, lower_visual_units};
+use crate::interaction::{collect_analysis_units_into, lower_visual_units};
 use crate::line_break::{
     FormedLine, LineFormationScratch, LineFormationWork, LogicalCluster, apply_wrap_policy,
-    collect_logical_clusters, form_lines, line_run_pieces, reorder_visual_pieces,
+    collect_logical_clusters_into, form_lines, line_run_pieces, reorder_visual_pieces,
     shaped_text_accounted_bytes, update_line_metrics,
 };
 use crate::lowering::{
     checked_source_range, index_char_starts, lower_glyphs, portable_synthesis, unrendered_source,
 };
 use crate::shaping::{
-    analyze_text_with_styles, prepare_inline_flow_indices, reshape_paragraph_with_retained_fonts,
-    shape_line, shape_paragraph, shaped_glyph_count,
+    analyze_text_with_styles_into, prepare_inline_flow_indices,
+    reshape_paragraph_with_retained_fonts, shape_line, shape_paragraph, shaped_glyph_count,
 };
 use crate::spacing::{
     apply_spacing, capture_base_advances, collect_joining_units, restore_base_advances,
@@ -55,6 +52,7 @@ pub struct ParleyParagraphEngine {
     line_scratch: LineFormationScratch,
     reshape_scratch: ShapedText,
     cache: BTreeMap<ParagraphPreparationId, PreparationCache>,
+    scratch_cache: Option<PreparationCache>,
     retention_budget: usize,
     retention_clock: u64,
     retention_work: RetentionWork,
@@ -71,6 +69,7 @@ impl ParleyParagraphEngine {
             line_scratch: LineFormationScratch::default(),
             reshape_scratch: ShapedText::new(),
             cache: BTreeMap::new(),
+            scratch_cache: None,
             retention_budget: 0,
             retention_clock: 0,
             retention_work: RetentionWork::default(),
@@ -81,6 +80,11 @@ impl ParleyParagraphEngine {
         self.line_scratch
             .accounted_owned_bytes()
             .saturating_add(shaped_text_accounted_bytes(&self.reshape_scratch))
+            .saturating_add(
+                self.scratch_cache
+                    .as_ref()
+                    .map_or(0, PreparationCache::calculate_accounted_owned_bytes),
+            )
     }
 
     fn remove_cache(&mut self, preparation: ParagraphPreparationId, release: bool) -> bool {
@@ -91,10 +95,24 @@ impl ParleyParagraphEngine {
             .retention_work
             .resident_bytes
             .saturating_sub(cache.accounted_bytes);
+        self.recycle_cache(cache);
         if release {
             self.retention_work.releases = self.retention_work.releases.saturating_add(1);
         }
         true
+    }
+
+    fn recycle_cache(&mut self, mut cache: PreparationCache) {
+        cache.last_used = 0;
+        cache.accounted_bytes = 0;
+        let replacement_bytes = cache.calculate_accounted_owned_bytes();
+        let retained_bytes = self
+            .scratch_cache
+            .as_ref()
+            .map_or(0, PreparationCache::calculate_accounted_owned_bytes);
+        if replacement_bytes >= retained_bytes {
+            self.scratch_cache = Some(cache);
+        }
     }
 
     fn release_entry(&mut self, preparation: ParagraphPreparationId, release: bool) {
@@ -155,85 +173,50 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 validate_paint_runs(&input, text_len)?;
             }
         }
+        if !retained {
+            self.cache.insert(
+                preparation_id,
+                self.scratch_cache
+                    .take()
+                    .unwrap_or_else(PreparationCache::empty),
+            );
+        }
         let analyzed = !retained || change.analysis_changed();
         if analyzed {
-            let analysis = analyze_text_with_styles(
+            let cache = self
+                .cache
+                .get_mut(&preparation_id)
+                .ok_or_else(PreparationError::invalid_output)?;
+            analyze_text_with_styles_into(
                 &mut self.analyzer,
                 input.text(),
                 input.paragraph_style().base_direction(),
                 input.analysis_styles(),
                 input.analysis_runs(),
+                &mut cache.analysis,
             )?;
-            let interaction_units = collect_analysis_units(input.text(), &analysis)?;
-            let mut joining_units = Vec::new();
+            collect_analysis_units_into(
+                input.text(),
+                &cache.analysis,
+                &mut cache.interaction_units,
+            )?;
             collect_joining_units(
                 input.text(),
-                &analysis,
-                &interaction_units,
-                &mut joining_units,
+                &cache.analysis,
+                &cache.interaction_units,
+                &mut cache.joining_units,
             )?;
-            let mut char_starts = self
-                .cache
-                .get_mut(&preparation_id)
-                .map(|cache| mem::take(&mut cache.char_starts))
-                .unwrap_or_default();
-            index_char_starts(input.text(), &mut char_starts)?;
-            if let Some(cache) = self.cache.get_mut(&preparation_id) {
-                cache.text = Arc::from(input.text());
-                cache.paragraph_style = input.paragraph_style();
-                cache.analysis_styles = input.analysis_styles().to_vec();
-                cache.analysis_runs = input.analysis_runs().to_vec();
-                cache.analysis = analysis;
-                cache.interaction_units = interaction_units;
-                cache.joining_units = joining_units;
-                cache.char_starts = char_starts;
-                cache.shaping_styles.clear();
-                cache.shaping_runs.clear();
-                cache.style_indices.clear();
-                cache.inline_flow_indices.clear();
-                cache.shaped_text.clear();
-                cache.scripts.clear();
-                cache.base_cluster_advances.clear();
-                cache.base_glyph_advances.clear();
-                cache.logical_clusters.clear();
-                cache.shaped_glyphs = 0;
-                cache.inline_flow_styles.clear();
-                cache.inline_flow_runs.clear();
-                cache.constraints = None;
-                cache.formed_lines.clear();
-                cache.region_transcript = None;
-            } else {
-                self.cache.insert(
-                    preparation_id,
-                    PreparationCache {
-                        text: Arc::from(input.text()),
-                        paragraph_style: input.paragraph_style(),
-                        analysis_styles: input.analysis_styles().to_vec(),
-                        analysis_runs: input.analysis_runs().to_vec(),
-                        analysis,
-                        interaction_units,
-                        joining_units,
-                        char_starts,
-                        shaping_styles: Vec::new(),
-                        shaping_runs: Vec::new(),
-                        style_indices: Vec::new(),
-                        inline_flow_indices: Vec::new(),
-                        shaped_text: ShapedText::new(),
-                        scripts: Vec::new(),
-                        base_cluster_advances: Vec::new(),
-                        base_glyph_advances: Vec::new(),
-                        logical_clusters: Vec::new(),
-                        shaped_glyphs: 0,
-                        inline_flow_styles: Vec::new(),
-                        inline_flow_runs: Vec::new(),
-                        constraints: None,
-                        formed_lines: Vec::new(),
-                        region_transcript: None,
-                        last_used: 0,
-                        accounted_bytes: 0,
-                    },
-                );
-            }
+            index_char_starts(input.text(), &mut cache.char_starts)?;
+            cache.style_indices.clear();
+            cache.inline_flow_indices.clear();
+            cache.shaped_text.clear();
+            cache.scripts.clear();
+            cache.base_cluster_advances.clear();
+            cache.base_glyph_advances.clear();
+            cache.logical_clusters.clear();
+            cache.shaped_glyphs = 0;
+            cache.formed_lines.clear();
+            cache.region_transcript = None;
         }
 
         let font_queried = analyzed || change.font_selection_changed();
@@ -249,12 +232,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .cache
                 .get_mut(&preparation_id)
                 .ok_or_else(PreparationError::invalid_output)?;
-            // Invalidate the retained key before any fallible shaping work.
-            // A failed font query clears `shaped_text`; keeping the previously
-            // successful key would let a later paint-only request reuse that
-            // incomplete cache entry.
-            cache.shaping_styles.clear();
-            cache.shaping_runs.clear();
             if font_queried {
                 selected_clusters = shape_paragraph(
                     &mut self.shaper,
@@ -288,8 +265,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 )?;
                 mem::swap(&mut cache.shaped_text, &mut self.reshape_scratch);
             }
-            cache.shaping_styles = input.shaping_styles().to_vec();
-            cache.shaping_runs = input.shaping_runs().to_vec();
             cache.shaped_glyphs = shaped_glyph_count(&cache.shaped_text);
             capture_base_advances(
                 &cache.shaped_text,
@@ -327,7 +302,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 &cache.interaction_units,
                 &cache.joining_units,
             )?;
-            cache.logical_clusters = collect_logical_clusters(input.text(), &cache.shaped_text)?;
+            collect_logical_clusters_into(
+                input.text(),
+                &cache.shaped_text,
+                &mut cache.logical_clusters,
+            )?;
             cache.formed_lines.clear();
             cache.region_transcript = None;
         }
@@ -415,20 +394,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 line_work = work;
                 cache.region_transcript = transcript;
             }
-            cache.constraints = Some(constraints.clone());
         }
-        if flow_projection_changed {
-            let cache = self
-                .cache
-                .get_mut(&preparation_id)
-                .ok_or_else(PreparationError::invalid_output)?;
-            cache.inline_flow_styles = input.inline_flow_styles().to_vec();
-            cache.inline_flow_runs = input.inline_flow_runs().to_vec();
-        }
-        self.cache
-            .get_mut(&preparation_id)
-            .ok_or_else(PreparationError::invalid_output)?
-            .paragraph_style = input.paragraph_style();
 
         let preparation = self
             .cache
@@ -589,7 +555,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
             .retention_work
             .releases
             .saturating_add(self.cache.len());
-        self.cache.clear();
+        let retained = mem::take(&mut self.cache);
+        for cache in retained.into_values() {
+            self.recycle_cache(cache);
+        }
         self.retention_work.resident_bytes = 0;
     }
 
@@ -641,16 +610,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
 
 #[derive(Debug)]
 struct PreparationCache {
-    text: Arc<str>,
-    paragraph_style: ParagraphStyle,
-    analysis_styles: Vec<AnalysisStyle>,
-    analysis_runs: Vec<AnalysisRun>,
     analysis: Analysis,
     interaction_units: Vec<Range<usize>>,
     joining_units: Vec<bool>,
     char_starts: Vec<u32>,
-    shaping_styles: Vec<ShapingStyle>,
-    shaping_runs: Vec<ShapingRun>,
     style_indices: Vec<u16>,
     inline_flow_indices: Vec<u16>,
     shaped_text: ShapedText,
@@ -659,9 +622,6 @@ struct PreparationCache {
     base_glyph_advances: Vec<f32>,
     logical_clusters: Vec<LogicalCluster>,
     shaped_glyphs: u32,
-    inline_flow_styles: Vec<InlineFlowStyle>,
-    inline_flow_runs: Vec<InlineFlowRun>,
-    constraints: Option<ParagraphConstraints>,
     formed_lines: Vec<FormedLine>,
     region_transcript: Option<RegionTranscript>,
     last_used: u64,
@@ -669,18 +629,34 @@ struct PreparationCache {
 }
 
 impl PreparationCache {
+    fn empty() -> Self {
+        Self {
+            analysis: Analysis::new(),
+            interaction_units: Vec::new(),
+            joining_units: Vec::new(),
+            char_starts: Vec::new(),
+            style_indices: Vec::new(),
+            inline_flow_indices: Vec::new(),
+            shaped_text: ShapedText::new(),
+            scripts: Vec::new(),
+            base_cluster_advances: Vec::new(),
+            base_glyph_advances: Vec::new(),
+            logical_clusters: Vec::new(),
+            shaped_glyphs: 0,
+            formed_lines: Vec::new(),
+            region_transcript: None,
+            last_used: 0,
+            accounted_bytes: 0,
+        }
+    }
+
     fn calculate_accounted_owned_bytes(&self) -> usize {
         let mut bytes = size_of::<Self>()
-            .saturating_add(self.text.len())
-            .saturating_add(vec_bytes::<AnalysisStyle>(self.analysis_styles.capacity()))
-            .saturating_add(vec_bytes::<AnalysisRun>(self.analysis_runs.capacity()))
             .saturating_add(size_of_val(self.analysis.char_info()))
             .saturating_add(size_of_val(self.analysis.bidi_levels()))
             .saturating_add(vec_bytes::<Range<usize>>(self.interaction_units.capacity()))
             .saturating_add(vec_bytes::<bool>(self.joining_units.capacity()))
             .saturating_add(vec_bytes::<u32>(self.char_starts.capacity()))
-            .saturating_add(vec_bytes::<ShapingStyle>(self.shaping_styles.capacity()))
-            .saturating_add(vec_bytes::<ShapingRun>(self.shaping_runs.capacity()))
             .saturating_add(vec_bytes::<u16>(self.style_indices.capacity()))
             .saturating_add(vec_bytes::<u16>(self.inline_flow_indices.capacity()))
             .saturating_add(shaped_text_accounted_bytes(&self.shaped_text))
@@ -690,10 +666,6 @@ impl PreparationCache {
             .saturating_add(vec_bytes::<LogicalCluster>(
                 self.logical_clusters.capacity(),
             ))
-            .saturating_add(vec_bytes::<InlineFlowStyle>(
-                self.inline_flow_styles.capacity(),
-            ))
-            .saturating_add(vec_bytes::<InlineFlowRun>(self.inline_flow_runs.capacity()))
             .saturating_add(vec_bytes::<FormedLine>(self.formed_lines.capacity()));
         for line in &self.formed_lines {
             bytes = bytes.saturating_add(line.accounted_owned_bytes());

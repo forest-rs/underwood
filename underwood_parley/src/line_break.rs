@@ -690,7 +690,7 @@ pub(crate) fn collect_logical_clusters(
     Ok(clusters)
 }
 
-fn collect_logical_clusters_into(
+pub(crate) fn collect_logical_clusters_into(
     text: &str,
     shaped_text: &ShapedText,
     clusters: &mut Vec<LogicalCluster>,

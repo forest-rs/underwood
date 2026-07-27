@@ -33,10 +33,13 @@ pub(crate) fn analyze_text(
     text: &str,
     base_direction: BaseDirection,
 ) -> Analysis {
-    analyze_text_with_styles(analyzer, text, base_direction, &[], &[])
-        .expect("empty analysis-style runs are valid")
+    let mut analysis = Analysis::new();
+    analyze_text_with_styles_into(analyzer, text, base_direction, &[], &[], &mut analysis)
+        .expect("empty analysis-style runs are valid");
+    analysis
 }
 
+#[cfg(test)]
 pub(crate) fn analyze_text_with_styles(
     analyzer: &mut Analyzer,
     text: &str,
@@ -44,6 +47,19 @@ pub(crate) fn analyze_text_with_styles(
     styles: &[AnalysisStyle],
     runs: &[AnalysisRun],
 ) -> Result<Analysis, PreparationError> {
+    let mut analysis = Analysis::new();
+    analyze_text_with_styles_into(analyzer, text, base_direction, styles, runs, &mut analysis)?;
+    Ok(analysis)
+}
+
+pub(crate) fn analyze_text_with_styles_into(
+    analyzer: &mut Analyzer,
+    text: &str,
+    base_direction: BaseDirection,
+    styles: &[AnalysisStyle],
+    runs: &[AnalysisRun],
+    analysis: &mut Analysis,
+) -> Result<(), PreparationError> {
     let mut word_break: Vec<(Range<usize>, WordBreak)> = Vec::new();
     for run in runs {
         let style = styles
@@ -63,7 +79,6 @@ pub(crate) fn analyze_text_with_styles(
             word_break.push((range, style.word_break()));
         }
     }
-    let mut analysis = Analysis::new();
     analyzer.analyze(
         text,
         &AnalysisOptions {
@@ -71,9 +86,9 @@ pub(crate) fn analyze_text_with_styles(
             word_break: &word_break,
             ..AnalysisOptions::default()
         },
-        &mut analysis,
+        analysis,
     );
-    Ok(analysis)
+    Ok(())
 }
 
 pub(crate) fn shape_paragraph(

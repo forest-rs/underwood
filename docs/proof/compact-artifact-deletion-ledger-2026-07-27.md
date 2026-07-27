@@ -601,3 +601,27 @@ measured zero-change repeat at 119–125 ns per label versus Parley's 193–196
 ns, but localized edit at 9.54–9.86 µs versus 3.02–3.07 µs. The remaining
 campaign must attack changed-paragraph allocation and formation work rather
 than retain memory to hide it.
+
+## One recycled cold-formation workspace
+
+The Parley adapter no longer drops every analysis, shaping, and line-formation
+capacity when the configured retained-fact budget is zero. Eviction and
+explicit release recycle the largest single `PreparationCache` as
+engine-owned scratch. A later cold paragraph seeds its work from that scratch;
+it is still reported separately from retained per-paragraph facts and cannot
+produce a cache hit.
+
+The same audit found eight retained input copies that were never read:
+projected text, paragraph style, and the analysis, shaping, inline-flow, and
+constraint keys. `LayoutEngine` already provides the exact
+`ParagraphFormationChange`; retaining those values inside the adapter repeated
+the proof without checking it. They are deleted. Analysis, grapheme-unit,
+joining-unit, character-index, and logical-cluster builders now refill the
+recycled buffers in place.
+
+On the 1,000-label edit tunnel, changed preparation falls from 88 allocation
+calls / 19,145 requested bytes to 63 calls / 12,584 bytes. The default
+adapter's single scratch paragraph is 10,196 deterministically accounted
+bytes; per-paragraph adapter residency remains zero. Three scale-1,000 timing
+samples improve localized edit from 9.54–9.86 µs to 8.54–8.79 µs. Parley
+measures 2.96–3.09 µs, so the latency and 16-call gates remain open.

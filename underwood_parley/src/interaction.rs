@@ -20,33 +20,48 @@ use underwood::adapter::{
 use crate::line_break::RunPiece;
 use crate::lowering::checked_source_range;
 
+#[cfg(test)]
 pub(crate) fn collect_analysis_units(
     text: &str,
     analysis: &Analysis,
 ) -> Result<Vec<Range<usize>>, PreparationError> {
-    let mut starts = Vec::new();
+    let mut units = Vec::new();
+    collect_analysis_units_into(text, analysis, &mut units)?;
+    Ok(units)
+}
+
+pub(crate) fn collect_analysis_units_into(
+    text: &str,
+    analysis: &Analysis,
+    units: &mut Vec<Range<usize>>,
+) -> Result<(), PreparationError> {
+    units.clear();
     let mut characters = 0_usize;
+    let mut start = None;
     for ((byte, _), info) in text.char_indices().zip(analysis.char_info()) {
         characters += 1;
         if info.is_grapheme_start() {
-            starts.push(byte);
+            if start.is_none() && byte != 0 {
+                return Err(PreparationError::invalid_output());
+            }
+            if let Some(previous) = start.replace(byte) {
+                units.push(previous..byte);
+            }
         }
     }
     if characters != text.chars().count()
         || characters != analysis.char_info().len()
-        || (!text.is_empty() && starts.first() != Some(&0))
+        || (!text.is_empty() && start.is_none())
     {
         return Err(PreparationError::invalid_output());
     }
-    let mut units = Vec::with_capacity(starts.len());
-    for (index, start) in starts.iter().copied().enumerate() {
-        let end = starts.get(index + 1).copied().unwrap_or(text.len());
-        if start >= end || text.get(start..end).is_none() {
+    if let Some(start) = start {
+        if start >= text.len() || text.get(start..text.len()).is_none() {
             return Err(PreparationError::invalid_output());
         }
-        units.push(start..end);
+        units.push(start..text.len());
     }
-    Ok(units)
+    Ok(())
 }
 
 struct VisualInteractionSlice {
