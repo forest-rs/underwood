@@ -105,9 +105,8 @@ fn composition_preparation_does_not_displace_committed_adapter_facts() {
     let [initial, composition] = outputs.as_slice() else {
         panic!("only the initial committed and transient composition facts must be observed");
     };
-    assert_ne!(
-        initial.lines().as_ptr(),
-        composition.lines().as_ptr(),
+    assert!(
+        !initial.shares_facts_with(composition),
         "composition must own distinct prepared facts"
     );
 }

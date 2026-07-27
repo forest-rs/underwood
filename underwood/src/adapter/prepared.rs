@@ -110,7 +110,7 @@ pub struct PreparedLine {
     height: f64,
     content_ascent: f64,
     content_descent: f64,
-    interaction: Arc<PreparedLineInteraction>,
+    interaction: PreparedLineInteraction,
     runs: Vec<PreparedRun>,
 }
 
@@ -278,114 +278,13 @@ impl PreparedLine {
             height,
             content_ascent,
             content_descent,
-            interaction: Arc::new(PreparedLineInteraction {
+            interaction: PreparedLineInteraction {
                 slices,
                 units,
                 source_order,
-            }),
+            },
             runs,
         })
-    }
-
-    /// Returns the exact accepted region slot, when region flow was requested.
-    #[must_use]
-    pub const fn slot(&self) -> Option<crate::LineSlot> {
-        self.slot
-    }
-
-    /// Returns the paragraph-local source range, including a terminating control.
-    #[must_use]
-    pub fn source(&self) -> Range<u32> {
-        self.source.clone()
-    }
-
-    /// Returns why the line ended.
-    #[must_use]
-    pub const fn break_reason(&self) -> LineBreakReason {
-        self.break_reason
-    }
-
-    /// Returns the full inline advance, including trailing whitespace.
-    #[must_use]
-    pub const fn advance(&self) -> f64 {
-        self.advance
-    }
-
-    /// Returns the logical trailing-whitespace advance excluded from alignment.
-    ///
-    /// Trailing whitespace remains source-complete and interactive, but hangs
-    /// from the visual line edge instead of changing the aligned content box.
-    #[must_use]
-    pub const fn trailing_whitespace_advance(&self) -> f64 {
-        self.trailing_whitespace_advance
-    }
-
-    /// Returns the number of explicit Western inter-word opportunities.
-    #[must_use]
-    pub fn western_justification_opportunities(&self) -> usize {
-        self.western_justification_opportunity_sources().count()
-    }
-
-    /// Returns source ranges for non-trailing eligible Western spaces.
-    pub fn western_justification_opportunity_sources(
-        &self,
-    ) -> impl Iterator<Item = Range<u32>> + '_ {
-        self.interaction
-            .units
-            .iter()
-            .filter(|unit| {
-                unit.is_western_justification_opportunity()
-                    && unit.source().end <= self.trailing_whitespace_start
-            })
-            .map(PreparedInteractionUnit::source)
-    }
-
-    /// Returns the baseline offset from the top of the line box.
-    #[must_use]
-    pub const fn baseline(&self) -> f64 {
-        self.baseline
-    }
-
-    /// Returns the block-axis line-box extent.
-    #[must_use]
-    pub const fn height(&self) -> f64 {
-        self.height
-    }
-
-    /// Returns the maximum font ascent contributing to the line.
-    #[must_use]
-    pub const fn content_ascent(&self) -> f64 {
-        self.content_ascent
-    }
-
-    /// Returns the maximum font descent contributing to the line.
-    #[must_use]
-    pub const fn content_descent(&self) -> f64 {
-        self.content_descent
-    }
-
-    /// Returns extended-grapheme interaction units in line-local visual order.
-    #[must_use]
-    pub fn units(&self) -> PreparedInteractionUnits<'_> {
-        PreparedInteractionUnits::new(&self.interaction.units, &self.interaction.slices)
-    }
-
-    pub(crate) fn unit_at_source_rank(
-        &self,
-        rank: usize,
-    ) -> Option<(usize, PreparedInteractionUnitView<'_>)> {
-        let index = self
-            .interaction
-            .source_order
-            .get(rank)
-            .map_or(rank, |&index| index as usize);
-        self.units().nth(index).map(|unit| (index, unit))
-    }
-
-    /// Returns shaped runs in line-local visual order.
-    #[must_use]
-    pub fn runs(&self) -> &[PreparedRun] {
-        &self.runs
     }
 }
 
@@ -394,7 +293,64 @@ pub(crate) struct PreparedParagraphFacts {
     text_len: u32,
     resolved_direction: ResolvedDirection,
     features: SceneFeatures,
-    lines: Vec<PreparedLine>,
+    lines: Vec<PreparedLineRecord>,
+    runs: Vec<PreparedRunRecord>,
+    glyphs: Vec<PreparedGlyph>,
+    interaction_slices: Vec<PreparedInteractionSlice>,
+    interaction_units: Vec<PreparedInteractionUnit>,
+    source_order: Vec<u32>,
+    normalized_coords: Vec<i16>,
+    unrendered_source: Vec<Range<u32>>,
+}
+
+#[derive(Debug)]
+struct PreparedLineRecord {
+    slot: Option<crate::LineSlot>,
+    source: Range<u32>,
+    break_reason: LineBreakReason,
+    advance: f64,
+    trailing_whitespace_start: u32,
+    trailing_whitespace_advance: f64,
+    baseline: f64,
+    height: f64,
+    content_ascent: f64,
+    content_descent: f64,
+    slices: TableRange,
+    units: TableRange,
+    source_order: TableRange,
+    runs: TableRange,
+}
+
+#[derive(Debug)]
+struct PreparedRunRecord {
+    source: Range<u32>,
+    bidi_level: u8,
+    script: [u8; 4],
+    font: FontData,
+    font_size: f32,
+    synthesis: FontSynthesis,
+    normalized_coords: TableRange,
+    unrendered_source: TableRange,
+    glyphs: TableRange,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TableRange {
+    start: u32,
+    end: u32,
+}
+
+impl TableRange {
+    fn try_from_usize(range: Range<usize>) -> Result<Self, PreparationError> {
+        Ok(Self {
+            start: u32::try_from(range.start).map_err(|_| PreparationError::invalid_output())?,
+            end: u32::try_from(range.end).map_err(|_| PreparationError::invalid_output())?,
+        })
+    }
+
+    fn as_usize(self) -> Range<usize> {
+        self.start as usize..self.end as usize
+    }
 }
 
 /// Validated owned formed lines for one paragraph.
@@ -447,14 +403,10 @@ impl PreparedParagraph {
         if previous_end != text_len {
             return Err(PreparationError::invalid_output());
         }
+        let facts = PreparedParagraphFacts::flatten(text_len, resolved_direction, features, lines)?;
         Ok(Self {
             paragraph,
-            facts: Arc::new(PreparedParagraphFacts {
-                text_len,
-                resolved_direction,
-                features,
-                lines,
-            }),
+            facts: Arc::new(facts),
         })
     }
 
@@ -495,8 +447,8 @@ impl PreparedParagraph {
 
     /// Returns the source-ordered formed lines.
     #[must_use]
-    pub fn lines(&self) -> &[PreparedLine] {
-        &self.facts.lines
+    pub fn lines(&self) -> PreparedLines<'_> {
+        self.facts.lines()
     }
 
     /// Returns the deterministic byte charge for this prepared paragraph's
@@ -509,6 +461,12 @@ impl PreparedParagraph {
     pub fn accounted_owned_bytes(&self) -> usize {
         self.facts.estimated_owned_bytes()
     }
+
+    /// Returns whether both paragraph envelopes share one canonical artifact.
+    #[must_use]
+    pub fn shares_facts_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.facts, &other.facts)
+    }
 }
 
 impl PreparedParagraphFacts {
@@ -520,8 +478,8 @@ impl PreparedParagraphFacts {
         self.features
     }
 
-    pub(crate) fn lines(&self) -> &[PreparedLine] {
-        &self.lines
+    pub(crate) fn lines(&self) -> PreparedLines<'_> {
+        PreparedLines::new(self)
     }
 
     #[cfg(test)]
@@ -530,50 +488,553 @@ impl PreparedParagraphFacts {
         features: SceneFeatures,
         lines: Vec<PreparedLine>,
     ) -> Arc<Self> {
-        Arc::new(Self {
-            text_len,
-            resolved_direction: ResolvedDirection::Ltr,
-            features,
-            lines,
-        })
+        Arc::new(
+            Self::flatten(text_len, ResolvedDirection::Ltr, features, lines)
+                .expect("test prepared lines must fit canonical table indexes"),
+        )
     }
 
     pub(crate) fn estimated_owned_bytes(&self) -> usize {
-        let mut bytes =
-            size_of::<Self>().saturating_add(vec_bytes::<PreparedLine>(self.lines.capacity()));
-        for line in &self.lines {
-            bytes = bytes
-                .saturating_add(vec_bytes::<PreparedInteractionUnit>(
-                    line.interaction.units.capacity(),
-                ))
-                .saturating_add(vec_bytes::<PreparedInteractionSlice>(
-                    line.interaction.slices.capacity(),
-                ))
-                .saturating_add(vec_bytes::<u32>(line.interaction.source_order.capacity()))
-                .saturating_add(vec_bytes::<PreparedRun>(line.runs.capacity()));
-            for run in &line.runs {
+        let mut bytes = size_of::<Self>()
+            .saturating_add(vec_bytes::<PreparedLineRecord>(self.lines.capacity()))
+            .saturating_add(vec_bytes::<PreparedRunRecord>(self.runs.capacity()))
+            .saturating_add(vec_bytes::<PreparedGlyph>(self.glyphs.capacity()))
+            .saturating_add(vec_bytes::<PreparedInteractionSlice>(
+                self.interaction_slices.capacity(),
+            ))
+            .saturating_add(vec_bytes::<PreparedInteractionUnit>(
+                self.interaction_units.capacity(),
+            ))
+            .saturating_add(vec_bytes::<u32>(self.source_order.capacity()))
+            .saturating_add(vec_bytes::<i16>(self.normalized_coords.capacity()))
+            .saturating_add(vec_bytes::<Range<u32>>(self.unrendered_source.capacity()));
+        for run in &self.runs {
+            if let Some(evidence) = &run.synthesis.evidence {
                 bytes = bytes
-                    .saturating_add(vec_bytes::<i16>(run.normalized_coords.capacity()))
-                    .saturating_add(vec_bytes::<Range<u32>>(run.unrendered_source.capacity()))
-                    .saturating_add(vec_bytes::<PreparedGlyph>(run.glyphs.capacity()));
-                if let Some(evidence) = &run.synthesis.evidence {
-                    bytes = bytes
-                        .saturating_add(size_of::<FontSynthesisEvidence>())
-                        .saturating_add(vec_bytes::<FontVariation>(evidence.variations.capacity()));
-                }
-                for glyph in &run.glyphs {
-                    bytes = bytes.saturating_add(
-                        size_of::<GlyphPaintSegment>().saturating_mul(
-                            glyph
-                                .paint
-                                .split_segments()
-                                .map_or(0, <[GlyphPaintSegment]>::len),
-                        ),
-                    );
-                }
+                    .saturating_add(size_of::<FontSynthesisEvidence>())
+                    .saturating_add(vec_bytes::<FontVariation>(evidence.variations.capacity()));
             }
         }
+        for glyph in &self.glyphs {
+            bytes = bytes.saturating_add(
+                size_of::<GlyphPaintSegment>().saturating_mul(
+                    glyph
+                        .paint
+                        .split_segments()
+                        .map_or(0, <[GlyphPaintSegment]>::len),
+                ),
+            );
+        }
         bytes
+    }
+
+    fn flatten(
+        text_len: u32,
+        resolved_direction: ResolvedDirection,
+        features: SceneFeatures,
+        lines: Vec<PreparedLine>,
+    ) -> Result<Self, PreparationError> {
+        let run_capacity = lines.iter().map(|line| line.runs.len()).sum();
+        let glyph_capacity = lines
+            .iter()
+            .flat_map(|line| &line.runs)
+            .map(|run| run.glyphs.len())
+            .sum();
+        let slice_capacity = lines.iter().map(|line| line.interaction.slices.len()).sum();
+        let unit_capacity = lines.iter().map(|line| line.interaction.units.len()).sum();
+        let source_order_capacity = lines
+            .iter()
+            .map(|line| line.interaction.source_order.len())
+            .sum();
+        let normalized_coord_capacity = lines
+            .iter()
+            .flat_map(|line| &line.runs)
+            .map(|run| run.normalized_coords.len())
+            .sum();
+        let unrendered_capacity = lines
+            .iter()
+            .flat_map(|line| &line.runs)
+            .map(|run| run.unrendered_source.len())
+            .sum();
+
+        let mut line_records = Vec::with_capacity(lines.len());
+        let mut run_records = Vec::with_capacity(run_capacity);
+        let mut glyphs = Vec::with_capacity(glyph_capacity);
+        let mut interaction_slices = Vec::with_capacity(slice_capacity);
+        let mut interaction_units = Vec::with_capacity(unit_capacity);
+        let mut source_order = Vec::with_capacity(source_order_capacity);
+        let mut normalized_coords = Vec::with_capacity(normalized_coord_capacity);
+        let mut unrendered_source = Vec::with_capacity(unrendered_capacity);
+
+        for line in lines {
+            let PreparedLine {
+                slot,
+                source,
+                break_reason,
+                advance,
+                trailing_whitespace_start,
+                trailing_whitespace_advance,
+                baseline,
+                height,
+                content_ascent,
+                content_descent,
+                interaction,
+                runs,
+            } = line;
+            let PreparedLineInteraction {
+                slices,
+                units,
+                source_order: line_source_order,
+            } = interaction;
+
+            let slices_start = interaction_slices.len();
+            interaction_slices.extend(slices);
+            let units_start = interaction_units.len();
+            interaction_units.extend(units);
+            let source_order_start = source_order.len();
+            source_order.extend(line_source_order);
+            let runs_start = run_records.len();
+
+            for run in runs {
+                let PreparedRun {
+                    source,
+                    bidi_level,
+                    script,
+                    font,
+                    font_size,
+                    synthesis,
+                    normalized_coords: run_normalized_coords,
+                    unrendered_source: run_unrendered_source,
+                    glyphs: run_glyphs,
+                } = run;
+                let normalized_coords_start = normalized_coords.len();
+                normalized_coords.extend(run_normalized_coords);
+                let unrendered_source_start = unrendered_source.len();
+                unrendered_source.extend(run_unrendered_source);
+                let glyphs_start = glyphs.len();
+                glyphs.extend(run_glyphs);
+                run_records.push(PreparedRunRecord {
+                    source,
+                    bidi_level,
+                    script,
+                    font,
+                    font_size,
+                    synthesis,
+                    normalized_coords: TableRange::try_from_usize(
+                        normalized_coords_start..normalized_coords.len(),
+                    )?,
+                    unrendered_source: TableRange::try_from_usize(
+                        unrendered_source_start..unrendered_source.len(),
+                    )?,
+                    glyphs: TableRange::try_from_usize(glyphs_start..glyphs.len())?,
+                });
+            }
+
+            line_records.push(PreparedLineRecord {
+                slot,
+                source,
+                break_reason,
+                advance,
+                trailing_whitespace_start,
+                trailing_whitespace_advance,
+                baseline,
+                height,
+                content_ascent,
+                content_descent,
+                slices: TableRange::try_from_usize(slices_start..interaction_slices.len())?,
+                units: TableRange::try_from_usize(units_start..interaction_units.len())?,
+                source_order: TableRange::try_from_usize(source_order_start..source_order.len())?,
+                runs: TableRange::try_from_usize(runs_start..run_records.len())?,
+            });
+        }
+
+        Ok(Self {
+            text_len,
+            resolved_direction,
+            features,
+            lines: line_records,
+            runs: run_records,
+            glyphs,
+            interaction_slices,
+            interaction_units,
+            source_order,
+            normalized_coords,
+            unrendered_source,
+        })
+    }
+}
+
+/// Borrowed source-ordered formed lines from one canonical paragraph artifact.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedLines<'a> {
+    facts: &'a PreparedParagraphFacts,
+    front: usize,
+    back: usize,
+}
+
+impl<'a> PreparedLines<'a> {
+    fn new(facts: &'a PreparedParagraphFacts) -> Self {
+        Self {
+            facts,
+            front: 0,
+            back: facts.lines.len(),
+        }
+    }
+
+    /// Returns a fresh traversal over every line.
+    #[must_use]
+    pub fn iter(&self) -> Self {
+        Self::new(self.facts)
+    }
+
+    /// Returns the number of lines.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.back - self.front
+    }
+
+    /// Returns whether the artifact has no formed lines.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns a line by source-order index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<PreparedLineView<'a>> {
+        (index < self.facts.lines.len()).then_some(PreparedLineView {
+            facts: self.facts,
+            index,
+        })
+    }
+
+    /// Returns the first line.
+    #[must_use]
+    pub fn first(&self) -> Option<PreparedLineView<'a>> {
+        self.get(0)
+    }
+
+    /// Returns the final line.
+    #[must_use]
+    pub fn last(self) -> Option<PreparedLineView<'a>> {
+        self.facts
+            .lines
+            .len()
+            .checked_sub(1)
+            .and_then(|index| self.get(index))
+    }
+
+    pub(crate) fn partition_point(
+        &self,
+        mut predicate: impl FnMut(PreparedLineView<'a>) -> bool,
+    ) -> usize {
+        let mut left = 0;
+        let mut right = self.facts.lines.len();
+        while left < right {
+            let middle = left + (right - left) / 2;
+            if predicate(
+                self.get(middle)
+                    .expect("binary-search midpoint remains in the line table"),
+            ) {
+                left = middle + 1;
+            } else {
+                right = middle;
+            }
+        }
+        left
+    }
+}
+
+impl<'a> Iterator for PreparedLines<'a> {
+    type Item = PreparedLineView<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let index = self.front;
+        if index == self.back {
+            return None;
+        }
+        self.front += 1;
+        Some(PreparedLineView {
+            facts: self.facts,
+            index,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl DoubleEndedIterator for PreparedLines<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.front == self.back {
+            return None;
+        }
+        self.back -= 1;
+        Some(PreparedLineView {
+            facts: self.facts,
+            index: self.back,
+        })
+    }
+}
+
+impl ExactSizeIterator for PreparedLines<'_> {}
+
+/// Borrowed view of one formed line in a canonical paragraph artifact.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedLineView<'a> {
+    facts: &'a PreparedParagraphFacts,
+    index: usize,
+}
+
+impl<'a> PreparedLineView<'a> {
+    fn record(self) -> &'a PreparedLineRecord {
+        &self.facts.lines[self.index]
+    }
+
+    /// Returns the exact accepted region slot, when region flow was requested.
+    #[must_use]
+    pub fn slot(self) -> Option<crate::LineSlot> {
+        self.record().slot
+    }
+
+    /// Returns the paragraph-local source range.
+    #[must_use]
+    pub fn source(self) -> Range<u32> {
+        self.record().source.clone()
+    }
+
+    /// Returns why the line ended.
+    #[must_use]
+    pub fn break_reason(self) -> LineBreakReason {
+        self.record().break_reason
+    }
+
+    /// Returns the full inline advance, including trailing whitespace.
+    #[must_use]
+    pub fn advance(self) -> f64 {
+        self.record().advance
+    }
+
+    /// Returns the logical trailing-whitespace advance excluded from alignment.
+    #[must_use]
+    pub fn trailing_whitespace_advance(self) -> f64 {
+        self.record().trailing_whitespace_advance
+    }
+
+    /// Returns the number of explicit Western inter-word opportunities.
+    #[must_use]
+    pub fn western_justification_opportunities(self) -> usize {
+        self.western_justification_opportunity_sources().count()
+    }
+
+    /// Returns source ranges for non-trailing eligible Western spaces.
+    pub fn western_justification_opportunity_sources(
+        self,
+    ) -> impl Iterator<Item = Range<u32>> + 'a {
+        let trailing_whitespace_start = self.record().trailing_whitespace_start;
+        self.units()
+            .filter(move |unit| {
+                unit.is_western_justification_opportunity()
+                    && unit.source().end <= trailing_whitespace_start
+            })
+            .map(|unit| unit.source())
+    }
+
+    /// Returns the baseline offset from the top of the line box.
+    #[must_use]
+    pub fn baseline(self) -> f64 {
+        self.record().baseline
+    }
+
+    /// Returns the block-axis line-box extent.
+    #[must_use]
+    pub fn height(self) -> f64 {
+        self.record().height
+    }
+
+    /// Returns the maximum font ascent contributing to the line.
+    #[must_use]
+    pub fn content_ascent(self) -> f64 {
+        self.record().content_ascent
+    }
+
+    /// Returns the maximum font descent contributing to the line.
+    #[must_use]
+    pub fn content_descent(self) -> f64 {
+        self.record().content_descent
+    }
+
+    /// Returns extended-grapheme units in line-local visual order.
+    #[must_use]
+    pub fn units(self) -> PreparedInteractionUnits<'a> {
+        let record = self.record();
+        PreparedInteractionUnits::new(
+            &self.facts.interaction_units[record.units.as_usize()],
+            &self.facts.interaction_slices[record.slices.as_usize()],
+        )
+    }
+
+    pub(crate) fn unit_at_source_rank(
+        self,
+        rank: usize,
+    ) -> Option<(usize, PreparedInteractionUnitView<'a>)> {
+        let record = self.record();
+        let source_order = &self.facts.source_order[record.source_order.as_usize()];
+        let index = source_order.get(rank).map_or(rank, |&index| index as usize);
+        self.units().nth(index).map(|unit| (index, unit))
+    }
+
+    /// Returns shaped runs in line-local visual order.
+    #[must_use]
+    pub fn runs(self) -> PreparedRuns<'a> {
+        PreparedRuns {
+            facts: self.facts,
+            front: self.record().runs.start as usize,
+            back: self.record().runs.end as usize,
+        }
+    }
+}
+
+/// Borrowed visual shaped runs from one formed line.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedRuns<'a> {
+    facts: &'a PreparedParagraphFacts,
+    front: usize,
+    back: usize,
+}
+
+impl<'a> PreparedRuns<'a> {
+    /// Returns a fresh traversal over the same line's runs.
+    #[must_use]
+    pub fn iter(&self) -> Self {
+        *self
+    }
+
+    /// Returns the number of runs.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.back - self.front
+    }
+
+    /// Returns whether the line has no shaped runs.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns a run by line-local visual index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<PreparedRunView<'a>> {
+        let index = self.front.checked_add(index)?;
+        (index < self.back).then_some(PreparedRunView {
+            facts: self.facts,
+            index,
+        })
+    }
+}
+
+impl<'a> Iterator for PreparedRuns<'a> {
+    type Item = PreparedRunView<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.front == self.back {
+            return None;
+        }
+        let index = self.front;
+        self.front += 1;
+        Some(PreparedRunView {
+            facts: self.facts,
+            index,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl DoubleEndedIterator for PreparedRuns<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.front == self.back {
+            return None;
+        }
+        self.back -= 1;
+        Some(PreparedRunView {
+            facts: self.facts,
+            index: self.back,
+        })
+    }
+}
+
+impl ExactSizeIterator for PreparedRuns<'_> {}
+
+/// Borrowed view of one shaped run in the canonical paragraph artifact.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedRunView<'a> {
+    facts: &'a PreparedParagraphFacts,
+    index: usize,
+}
+
+impl<'a> PreparedRunView<'a> {
+    fn record(self) -> &'a PreparedRunRecord {
+        &self.facts.runs[self.index]
+    }
+
+    /// Returns the paragraph-local source range.
+    #[must_use]
+    pub fn source(self) -> Range<u32> {
+        self.record().source.clone()
+    }
+
+    /// Returns the resolved bidi level.
+    #[must_use]
+    pub fn bidi_level(self) -> u8 {
+        self.record().bidi_level
+    }
+
+    /// Returns the ISO 15924 script tag.
+    #[must_use]
+    pub fn script(self) -> [u8; 4] {
+        self.record().script
+    }
+
+    /// Returns the exact font resource and face index.
+    #[must_use]
+    pub fn font(self) -> &'a FontData {
+        &self.record().font
+    }
+
+    /// Returns the font size used for shaping.
+    #[must_use]
+    pub fn font_size(self) -> f32 {
+        self.record().font_size
+    }
+
+    /// Returns synthesis suggestions selected for this font instance.
+    #[must_use]
+    pub fn synthesis(self) -> &'a FontSynthesis {
+        &self.record().synthesis
+    }
+
+    /// Returns normalized variation coordinates.
+    #[must_use]
+    pub fn normalized_coords(self) -> &'a [i16] {
+        &self.facts.normalized_coords[self.record().normalized_coords.as_usize()]
+    }
+
+    /// Returns source ranges which intentionally produce no glyphs.
+    #[must_use]
+    pub fn unrendered_source(self) -> &'a [Range<u32>] {
+        &self.facts.unrendered_source[self.record().unrendered_source.as_usize()]
+    }
+
+    /// Returns glyphs in backend-provided visual order.
+    #[must_use]
+    pub fn glyphs(self) -> &'a [PreparedGlyph] {
+        &self.facts.glyphs[self.record().glyphs.as_usize()]
     }
 }
 
@@ -590,8 +1051,8 @@ pub struct PreparedRun {
     font: FontData,
     font_size: f32,
     synthesis: FontSynthesis,
-    normalized_coords: Arc<Vec<i16>>,
-    unrendered_source: Arc<Vec<Range<u32>>>,
+    normalized_coords: Vec<i16>,
+    unrendered_source: Vec<Range<u32>>,
     glyphs: Vec<PreparedGlyph>,
 }
 
@@ -639,70 +1100,10 @@ impl PreparedRun {
             font,
             font_size,
             synthesis,
-            normalized_coords: Arc::new(normalized_coords.into_iter().collect()),
-            unrendered_source: Arc::new(unrendered_source),
+            normalized_coords: normalized_coords.into_iter().collect(),
+            unrendered_source,
             glyphs,
         })
-    }
-
-    /// Returns the paragraph-local source range.
-    #[must_use]
-    pub fn source(&self) -> Range<u32> {
-        self.source.clone()
-    }
-
-    /// Returns the resolved bidi level.
-    #[must_use]
-    pub const fn bidi_level(&self) -> u8 {
-        self.bidi_level
-    }
-
-    /// Returns the ISO 15924 script tag.
-    #[must_use]
-    pub const fn script(&self) -> [u8; 4] {
-        self.script
-    }
-
-    /// Returns the exact font resource and face index.
-    #[must_use]
-    pub const fn font(&self) -> &FontData {
-        &self.font
-    }
-
-    /// Returns the font size used for shaping.
-    #[must_use]
-    pub const fn font_size(&self) -> f32 {
-        self.font_size
-    }
-
-    /// Returns synthesis suggestions selected for this font instance.
-    #[must_use]
-    pub const fn synthesis(&self) -> &FontSynthesis {
-        &self.synthesis
-    }
-
-    /// Returns normalized variation coordinates.
-    #[must_use]
-    pub fn normalized_coords(&self) -> &[i16] {
-        &self.normalized_coords
-    }
-
-    /// Returns source-ordered ranges which intentionally produce no glyphs.
-    ///
-    /// Paragraph adapters use this for controls and format characters which
-    /// participate in text semantics but not font shaping.
-    #[must_use]
-    pub fn unrendered_source(&self) -> &[Range<u32>] {
-        &self.unrendered_source
-    }
-
-    /// Returns glyphs in backend-provided visual order.
-    ///
-    /// This is empty for a control-only shaped run, whose source remains
-    /// explicit in [`Self::unrendered_source`].
-    #[must_use]
-    pub fn glyphs(&self) -> &[PreparedGlyph] {
-        &self.glyphs
     }
 }
 

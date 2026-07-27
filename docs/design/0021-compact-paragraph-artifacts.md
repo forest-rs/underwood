@@ -694,6 +694,25 @@ Only a glyph genuinely split across paint boundaries retains
 `GlyphPaintSegment` records, and every such segment remains explicitly
 clipped. Adapters must not copy ordinary paint runs into glyph records.
 
+Prepared paragraph traversal also changes because the final artifact is no
+longer a tree of owning line and run values:
+
+```rust,ignore
+// Before: a borrowed slice of independently owning line values.
+let line = &paragraph.lines()[index];
+let run = &line.runs()[run_index];
+
+// After: copyable borrowed views over paragraph-level canonical tables.
+let line = paragraph.lines().get(index).expect("line exists");
+let run = line.runs().get(run_index).expect("run exists");
+```
+
+`PreparedLine` and `PreparedRun` remain checked construction values.
+`PreparedLineView`, `PreparedRunView`, and their exact-size traversals are the
+read contract after `PreparedParagraph` has flattened those values. Code that
+needs to prove shared preparation uses
+`PreparedParagraph::shares_facts_with` rather than comparing slice pointers.
+
 ## Required wind tunnels
 
 All runs use the matched source, font, style, width, and scale fixture in

@@ -38,7 +38,10 @@ pub use interaction::{
 };
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
 pub(crate) use prepared::PreparedParagraphFacts;
-pub use prepared::{FontSynthesis, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun};
+pub use prepared::{
+    FontSynthesis, PreparedGlyph, PreparedLine, PreparedLineView, PreparedLines, PreparedParagraph,
+    PreparedRun, PreparedRunView, PreparedRuns,
+};
 
 #[cfg(test)]
 mod tests;

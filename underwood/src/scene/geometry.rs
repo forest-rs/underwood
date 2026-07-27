@@ -310,7 +310,7 @@ impl CachedGeometry {
         let source = prepared.map_or_else(
             || {
                 prepared_line
-                    .map(PreparedLine::source)
+                    .map(|line| line.source())
                     .unwrap_or(0..0)
                     .into()
             },

@@ -153,10 +153,10 @@ same internal paragraph-source view used by document paragraphs.
 | adapter final-output cache | present | deleted | complete |
 | ordinary per-glyph paint coverage | present | deleted | complete |
 | clone-based repaint | present | deleted | complete |
-| nested-to-flat final lowering | present | — | pending |
+| nested-to-flat final lowering | present | deleted | complete |
 | plain-block document tree | present | — | pending |
-| one canonical paragraph artifact | absent | — | pending |
-| borrowed indexed capability views | partial | — | pending |
+| one canonical paragraph artifact | absent | present | complete |
+| borrowed indexed capability views | partial | present | complete |
 
 This ledger stays pending until the implementation, numeric gates, and
 requirement-by-requirement audit are complete.
@@ -266,3 +266,23 @@ The paint topology remains inline in the already-retained paragraph segment
 rather than adding another `Arc` allocation. Recalculation on an explicit
 paint or capability boundary is cheaper than another permanently resident
 owner. `repaint_geometry` and the clone-based reconstruction path are deleted.
+
+## Canonical paragraph-table checkpoint
+
+The retained prepared artifact is no longer
+`Vec<PreparedLine> → Vec<PreparedRun> → Vec<PreparedGlyph>` with another
+line-local interaction allocation and per-run coordinate/source allocations.
+It owns paragraph-level line, run, glyph, interaction-slice,
+interaction-unit, source-order, coordinate, and unrendered-source tables.
+Line and run records contain compact 32-bit table ranges; public traversal is
+through copyable borrowed views.
+
+The checked `PreparedLine` and `PreparedRun` construction values are drained
+when `PreparedParagraph` is created. Their former interaction,
+normalized-coordinate, and unrendered-source `Arc`s are deleted rather than
+carried into the final artifact.
+
+The matched 1,000-label editable live heap measured 12,991,104 bytes raw.
+After subtracting the unchanged 1,820,512-byte Underwood font baseline, the
+retained delta is 11,170,592 bytes: another 439,680-byte reduction, and 3.31×
+the matched 3,378,240-byte Parley delta.

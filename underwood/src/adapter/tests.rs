@@ -212,7 +212,23 @@ fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage
         [run(0..3)],
     )
     .expect("visual slice order may differ from canonical source order");
-    let unit = line.units().next().expect("the line has one unit");
+    let paragraph = PreparedParagraph::try_new(
+        ParagraphId {
+            document: DocumentId::from_bytes(*b"adapter-test-002"),
+            index: 0,
+        },
+        3,
+        ResolvedDirection::Ltr,
+        [line],
+    )
+    .expect("the line flattens into a canonical paragraph artifact");
+    let unit = paragraph
+        .lines()
+        .first()
+        .expect("the paragraph has one line")
+        .units()
+        .next()
+        .expect("the line has one unit");
     assert_eq!(unit.source(), 0..3);
     assert_eq!(unit.advance(), 5.0);
     assert_eq!(unit.slices()[0].source(), 1..3);
@@ -298,8 +314,40 @@ fn prepared_run_accepts_control_only_source_without_a_phantom_glyph() {
         [],
     )
     .expect("control-only source does not require a fabricated glyph");
+    let (slices, units) = interaction(0..1, 0.0);
+    let line = PreparedLine::try_new(
+        0..1,
+        LineBreakReason::End,
+        0.0,
+        0.8,
+        1.0,
+        0.8,
+        0.2,
+        slices,
+        units,
+        [run],
+    )
+    .expect("control-only run forms an honest line");
+    let paragraph = PreparedParagraph::try_new(
+        ParagraphId {
+            document: DocumentId::from_bytes(*b"adapter-test-003"),
+            index: 0,
+        },
+        1,
+        ResolvedDirection::Ltr,
+        [line],
+    )
+    .expect("control-only line flattens into the canonical artifact");
     assert!(
-        run.glyphs().is_empty(),
+        paragraph
+            .lines()
+            .first()
+            .expect("the paragraph has one line")
+            .runs()
+            .next()
+            .expect("the line has one run")
+            .glyphs()
+            .is_empty(),
         "control-only runs must retain an honest empty glyph sequence"
     );
 }

@@ -254,8 +254,15 @@ impl<'a> SceneLineView<'a> {
         &self.positioned.position.segment.geometry.lines[self.positioned.local]
     }
 
-    fn prepared(self) -> &'a PreparedLine {
-        &self.positioned.position.segment.geometry.artifact.lines()[self.positioned.local]
+    fn prepared(self) -> PreparedLineView<'a> {
+        self.positioned
+            .position
+            .segment
+            .geometry
+            .artifact
+            .lines()
+            .get(self.positioned.local)
+            .expect("positioned line indexes the canonical artifact")
     }
 
     /// Returns scene-space line bounds.
@@ -632,9 +639,14 @@ impl<'a> SceneFragmentView<'a> {
         &self.positioned.position.segment.paint.fragments[self.positioned.local]
     }
 
-    fn prepared_run(self) -> &'a PreparedRun {
+    fn prepared_run(self) -> PreparedRunView<'a> {
         let geometry = &self.positioned.position.segment.geometry;
-        &geometry.artifact.lines()[self.local().line as usize].runs()[self.local().run as usize]
+        geometry
+            .artifact
+            .lines()
+            .get(self.local().line as usize)
+            .and_then(|line| line.runs().get(self.local().run as usize))
+            .expect("paint fragment indexes the canonical artifact")
     }
 
     fn prepared_glyph(self, glyph: usize) -> &'a PreparedGlyph {

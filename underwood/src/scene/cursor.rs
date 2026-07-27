@@ -196,7 +196,7 @@ impl<'a> ParagraphCursor<'a> {
 
     fn find_unit(
         self,
-        line: &PreparedLine,
+        line: PreparedLineView<'a>,
         line_index: usize,
         offset: u32,
         upstream: bool,
@@ -262,9 +262,11 @@ impl<'a> ParagraphCursor<'a> {
                 unit,
             });
         }
-        self.facts.lines()[..cluster.line]
+        self.facts
+            .lines()
             .iter()
             .enumerate()
+            .take(cluster.line)
             .rev()
             .find(|(_, line)| !line.units().is_empty())
             .map(|(line, prepared)| CursorCluster {
@@ -312,12 +314,20 @@ impl<'a> ParagraphCursor<'a> {
 
     fn is_soft_line_end(self, cluster: CursorCluster) -> bool {
         self.is_end_of_line(cluster)
-            && self.facts.lines()[cluster.line].break_reason() == LineBreakReason::Regular
+            && self
+                .facts
+                .lines()
+                .get(cluster.line)
+                .is_some_and(|line| line.break_reason() == LineBreakReason::Regular)
     }
 
     fn is_hard_line_end(self, cluster: CursorCluster) -> bool {
         self.is_end_of_line(cluster)
-            && self.facts.lines()[cluster.line].break_reason() == LineBreakReason::Mandatory
+            && self
+                .facts
+                .lines()
+                .get(cluster.line)
+                .is_some_and(|line| line.break_reason() == LineBreakReason::Mandatory)
     }
 }
 
