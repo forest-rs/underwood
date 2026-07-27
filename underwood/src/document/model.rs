@@ -56,6 +56,24 @@ pub struct SemanticId {
     text: Option<u32>,
 }
 
+impl SemanticId {
+    pub(crate) const fn for_paragraph(paragraph: ParagraphId) -> Self {
+        Self {
+            document: paragraph.document,
+            paragraph: paragraph.index,
+            text: None,
+        }
+    }
+
+    pub(crate) const fn for_text(text: TextId) -> Self {
+        Self {
+            document: text.document,
+            paragraph: text.paragraph,
+            text: Some(text.index),
+        }
+    }
+}
+
 /// Semantic role of a block paragraph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ParagraphRole(u8);
@@ -423,23 +441,8 @@ impl ChangeSet {
 }
 
 impl Paragraph {
-    pub(crate) fn project_text_into(&self, text: &mut String) {
-        let capacity = self.leaves.iter().fold(0_usize, |total, leaf| {
-            total.saturating_add(leaf.text().len())
-        });
-        text.clear();
-        text.reserve(capacity);
-        for leaf in &self.leaves {
-            text.push_str(leaf.text());
-        }
-    }
-
     pub(crate) fn semantic_id(&self) -> SemanticId {
-        SemanticId {
-            document: self.id.document,
-            paragraph: self.id.index,
-            text: None,
-        }
+        SemanticId::for_paragraph(self.id)
     }
 }
 
@@ -483,11 +486,7 @@ impl TextLeaf {
     }
 
     pub(crate) fn semantic_id(&self) -> SemanticId {
-        SemanticId {
-            document: self.id.document,
-            paragraph: self.id.paragraph,
-            text: Some(self.id.index),
-        }
+        SemanticId::for_text(self.id)
     }
 }
 

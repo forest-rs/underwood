@@ -9,10 +9,153 @@
 use super::*;
 use alloc::string::String;
 use core::mem::{self, size_of};
+use core::slice;
 
 mod styles;
 
 use styles::project_style_runs;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ParagraphSource<'a> {
+    Document(&'a Paragraph),
+    Block(&'a TextBlockSnapshot),
+}
+
+impl<'a> ParagraphSource<'a> {
+    pub(super) const fn document(paragraph: &'a Paragraph) -> Self {
+        Self::Document(paragraph)
+    }
+
+    pub(super) const fn block(block: &'a TextBlockSnapshot) -> Self {
+        Self::Block(block)
+    }
+
+    pub(super) fn id(self) -> ParagraphId {
+        match self {
+            Self::Document(paragraph) => paragraph.id,
+            Self::Block(block) => block.paragraph_id(),
+        }
+    }
+
+    pub(super) fn version(self) -> u64 {
+        match self {
+            Self::Document(paragraph) => paragraph.version,
+            Self::Block(block) => block.revision().0,
+        }
+    }
+
+    pub(super) fn role(self) -> ParagraphRole {
+        match self {
+            Self::Document(paragraph) => paragraph.role,
+            Self::Block(_) => ParagraphRole::BODY,
+        }
+    }
+
+    pub(super) fn semantic_id(self) -> SemanticId {
+        match self {
+            Self::Document(paragraph) => paragraph.semantic_id(),
+            Self::Block(block) => SemanticId::for_paragraph(block.paragraph_id()),
+        }
+    }
+
+    pub(super) fn leaves(self) -> ParagraphLeaves<'a> {
+        match self {
+            Self::Document(paragraph) => ParagraphLeaves::Document(paragraph.leaves.iter()),
+            Self::Block(block) => ParagraphLeaves::Block(Some(block)),
+        }
+    }
+
+    pub(super) fn leaf_count(self) -> usize {
+        match self {
+            Self::Document(paragraph) => paragraph.leaves.len(),
+            Self::Block(_) => 1,
+        }
+    }
+
+    pub(super) fn is_empty(self) -> bool {
+        self.leaves().all(|leaf| leaf.text().is_empty())
+    }
+
+    pub(super) fn project_text_into(self, text: &mut String) {
+        let capacity = self.leaves().fold(0_usize, |total, leaf| {
+            total.saturating_add(leaf.text().len())
+        });
+        text.clear();
+        text.reserve(capacity);
+        for leaf in self.leaves() {
+            text.push_str(leaf.text());
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum LeafSource<'a> {
+    Document(&'a crate::document::TextLeaf),
+    Block(&'a TextBlockSnapshot),
+}
+
+impl<'a> LeafSource<'a> {
+    pub(super) fn id(self) -> TextId {
+        match self {
+            Self::Document(leaf) => leaf.id,
+            Self::Block(block) => block.text_id(),
+        }
+    }
+
+    pub(super) fn role(self) -> InlineRole {
+        match self {
+            Self::Document(leaf) => leaf.role,
+            Self::Block(_) => InlineRole::TEXT,
+        }
+    }
+
+    pub(super) fn text(self) -> &'a str {
+        match self {
+            Self::Document(leaf) => leaf.text(),
+            Self::Block(block) => block.text(),
+        }
+    }
+
+    pub(super) fn semantic_id(self) -> SemanticId {
+        match self {
+            Self::Document(leaf) => leaf.semantic_id(),
+            Self::Block(block) => SemanticId::for_text(block.text_id()),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) enum ParagraphLeaves<'a> {
+    Document(slice::Iter<'a, crate::document::TextLeaf>),
+    Block(Option<&'a TextBlockSnapshot>),
+}
+
+impl<'a> Iterator for ParagraphLeaves<'a> {
+    type Item = LeafSource<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Document(leaves) => leaves.next().map(LeafSource::Document),
+            Self::Block(block) => block.take().map(LeafSource::Block),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for ParagraphLeaves<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Document(leaves) => leaves.len(),
+            Self::Block(block) => usize::from(block.is_some()),
+        }
+    }
+}
+
+impl core::iter::FusedIterator for ParagraphLeaves<'_> {}
 
 #[derive(Debug, Default)]
 pub(super) struct ProjectionScratch {
@@ -77,11 +220,12 @@ pub(super) struct Projection {
 
 impl Projection {
     pub(super) fn new_in(
-        paragraph: &Paragraph,
+        paragraph: ParagraphSource<'_>,
         request: &SceneRequest<'_>,
         scratch: &mut ProjectionScratch,
     ) -> Result<Self, SceneError> {
         paragraph.project_text_into(&mut scratch.mapping_source);
+        let paragraph_id = paragraph.id();
         let mut spans = mem::take(&mut scratch.spans);
         let mut analysis_styles = mem::take(&mut scratch.analysis_styles);
         let mut analysis_runs = mem::take(&mut scratch.analysis_runs);
@@ -98,26 +242,26 @@ impl Projection {
         inline_flow_styles.clear();
         inline_flow_runs.clear();
         paint_runs.clear();
-        spans.reserve(paragraph.leaves.len());
-        analysis_runs.reserve(paragraph.leaves.len());
-        shaping_runs.reserve(paragraph.leaves.len());
-        inline_flow_runs.reserve(paragraph.leaves.len());
-        paint_runs.reserve(paragraph.leaves.len());
+        spans.reserve(paragraph.leaf_count());
+        analysis_runs.reserve(paragraph.leaf_count());
+        shaping_runs.reserve(paragraph.leaf_count());
+        inline_flow_runs.reserve(paragraph.leaf_count());
+        paint_runs.reserve(paragraph.leaf_count());
         let mut start = 0_u32;
-        for leaf in &paragraph.leaves {
+        for leaf in paragraph.leaves() {
             let len = u32::try_from(leaf.text().len()).map_err(|_| {
-                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph_id)
             })?;
             let end = start.checked_add(len).ok_or_else(|| {
-                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph_id)
             })?;
-            let style = request.styles.style_for(leaf.id);
+            let style = request.styles.style_for(leaf.id());
             spans.push(LeafSpan {
                 paragraph: start..end,
-                text: leaf.id,
+                text: leaf.id(),
                 source: LeafSpanSource::Snapshot { start: 0 },
                 leaf_len: len,
-                role: leaf.role,
+                role: leaf.role(),
                 semantic: leaf.semantic_id(),
             });
             if start != end {
@@ -126,36 +270,36 @@ impl Projection {
                     &mut analysis_runs,
                     start..end,
                     style.analysis(),
-                    paragraph.id,
+                    paragraph_id,
                 )?;
                 append_shaping_run(
                     &mut shaping_styles,
                     &mut shaping_runs,
                     start..end,
                     style.shaping(),
-                    paragraph.id,
+                    paragraph_id,
                 )?;
                 append_inline_flow_run(
                     &mut inline_flow_styles,
                     &mut inline_flow_runs,
                     start..end,
                     style.inline_flow(),
-                    paragraph.id,
+                    paragraph_id,
                 )?;
                 append_paint_run(&mut paint_runs, start..end, style.paint());
             }
             start = end;
         }
-        let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
+        let paragraph_style = request.styles.paragraph_style_for(paragraph_id);
         let mapping = TextProjection::from_whitespace_reusing(
             mem::take(&mut scratch.mapping_source),
             paragraph_style.whitespace_collapse(),
             &mut scratch.mapping_projected,
             &mut scratch.mapping_segments,
         )
-        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph_id))?;
         project_style_runs(
-            paragraph.id,
+            paragraph_id,
             &mapping,
             &mut analysis_runs,
             &mut shaping_runs,
@@ -163,7 +307,7 @@ impl Projection {
             &mut paint_runs,
         )?;
         Ok(Self {
-            paragraph: paragraph.id,
+            paragraph: paragraph_id,
             mapping,
             spans,
             analysis_styles,
@@ -177,23 +321,24 @@ impl Projection {
             default_inline_flow: request.styles.default_style().inline_flow(),
             paragraph_style,
             paragraph_semantic: paragraph.semantic_id(),
-            paragraph_role: paragraph.role,
+            paragraph_role: paragraph.role(),
         })
     }
 
     pub(super) fn with_composition_in(
-        paragraph: &Paragraph,
+        paragraph: ParagraphSource<'_>,
         request: &SceneRequest<'_>,
         composition: &CompositionSession,
         scratch: &mut ProjectionScratch,
     ) -> Result<Self, SceneError> {
+        let paragraph_id = paragraph.id();
         let target = composition.target_text().ok_or_else(|| {
-            SceneError::for_paragraph(SceneErrorKind::InvalidComposition, paragraph.id)
+            SceneError::for_paragraph(SceneErrorKind::InvalidComposition, paragraph_id)
         })?;
-        if target.paragraph != paragraph.id.index {
+        if target.paragraph != paragraph_id.index {
             return Err(SceneError::for_paragraph(
                 SceneErrorKind::InvalidComposition,
-                paragraph.id,
+                paragraph_id,
             ));
         }
         let ranges = composition.replacement_ranges();
@@ -204,13 +349,13 @@ impl Projection {
         {
             return Err(SceneError::for_paragraph(
                 SceneErrorKind::InvalidComposition,
-                paragraph.id,
+                paragraph_id,
             ));
         }
 
         let mut text = mem::take(&mut scratch.mapping_source);
         text.clear();
-        let capacity = paragraph.leaves.len() + ranges.len() + 1;
+        let capacity = paragraph.leaf_count() + ranges.len() + 1;
         let mut spans = mem::take(&mut scratch.spans);
         let mut analysis_styles = mem::take(&mut scratch.analysis_styles);
         let mut analysis_runs = mem::take(&mut scratch.analysis_runs);
@@ -234,11 +379,11 @@ impl Projection {
         paint_runs.reserve(capacity);
         let mut target_found = false;
 
-        for leaf in &paragraph.leaves {
-            let style = request.styles.style_for(leaf.id);
-            if leaf.id != target {
+        for leaf in paragraph.leaves() {
+            let style = request.styles.style_for(leaf.id());
+            if leaf.id() != target {
                 append_projection_span(
-                    paragraph.id,
+                    paragraph_id,
                     &mut text,
                     &mut spans,
                     &mut analysis_styles,
@@ -268,7 +413,7 @@ impl Projection {
                 {
                     return Err(SceneError::for_source(
                         SceneErrorKind::InvalidComposition,
-                        paragraph.id,
+                        paragraph_id,
                         bytes,
                     ));
                 }
@@ -279,12 +424,12 @@ impl Projection {
                         .ok_or_else(|| {
                             SceneError::for_source(
                                 SceneErrorKind::InvalidComposition,
-                                paragraph.id,
+                                paragraph_id,
                                 source..bytes.start,
                             )
                         })?;
                     append_projection_span(
-                        paragraph.id,
+                        paragraph_id,
                         &mut text,
                         &mut spans,
                         &mut analysis_styles,
@@ -302,7 +447,7 @@ impl Projection {
                 }
                 if index == 0 {
                     append_projection_span(
-                        paragraph.id,
+                        paragraph_id,
                         &mut text,
                         &mut spans,
                         &mut analysis_styles,
@@ -325,18 +470,18 @@ impl Projection {
                 source = bytes.end;
             }
             let end = u32::try_from(leaf.text().len()).map_err(|_| {
-                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id)
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph_id)
             })?;
             if source < end {
                 let retained = leaf.text().get(source as usize..).ok_or_else(|| {
                     SceneError::for_source(
                         SceneErrorKind::InvalidComposition,
-                        paragraph.id,
+                        paragraph_id,
                         source..end,
                     )
                 })?;
                 append_projection_span(
-                    paragraph.id,
+                    paragraph_id,
                     &mut text,
                     &mut spans,
                     &mut analysis_styles,
@@ -356,20 +501,20 @@ impl Projection {
         if !target_found {
             return Err(SceneError::for_paragraph(
                 SceneErrorKind::InvalidComposition,
-                paragraph.id,
+                paragraph_id,
             ));
         }
 
-        let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
+        let paragraph_style = request.styles.paragraph_style_for(paragraph_id);
         let mapping = TextProjection::from_whitespace_reusing(
             text,
             paragraph_style.whitespace_collapse(),
             &mut scratch.mapping_projected,
             &mut scratch.mapping_segments,
         )
-        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph_id))?;
         project_style_runs(
-            paragraph.id,
+            paragraph_id,
             &mapping,
             &mut analysis_runs,
             &mut shaping_runs,
@@ -377,7 +522,7 @@ impl Projection {
             &mut paint_runs,
         )?;
         Ok(Self {
-            paragraph: paragraph.id,
+            paragraph: paragraph_id,
             mapping,
             spans,
             analysis_styles,
@@ -391,7 +536,7 @@ impl Projection {
             default_inline_flow: request.styles.default_style().inline_flow(),
             paragraph_style,
             paragraph_semantic: paragraph.semantic_id(),
-            paragraph_role: paragraph.role,
+            paragraph_role: paragraph.role(),
         })
     }
 
@@ -546,7 +691,7 @@ pub(super) fn append_projection_span(
     inline_flow_styles: &mut Vec<InlineFlowStyle>,
     inline_flow_runs: &mut Vec<InlineFlowRun>,
     paint_runs: &mut Vec<PaintRun>,
-    leaf: &crate::document::TextLeaf,
+    leaf: LeafSource<'_>,
     value: &str,
     source: LeafSpanSource,
     style: &ComputedInlineStyle,
@@ -558,11 +703,11 @@ pub(super) fn append_projection_span(
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?;
     spans.push(LeafSpan {
         paragraph: start..end,
-        text: leaf.id,
+        text: leaf.id(),
         source,
         leaf_len: u32::try_from(leaf.text().len())
             .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?,
-        role: leaf.role,
+        role: leaf.role(),
         semantic: leaf.semantic_id(),
     });
     if start != end {

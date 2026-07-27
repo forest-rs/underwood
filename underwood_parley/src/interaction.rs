@@ -8,7 +8,7 @@
 //! document-edit policy.
 
 use alloc::vec::Vec;
-use core::ops::Range;
+use core::{mem::size_of, ops::Range};
 
 use parley_engine::{Analysis, Boundary, ShapedText, shape::Whitespace};
 use underwood::TextAffinity;
@@ -64,6 +64,21 @@ pub(crate) fn collect_analysis_units_into(
     Ok(())
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct InteractionScratch {
+    visual_slices: Vec<VisualInteractionSlice>,
+    seen: Vec<bool>,
+}
+
+impl InteractionScratch {
+    pub(crate) fn accounted_owned_bytes(&self) -> usize {
+        size_of::<VisualInteractionSlice>()
+            .saturating_mul(self.visual_slices.capacity())
+            .saturating_add(self.seen.capacity().saturating_add(7) / 8)
+    }
+}
+
+#[derive(Debug)]
 struct VisualInteractionSlice {
     source: Range<u32>,
     advance: f64,
@@ -81,10 +96,16 @@ pub(crate) fn lower_visual_units(
     interaction_units: &[Range<usize>],
     line_source: &Range<usize>,
     mandatory_line_end: bool,
+    scratch: &mut InteractionScratch,
     output: &mut PreparedLineBuilder<'_>,
 ) -> Result<(), PreparationError> {
     let slice_count = pieces.iter().map(|piece| piece.clusters.len()).sum();
-    let mut visual_slices = Vec::with_capacity(slice_count);
+    let InteractionScratch {
+        visual_slices,
+        seen,
+    } = scratch;
+    visual_slices.clear();
+    visual_slices.reserve(slice_count);
     for piece in pieces {
         let run = shaped_text
             .runs()
@@ -113,7 +134,8 @@ pub(crate) fn lower_visual_units(
     {
         return Err(PreparationError::invalid_output());
     }
-    let mut seen = alloc::vec![false; expected.len()];
+    seen.clear();
+    seen.resize(expected.len(), false);
     let mut current_owner = None;
     let mut current_start = 0;
     for (index, slice) in visual_slices.iter().enumerate() {

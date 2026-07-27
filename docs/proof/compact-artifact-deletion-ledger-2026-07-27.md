@@ -717,3 +717,54 @@ an upstream shaping API: `TextBlock::prepare_block` still materializes a
 one-paragraph `Document` on every changed revision. That contradicts the
 compact-block design claim and accounts for eight changed-path allocations
 before paragraph preparation begins.
+
+## Prepare compact blocks as borrowed paragraphs
+
+`LayoutEngine::prepare_block` no longer constructs a temporary `Document`,
+publishes a one-paragraph snapshot, and then converts the resulting document
+root back into a block root. The shared projection and paragraph-preparation
+pipeline now consumes a private borrowed paragraph source. A document
+paragraph and a `TextBlockSnapshot` provide the same identity, revision,
+semantic, leaf, and text observations without requiring the same storage
+representation.
+
+This is a storage-boundary correction, not a block-specific layout path.
+Projection, whitespace processing, invalidation, adapter formation, geometry,
+paint, capability sidecars, region flow, and scene queries remain shared.
+`TextBlock`/document parity, empty blocks, intrinsic sizing, region flow, bidi
+interaction, and composition tests remain green.
+
+Two smaller allocation classes were removed in the same measured slice:
+
+- visual run pieces, interaction slices, and seen-unit bits are now reusable
+  adapter scratch rather than fresh vectors for every accepted line;
+- equivalent `BlockRequest` computed styles reuse one immutable `StyleMap`
+  backing store rather than allocating an internal map for every block and
+  every changed revision.
+
+The adapter scratch increase is bounded once per engine, not once per
+paragraph: the measured charge moves from 7,060 to 8,314 bytes. Scene and
+per-paragraph adapter residency do not increase.
+
+The matched allocation-counter result at 1,000 blocks is:
+
+| Phase | Recycled local work | Borrowed block path |
+|---|---:|---:|
+| cold preparation calls | 28,377 | **16,884** |
+| changed preparation calls | 29 | **16** |
+| changed requested bytes | 4,516 | **3,200** |
+| changed retained net bytes | 920 | **920** |
+| stable repeat calls | 0 | **0** |
+| paint-only calls | 0 | **0** |
+
+Seven paired 20,000-round release samples measure Underwood at 5.91–6.04 µs
+per localized edit and Parley at 3.04–3.10 µs. The paired ratio is
+**1.91–1.99×**, making both Design-0021 blocking edit gates green on this host.
+The result stays on Parley Engine
+`97b874719f810c375025f3fa727b245530a87f9f`; no `ShapedText` method, dependency
+revision, local Parley patch, or private fork is part of the result.
+
+The remaining `TextBlockSnapshot::materialize_document` helper is no longer on
+preparation. It is confined to multi-selection replacement and remains an
+explicit deletion target before the compact-block representation is declared
+fully complete.

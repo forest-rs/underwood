@@ -23,11 +23,11 @@ use underwood::adapter::{
 use underwood::{RegionAttempt, RegionTranscript, ResolvedDirection};
 
 use crate::font::FontSet;
-use crate::interaction::{collect_analysis_units_into, lower_visual_units};
+use crate::interaction::{InteractionScratch, collect_analysis_units_into, lower_visual_units};
 use crate::line_break::{
-    FormedLine, LineFormationScratch, LineFormationWork, LogicalCluster, apply_wrap_policy,
-    collect_logical_clusters_into, form_lines, line_run_pieces, reorder_visual_pieces,
-    shaped_text_accounted_bytes, update_line_metrics,
+    FormedLine, LineFormationScratch, LineFormationWork, LogicalCluster, RunPiece,
+    apply_wrap_policy, collect_logical_clusters_into, form_lines, line_run_pieces_into,
+    reorder_visual_pieces, shaped_text_accounted_bytes, update_line_metrics,
 };
 use crate::lowering::{
     append_unrendered_source, checked_source_range, index_char_starts, lower_glyphs_into,
@@ -52,6 +52,8 @@ pub struct ParleyParagraphEngine {
     shaper: Shaper,
     line_scratch: LineFormationScratch,
     reshape_scratch: ShapedText,
+    run_pieces: Vec<RunPiece>,
+    interaction_scratch: InteractionScratch,
     cache: BTreeMap<ParagraphPreparationId, PreparationCache>,
     scratch_cache: Option<PreparationCache>,
     retention_budget: usize,
@@ -69,6 +71,8 @@ impl ParleyParagraphEngine {
             shaper: Shaper::default(),
             line_scratch: LineFormationScratch::default(),
             reshape_scratch: ShapedText::new(),
+            run_pieces: Vec::new(),
+            interaction_scratch: InteractionScratch::default(),
             cache: BTreeMap::new(),
             scratch_cache: None,
             retention_budget: 0,
@@ -81,6 +85,8 @@ impl ParleyParagraphEngine {
         self.line_scratch
             .accounted_owned_bytes()
             .saturating_add(shaped_text_accounted_bytes(&self.reshape_scratch))
+            .saturating_add(size_of::<RunPiece>().saturating_mul(self.run_pieces.capacity()))
+            .saturating_add(self.interaction_scratch.accounted_owned_bytes())
             .saturating_add(
                 self.scratch_cache
                     .as_ref()
@@ -451,8 +457,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
             if shaped_text.runs().len() != scripts.len() {
                 return Err(PreparationError::invalid_output());
             }
-            let mut pieces = line_run_pieces(shaped_text, plan.clusters.clone())?;
-            reorder_visual_pieces(shaped_text, &mut pieces);
+            line_run_pieces_into(shaped_text, plan.clusters.clone(), &mut self.run_pieces)?;
+            reorder_visual_pieces(shaped_text, &mut self.run_pieces);
             let mut line = paragraph.begin_line(PreparedLine::try_new_in_slot(
                 plan.slot,
                 checked_source_range(&plan.source)?,
@@ -467,13 +473,14 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 input.text(),
                 shaped_text,
                 scripts,
-                &pieces,
+                &self.run_pieces,
                 &preparation.interaction_units,
                 &plan.source,
                 plan.reason == LineBreakReason::Mandatory,
+                &mut self.interaction_scratch,
                 &mut line,
             )?;
-            for piece in pieces {
+            for piece in &self.run_pieces {
                 let run = shaped_text
                     .runs()
                     .get(piece.run)

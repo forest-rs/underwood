@@ -441,14 +441,20 @@ the nested final lowering path, and deep formation keys. Exact matched
 live-heap deltas are now 1.07× Parley for display and 1.19× for editable
 labels. Direct canonical construction plus recycled projection, whitespace,
 and line work has reduced one changed paragraph from 63 calls / 12,584
-requested bytes to 29 calls / 4,516 bytes. Whitespace-separated lines borrow
-canonical shaping while Arabic joining-sensitive boundaries still reshape;
-this requires no new `ShapedText` API or Parley fork. Localized edit is now
-6.30–6.57 µs versus Parley's 3.08–3.15 µs. Residency and requested-byte gates
-are green; the 16-call gate and a robust ≤2× edit-latency result remain open.
-Allocator stacks expose that the supposedly deleted plain-block miniature
-`Document` still exists on changed preparation; removing that mirage is the
-next deletion slice. The running ledger and raw checkpoints are in
+requested bytes to 29 calls / 4,516 bytes. The subsequent borrowed-paragraph
+slice removes the temporary `Document` from block preparation, recycles
+line-lowering work, and shares equivalent internal block style maps. Changed
+preparation is now **16 calls / 3,200 bytes**, stable repeat and repaint remain
+allocation-free, and cold preparation falls from 28,377 to 16,884 calls at
+1,000 blocks. Whitespace-separated lines borrow canonical shaping while
+Arabic joining-sensitive boundaries still reshape; none of this requires a
+new `ShapedText` API or Parley fork. Seven paired release samples measure
+localized edit at 5.91–6.04 µs versus Parley's 3.04–3.10 µs, or
+**1.91–1.99×**. Residency, requested-byte, call-count, and edit-latency gates
+are green on this host. The miniature `Document` helper is now confined to
+multi-selection replacement and must be deleted before the compact-block
+representation is declared complete. The running ledger and raw checkpoints
+are in
 `docs/proof/compact-artifact-deletion-ledger-2026-07-27.md`.
 
 ### Risks and controls

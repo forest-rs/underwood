@@ -1002,11 +1002,12 @@ fn inline_flow_line_height(
     Ok(f64::from(height))
 }
 
-pub(crate) fn line_run_pieces(
+pub(crate) fn line_run_pieces_into(
     shaped_text: &ShapedText,
     clusters: Range<usize>,
-) -> Result<Vec<RunPiece>, PreparationError> {
-    let mut pieces = Vec::new();
+    pieces: &mut Vec<RunPiece>,
+) -> Result<(), PreparationError> {
+    pieces.clear();
     for (run_index, run) in shaped_text.runs().iter().enumerate() {
         let start = run.clusters_range.start.max(clusters.start);
         let end = run.clusters_range.end.min(clusters.end);
@@ -1026,7 +1027,7 @@ pub(crate) fn line_run_pieces(
     {
         return Err(PreparationError::invalid_output());
     }
-    Ok(pieces)
+    Ok(())
 }
 
 pub(crate) fn reorder_visual_pieces(shaped_text: &ShapedText, pieces: &mut [RunPiece]) {
