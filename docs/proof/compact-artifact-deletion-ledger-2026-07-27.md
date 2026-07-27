@@ -152,7 +152,7 @@ same internal paragraph-source view used by document paragraphs.
 | copied scene cursor graph | present | deleted | complete |
 | adapter final-output cache | present | deleted | complete |
 | ordinary per-glyph paint coverage | present | deleted | complete |
-| clone-based repaint | present | — | pending |
+| clone-based repaint | present | deleted | complete |
 | nested-to-flat final lowering | present | — | pending |
 | plain-block document tree | present | — | pending |
 | one canonical paragraph artifact | absent | — | pending |
@@ -252,3 +252,17 @@ retains two or more explicitly clipped segments.
 The 1,000-label editable live-heap delta fell another 1,292,000 bytes, from
 12,902,272 to 11,610,272 bytes. That is 3.44× matched Parley. The public
 adapter migration is recorded in Design-0021.
+
+## Shared paint-topology checkpoint
+
+Paint-only preparation no longer manufactures a replacement `CachedGeometry`
+by cloning its artifact, facts, source map, hit geometry, and semantics.
+`ParagraphSceneSegment` owns a small run-sized paint topology separately from
+an `Arc<CachedGeometry>`. A paint change rebuilds that topology and shares the
+complete immutable geometry allocation; a regression test asserts pointer
+identity across the change.
+
+The paint topology remains inline in the already-retained paragraph segment
+rather than adding another `Arc` allocation. Recalculation on an explicit
+paint or capability boundary is cheaper than another permanently resident
+owner. `repaint_geometry` and the clone-based reconstruction path are deleted.

@@ -19,6 +19,7 @@ const MAX_SPINE_DEPTH: usize = 32;
 pub(super) struct ParagraphSceneSegment {
     pub(super) paragraph: ParagraphId,
     pub(super) geometry: Arc<CachedGeometry>,
+    pub(super) paint: PaintTopology,
     pub(super) region_transcript: Option<RegionTranscript>,
 }
 
@@ -26,11 +27,13 @@ impl ParagraphSceneSegment {
     pub(super) fn new(
         paragraph: ParagraphId,
         geometry: Arc<CachedGeometry>,
+        paint: PaintTopology,
         region_transcript: Option<RegionTranscript>,
     ) -> Self {
         Self {
             paragraph,
             geometry,
+            paint,
             region_transcript,
         }
     }
@@ -135,7 +138,7 @@ impl SceneSummary {
             paragraphs: 1,
             block_extent: geometry.height,
             lines: geometry.lines.len(),
-            fragments: geometry.fragments.len(),
+            fragments: segment.paint.fragments.len(),
             clusters: geometry.hit_geometry.len(),
             movements: geometry.movement_count(),
             texts: geometry
@@ -848,11 +851,13 @@ mod tests {
                     lines: Vec::new(),
                     glyphs: Vec::new(),
                 }),
-                fragments: Vec::new(),
                 source_map: None,
                 hit_geometry: CachedHitSidecar::new(false, Vec::new()),
                 semantics: CachedSidecar::new(false, Vec::new()),
             }),
+            PaintTopology {
+                fragments: Vec::new(),
+            },
             None,
         ))
     }

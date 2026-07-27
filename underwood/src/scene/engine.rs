@@ -1133,7 +1133,7 @@ impl LayoutEngine {
                     .expect("localized preparation retains its paragraph segment")
                     .segment,
             );
-            paint_records = paint_records.saturating_add(segment.geometry.fragments.len());
+            paint_records = paint_records.saturating_add(segment.paint.fragments.len());
             spine = spine
                 .replace(paragraph_index, segment)
                 .expect("the retained spine has the same paragraph count");
@@ -1309,7 +1309,7 @@ impl LayoutEngine {
                     .expect("appended preparation retains its paragraph segment")
                     .segment,
             );
-            paint_records = paint_records.saturating_add(segment.geometry.fragments.len());
+            paint_records = paint_records.saturating_add(segment.paint.fragments.len());
             spine = spine.append(segment);
             self.enforce_budget();
         }
@@ -1522,7 +1522,7 @@ impl LayoutEngine {
                         .expect("localized region preparation retains its segment")
                         .segment,
                 );
-                paint_records = paint_records.saturating_add(segment.geometry.fragments.len());
+                paint_records = paint_records.saturating_add(segment.paint.fragments.len());
                 self.scratch.region_segments.push(segment);
                 processed = processed.saturating_add(1);
                 self.enforce_budget();
@@ -2023,7 +2023,7 @@ fn prepare_paragraph_geometry(
                 .geometry,
         )
     });
-    let retained_paint_geometry = (formation_matches
+    let retained_paint_layout = (formation_matches
         && adjustment_matches
         && !paint_matches
         && cache
@@ -2295,19 +2295,33 @@ fn prepare_paragraph_geometry(
     if backend_called && projection.mapping.text().is_empty() && !formation_matches {
         work.flow.add_paragraph(1);
     }
-    let mut geometry = match retained_paint_geometry.as_ref().map_or_else(
-        || {
-            build_geometry(
+    let geometry = match retained_paint_layout {
+        Some(retained) => retained,
+        None => {
+            let mut geometry = match build_geometry(
                 &prepared,
                 projection,
                 features,
                 constraint,
                 region_transcript.as_ref(),
-            )
-        },
-        |retained| repaint_geometry(&prepared, projection, retained),
-    ) {
-        Ok(geometry) => geometry,
+            ) {
+                Ok(geometry) => geometry,
+                Err(error) => {
+                    if backend_called {
+                        paragraphs.release(preparation);
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(retained) = retained_layout {
+                geometry.facts = Arc::clone(&retained.facts);
+                geometry.retain_sidecars_from(&retained);
+            }
+            Arc::new(geometry)
+        }
+    };
+    let paint = match build_paint_topology(&prepared, projection, &geometry) {
+        Ok(paint) => paint,
         Err(error) => {
             if backend_called {
                 paragraphs.release(preparation);
@@ -2315,10 +2329,6 @@ fn prepare_paragraph_geometry(
             return Err(error);
         }
     };
-    if let Some(retained) = retained_layout {
-        geometry.facts = Arc::clone(&retained.facts);
-        geometry.retain_sidecars_from(&retained);
-    }
     if backend_called && let Some(query) = &shared_query {
         shared_preparation.insert(
             query,
@@ -2332,7 +2342,7 @@ fn prepare_paragraph_geometry(
     } else {
         geometry.lines.len()
     });
-    work.geometry.add_paragraph(geometry.fragments.len());
+    work.geometry.add_paragraph(paint.fragments.len());
     let formation_key = FormationKey::new(
         paragraph.version,
         alloc::string::String::from(projection.mapping.text()),
@@ -2359,7 +2369,8 @@ fn prepare_paragraph_geometry(
             entry.paint_runs = projection.paint_runs.clone();
             entry.segment = Arc::new(ParagraphSceneSegment::new(
                 paragraph.id,
-                Arc::new(geometry),
+                geometry,
+                paint,
                 region_transcript.clone(),
             ));
             entry.accounted_bytes = entry.calculate_accounted_owned_bytes();
@@ -2377,7 +2388,8 @@ fn prepare_paragraph_geometry(
                 paint_runs: projection.paint_runs.clone(),
                 segment: Arc::new(ParagraphSceneSegment::new(
                     paragraph.id,
-                    Arc::new(geometry),
+                    geometry,
+                    paint,
                     region_transcript.clone(),
                 )),
                 accounted_bytes: 0,
@@ -2703,6 +2715,7 @@ impl ParagraphCache {
                     }),
             )
             .saturating_add(self.segment.geometry.accounted_owned_bytes())
+            .saturating_add(self.segment.paint.residency_bytes())
     }
 }
 

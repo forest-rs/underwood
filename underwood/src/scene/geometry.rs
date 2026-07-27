@@ -15,7 +15,6 @@ pub(super) struct CachedGeometry {
     pub(super) features: SceneFeatures,
     pub(super) artifact: Arc<PreparedParagraphFacts>,
     pub(super) facts: Arc<CachedGeometryFacts>,
-    pub(super) fragments: Vec<CachedFragment>,
     pub(super) source_map: Option<Arc<ParagraphSourceMap>>,
     pub(super) hit_geometry: CachedHitSidecar,
     pub(super) semantics: CachedSidecar<CachedSemantic>,
@@ -171,8 +170,9 @@ pub(super) struct CachedGlyph {
     pub(super) inline_advance_adjustment: f64,
 }
 
-struct PaintTopology {
-    fragments: Vec<CachedFragment>,
+#[derive(Clone, Debug)]
+pub(super) struct PaintTopology {
+    pub(super) fragments: Vec<CachedFragment>,
 }
 
 #[derive(Clone, Copy)]
@@ -452,7 +452,6 @@ impl CachedGeometry {
         let layout =
             vec_bytes::<CachedLine>(self.lines.capacity())
                 .saturating_add(vec_bytes::<CachedGlyph>(self.glyphs.capacity()));
-        let paint = vec_bytes::<CachedFragment>(self.fragments.capacity());
         let sources = self
             .source_map
             .as_ref()
@@ -460,7 +459,7 @@ impl CachedGeometry {
         let hit_testing = vec_bytes::<CachedHitPlacement>(self.hit_geometry.capacity());
         SceneResidencyBytes::from_categories(
             layout,
-            paint,
+            0,
             sources,
             vec_bytes::<CachedSemantic>(self.semantics.capacity()),
             hit_testing,
@@ -472,6 +471,12 @@ impl CachedGeometry {
 
     pub(super) fn accounted_owned_bytes(&self) -> usize {
         self.residency_bytes().total()
+    }
+}
+
+impl PaintTopology {
+    pub(super) fn residency_bytes(&self) -> usize {
+        vec_bytes::<CachedFragment>(self.fragments.capacity())
     }
 }
 
@@ -772,7 +777,6 @@ pub(super) fn build_geometry(
         line_top = line_top.max(current_line_top + line.height());
     }
     let glyphs = build_layout_glyphs(prepared, &lines)?;
-    let paint = build_paint_fragments(prepared, projection, &glyphs)?;
 
     if retains_clusters
         && prepared.lines().is_empty()
@@ -864,28 +868,18 @@ pub(super) fn build_geometry(
             lines,
             glyphs,
         }),
-        fragments: paint.fragments,
         source_map,
         hit_geometry: CachedHitSidecar::new(retains_clusters, hit_placements),
         semantics: CachedSidecar::new(features.has_semantics(), semantics),
     })
 }
 
-pub(super) fn repaint_geometry(
+pub(super) fn build_paint_topology(
     prepared: &PreparedParagraph,
     projection: &Projection<'_>,
     retained: &CachedGeometry,
-) -> Result<CachedGeometry, SceneError> {
-    let paint = build_paint_fragments(prepared, projection, &retained.glyphs)?;
-    Ok(CachedGeometry {
-        features: retained.features,
-        artifact: Arc::clone(&retained.artifact),
-        facts: Arc::clone(&retained.facts),
-        fragments: paint.fragments,
-        source_map: retained.source_map.clone(),
-        hit_geometry: retained.hit_geometry.clone(),
-        semantics: retained.semantics.clone(),
-    })
+) -> Result<PaintTopology, SceneError> {
+    build_paint_fragments(prepared, projection, &retained.glyphs)
 }
 
 fn build_layout_glyphs(

@@ -248,6 +248,7 @@ impl ExactSizeIterator for SceneParagraphResidencies<'_> {}
 
 pub(super) fn paragraph_bytes(segment: &ParagraphSceneSegment) -> SceneResidencyBytes {
     let mut bytes = segment.geometry.residency_bytes();
+    bytes.paint = bytes.paint.saturating_add(segment.paint.residency_bytes());
     bytes.layout =
         bytes
             .layout

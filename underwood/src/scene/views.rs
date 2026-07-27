@@ -292,7 +292,7 @@ impl<'a> SceneLineView<'a> {
     #[must_use]
     pub fn fragment_range(self) -> Range<usize> {
         let base = self.positioned.position.position.fragment_base;
-        let fragments = &self.positioned.position.segment.geometry.fragments;
+        let fragments = &self.positioned.position.segment.paint.fragments;
         let line = u32::try_from(self.positioned.local)
             .expect("validated scene line index fits the retained fragment index");
         let start = fragments.partition_point(|fragment| fragment.line < line);
@@ -417,7 +417,7 @@ impl<'a> Iterator for SceneFragments<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             if let Some((positioned, local)) = &mut self.current
-                && *local < positioned.segment.geometry.fragments.len()
+                && *local < positioned.segment.paint.fragments.len()
             {
                 let fragment = PositionedFragment {
                     position: *positioned,
@@ -629,7 +629,7 @@ impl<'a> SceneFragmentView<'a> {
     }
 
     fn local(self) -> &'a CachedFragment {
-        &self.positioned.position.segment.geometry.fragments[self.positioned.local]
+        &self.positioned.position.segment.paint.fragments[self.positioned.local]
     }
 
     fn prepared_run(self) -> &'a PreparedRun {

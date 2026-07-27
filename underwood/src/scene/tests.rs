@@ -650,13 +650,13 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
         .cached_geometry_for_test(paragraph)
         .expect("painted paragraph remains cached");
     assert!(
-        Arc::ptr_eq(&adjusted_geometry.facts, &painted_geometry.facts),
-        "paint-only preparation must share all non-paint scene facts"
+        Arc::ptr_eq(&adjusted_geometry, &painted_geometry),
+        "paint-only preparation must share the complete immutable geometry"
     );
     assert_eq!(
         painted.scene().fragment(0).expect("paint fragment").paint(),
         PaintSlot::new(1),
-        "the paint sidecar must still expose the new slot"
+        "the paint topology must still expose the new slot"
     );
 
     let mut untraced = LayoutEngine::new(
