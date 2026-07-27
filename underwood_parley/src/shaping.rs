@@ -101,12 +101,10 @@ pub(crate) fn shape_paragraph(
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
     shaped_text: &mut ShapedText,
-    scripts: &mut Vec<[u8; 4]>,
     style_indices: &mut Vec<u16>,
     inline_flow_indices: &mut Vec<u16>,
 ) -> Result<u32, PreparationError> {
     shaped_text.clear();
-    scripts.clear();
     prepare_style_indices(
         text,
         shaping_runs,
@@ -125,7 +123,6 @@ pub(crate) fn shape_paragraph(
         inline_flow_indices,
         0..text.len(),
         shaped_text,
-        scripts,
     )
 }
 
@@ -143,12 +140,10 @@ pub(crate) fn reshape_paragraph_with_retained_fonts(
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
     shaped_text: &mut ShapedText,
-    scripts: &mut Vec<[u8; 4]>,
     style_indices: &mut Vec<u16>,
     inline_flow_indices: &mut Vec<u16>,
 ) -> Result<u32, PreparationError> {
     shaped_text.clear();
-    scripts.clear();
     prepare_style_indices(
         text,
         shaping_runs,
@@ -167,7 +162,6 @@ pub(crate) fn reshape_paragraph_with_retained_fonts(
         inline_flow_indices,
         0..text.len(),
         shaped_text,
-        scripts,
     )
 }
 
@@ -182,10 +176,8 @@ pub(crate) fn shape_line(
     inline_flow_indices: &[u16],
     source: Range<usize>,
     shaped_text: &mut ShapedText,
-    scripts: &mut Vec<[u8; 4]>,
 ) -> Result<LineShapeWork, PreparationError> {
     shaped_text.clear();
-    scripts.clear();
     let selected_clusters = shape_range(
         shaper,
         analysis,
@@ -197,7 +189,6 @@ pub(crate) fn shape_line(
         inline_flow_indices,
         source,
         shaped_text,
-        scripts,
     )?;
     let shaped_glyphs = shaped_glyph_count(shaped_text);
     Ok(LineShapeWork {
@@ -311,7 +302,6 @@ fn shape_range(
     inline_flow_indices: &[u16],
     source: Range<usize>,
     shaped_text: &mut ShapedText,
-    scripts: &mut Vec<[u8; 4]>,
 ) -> Result<u32, PreparationError> {
     if source.start > source.end
         || text.get(source.clone()).is_none()
@@ -339,7 +329,6 @@ fn shape_range(
         let style = &shaping_styles[usize::from(style_indices[item.range.char_range.start])];
         let inline_flow =
             inline_flow_styles[usize::from(inline_flow_indices[item.range.char_range.start])];
-        let script = item.script.to_bytes();
         let missing_font = Cell::new(false);
         let item_info = analysis
             .char_info()
@@ -359,7 +348,7 @@ fn shape_range(
             variations: style.variations(),
             char_style_indices: style_indices,
         };
-        let appended = match &mut font_source {
+        match &mut font_source {
             FontSource::Query(fonts) => {
                 let (collection, source_cache) = fonts.resources_mut();
                 let mut query = collection.query(source_cache);
@@ -411,13 +400,10 @@ fn shape_range(
         };
         if missing_font.get() {
             shaped_text.clear();
-            scripts.clear();
             return Err(PreparationError::missing_font());
         }
-        scripts.extend(core::iter::repeat_n(script, appended.len()));
     }
     if !source.is_empty() && shaped_text.runs().is_empty() {
-        scripts.clear();
         return Err(PreparationError::missing_font());
     }
     Ok(selected_clusters.get())
