@@ -471,6 +471,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
             )?)?;
             lower_visual_units(
                 input.text(),
+                &preparation.analysis,
+                &preparation.char_starts,
                 shaped_text,
                 scripts,
                 &self.run_pieces,

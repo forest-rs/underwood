@@ -242,6 +242,130 @@ fn split_leaf_grapheme_has_no_fabricated_interior_position() {
 }
 
 #[test]
+fn cross_script_grapheme_spanning_itemized_runs_is_one_interaction_unit() {
+    let mut block = TextBlock::plain(DocumentId::from_bytes(*b"script-grapheme1"), "a\u{0903}b")
+        .expect("cross-script fixture block is valid");
+    let snapshot = block.snapshot();
+    let text = snapshot.text_id();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = editable_block_request(TextConstraint::MaxContent, &style, &paint);
+
+    let output = fixture_engine()
+        .prepare_block(&snapshot, &request)
+        .expect("a grapheme crossing script-itemized runs must prepare");
+    let scene = output.scene();
+    let editing = scene
+        .editing()
+        .expect("fixture retains editable scene data");
+
+    for byte in [0, 4, 5] {
+        assert!(
+            editing.position_at(text, byte).is_some(),
+            "grapheme boundary at byte {byte} must be represented"
+        );
+    }
+    for byte in 1..4 {
+        assert!(
+            editing.position_at(text, byte).is_none(),
+            "byte {byte} inside the cross-script grapheme is not a caret boundary"
+        );
+    }
+    assert!(
+        scene
+            .fragments()
+            .iter()
+            .any(|fragment| fragment.font().data.as_ref() == LATIN_FONT)
+            && scene
+                .fragments()
+                .iter()
+                .any(|fragment| fragment.font().data.as_ref() == DEVANAGARI_FONT),
+        "fallback must allow one grapheme to span two fonts"
+    );
+
+    let start = editing
+        .position_at(text, 0)
+        .expect("cross-script grapheme start is represented");
+    let selections = editing
+        .selection_set([editing
+            .collapsed_selection(&start)
+            .expect("cross-script grapheme start is a caret")])
+        .expect("one caret forms a selection set");
+    let after_grapheme = editing
+        .move_selections(&selections, TextMovement::NextLogical, false)
+        .expect("logical movement crosses the complete grapheme");
+    assert_eq!(
+        after_grapheme
+            .primary()
+            .expect("primary selection survives")
+            .extent()
+            .byte(),
+        4
+    );
+    let deletion = editing
+        .move_selections(&after_grapheme, TextMovement::PreviousLogical, true)
+        .expect("backspace selects the complete grapheme");
+    let ranges = deletion
+        .primary()
+        .expect("primary selection survives")
+        .ranges();
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges[0].text(), text);
+    assert_eq!(ranges[0].bytes(), 0..4);
+    block
+        .replace_selections(&deletion, "")
+        .expect("cross-script grapheme replacement publishes atomically");
+    assert_eq!(block.text(), "b");
+}
+
+#[test]
+fn mixed_level_grapheme_uses_its_first_shaping_scalar_for_caret_sides() {
+    let block = TextBlock::plain(
+        DocumentId::from_bytes(*b"mixed-level-unit"),
+        "\u{06dd}\u{0903}",
+    )
+    .expect("mixed-level fixture block is valid");
+    let snapshot = block.snapshot();
+    let text = snapshot.text_id();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = editable_block_request(TextConstraint::MaxContent, &style, &paint);
+
+    let output = fixture_engine()
+        .prepare_block(&snapshot, &request)
+        .expect("a grapheme crossing itemized bidi levels must prepare");
+    let editing = output
+        .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let start = editing
+        .position_at(text, 0)
+        .expect("mixed-level grapheme start is represented");
+    let end = editing
+        .position_at(text, 5)
+        .expect("mixed-level grapheme end is represented");
+
+    assert_eq!(start.affinity(), TextAffinity::Downstream);
+    assert_eq!(end.affinity(), TextAffinity::Upstream);
+    for byte in 1..5 {
+        assert!(
+            editing.position_at(text, byte).is_none(),
+            "byte {byte} inside the mixed-level grapheme is not a caret boundary"
+        );
+    }
+}
+
+#[test]
 fn exact_interaction_uses_ligature_components_not_glyph_ink() {
     let (document, styles, paint) = fixture_document("office", 1.2);
     let mut engine = fixture_engine();
