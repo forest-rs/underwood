@@ -295,9 +295,10 @@ pub(crate) struct PreparedParagraphFacts {
     features: SceneFeatures,
     lines: Vec<PreparedLineRecord>,
     runs: Vec<PreparedRunRecord>,
-    glyphs: Vec<PreparedGlyph>,
+    glyphs: Vec<PreparedGlyphRecord>,
+    split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
     interaction_slices: Vec<PreparedInteractionSlice>,
-    interaction_units: Vec<PreparedInteractionUnit>,
+    interaction_units: Vec<PreparedInteractionUnitRecord>,
     source_order: Vec<u32>,
     normalized_coords: Vec<i16>,
     unrendered_source: Vec<Range<u32>>,
@@ -332,6 +333,48 @@ struct PreparedRunRecord {
     normalized_coords: TableRange,
     unrendered_source: TableRange,
     glyphs: TableRange,
+}
+
+#[derive(Debug)]
+struct PreparedGlyphRecord {
+    id: u32,
+    source: Range<u32>,
+    advance: [f32; 2],
+    offset: [f32; 2],
+}
+
+impl PreparedGlyphRecord {
+    fn try_from_glyph(
+        glyph: PreparedGlyph,
+    ) -> Result<(Self, GlyphPaintCoverage), PreparationError> {
+        let advance = [
+            compact_shaping_coordinate(glyph.advance.x)
+                .ok_or_else(PreparationError::invalid_output)?,
+            compact_shaping_coordinate(glyph.advance.y)
+                .ok_or_else(PreparationError::invalid_output)?,
+        ];
+        let offset = [
+            compact_shaping_coordinate(glyph.offset.x)
+                .ok_or_else(PreparationError::invalid_output)?,
+            compact_shaping_coordinate(glyph.offset.y)
+                .ok_or_else(PreparationError::invalid_output)?,
+        ];
+        Ok((
+            Self {
+                id: glyph.id,
+                source: glyph.source,
+                advance,
+                offset,
+            },
+            glyph.paint,
+        ))
+    }
+}
+
+#[derive(Debug)]
+struct PreparedSplitGlyphPaint {
+    glyph: u32,
+    coverage: GlyphPaintCoverage,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -498,11 +541,14 @@ impl PreparedParagraphFacts {
         let mut bytes = size_of::<Self>()
             .saturating_add(vec_bytes::<PreparedLineRecord>(self.lines.capacity()))
             .saturating_add(vec_bytes::<PreparedRunRecord>(self.runs.capacity()))
-            .saturating_add(vec_bytes::<PreparedGlyph>(self.glyphs.capacity()))
+            .saturating_add(vec_bytes::<PreparedGlyphRecord>(self.glyphs.capacity()))
+            .saturating_add(vec_bytes::<PreparedSplitGlyphPaint>(
+                self.split_glyph_paints.capacity(),
+            ))
             .saturating_add(vec_bytes::<PreparedInteractionSlice>(
                 self.interaction_slices.capacity(),
             ))
-            .saturating_add(vec_bytes::<PreparedInteractionUnit>(
+            .saturating_add(vec_bytes::<PreparedInteractionUnitRecord>(
                 self.interaction_units.capacity(),
             ))
             .saturating_add(vec_bytes::<u32>(self.source_order.capacity()))
@@ -515,11 +561,11 @@ impl PreparedParagraphFacts {
                     .saturating_add(vec_bytes::<FontVariation>(evidence.variations.capacity()));
             }
         }
-        for glyph in &self.glyphs {
+        for split in &self.split_glyph_paints {
             bytes = bytes.saturating_add(
                 size_of::<GlyphPaintSegment>().saturating_mul(
-                    glyph
-                        .paint
+                    split
+                        .coverage
                         .split_segments()
                         .map_or(0, <[GlyphPaintSegment]>::len),
                 ),
@@ -560,6 +606,7 @@ impl PreparedParagraphFacts {
         let mut line_records = Vec::with_capacity(lines.len());
         let mut run_records = Vec::with_capacity(run_capacity);
         let mut glyphs = Vec::with_capacity(glyph_capacity);
+        let mut split_glyph_paints = Vec::new();
         let mut interaction_slices = Vec::with_capacity(slice_capacity);
         let mut interaction_units = Vec::with_capacity(unit_capacity);
         let mut source_order = Vec::with_capacity(source_order_capacity);
@@ -590,7 +637,9 @@ impl PreparedParagraphFacts {
             let slices_start = interaction_slices.len();
             interaction_slices.extend(slices);
             let units_start = interaction_units.len();
-            interaction_units.extend(units);
+            for unit in units {
+                interaction_units.push(PreparedInteractionUnitRecord::try_from_unit(unit)?);
+            }
             let source_order_start = source_order.len();
             source_order.extend(line_source_order);
             let runs_start = run_records.len();
@@ -612,7 +661,18 @@ impl PreparedParagraphFacts {
                 let unrendered_source_start = unrendered_source.len();
                 unrendered_source.extend(run_unrendered_source);
                 let glyphs_start = glyphs.len();
-                glyphs.extend(run_glyphs);
+                for glyph in run_glyphs {
+                    let glyph_index = u32::try_from(glyphs.len())
+                        .map_err(|_| PreparationError::invalid_output())?;
+                    let (glyph, paint) = PreparedGlyphRecord::try_from_glyph(glyph)?;
+                    glyphs.push(glyph);
+                    if !paint.is_whole() {
+                        split_glyph_paints.push(PreparedSplitGlyphPaint {
+                            glyph: glyph_index,
+                            coverage: paint,
+                        });
+                    }
+                }
                 run_records.push(PreparedRunRecord {
                     source,
                     bidi_level,
@@ -655,6 +715,7 @@ impl PreparedParagraphFacts {
             lines: line_records,
             runs: run_records,
             glyphs,
+            split_glyph_paints,
             interaction_slices,
             interaction_units,
             source_order,
@@ -1033,8 +1094,171 @@ impl<'a> PreparedRunView<'a> {
 
     /// Returns glyphs in backend-provided visual order.
     #[must_use]
-    pub fn glyphs(self) -> &'a [PreparedGlyph] {
-        &self.facts.glyphs[self.record().glyphs.as_usize()]
+    pub fn glyphs(self) -> PreparedGlyphs<'a> {
+        PreparedGlyphs::new(self.facts, self.record().glyphs.as_usize())
+    }
+}
+
+/// Allocation-free traversal of shaped glyphs in canonical visual order.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedGlyphs<'a> {
+    facts: &'a PreparedParagraphFacts,
+    front: usize,
+    back: usize,
+}
+
+impl<'a> PreparedGlyphs<'a> {
+    fn new(facts: &'a PreparedParagraphFacts, range: Range<usize>) -> Self {
+        Self {
+            facts,
+            front: range.start,
+            back: range.end,
+        }
+    }
+
+    /// Returns a fresh traversal over the same glyphs.
+    #[must_use]
+    pub fn iter(&self) -> Self {
+        *self
+    }
+
+    /// Returns the number of remaining glyphs.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.back - self.front
+    }
+
+    /// Returns whether no glyphs remain.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns one glyph by traversal-local index.
+    #[must_use]
+    pub fn get(&self, index: usize) -> Option<PreparedGlyphView<'a>> {
+        let index = self.front.checked_add(index)?;
+        (index < self.back).then_some(PreparedGlyphView {
+            facts: self.facts,
+            index,
+        })
+    }
+
+    /// Returns the first glyph.
+    #[must_use]
+    pub fn first(&self) -> Option<PreparedGlyphView<'a>> {
+        self.get(0)
+    }
+
+    /// Returns the final glyph.
+    #[must_use]
+    pub fn last(&self) -> Option<PreparedGlyphView<'a>> {
+        self.len().checked_sub(1).and_then(|index| self.get(index))
+    }
+
+    pub(crate) fn slice(self, range: Range<usize>) -> Option<Self> {
+        if range.start > range.end || range.end > self.len() {
+            return None;
+        }
+        Some(Self {
+            facts: self.facts,
+            front: self.front + range.start,
+            back: self.front + range.end,
+        })
+    }
+}
+
+impl<'a> Iterator for PreparedGlyphs<'a> {
+    type Item = PreparedGlyphView<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.front == self.back {
+            return None;
+        }
+        let index = self.front;
+        self.front += 1;
+        Some(PreparedGlyphView {
+            facts: self.facts,
+            index,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl DoubleEndedIterator for PreparedGlyphs<'_> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.front == self.back {
+            return None;
+        }
+        self.back -= 1;
+        Some(PreparedGlyphView {
+            facts: self.facts,
+            index: self.back,
+        })
+    }
+}
+
+impl ExactSizeIterator for PreparedGlyphs<'_> {}
+impl core::iter::FusedIterator for PreparedGlyphs<'_> {}
+
+/// Borrowed shaped glyph from one canonical paragraph artifact.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedGlyphView<'a> {
+    facts: &'a PreparedParagraphFacts,
+    index: usize,
+}
+
+impl<'a> PreparedGlyphView<'a> {
+    fn record(self) -> &'a PreparedGlyphRecord {
+        &self.facts.glyphs[self.index]
+    }
+
+    /// Returns the backend glyph identifier.
+    #[must_use]
+    pub fn id(self) -> u32 {
+        self.record().id
+    }
+
+    /// Returns the paragraph-local source range.
+    #[must_use]
+    pub fn source(self) -> Range<u32> {
+        self.record().source.clone()
+    }
+
+    /// Returns the shaped advance.
+    #[must_use]
+    pub fn advance(self) -> Vec2 {
+        let [x, y] = self.record().advance;
+        Vec2::new(f64::from(x), f64::from(y))
+    }
+
+    /// Returns the shaped glyph offset.
+    #[must_use]
+    pub fn offset(self) -> Vec2 {
+        let [x, y] = self.record().offset;
+        Vec2::new(f64::from(x), f64::from(y))
+    }
+
+    /// Returns exceptional split-paint coverage.
+    ///
+    /// Whole glyphs share one zero-payload marker. Only exceptional split
+    /// glyphs retain out-of-line clipped coverage.
+    #[must_use]
+    pub fn paint(self) -> &'a GlyphPaintCoverage {
+        let index =
+            u32::try_from(self.index).expect("canonical glyph indexes were validated as u32");
+        self.facts
+            .split_glyph_paints
+            .binary_search_by_key(&index, |split| split.glyph)
+            .ok()
+            .map_or_else(
+                || whole_glyph_paint(),
+                |index| &self.facts.split_glyph_paints[index].coverage,
+            )
     }
 }
 

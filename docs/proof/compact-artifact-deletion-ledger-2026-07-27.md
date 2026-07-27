@@ -335,3 +335,34 @@ classes as `PreparedParagraphFacts::flatten`: 1,456,000 and 1,302,000 bytes
 across 1,000 allocations each. The next structural checkpoint therefore
 compacts final glyph and interaction records rather than tuning already
 allocation-free repeat or repaint paths.
+
+## Compact glyph and interaction records
+
+The canonical artifact no longer retains the wide checked construction values
+for glyphs and interaction units:
+
+- an interaction unit stores its source endpoints once, a compact slice range,
+  native `f32` advance, bidi/boundary/whitespace bytes, and four flag bits;
+  left/right positions are derived from the already-proven endpoints,
+  orientation, and affinities;
+- interaction-slice advances retain native shaping precision instead of
+  widening every record;
+- a final glyph stores its ID, source, and native `f32` advance/offset;
+- ordinary glyphs retain no paint field at all; exceptional split coverage is
+  held in one sorted paragraph-level side table and found only by split-paint
+  queries;
+- public readers use copyable `PreparedGlyphView` and
+  `PreparedInteractionUnitView` values over those canonical tables.
+
+On the same 1,000-label allocation-counter run:
+
+| Cold preparation | Before | After interaction | After glyphs |
+|---|---:|---:|---:|
+| total allocated bytes | 24,652,853 | 23,722,853 | 22,927,853 |
+| net retained bytes | 9,653,136 | 8,816,136 | 8,021,136 |
+| scene-cache accounting | 6,274,314 | 5,436,738 | 4,641,162 |
+
+The two record changes remove 1,632,000 retained bytes and 1,725,000 bytes of
+cold allocation churn without changing the allocation-free stable-repeat or
+paint-only paths. One edited paragraph's net preparation growth falls from
+2,976 to 1,824 bytes.

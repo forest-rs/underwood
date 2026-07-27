@@ -93,16 +93,24 @@ impl PreparedClusterSide {
 #[derive(Clone, Debug)]
 pub struct PreparedInteractionSlice {
     source: Range<u32>,
-    advance: f64,
+    advance: f32,
 }
 
 impl PreparedInteractionSlice {
     /// Validates one nonempty shaping-record source and its visual advance.
     pub fn try_new(source: Range<u32>, advance: f64) -> Result<Self, PreparationError> {
-        if source.start >= source.end || !advance.is_finite() || advance < 0.0 {
+        let compact_advance = compact_shaping_coordinate(advance);
+        if source.start >= source.end
+            || !advance.is_finite()
+            || advance < 0.0
+            || compact_advance.is_none()
+        {
             return Err(PreparationError::invalid_output());
         }
-        Ok(Self { source, advance })
+        Ok(Self {
+            source,
+            advance: compact_advance.expect("the compact advance was validated"),
+        })
     }
 
     /// Returns the paragraph-local UTF-8 source range.
@@ -113,8 +121,8 @@ impl PreparedInteractionSlice {
 
     /// Returns this slice's contribution to the unit's inline advance.
     #[must_use]
-    pub const fn advance(&self) -> f64 {
-        self.advance
+    pub fn advance(&self) -> f64 {
+        f64::from(self.advance)
     }
 }
 
@@ -225,7 +233,7 @@ impl PreparedInteractionUnit {
             covered = covered
                 .checked_add(slice.source.end - slice.source.start)
                 .ok_or_else(PreparationError::invalid_output)?;
-            advance += slice.advance;
+            advance += slice.advance();
             if !advance.is_finite() {
                 return Err(PreparationError::invalid_output());
             }
@@ -293,10 +301,101 @@ impl PreparedInteractionUnit {
     }
 }
 
+const LEFT_IS_SOURCE_START: u8 = 1 << 0;
+const LEFT_IS_UPSTREAM: u8 = 1 << 1;
+const RIGHT_IS_UPSTREAM: u8 = 1 << 2;
+const WESTERN_JUSTIFICATION: u8 = 1 << 3;
+
+/// Compact canonical form of one validated interaction unit.
+#[derive(Debug)]
+pub(crate) struct PreparedInteractionUnitRecord {
+    source: Range<u32>,
+    slices: Range<u32>,
+    advance: f32,
+    bidi_level: u8,
+    boundary: ClusterBoundary,
+    whitespace: ClusterWhitespace,
+    flags: u8,
+}
+
+impl PreparedInteractionUnitRecord {
+    pub(crate) fn try_from_unit(unit: PreparedInteractionUnit) -> Result<Self, PreparationError> {
+        let advance = compact_shaping_coordinate(unit.advance)
+            .ok_or_else(PreparationError::invalid_output)?;
+        let slices = u32::try_from(unit.slices.start)
+            .and_then(|start| u32::try_from(unit.slices.end).map(|end| start..end))
+            .map_err(|_| PreparationError::invalid_output())?;
+        let mut flags = 0;
+        if unit.left.offset == unit.source.start {
+            flags |= LEFT_IS_SOURCE_START;
+        }
+        if unit.left.affinity == TextAffinity::Upstream {
+            flags |= LEFT_IS_UPSTREAM;
+        }
+        if unit.right.affinity == TextAffinity::Upstream {
+            flags |= RIGHT_IS_UPSTREAM;
+        }
+        if unit.western_justification_opportunity {
+            flags |= WESTERN_JUSTIFICATION;
+        }
+        Ok(Self {
+            source: unit.source,
+            slices,
+            advance,
+            bidi_level: unit.bidi_level,
+            boundary: unit.boundary,
+            whitespace: unit.whitespace,
+            flags,
+        })
+    }
+
+    fn source(&self) -> Range<u32> {
+        self.source.clone()
+    }
+
+    fn slices(&self) -> Range<usize> {
+        self.slices.start as usize..self.slices.end as usize
+    }
+
+    fn advance(&self) -> f64 {
+        f64::from(self.advance)
+    }
+
+    const fn left(&self) -> PreparedClusterSide {
+        PreparedClusterSide::new(
+            if self.flags & LEFT_IS_SOURCE_START != 0 {
+                self.source.start
+            } else {
+                self.source.end
+            },
+            if self.flags & LEFT_IS_UPSTREAM != 0 {
+                TextAffinity::Upstream
+            } else {
+                TextAffinity::Downstream
+            },
+        )
+    }
+
+    const fn right(&self) -> PreparedClusterSide {
+        PreparedClusterSide::new(
+            if self.flags & LEFT_IS_SOURCE_START != 0 {
+                self.source.end
+            } else {
+                self.source.start
+            },
+            if self.flags & RIGHT_IS_UPSTREAM != 0 {
+                TextAffinity::Upstream
+            } else {
+                TextAffinity::Downstream
+            },
+        )
+    }
+}
+
 /// Borrowed interaction unit with access to its line-local shaping slices.
 #[derive(Clone, Copy, Debug)]
 pub struct PreparedInteractionUnitView<'a> {
-    unit: &'a PreparedInteractionUnit,
+    unit: &'a PreparedInteractionUnitRecord,
     slices: &'a [PreparedInteractionSlice],
 }
 
@@ -306,26 +405,66 @@ impl<'a> PreparedInteractionUnitView<'a> {
     pub const fn slices(self) -> &'a [PreparedInteractionSlice] {
         self.slices
     }
-}
 
-impl core::ops::Deref for PreparedInteractionUnitView<'_> {
-    type Target = PreparedInteractionUnit;
+    /// Returns the paragraph-local UTF-8 source range.
+    #[must_use]
+    pub fn source(self) -> Range<u32> {
+        self.unit.source()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        self.unit
+    /// Returns the visual inline advance.
+    #[must_use]
+    pub fn advance(self) -> f64 {
+        self.unit.advance()
+    }
+
+    /// Returns the resolved bidi level.
+    #[must_use]
+    pub const fn bidi_level(self) -> u8 {
+        self.unit.bidi_level
+    }
+
+    /// Returns the Unicode boundary fact.
+    #[must_use]
+    pub const fn boundary(self) -> ClusterBoundary {
+        self.unit.boundary
+    }
+
+    /// Returns the whitespace classification.
+    #[must_use]
+    pub const fn whitespace(self) -> ClusterWhitespace {
+        self.unit.whitespace
+    }
+
+    /// Returns whether this unit is an eligible Western space.
+    #[must_use]
+    pub const fn is_western_justification_opportunity(self) -> bool {
+        self.unit.flags & WESTERN_JUSTIFICATION != 0
+    }
+
+    /// Returns the position reached from the visual left side.
+    #[must_use]
+    pub const fn left(self) -> PreparedClusterSide {
+        self.unit.left()
+    }
+
+    /// Returns the position reached from the visual right side.
+    #[must_use]
+    pub const fn right(self) -> PreparedClusterSide {
+        self.unit.right()
     }
 }
 
 /// Allocation-free traversal of line-local interaction units.
 #[derive(Clone, Debug)]
 pub struct PreparedInteractionUnits<'a> {
-    units: core::slice::Iter<'a, PreparedInteractionUnit>,
+    units: core::slice::Iter<'a, PreparedInteractionUnitRecord>,
     slices: &'a [PreparedInteractionSlice],
 }
 
 impl<'a> PreparedInteractionUnits<'a> {
     pub(crate) fn new(
-        units: &'a [PreparedInteractionUnit],
+        units: &'a [PreparedInteractionUnitRecord],
         slices: &'a [PreparedInteractionSlice],
     ) -> Self {
         Self {
@@ -352,10 +491,10 @@ impl<'a> PreparedInteractionUnits<'a> {
         self.units.len() == 0
     }
 
-    fn view(&self, unit: &'a PreparedInteractionUnit) -> PreparedInteractionUnitView<'a> {
+    fn view(&self, unit: &'a PreparedInteractionUnitRecord) -> PreparedInteractionUnitView<'a> {
         PreparedInteractionUnitView {
             unit,
-            slices: &self.slices[unit.slices.clone()],
+            slices: &self.slices[unit.slices()],
         }
     }
 }

@@ -24,6 +24,15 @@ mod interaction;
 mod paint;
 mod prepared;
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "canonical shaping records deliberately retain native f32 precision"
+)]
+fn compact_shaping_coordinate(value: f64) -> Option<f32> {
+    let compact = value as f32;
+    compact.is_finite().then_some(compact)
+}
+
 pub use error::{PreparationError, PreparationErrorKind};
 pub use formation::{
     AnalysisRun, AnalysisStyleId, FormationWork, InlineFlowRun, InlineFlowStyleId, LineShapingWork,
@@ -31,16 +40,18 @@ pub use formation::{
     ParagraphFormationChange, ParagraphFormationOutput, ParagraphFormationReuse, ParagraphInput,
     ParagraphPreparationId, ShapingRun, ShapingStyleId,
 };
+pub(crate) use interaction::PreparedInteractionUnitRecord;
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedClusterSide,
     PreparedInteractionSlice, PreparedInteractionUnit, PreparedInteractionUnitView,
     PreparedInteractionUnits, TextAffinity,
 };
+pub(crate) use paint::whole_glyph_paint;
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
 pub(crate) use prepared::PreparedParagraphFacts;
 pub use prepared::{
-    FontSynthesis, PreparedGlyph, PreparedLine, PreparedLineView, PreparedLines, PreparedParagraph,
-    PreparedRun, PreparedRunView, PreparedRuns,
+    FontSynthesis, PreparedGlyph, PreparedGlyphView, PreparedGlyphs, PreparedLine,
+    PreparedLineView, PreparedLines, PreparedParagraph, PreparedRun, PreparedRunView, PreparedRuns,
 };
 
 #[cfg(test)]

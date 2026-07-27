@@ -649,8 +649,11 @@ impl<'a> SceneFragmentView<'a> {
             .expect("paint fragment indexes the canonical artifact")
     }
 
-    fn prepared_glyph(self, glyph: usize) -> &'a PreparedGlyph {
-        &self.prepared_run().glyphs()[glyph]
+    fn prepared_glyph(self, glyph: usize) -> PreparedGlyphView<'a> {
+        self.prepared_run()
+            .glyphs()
+            .get(glyph)
+            .expect("paint fragment indexes the canonical glyph table")
     }
 
     fn source_reference(self, glyph: usize) -> SourceReference {
@@ -978,7 +981,7 @@ pub struct SceneGlyphView<'a> {
 }
 
 impl<'a> SceneGlyphView<'a> {
-    fn prepared(self) -> &'a PreparedGlyph {
+    fn prepared(self) -> PreparedGlyphView<'a> {
         self.fragment.prepared_glyph(self.local)
     }
 
@@ -1062,8 +1065,11 @@ impl<'a> SnapshotSources<'a> {
             ranges: SourceRangeSequence::new(
                 map,
                 SourceReferences::Glyphs {
-                    glyphs: &fragment.prepared_run().glyphs()
-                        [glyphs.start as usize..glyphs.end as usize],
+                    glyphs: fragment
+                        .prepared_run()
+                        .glyphs()
+                        .slice(glyphs.start as usize..glyphs.end as usize)
+                        .expect("paint fragment indexes its prepared run"),
                     segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
                         .then_some(fragment.local().segment as usize),
                 },
@@ -1147,8 +1153,11 @@ impl<'a> ProjectedSources<'a> {
             ranges: SourceRangeSequence::new(
                 map,
                 SourceReferences::Glyphs {
-                    glyphs: &fragment.prepared_run().glyphs()
-                        [glyphs.start as usize..glyphs.end as usize],
+                    glyphs: fragment
+                        .prepared_run()
+                        .glyphs()
+                        .slice(glyphs.start as usize..glyphs.end as usize)
+                        .expect("paint fragment indexes its prepared run"),
                     segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
                         .then_some(fragment.local().segment as usize),
                 },
@@ -1286,7 +1295,7 @@ impl<'a> ProjectedTextUnitView<'a> {
 enum SourceReferences<'a> {
     One(SourceReference),
     Glyphs {
-        glyphs: &'a [PreparedGlyph],
+        glyphs: PreparedGlyphs<'a>,
         segment: Option<usize>,
     },
 }

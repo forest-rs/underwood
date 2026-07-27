@@ -67,6 +67,11 @@ impl GlyphPaintCoverage {
     }
 }
 
+pub(crate) fn whole_glyph_paint() -> &'static GlyphPaintCoverage {
+    static WHOLE: GlyphPaintCoverage = GlyphPaintCoverage::whole();
+    &WHOLE
+}
+
 /// Paint ownership for one source portion of a shaped glyph.
 #[derive(Clone, Debug)]
 pub struct GlyphPaintSegment {

@@ -713,6 +713,33 @@ read contract after `PreparedParagraph` has flattened those values. Code that
 needs to prove shared preparation uses
 `PreparedParagraph::shares_facts_with` rather than comparing slice pointers.
 
+Glyph traversal follows the same rule:
+
+```rust,ignore
+// Before: a borrowed slice of wide construction values.
+for glyph in run.glyphs() {
+    draw(glyph);
+}
+
+// After: copyable borrowed views over compact canonical records.
+for glyph in run.glyphs() {
+    draw(glyph.id(), glyph.advance(), glyph.offset());
+}
+```
+
+`PreparedRunView::glyphs` now returns the exact-size `PreparedGlyphs`
+traversal, whose items are `PreparedGlyphView`, rather than
+`&[PreparedGlyph]`. `PreparedGlyph` remains the checked adapter construction
+value. Final glyph advances and offsets use the shaping pipeline's native
+`f32` precision; the public view converts them to scene-space `f64` values.
+Values outside finite `f32` range are rejected while the paragraph is
+canonicalized.
+
+`PreparedInteractionUnitView` is now a direct view rather than dereferencing
+to the wide `PreparedInteractionUnit` construction value. Its method surface
+is unchanged. Interaction slice advances likewise retain native `f32`
+precision and are exposed as `f64`.
+
 ## Required wind tunnels
 
 All runs use the matched source, font, style, width, and scale fixture in
