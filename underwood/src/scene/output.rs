@@ -91,7 +91,7 @@ pub enum ProjectedTextPosition {
 pub struct SceneOutput {
     pub(super) scene: TextScene,
     pub(super) work: WorkReport,
-    pub(super) trace: Option<PreparationTrace>,
+    pub(super) trace: Option<Arc<PreparationTrace>>,
 }
 
 /// Immutable transient scene for one exact composition epoch.
@@ -99,7 +99,7 @@ pub struct SceneOutput {
 pub struct CompositionSceneOutput {
     pub(super) scene: CompositionScene,
     pub(super) work: WorkReport,
-    pub(super) trace: Option<PreparationTrace>,
+    pub(super) trace: Option<Arc<PreparationTrace>>,
 }
 
 /// Cheap immutable view of document-level region attempts retained in scene segments.
@@ -199,8 +199,8 @@ impl CompositionSceneOutput {
 
     /// Returns requested preparation decisions, work, and memory accounting.
     #[must_use]
-    pub const fn trace(&self) -> Option<&PreparationTrace> {
-        self.trace.as_ref()
+    pub fn trace(&self) -> Option<&PreparationTrace> {
+        self.trace.as_deref()
     }
 
     /// Returns replayable region attempts for this transient request.
@@ -225,8 +225,8 @@ impl SceneOutput {
 
     /// Returns requested preparation decisions, work, and memory accounting.
     #[must_use]
-    pub const fn trace(&self) -> Option<&PreparationTrace> {
-        self.trace.as_ref()
+    pub fn trace(&self) -> Option<&PreparationTrace> {
+        self.trace.as_deref()
     }
 
     /// Returns replayable region attempts for this request.

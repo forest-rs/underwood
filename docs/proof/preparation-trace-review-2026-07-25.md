@@ -42,7 +42,9 @@ paint both change reports both facts. Exact geometry reuse, shared preparation,
 and an adapter call are mutually exclusive outcomes.
 
 An ordinary untraced request returns `None` from `SceneOutput::trace()` and
-does not run the deep scene-output capacity pass. The always-on reuse counters
+does not run the deep scene-output capacity pass or reserve the trace payload
+inside the output. The output stores only a nullable shared handle; a traced
+request allocates the immutable trace out of line. The always-on reuse counters
 are scalar increments folded into existing cache decisions.
 
 ## Memory vocabulary

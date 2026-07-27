@@ -504,20 +504,22 @@ impl LayoutEngine {
         )?;
         let region_attempts = region.map_or(0, |region| region.attempts);
         let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| PreparationTrace {
-            work: work.clone(),
-            reuse,
-            memory: PreparationMemory {
-                cache_before: cache_before.expect("traced request records initial cache state"),
-                cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: spine
-                    .unshared_node_bytes_from(previous_spine.as_ref()),
-                scratch_capacity_before: scratch_capacity_before
-                    .expect("traced request records initial scratch state"),
-                scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-            },
-            region_attempts,
-            region_height_rejections,
+        let trace = request.trace.then(|| {
+            Arc::new(PreparationTrace {
+                work: work.clone(),
+                reuse,
+                memory: PreparationMemory {
+                    cache_before: cache_before.expect("traced request records initial cache state"),
+                    cache_after: self.cache_diagnostics(),
+                    scene_output_capacity_bytes: spine
+                        .unshared_node_bytes_from(previous_spine.as_ref()),
+                    scratch_capacity_before: scratch_capacity_before
+                        .expect("traced request records initial scratch state"),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts,
+                region_height_rejections,
+            })
         });
         let core = Arc::new(SceneCore {
             paragraph_count: snapshot.paragraphs().len(),
@@ -781,20 +783,22 @@ impl LayoutEngine {
         )?;
         let region_attempts = region.map_or(0, |region| region.attempts);
         let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| PreparationTrace {
-            work: work.clone(),
-            reuse,
-            memory: PreparationMemory {
-                cache_before: cache_before.expect("traced request records initial cache state"),
-                cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: spine
-                    .unshared_node_bytes_from(previous_spine.as_ref()),
-                scratch_capacity_before: scratch_capacity_before
-                    .expect("traced request records initial scratch state"),
-                scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-            },
-            region_attempts,
-            region_height_rejections,
+        let trace = request.trace.then(|| {
+            Arc::new(PreparationTrace {
+                work: work.clone(),
+                reuse,
+                memory: PreparationMemory {
+                    cache_before: cache_before.expect("traced request records initial cache state"),
+                    cache_after: self.cache_diagnostics(),
+                    scene_output_capacity_bytes: spine
+                        .unshared_node_bytes_from(previous_spine.as_ref()),
+                    scratch_capacity_before: scratch_capacity_before
+                        .expect("traced request records initial scratch state"),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts,
+                region_height_rejections,
+            })
         });
         let effective_features = request.features.clone().with_paragraph(
             target_paragraph,
@@ -987,7 +991,7 @@ impl LayoutEngine {
         };
         let trace = request.trace.then(|| {
             let diagnostics = self.cache_diagnostics();
-            PreparationTrace {
+            Arc::new(PreparationTrace {
                 work: work.clone(),
                 reuse: PreparationReuse {
                     paragraphs: paragraph_count,
@@ -1004,7 +1008,7 @@ impl LayoutEngine {
                 },
                 region_attempts: published.region_attempts,
                 region_height_rejections: published.region_height_rejections,
-            }
+            })
         });
         Some(SceneOutput {
             scene: TextScene {
@@ -1059,7 +1063,7 @@ impl LayoutEngine {
         };
         let trace = request.trace.then(|| {
             let diagnostics = self.cache_diagnostics();
-            PreparationTrace {
+            Arc::new(PreparationTrace {
                 work: work.clone(),
                 reuse: PreparationReuse {
                     paragraphs: 1,
@@ -1076,7 +1080,7 @@ impl LayoutEngine {
                 },
                 region_attempts: published.region_attempts,
                 region_height_rejections: published.region_height_rejections,
-            }
+            })
         });
         Some(SceneOutput {
             scene: TextScene {
@@ -1205,20 +1209,22 @@ impl LayoutEngine {
             paragraphs: changed_count,
             records: paint_records,
         };
-        let trace = request.trace.then(|| PreparationTrace {
-            work: work.clone(),
-            reuse,
-            memory: PreparationMemory {
-                cache_before: cache_before.expect("traced request records initial cache state"),
-                cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: spine
-                    .unshared_node_bytes_from(Some(&previous_core.spine)),
-                scratch_capacity_before: scratch_capacity_before
-                    .expect("traced request records initial scratch state"),
-                scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-            },
-            region_attempts: 0,
-            region_height_rejections: 0,
+        let trace = request.trace.then(|| {
+            Arc::new(PreparationTrace {
+                work: work.clone(),
+                reuse,
+                memory: PreparationMemory {
+                    cache_before: cache_before.expect("traced request records initial cache state"),
+                    cache_after: self.cache_diagnostics(),
+                    scene_output_capacity_bytes: spine
+                        .unshared_node_bytes_from(Some(&previous_core.spine)),
+                    scratch_capacity_before: scratch_capacity_before
+                        .expect("traced request records initial scratch state"),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts: 0,
+                region_height_rejections: 0,
+            })
         });
         let core = if changed_count == 0 {
             previous_core
@@ -1381,20 +1387,22 @@ impl LayoutEngine {
         )?;
         let region_attempts = region.map_or(0, |region| region.attempts);
         let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| PreparationTrace {
-            work: work.clone(),
-            reuse,
-            memory: PreparationMemory {
-                cache_before: cache_before.expect("traced request records initial cache state"),
-                cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: spine
-                    .unshared_node_bytes_from(Some(&previous_core.spine)),
-                scratch_capacity_before: scratch_capacity_before
-                    .expect("traced request records initial scratch state"),
-                scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-            },
-            region_attempts,
-            region_height_rejections,
+        let trace = request.trace.then(|| {
+            Arc::new(PreparationTrace {
+                work: work.clone(),
+                reuse,
+                memory: PreparationMemory {
+                    cache_before: cache_before.expect("traced request records initial cache state"),
+                    cache_after: self.cache_diagnostics(),
+                    scene_output_capacity_bytes: spine
+                        .unshared_node_bytes_from(Some(&previous_core.spine)),
+                    scratch_capacity_before: scratch_capacity_before
+                        .expect("traced request records initial scratch state"),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts,
+                region_height_rejections,
+            })
         });
         let core = Arc::new(SceneCore {
             paragraph_count: snapshot.paragraphs().len(),
@@ -1615,20 +1623,22 @@ impl LayoutEngine {
         )?;
         let region_attempts = region.map_or(0, |region| region.attempts);
         let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| PreparationTrace {
-            work: work.clone(),
-            reuse,
-            memory: PreparationMemory {
-                cache_before: cache_before.expect("traced request records initial cache state"),
-                cache_after: self.cache_diagnostics(),
-                scene_output_capacity_bytes: spine
-                    .unshared_node_bytes_from(Some(&previous_core.spine)),
-                scratch_capacity_before: scratch_capacity_before
-                    .expect("traced request records initial scratch state"),
-                scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-            },
-            region_attempts,
-            region_height_rejections,
+        let trace = request.trace.then(|| {
+            Arc::new(PreparationTrace {
+                work: work.clone(),
+                reuse,
+                memory: PreparationMemory {
+                    cache_before: cache_before.expect("traced request records initial cache state"),
+                    cache_after: self.cache_diagnostics(),
+                    scene_output_capacity_bytes: spine
+                        .unshared_node_bytes_from(Some(&previous_core.spine)),
+                    scratch_capacity_before: scratch_capacity_before
+                        .expect("traced request records initial scratch state"),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts,
+                region_height_rejections,
+            })
         });
         let core = if processed == 0 {
             previous_core
@@ -1718,7 +1728,7 @@ impl LayoutEngine {
         };
         let trace = request.trace.then(|| {
             let diagnostics = self.cache_diagnostics();
-            PreparationTrace {
+            Arc::new(PreparationTrace {
                 work: work.clone(),
                 reuse: PreparationReuse {
                     paragraphs: paragraph_count,
@@ -1735,7 +1745,7 @@ impl LayoutEngine {
                 },
                 region_attempts: published.region_attempts,
                 region_height_rejections: published.region_height_rejections,
-            }
+            })
         });
         Some(CompositionSceneOutput {
             scene: CompositionScene {

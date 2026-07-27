@@ -540,3 +540,28 @@ regression in the matched tunnel. Three-sample medians were 143 ns per stable
 label at scale 64 and 190 ns at scale 1,000; localized edit was 9.7 µs and
 10.0 µs respectively. The multi-paragraph tree continues to retain its
 aggregate summaries.
+
+## Out-of-line opt-in preparation traces
+
+`SceneOutput` and `CompositionSceneOutput` no longer reserve the complete
+`PreparationTrace` representation inline when tracing was not requested.
+Ordinary outputs retain one nullable shared handle; traced requests alone
+allocate and own the immutable trace. The public accessor still returns
+`Option<&PreparationTrace>`.
+
+This is not merely a representation detail at label scale. A caller normally
+retains one output per label, and the inline optional trace made every output
+1,184 bytes even though production requests did not ask for a trace. In the
+1,000-label allocation tunnel, moving the payload out of line removes 950,272
+net retained bytes from cold preparation while stable repeat and repaint stay
+allocation-free.
+
+The exact matched live-heap checkpoint now measures 4,634,624 bytes above
+Underwood's font baseline for editable labels versus 3,378,240 bytes above
+Parley's: **1.37×**. Display-only labels retain 4,210,624 bytes above the
+baseline, or **1.25×** (1.246× before rounding). This decisively passes the
+original 2× ceiling and the lower 1.5× target.
+
+Migration note: `SceneOutput::trace` and `CompositionSceneOutput::trace` are
+no longer `const fn`; dereferencing the out-of-line shared trace is a runtime
+operation. Their argument and return types are unchanged.
