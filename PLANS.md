@@ -220,7 +220,8 @@ work, and all local and protected remote gates are green.
 
 ## Retained O(change) preparation and scene lifecycle
 
-**Status:** Active — Designs 0017 and 0018 approved
+**Status:** Active — Designs 0017 and 0018 approved; Design-0021 proposed at a
+breaking adapter API gate
 
 **Beads:** `und-oh0.13.17` and its dependency-ordered children
 
@@ -238,6 +239,10 @@ This campaign is informed by the preparation trace but is not part of the
 reusable text-tools completion gate. Design-0017 and its public traversal
 migration were approved on 2026-07-25; implementation remains bound by its
 dependency, `unsafe`, serialization, and renderer-policy gates.
+The matched Parley comparison subsequently falsified the final editable
+retained shape. Design-0021 may replace that shape only after its explicit
+public adapter approval; it preserves the O(change), immutable-publication,
+capability, source-completeness, and `no_std` laws.
 
 ### Measured baseline
 
@@ -291,6 +296,10 @@ staging.
 5. Make document staging copy-on-write and mutate each touched leaf once.
 6. Compact common-case source, paint, and interaction records with matched
    before/after allocation and query evidence.
+7. Collapse the remaining prepared/scene duplication into one flat paragraph
+   artifact, make scene capabilities borrowed indexed views, remove the
+   adapter final-output cache and miniature-document block path, and delete
+   every superseded representation.
 
 Step 5 is implemented and measured in
 `docs/proof/retained-document-cow-2026-07-26.md`: one-byte staging performs 20
@@ -399,6 +408,31 @@ append. Exact results, the `SceneRegionTranscript` migration, and remaining
 non-claims are recorded in
 `docs/proof/retained-structural-laws-2026-07-26.md`.
 
+The final matched high-level Parley gate is now checked in as
+`benches/residency-compare` and
+`docs/proof/retained-parley-comparison-2026-07-27.md`. It proves:
+
+- exact repeats are allocation-free and faster than Parley in the matched
+  fixture;
+- localized edit work is flat from 64 to 1,000 siblings;
+- indexed 1,000-unit exact/closest/byte hit queries are faster than Parley;
+- the default editable label path nevertheless retains 20.3 MB above its font
+  baseline at 1,000 labels versus Parley's 3.38 MB, while one edit is about
+  7.4× slower and performs roughly 130–136 allocations versus 3;
+- optional warm adapter retention raises the live delta to 42.0 MB without
+  improving matched typing.
+
+Those failures block campaign closure. Proposed Design-0021 changes the
+canonical story to one source snapshot prepared into one immutable
+paragraph-local artifact, with display, source, hit, selection, movement,
+native, and export behavior exposed as borrowed indexed views. It explicitly
+targets deletion of the prepared/cached cursor graphs, adapter final-output
+cache, clone-based repaint path, nested flattening pipeline, and plain
+`TextBlock` miniature `Document`. Its blocking numeric gates are at most 1.5×
+Parley display residency, 2× Parley default editable residency and edit
+latency, 16 allocations / 8 KiB per edit, zero exact-repeat allocations, and
+no query regression.
+
 The proposed representation and public migration are recorded in
 `docs/design/0017-retained-scene-lifecycle.md`.
 
@@ -421,7 +455,9 @@ localized-edit work laws; unchanged records are shared rather than copied;
 adapter hits do not re-lower; one-byte edits do not clone untouched paragraph
 or leaf storage; common records avoid per-glyph allocation; and the full Rust
 1.88, `no_std`, formatting, lint, test, documentation, repository, and
-protected-remote gates pass.
+protected-remote gates pass. The final representation must also pass the
+Design-0021 residency, edit, allocation, query, churn, and deletion gates; an
+O(change) result with an unacceptable constant factor is not complete.
 
 ## Module boundaries and Parley Engine convergence
 
