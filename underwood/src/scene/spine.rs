@@ -851,7 +851,7 @@ mod tests {
                     lines: Vec::new(),
                 }),
                 source_map: None,
-                hit_geometry: CachedHitSidecar::new(false, Vec::new()),
+                hit_geometry: CachedHitSidecar::new(false, Vec::new(), 0),
                 semantics: CachedSidecar::new(false, Vec::new()),
             }),
             PaintTopology {

@@ -536,6 +536,10 @@ impl PreparedParagraphFacts {
         PreparedLines::new(self)
     }
 
+    pub(crate) fn line_unit_table_range(&self, line: usize) -> Option<Range<usize>> {
+        self.lines.get(line).map(|line| line.units.as_usize())
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(
         text_len: u32,

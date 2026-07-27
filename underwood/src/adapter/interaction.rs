@@ -592,16 +592,19 @@ impl<'a> PreparedInteractionUnits<'a> {
 
     fn view(&self, local_index: usize) -> PreparedInteractionUnitView<'a> {
         let unit = &self.units[local_index];
-        let local_index =
-            u32::try_from(local_index).expect("validated interaction tables fit u32 indexes");
-        let global_index = self
-            .unit_base
-            .checked_add(local_index)
-            .expect("validated interaction tables fit u32 indexes");
-        let spilled_slices = self
-            .spills
-            .binary_search_by_key(&global_index, |spill| spill.unit)
-            .ok()
+        let spilled_slices = (!self.spills.is_empty())
+            .then(|| {
+                let local_index = u32::try_from(local_index)
+                    .expect("validated interaction tables fit u32 indexes");
+                self.unit_base
+                    .checked_add(local_index)
+                    .expect("validated interaction tables fit u32 indexes")
+            })
+            .and_then(|global_index| {
+                self.spills
+                    .binary_search_by_key(&global_index, |spill| spill.unit)
+                    .ok()
+            })
             .map(|index| {
                 let range = self.spills[index].slices.clone();
                 &self.slices[range.start as usize..range.end as usize]

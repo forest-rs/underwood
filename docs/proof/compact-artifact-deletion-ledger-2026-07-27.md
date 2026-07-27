@@ -497,3 +497,25 @@ In the 1,000-label allocation tunnel this removes 174,000 retained bytes.
 Scene-cache accounting falls from 3,202,474 to 3,028,338 bytes and the
 caller-held scene from 2,770,208 to 2,596,072 bytes. Exact repeat and repaint
 remain at zero allocations. Edited-paragraph preparation retains 1,000 bytes.
+
+## Derived hit topology
+
+Hit testing no longer retains `{line, unit, inline_end}` for every interaction
+unit. The canonical paragraph artifact already indexes each line's global unit
+range, so the hit sidecar stores only one exact `f64` inline end per real unit.
+Empty editable lines derive their zero-width hit from retained line geometry
+and carry only one paragraph-level count; no synthetic placement record is
+stored.
+
+This deletes both identity fields and the first attempted replacement—another
+line-offset table. The 1,000-label allocation tunnel removes 178,000 net bytes:
+hit accounting falls from 372,256 to 186,128 bytes, scene-cache accounting to
+2,842,210 bytes, and the caller-held scene to 2,409,944 bytes. Stable repeat
+and repaint remain allocation-free; edited-paragraph retention falls to 872
+bytes.
+
+The memory cut retains indexed query behavior. At 1,000 units, 100,000-query
+samples measured exact hits at 81–87 ns and closest hits at 122–126 ns.
+Matched Parley samples measured 156–163 ns and 198–205 ns respectively. The
+smaller 64-unit case still has a higher Underwood constant factor and remains
+an optimization target.

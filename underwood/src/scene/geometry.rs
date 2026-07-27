@@ -75,42 +75,32 @@ impl<'a, T> IntoIterator for &'a CachedSidecar<T> {
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedHitSidecar {
-    records: Option<Arc<CachedHitGeometry>>,
-}
-
-#[derive(Clone, Debug)]
-struct CachedHitGeometry {
-    placements: Vec<CachedHitPlacement>,
+    inline_ends: Option<Arc<Vec<f64>>>,
+    synthetic_hits: u32,
 }
 
 impl CachedHitSidecar {
-    pub(super) fn new(retain: bool, placements: Vec<CachedHitPlacement>) -> Self {
+    pub(super) fn new(retain: bool, inline_ends: Vec<f64>, synthetic_hits: u32) -> Self {
         debug_assert!(
-            retain || placements.is_empty(),
+            retain || inline_ends.is_empty() && synthetic_hits == 0,
             "discarded hit geometry must not be built"
         );
-        debug_assert!(
-            placements.windows(2).all(|pair| {
-                pair[0].line < pair[1].line
-                    || pair[0].line == pair[1].line && pair[0].inline_end <= pair[1].inline_end
-            }),
-            "retained hit placements must remain ordered by line and visual inline end"
-        );
         Self {
-            records: retain.then(|| Arc::new(CachedHitGeometry { placements })),
+            inline_ends: retain.then(|| Arc::new(inline_ends)),
+            synthetic_hits,
         }
     }
 
-    fn capacity(&self) -> usize {
-        self.records
+    fn accounted_owned_bytes(&self) -> usize {
+        self.inline_ends
             .as_ref()
-            .map_or(0, |records| records.placements.capacity())
+            .map_or(0, |inline_ends| vec_bytes::<f64>(inline_ends.capacity()))
     }
 
     pub(super) fn len(&self) -> usize {
-        self.records
-            .as_ref()
-            .map_or(0, |records| records.placements.len())
+        self.inline_ends.as_ref().map_or(0, |inline_ends| {
+            inline_ends.len() + self.synthetic_hits as usize
+        })
     }
 
     #[cfg(test)]
@@ -119,22 +109,17 @@ impl CachedHitSidecar {
     }
 
     fn retain_from(&mut self, retained: &Self) {
-        if self.records.is_none() {
-            self.records.clone_from(&retained.records);
+        if self.inline_ends.is_none() {
+            self.inline_ends.clone_from(&retained.inline_ends);
+            self.synthetic_hits = retained.synthetic_hits;
         }
     }
 
-    fn placements(&self) -> &[CachedHitPlacement] {
-        self.records
-            .as_deref()
-            .map_or(&[], |records| records.placements.as_slice())
-    }
-
-    fn placements_for_line(&self, line: u32) -> &[CachedHitPlacement] {
-        let placements = self.placements();
-        let start = placements.partition_point(|placement| placement.line < line);
-        let end = placements.partition_point(|placement| placement.line <= line);
-        &placements[start..end]
+    fn inline_ends_for_range(&self, range: Range<usize>) -> &[f64] {
+        let Some(inline_ends) = self.inline_ends.as_deref() else {
+            return &[];
+        };
+        &inline_ends[range]
     }
 }
 
@@ -177,15 +162,7 @@ struct PaintGlyphIndex {
     instance: usize,
 }
 
-const SYNTHETIC_HIT_UNIT: u32 = u32::MAX;
 pub(super) const WHOLE_GLYPH_PAINT: u32 = u32::MAX;
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct CachedHitPlacement {
-    line: u32,
-    unit: u32,
-    inline_end: f64,
-}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct CachedCluster<'a> {
@@ -240,17 +217,32 @@ pub(super) enum LocalPosition {
 
 impl CachedGeometry {
     pub(super) fn hit_clusters(&self) -> impl Iterator<Item = CachedCluster<'_>> {
-        self.hit_geometry
-            .placements()
-            .iter()
-            .filter_map(|placement| self.hit_cluster(*placement))
+        let line_count = self
+            .artifact
+            .lines()
+            .len()
+            .max(usize::from(self.hit_geometry.synthetic_hits > 0));
+        (0..line_count).flat_map(move |line| {
+            let count = self.hit_count_for_line(line);
+            (0..count).filter_map(move |unit| {
+                let inline_end = self.hit_inline_end(line, unit)?;
+                self.hit_cluster(line, unit, inline_end)
+            })
+        })
     }
 
     pub(super) fn exact_hit_cluster(&self, line: usize, inline: f64) -> Option<CachedCluster<'_>> {
-        let line = u32::try_from(line).ok()?;
-        let placements = self.hit_geometry.placements_for_line(line);
-        let index = placements.partition_point(|placement| placement.inline_end < inline);
-        let cluster = self.hit_cluster(*placements.get(index)?)?;
+        let inline_ends = self
+            .artifact
+            .line_unit_table_range(line)
+            .map(|range| self.hit_geometry.inline_ends_for_range(range))
+            .unwrap_or_default();
+        if inline_ends.is_empty() {
+            let cluster = self.hit_cluster(line, 0, self.synthetic_hit_inline_end(line)?)?;
+            return (cluster.bounds.x0 <= inline && inline <= cluster.bounds.x1).then_some(cluster);
+        }
+        let index = inline_ends.partition_point(|&inline_end| inline_end < inline);
+        let cluster = self.hit_cluster(line, index, *inline_ends.get(index)?)?;
         (cluster.bounds.x0 <= inline && inline <= cluster.bounds.x1).then_some(cluster)
     }
 
@@ -259,17 +251,27 @@ impl CachedGeometry {
         line: usize,
         inline: f64,
     ) -> Option<CachedCluster<'_>> {
-        let line = u32::try_from(line).ok()?;
-        let placements = self.hit_geometry.placements_for_line(line);
-        let next = placements.partition_point(|placement| placement.inline_end < inline);
+        let inline_ends = self
+            .artifact
+            .line_unit_table_range(line)
+            .map(|range| self.hit_geometry.inline_ends_for_range(range))
+            .unwrap_or_default();
+        if inline_ends.is_empty() {
+            return self.hit_cluster(line, 0, self.synthetic_hit_inline_end(line)?);
+        }
+        let next = inline_ends.partition_point(|&inline_end| inline_end < inline);
         let before = next.checked_sub(1);
-        let after = (next < placements.len()).then_some(next);
+        let after = (next < inline_ends.len()).then_some(next);
         let mut closest = match (before, after) {
             (Some(before), Some(after)) => {
-                let before_distance =
-                    inline_distance_to_rect(inline, self.hit_cluster(placements[before])?.bounds);
-                let after_distance =
-                    inline_distance_to_rect(inline, self.hit_cluster(placements[after])?.bounds);
+                let before_distance = inline_distance_to_rect(
+                    inline,
+                    self.hit_cluster(line, before, inline_ends[before])?.bounds,
+                );
+                let after_distance = inline_distance_to_rect(
+                    inline,
+                    self.hit_cluster(line, after, inline_ends[after])?.bounds,
+                );
                 if after_distance < before_distance {
                     after
                 } else {
@@ -279,28 +281,76 @@ impl CachedGeometry {
             (Some(index), None) | (None, Some(index)) => index,
             (None, None) => return None,
         };
-        let distance =
-            inline_distance_to_rect(inline, self.hit_cluster(placements[closest])?.bounds);
+        let distance = inline_distance_to_rect(
+            inline,
+            self.hit_cluster(line, closest, inline_ends[closest])?
+                .bounds,
+        );
         while let Some(previous) = closest.checked_sub(1) {
-            let previous_distance =
-                inline_distance_to_rect(inline, self.hit_cluster(placements[previous])?.bounds);
+            let previous_distance = inline_distance_to_rect(
+                inline,
+                self.hit_cluster(line, previous, inline_ends[previous])?
+                    .bounds,
+            );
             if previous_distance != distance {
                 break;
             }
             closest = previous;
         }
-        self.hit_cluster(placements[closest])
+        self.hit_cluster(line, closest, inline_ends[closest])
     }
 
-    fn hit_cluster(&self, placement: CachedHitPlacement) -> Option<CachedCluster<'_>> {
-        let line = usize::try_from(placement.line).ok()?;
-        let prepared_line = self.artifact.lines().get(line);
-        let prepared = (placement.unit != SYNTHETIC_HIT_UNIT)
-            .then(|| {
-                let unit = usize::try_from(placement.unit).ok()?;
-                prepared_line?.units().nth(unit)
+    fn hit_count_for_line(&self, line: usize) -> usize {
+        self.artifact.line_unit_table_range(line).map_or_else(
+            || usize::from(self.synthetic_hit_inline_end(line).is_some()),
+            |range| {
+                let count = range.len();
+                count.max(usize::from(
+                    count == 0 && self.synthetic_hit_inline_end(line).is_some(),
+                ))
+            },
+        )
+    }
+
+    fn hit_inline_end(&self, line: usize, unit: usize) -> Option<f64> {
+        self.artifact
+            .line_unit_table_range(line)
+            .and_then(|range| {
+                self.hit_geometry
+                    .inline_ends_for_range(range)
+                    .get(unit)
+                    .copied()
             })
-            .flatten();
+            .or_else(|| {
+                (unit == 0)
+                    .then(|| self.synthetic_hit_inline_end(line))
+                    .flatten()
+            })
+    }
+
+    fn synthetic_hit_inline_end(&self, line: usize) -> Option<f64> {
+        (self.hit_geometry.synthetic_hits > 0)
+            .then(|| {
+                self.artifact.lines().get(line).map_or_else(
+                    || {
+                        (line == 0 && self.artifact.lines().is_empty())
+                            .then_some(self.empty_bounds.x1)
+                    },
+                    |prepared| {
+                        prepared
+                            .units()
+                            .is_empty()
+                            .then(|| self.lines.get(line).map(|line| line.bounds.x0))
+                            .flatten()
+                    },
+                )
+            })
+            .flatten()
+    }
+
+    fn hit_cluster(&self, line: usize, unit: usize, inline_end: f64) -> Option<CachedCluster<'_>> {
+        let prepared_line = self.artifact.lines().get(line);
+        let prepared = prepared_line.and_then(|line| line.units().nth(unit));
         let source = prepared.map_or_else(
             || {
                 prepared_line
@@ -348,23 +398,17 @@ impl CachedGeometry {
             },
         );
         let bounds = if let Some(line_bounds) = self.lines.get(line).map(|line| line.bounds) {
-            let inline_start = if placement.unit == 0 {
+            let inline_start = if unit == 0 {
                 line_bounds.x0
-            } else if placement.unit == SYNTHETIC_HIT_UNIT {
-                placement.inline_end
             } else {
-                let previous = placement.unit.checked_sub(1)?;
+                let previous = unit.checked_sub(1)?;
+                let range = self.artifact.line_unit_table_range(line)?;
                 self.hit_geometry
-                    .placements_for_line(placement.line)
-                    .get(usize::try_from(previous).ok()?)?
-                    .inline_end
+                    .inline_ends_for_range(range)
+                    .get(previous)
+                    .copied()?
             };
-            Rect::new(
-                inline_start,
-                line_bounds.y0,
-                placement.inline_end,
-                line_bounds.y1,
-            )
+            Rect::new(inline_start, line_bounds.y0, inline_end, line_bounds.y1)
         } else {
             self.empty_bounds
         };
@@ -395,20 +439,16 @@ impl CachedGeometry {
     pub(super) fn caret_bounds(&self, movement: CursorMovement<'_>) -> Option<Rect> {
         let (line_bounds, inline) = match movement.caret_anchor() {
             CursorCaretAnchor::Unit { cluster, at_end } => {
-                let line = u32::try_from(cluster.line).ok()?;
-                let placements = self.hit_geometry.placements_for_line(line);
-                let placement = placements.get(cluster.unit)?;
+                let range = self.artifact.line_unit_table_range(cluster.line)?;
+                let inline_ends = self.hit_geometry.inline_ends_for_range(range);
+                let inline_end = *inline_ends.get(cluster.unit)?;
                 let start = cluster.unit.checked_sub(1).map_or_else(
                     || self.lines.get(cluster.line).map(|line| line.bounds.x0),
-                    |previous| {
-                        placements
-                            .get(previous)
-                            .map(|placement| placement.inline_end)
-                    },
+                    |previous| inline_ends.get(previous).copied(),
                 )?;
                 (
                     self.lines.get(cluster.line)?.bounds,
-                    if at_end { placement.inline_end } else { start },
+                    if at_end { inline_end } else { start },
                 )
             }
             CursorCaretAnchor::LastLineStart => self
@@ -451,7 +491,7 @@ impl CachedGeometry {
             .source_map
             .as_ref()
             .map_or(0, |map| map.accounted_owned_bytes());
-        let hit_testing = vec_bytes::<CachedHitPlacement>(self.hit_geometry.capacity());
+        let hit_testing = self.hit_geometry.accounted_owned_bytes();
         SceneResidencyBytes::from_categories(
             layout,
             0,
@@ -572,23 +612,11 @@ pub(super) fn build_geometry(
     let builds_semantics = features.has_semantics();
     let hit_capacity = if !retains_clusters {
         0
-    } else if prepared.lines().is_empty() {
-        usize::from(projection.mapping.text().is_empty() && !projection.spans.is_empty())
     } else {
-        prepared
-            .lines()
-            .iter()
-            .map(|line| {
-                let units = line.units().len();
-                if units == 0 && !projection.spans.is_empty() {
-                    1
-                } else {
-                    units
-                }
-            })
-            .sum()
+        prepared.lines().iter().map(|line| line.units().len()).sum()
     };
-    let mut hit_placements = Vec::with_capacity(hit_capacity);
+    let mut hit_inline_ends = Vec::with_capacity(hit_capacity);
+    let mut synthetic_hits = 0_u32;
     let mut semantic_bounds: Vec<Option<Rect>> = Vec::with_capacity(if builds_semantics {
         projection.spans.len()
     } else {
@@ -599,7 +627,6 @@ pub(super) fn build_geometry(
     }
 
     for line in prepared.lines() {
-        let line_index = lines.len();
         let slot_start = line.slot().map_or(0.0, crate::LineSlot::inline_start);
         let slot_size = line
             .slot()
@@ -635,7 +662,7 @@ pub(super) fn build_geometry(
             ));
         }
         let mut unit_x = inline_start;
-        for (unit_index, unit) in line.units().enumerate() {
+        for unit in line.units() {
             let paragraph_source = unit.source();
             let unit_expansion = if opportunity_sources.contains(&paragraph_source) {
                 expansion
@@ -694,21 +721,7 @@ pub(super) fn build_geometry(
                 }
             }
             if retains_clusters {
-                hit_placements.push(CachedHitPlacement {
-                    line: u32::try_from(line_index).map_err(|_| {
-                        SceneError::for_paragraph(
-                            SceneErrorKind::SourceCoverage,
-                            prepared.paragraph(),
-                        )
-                    })?,
-                    unit: u32::try_from(unit_index).map_err(|_| {
-                        SceneError::for_paragraph(
-                            SceneErrorKind::SourceCoverage,
-                            prepared.paragraph(),
-                        )
-                    })?,
-                    inline_end: next_x,
-                });
+                hit_inline_ends.push(next_x);
             }
             unit_x = next_x;
         }
@@ -755,16 +768,9 @@ pub(super) fn build_geometry(
                         source,
                     ));
                 }
-                hit_placements.push(CachedHitPlacement {
-                    line: u32::try_from(line_index).map_err(|_| {
-                        SceneError::for_paragraph(
-                            SceneErrorKind::SourceCoverage,
-                            prepared.paragraph(),
-                        )
-                    })?,
-                    unit: SYNTHETIC_HIT_UNIT,
-                    inline_end: bounds.x1,
-                });
+                synthetic_hits = synthetic_hits.checked_add(1).ok_or_else(|| {
+                    SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
+                })?;
             }
         }
         let adjusted_advance = line.advance()
@@ -803,11 +809,9 @@ pub(super) fn build_geometry(
                 0..0,
             ));
         }
-        hit_placements.push(CachedHitPlacement {
-            line: 0,
-            unit: SYNTHETIC_HIT_UNIT,
-            inline_end: empty_bounds.x1,
-        });
+        synthetic_hits = synthetic_hits.checked_add(1).ok_or_else(|| {
+            SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
+        })?;
     }
 
     let mut semantics = Vec::new();
@@ -873,7 +877,7 @@ pub(super) fn build_geometry(
             lines,
         }),
         source_map,
-        hit_geometry: CachedHitSidecar::new(retains_clusters, hit_placements),
+        hit_geometry: CachedHitSidecar::new(retains_clusters, hit_inline_ends, synthetic_hits),
         semantics: CachedSidecar::new(features.has_semantics(), semantics),
     })
 }
