@@ -651,7 +651,7 @@ There is no compatibility shim retaining both forms.
 
 The cursor portion of that migration is already concrete. A custom adapter
 previously constructed every position, caret, and four-way transition after
-constructing its lines:
+constructing nested lines:
 
 ```rust,ignore
 PreparedParagraph::try_new_with_features(
@@ -664,21 +664,57 @@ PreparedParagraph::try_new_with_features(
 )
 ```
 
-It now supplies only validated lines whose interaction units carry exact
-source, bidi, and visual-side facts:
+It now streams metadata and records into the final paragraph-level tables.
+Interaction units carry the exact source, bidi, and visual-side facts from
+which the scene derives cursor behavior:
 
 ```rust,ignore
-PreparedParagraph::try_new_with_features(
+let mut paragraph = PreparedParagraphBuilder::with_features(
     paragraph,
     text_len,
     direction,
     features,
-    lines,
-)
+);
+paragraph.reserve_exact(PreparedParagraphCapacity::new(
+    line_count,
+    run_count,
+    glyph_count,
+    interaction_unit_count,
+));
+
+let mut line = paragraph.begin_line(PreparedLine::try_new(
+    source,
+    break_reason,
+    advance,
+    baseline,
+    height,
+    ascent,
+    descent,
+)?)?;
+line.push_unit_parts(unit, slices)?;
+
+let mut run = line.begin_run(PreparedRun::try_new(
+    run_source,
+    bidi_level,
+    script,
+    font,
+    font_size,
+    synthesis,
+)?);
+run.extend_normalized_coords(coords);
+for glyph in glyphs {
+    run.push_glyph(glyph)?;
+}
+run.finish()?;
+line.finish()?;
+let prepared = paragraph.finish()?;
 ```
 
-Scene navigation and carets are derived from those units. Adapters must not
-rebuild the removed graph privately.
+The builders append directly to canonical flat storage. They do not retain
+the streamed line/run values or perform a later flattening pass. Dropping an
+unfinished line or run poisons the paragraph, so a partial artifact cannot be
+published. Scene navigation and carets are derived from the units; adapters
+must not rebuild the removed graph privately.
 
 Ordinary glyph paint construction also changes:
 
@@ -707,7 +743,9 @@ let line = paragraph.lines().get(index).expect("line exists");
 let run = line.runs().get(run_index).expect("run exists");
 ```
 
-`PreparedLine` and `PreparedRun` remain checked construction values.
+`PreparedLine` and `PreparedRun` remain checked metadata values. Their
+variable-size units, runs, coordinates, unrendered ranges, and glyphs live
+only in the paragraph builder's final tables.
 `PreparedLineView`, `PreparedRunView`, and their exact-size traversals are the
 read contract after `PreparedParagraph` has flattened those values. Code that
 needs to prove shared preparation uses

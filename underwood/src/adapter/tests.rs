@@ -10,7 +10,8 @@ use super::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment,
     LineBreakReason, PreparationErrorKind, PreparedClusterSide, PreparedGlyph,
     PreparedInteractionSlice, PreparedInteractionSliceSpill, PreparedInteractionUnit,
-    PreparedInteractionUnitRecord, PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
+    PreparedInteractionUnitRecord, PreparedLine, PreparedParagraph, PreparedParagraphBuilder,
+    PreparedRun, TextAffinity,
 };
 use crate::{
     DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, ResolvedDirection, Tag, Vec2,
@@ -126,7 +127,7 @@ fn prepared_paragraph_rejects_a_gap_between_lines() {
     };
     let first = line(0..1);
     let second = line(2..3);
-    let error = PreparedParagraph::try_new(paragraph, 3, ResolvedDirection::Ltr, [first, second])
+    let error = build_paragraph(paragraph, 3, ResolvedDirection::Ltr, [first, second])
         .expect_err("source gaps must be rejected at the adapter boundary");
     assert_eq!(
         error.kind(),
@@ -136,40 +137,38 @@ fn prepared_paragraph_rejects_a_gap_between_lines() {
 }
 
 #[test]
+fn dropping_an_unfinished_line_poisons_the_paragraph_builder() {
+    let mut paragraph =
+        PreparedParagraphBuilder::new(test_paragraph(20), 0, ResolvedDirection::Ltr);
+    {
+        let _unfinished = paragraph
+            .begin_line(
+                PreparedLine::try_new(0..0, LineBreakReason::End, 0.0, 8.0, 10.0, 8.0, 2.0)
+                    .expect("empty line metadata is valid"),
+            )
+            .expect("the line begins");
+    }
+    let error = paragraph
+        .finish()
+        .expect_err("a partially streamed line must never publish");
+    assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
+}
+
+#[test]
 fn prepared_line_rejects_missing_run_source() {
     let (slices, units) = interaction(0..2, 1.0);
-    let error = PreparedLine::try_new(
-        0..2,
-        LineBreakReason::End,
-        1.0,
-        0.8,
-        1.0,
-        0.8,
-        0.2,
-        slices,
-        units,
-        [run(0..1)],
-    )
-    .expect_err("visual runs must cover the complete non-empty line source");
+    let line = test_line(0..2, 1.0, slices, units, [run(0..1)]);
+    let error = build_paragraph(test_paragraph(10), 2, ResolvedDirection::Ltr, [line])
+        .expect_err("visual runs must cover the complete non-empty line source");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
 #[test]
 fn prepared_line_rejects_missing_interaction_unit_source() {
     let (slices, units) = interaction(0..1, 1.0);
-    let error = PreparedLine::try_new(
-        0..2,
-        LineBreakReason::End,
-        1.0,
-        0.8,
-        1.0,
-        0.8,
-        0.2,
-        slices,
-        units,
-        [run(0..2)],
-    )
-    .expect_err("interaction units must cover the complete line source");
+    let line = test_line(0..2, 1.0, slices, units, [run(0..2)]);
+    let error = build_paragraph(test_paragraph(11), 2, ResolvedDirection::Ltr, [line])
+        .expect_err("interaction units must cover the complete line source");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
@@ -177,7 +176,6 @@ fn prepared_line_rejects_missing_interaction_unit_source() {
 fn prepared_interaction_unit_rejects_a_side_outside_its_source() {
     let error = PreparedInteractionUnit::try_new(
         1..2,
-        0..1,
         1.0,
         0,
         ClusterBoundary::None,
@@ -197,7 +195,6 @@ fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage
     ];
     let unit = PreparedInteractionUnit::try_new(
         0..3,
-        0..2,
         5.0,
         1,
         ClusterBoundary::None,
@@ -206,20 +203,8 @@ fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage
         PreparedClusterSide::new(0, TextAffinity::Downstream),
     )
     .expect("the packed interaction record is locally valid");
-    let line = PreparedLine::try_new(
-        0..3,
-        LineBreakReason::End,
-        5.0,
-        0.8,
-        1.0,
-        0.8,
-        0.2,
-        slices,
-        [unit],
-        [run(0..3)],
-    )
-    .expect("visual slice order may differ from canonical source order");
-    let paragraph = PreparedParagraph::try_new(
+    let line = test_line(0..3, 5.0, slices, [unit], [run(0..3)]);
+    let paragraph = build_paragraph(
         ParagraphId {
             document: DocumentId::from_bytes(*b"adapter-test-002"),
             index: 0,
@@ -243,7 +228,6 @@ fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage
 
     let incomplete = PreparedInteractionUnit::try_new(
         0..3,
-        0..1,
         5.0,
         0,
         ClusterBoundary::None,
@@ -252,37 +236,21 @@ fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage
         PreparedClusterSide::new(3, TextAffinity::Upstream),
     )
     .expect("the record is validated against its table by the line");
-    let error = PreparedLine::try_new(
+    let line = test_line(
         0..3,
-        LineBreakReason::End,
         5.0,
-        0.8,
-        1.0,
-        0.8,
-        0.2,
         [PreparedInteractionSlice::try_new(0..1, 5.0).expect("the individual slice is valid")],
         [incomplete],
         [run(0..3)],
-    )
-    .expect_err("missing mark source must fail at the adapter boundary");
+    );
+    let error = build_paragraph(test_paragraph(12), 3, ResolvedDirection::Ltr, [line])
+        .expect_err("missing mark source must fail at the adapter boundary");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
-fn line(source: core::ops::Range<u32>) -> PreparedLine {
+fn line(source: core::ops::Range<u32>) -> TestLine {
     let (slices, units) = interaction(source.clone(), 1.0);
-    PreparedLine::try_new(
-        source.clone(),
-        LineBreakReason::End,
-        1.0,
-        0.8,
-        1.0,
-        0.8,
-        0.2,
-        slices,
-        units,
-        [run(source)],
-    )
-    .expect("test line is valid")
+    test_line(source.clone(), 1.0, slices, units, [run(source)])
 }
 
 fn interaction(
@@ -295,7 +263,6 @@ fn interaction(
     ];
     let unit = PreparedInteractionUnit::try_new(
         source.clone(),
-        0..1,
         advance,
         0,
         ClusterBoundary::None,
@@ -316,26 +283,18 @@ fn prepared_run_accepts_control_only_source_without_a_phantom_glyph() {
         FontData::new(Blob::from(vec![0_u8]), 0),
         16.,
         FontSynthesis::default(),
-        [],
-        core::iter::once(0..1),
-        [],
     )
     .expect("control-only source does not require a fabricated glyph");
+    let unrendered_source = core::iter::once(0..1).collect();
+    let run = TestRun {
+        run,
+        normalized_coords: Vec::new(),
+        unrendered_source,
+        glyphs: Vec::new(),
+    };
     let (slices, units) = interaction(0..1, 0.0);
-    let line = PreparedLine::try_new(
-        0..1,
-        LineBreakReason::End,
-        0.0,
-        0.8,
-        1.0,
-        0.8,
-        0.2,
-        slices,
-        units,
-        [run],
-    )
-    .expect("control-only run forms an honest line");
-    let paragraph = PreparedParagraph::try_new(
+    let line = test_line(0..1, 0.0, slices, units, [run]);
+    let paragraph = build_paragraph(
         ParagraphId {
             document: DocumentId::from_bytes(*b"adapter-test-003"),
             index: 0,
@@ -359,20 +318,95 @@ fn prepared_run_accepts_control_only_source_without_a_phantom_glyph() {
     );
 }
 
-fn run(source: core::ops::Range<u32>) -> PreparedRun {
+fn run(source: core::ops::Range<u32>) -> TestRun {
     let paint = GlyphPaintCoverage::whole();
     let glyph = PreparedGlyph::try_new(1, source.clone(), Vec2::new(1., 0.), Vec2::ZERO, paint)
         .expect("test glyph is valid");
-    PreparedRun::try_new(
+    let run = PreparedRun::try_new(
         source,
         0,
         *b"Latn",
         FontData::new(Blob::from(vec![0_u8]), 0),
         16.,
         FontSynthesis::default(),
-        [],
-        [],
-        [glyph],
     )
-    .expect("test run is internally valid")
+    .expect("test run is internally valid");
+    TestRun {
+        run,
+        normalized_coords: Vec::new(),
+        unrendered_source: Vec::new(),
+        glyphs: vec![glyph],
+    }
+}
+
+struct TestRun {
+    run: PreparedRun,
+    normalized_coords: Vec<i16>,
+    unrendered_source: Vec<core::ops::Range<u32>>,
+    glyphs: Vec<PreparedGlyph>,
+}
+
+struct TestLine {
+    line: PreparedLine,
+    slices: Vec<PreparedInteractionSlice>,
+    units: Vec<PreparedInteractionUnit>,
+    runs: Vec<TestRun>,
+}
+
+fn test_paragraph(index: u32) -> ParagraphId {
+    ParagraphId {
+        document: DocumentId::from_bytes(*b"adapter-test-004"),
+        index,
+    }
+}
+
+fn test_line(
+    source: core::ops::Range<u32>,
+    advance: f64,
+    slices: impl IntoIterator<Item = PreparedInteractionSlice>,
+    units: impl IntoIterator<Item = PreparedInteractionUnit>,
+    runs: impl IntoIterator<Item = TestRun>,
+) -> TestLine {
+    TestLine {
+        line: PreparedLine::try_new(source, LineBreakReason::End, advance, 0.8, 1.0, 0.8, 0.2)
+            .expect("test line metrics are valid"),
+        slices: slices.into_iter().collect(),
+        units: units.into_iter().collect(),
+        runs: runs.into_iter().collect(),
+    }
+}
+
+fn build_paragraph(
+    paragraph: ParagraphId,
+    text_len: u32,
+    direction: ResolvedDirection,
+    lines: impl IntoIterator<Item = TestLine>,
+) -> Result<PreparedParagraph, super::PreparationError> {
+    let mut builder = PreparedParagraphBuilder::new(paragraph, text_len, direction);
+    for test_line in lines {
+        let mut line = builder.begin_line(test_line.line)?;
+        for unit in test_line.units {
+            let source = unit.source();
+            line.push_unit(
+                unit,
+                test_line.slices.iter().copied().filter(|slice| {
+                    let slice = slice.source();
+                    source.start <= slice.start && slice.end <= source.end
+                }),
+            )?;
+        }
+        for test_run in test_line.runs {
+            let mut run = line.begin_run(test_run.run);
+            run.extend_normalized_coords(test_run.normalized_coords);
+            for glyph in test_run.glyphs {
+                run.push_glyph(glyph)?;
+            }
+            for source in test_run.unrendered_source {
+                run.push_unrendered_source(source)?;
+            }
+            run.finish()?;
+        }
+        line.finish()?;
+    }
+    builder.finish()
 }

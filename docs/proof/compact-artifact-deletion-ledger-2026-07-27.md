@@ -625,3 +625,45 @@ adapter's single scratch paragraph is 10,196 deterministically accounted
 bytes; per-paragraph adapter residency remains zero. Three scale-1,000 timing
 samples improve localized edit from 9.54–9.86 µs to 8.54–8.79 µs. Parley
 measures 2.96–3.09 µs, so the latency and 16-call gates remain open.
+
+## Direct canonical artifact construction
+
+The adapter boundary no longer asks a backend to allocate nested
+`PreparedLine → PreparedRun → PreparedGlyph` owners and then asks
+`PreparedParagraphFacts::flatten` to allocate and copy the same records into
+canonical tables. `PreparedParagraphBuilder` now owns the final tables from
+the first write. Its line and run builders stream interaction units, source
+slices, variation coordinates, unrendered source, and glyphs directly into
+those tables. The old paragraph constructors and flattening implementation
+are deleted rather than wrapped.
+
+The common one-slice interaction unit and ordinary glyph paths retain no
+temporary side-table owner. Multi-slice graphemes, positioned glyphs, split
+paint, and unrendered source spill only into their existing exceptional
+tables. Exact common-table capacity is computed before publication so the
+memory win is not traded for retained geometric-growth slack.
+
+On the same 1,000-label allocation-counter tunnel:
+
+| Changed paragraph phase | Recycled workspace | Direct artifact |
+|---|---:|---:|
+| allocation calls | 63 | **52** |
+| requested bytes | 12,584 | **7,960** |
+| retained net calls | 3 | **3** |
+| retained net bytes | 2,328 | **2,328** |
+| cold preparation calls | 58,868 | **48,868** |
+
+The requested-byte gate is now green. The call-count gate remains open.
+Scene-cache residency is 2,320,000 bytes for the edited 1,000-label state;
+the preceding exact live-heap ratios remain representative and below 1.25×
+Parley for both ordinary tiers.
+
+Three scale-1,000 timing samples around this checkpoint measured localized
+edit at approximately 8.1–8.6 µs versus 3.0–3.1 µs for Parley. A ten-second
+macOS CPU sample attributes about 2% to the scene's post-builder
+`validate_prepared` traversal and about 2% to direct-builder validation. The
+dominant difference is structural: canonical paragraph shaping and accepted
+line shaping together account for roughly half the Underwood edit. The next
+slice therefore fuses redundant scene validation with consumption and attacks
+whole-paragraph-plus-line reshaping; it does not spend the campaign on
+micro-optimizing checked constructors.

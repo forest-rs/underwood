@@ -12,10 +12,12 @@ use core::ops::Range;
 
 use fontique::Synthesis;
 use parley_engine::{Analysis, ShapedText, shape::ClusterData};
-use underwood::adapter::{FontSynthesis, GlyphPaintCoverage, PreparationError, PreparedGlyph};
+use underwood::adapter::{
+    FontSynthesis, GlyphPaintCoverage, PreparationError, PreparedGlyph, PreparedRunBuilder,
+};
 use underwood::{FontVariation, Tag, Vec2};
 
-pub(crate) fn lower_glyphs(
+pub(crate) fn lower_glyphs_into(
     text: &str,
     analysis: &Analysis,
     char_starts: &[u32],
@@ -23,7 +25,8 @@ pub(crate) fn lower_glyphs(
     run: &parley_engine::ShapedRun,
     cluster_range: Range<usize>,
     paint_runs: &[underwood::adapter::PaintRun],
-) -> Result<Vec<PreparedGlyph>, PreparationError> {
+    output: &mut PreparedRunBuilder<'_>,
+) -> Result<(), PreparationError> {
     let clusters = shaped_text
         .clusters()
         .get(run.clusters_range.clone())
@@ -39,7 +42,6 @@ pub(crate) fn lower_glyphs(
     if start >= end || end > clusters.len() {
         return Err(PreparationError::invalid_output());
     }
-    let mut prepared = Vec::with_capacity(cluster_range.len());
     let mut lower_cluster = |index: usize| -> Result<(), PreparationError> {
         let cluster = clusters
             .get(index)
@@ -60,14 +62,13 @@ pub(crate) fn lower_glyphs(
         lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
             let advance = Vec2::new(f64::from(glyph.advance), 0.0);
             let paint = paint_coverage(source.clone(), paint_runs)?;
-            prepared.push(PreparedGlyph::try_new(
+            output.push_glyph(PreparedGlyph::try_new(
                 glyph.id,
                 source.clone(),
                 advance,
                 Vec2::new(f64::from(glyph.x), -f64::from(glyph.y)),
                 paint,
-            )?);
-            Ok(())
+            )?)
         })
     };
     if run.bidi_level & 1 == 1 {
@@ -79,7 +80,48 @@ pub(crate) fn lower_glyphs(
             lower_cluster(index)?;
         }
     }
-    Ok(prepared)
+    Ok(())
+}
+
+pub(crate) fn lowered_glyph_count(
+    text: &str,
+    analysis: &Analysis,
+    char_starts: &[u32],
+    shaped_text: &ShapedText,
+    run: &parley_engine::ShapedRun,
+    cluster_range: Range<usize>,
+) -> Result<usize, PreparationError> {
+    let clusters = shaped_text
+        .clusters()
+        .get(run.clusters_range.clone())
+        .ok_or_else(PreparationError::invalid_output)?;
+    let start = cluster_range
+        .start
+        .checked_sub(run.clusters_range.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    let end = cluster_range
+        .end
+        .checked_sub(run.clusters_range.start)
+        .ok_or_else(PreparationError::invalid_output)?;
+    if start >= end || end > clusters.len() {
+        return Err(PreparationError::invalid_output());
+    }
+    let mut count = 0_usize;
+    for index in start..end {
+        let cluster = &clusters[index];
+        if cluster.is_ligature_component() {
+            continue;
+        }
+        let source = cluster_source(run, clusters, index)?;
+        if source_contributes_to_shaping(text, analysis, char_starts, &source)? {
+            count = count.saturating_add(if cluster.glyph_len == u8::MAX {
+                1
+            } else {
+                usize::from(cluster.glyph_len)
+            });
+        }
+    }
+    Ok(count)
 }
 
 fn source_contributes_to_shaping(
@@ -102,13 +144,13 @@ fn source_contributes_to_shaping(
         .any(|info| info.contributes_to_shaping()))
 }
 
-pub(crate) fn unrendered_source(
+pub(crate) fn append_unrendered_source(
     text: &str,
     analysis: &Analysis,
     char_starts: &[u32],
     source: Range<usize>,
-    glyphs: &[PreparedGlyph],
-) -> Result<Vec<Range<u32>>, PreparationError> {
+    output: &mut PreparedRunBuilder<'_>,
+) -> Result<(), PreparationError> {
     let source_text = text
         .get(source.clone())
         .ok_or_else(PreparationError::invalid_output)?;
@@ -116,7 +158,7 @@ pub(crate) fn unrendered_source(
         char_starts,
         u32::try_from(source.start).map_err(|_| PreparationError::invalid_output())?,
     )?;
-    let mut unrendered: Vec<Range<u32>> = Vec::new();
+    let mut pending: Option<Range<u32>> = None;
     for (index, (offset, character)) in source_text.char_indices().enumerate() {
         let start = source
             .start
@@ -126,10 +168,7 @@ pub(crate) fn unrendered_source(
             .checked_add(character.len_utf8())
             .ok_or_else(PreparationError::invalid_output)?;
         let range = checked_source_range(&(start..end))?;
-        if glyphs.iter().any(|glyph| {
-            let glyph_source = glyph.source();
-            glyph_source.start <= range.start && glyph_source.end >= range.end
-        }) {
+        if output.renders(range.clone()) {
             continue;
         }
         let info = analysis
@@ -139,15 +178,20 @@ pub(crate) fn unrendered_source(
         if info.contributes_to_shaping() {
             return Err(PreparationError::invalid_output());
         }
-        if let Some(previous) = unrendered.last_mut()
+        if let Some(previous) = pending.as_mut()
             && previous.end == range.start
         {
             previous.end = range.end;
         } else {
-            unrendered.push(range);
+            if let Some(previous) = pending.replace(range) {
+                output.push_unrendered_source(previous)?;
+            }
         }
     }
-    Ok(unrendered)
+    if let Some(pending) = pending {
+        output.push_unrendered_source(pending)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn index_char_starts(text: &str, output: &mut Vec<u32>) -> Result<(), PreparationError> {

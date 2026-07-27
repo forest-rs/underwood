@@ -137,7 +137,6 @@ impl PreparedInteractionSlice {
 #[derive(Clone, Debug)]
 pub struct PreparedInteractionUnit {
     source: Range<u32>,
-    slices: Range<usize>,
     advance: f64,
     bidi_level: u8,
     boundary: ClusterBoundary,
@@ -148,14 +147,13 @@ pub struct PreparedInteractionUnit {
 }
 
 impl PreparedInteractionUnit {
-    /// Validates one interaction-unit record over a line-local slice table.
+    /// Validates one interaction-unit record.
     ///
-    /// `slices` must name a nonempty contiguous range in the slice table later
-    /// supplied to [`crate::adapter::PreparedLine`]. Line construction checks
-    /// exact canonical source coverage and computes the visual advance.
+    /// The checked paragraph builder separately accepts this unit's shaping
+    /// slices and proves their exact source coverage and visual advance before
+    /// publishing the canonical artifact.
     pub fn try_new(
         source: Range<u32>,
-        slices: Range<usize>,
         advance: f64,
         bidi_level: u8,
         boundary: ClusterBoundary,
@@ -164,7 +162,7 @@ impl PreparedInteractionUnit {
         right: PreparedClusterSide,
     ) -> Result<Self, PreparationError> {
         Self::try_new_with_justification(
-            source, slices, advance, bidi_level, boundary, whitespace, false, left, right,
+            source, advance, bidi_level, boundary, whitespace, false, left, right,
         )
     }
 
@@ -179,7 +177,6 @@ impl PreparedInteractionUnit {
     )]
     pub fn try_new_with_justification(
         source: Range<u32>,
-        slices: Range<usize>,
         advance: f64,
         bidi_level: u8,
         boundary: ClusterBoundary,
@@ -189,7 +186,6 @@ impl PreparedInteractionUnit {
         right: PreparedClusterSide,
     ) -> Result<Self, PreparationError> {
         if source.start >= source.end
-            || slices.start >= slices.end
             || !advance.is_finite()
             || advance < 0.0
             || !matches!(left.offset, offset if offset == source.start || offset == source.end)
@@ -201,7 +197,6 @@ impl PreparedInteractionUnit {
         }
         Ok(Self {
             source,
-            slices,
             advance,
             bidi_level,
             boundary,
@@ -210,47 +205,6 @@ impl PreparedInteractionUnit {
             left,
             right,
         })
-    }
-
-    pub(crate) fn validate_slices(
-        &self,
-        table: &[PreparedInteractionSlice],
-    ) -> Result<(), PreparationError> {
-        let slices = table
-            .get(self.slices.clone())
-            .ok_or_else(PreparationError::invalid_output)?;
-        let mut covered = 0_u32;
-        let mut advance = 0.0;
-        for (index, slice) in slices.iter().enumerate() {
-            let source = slice.source();
-            if source.start < self.source.start || source.end > self.source.end {
-                return Err(PreparationError::invalid_output());
-            }
-            for previous in &slices[..index] {
-                let previous = previous.source();
-                if source.start < previous.end && previous.start < source.end {
-                    return Err(PreparationError::invalid_output());
-                }
-            }
-            covered = covered
-                .checked_add(source.end - source.start)
-                .ok_or_else(PreparationError::invalid_output)?;
-            advance += slice.advance();
-            if !advance.is_finite() {
-                return Err(PreparationError::invalid_output());
-            }
-        }
-        if covered != self.source.end - self.source.start {
-            return Err(PreparationError::invalid_output());
-        }
-        let tolerance = f64::max(1.0, self.advance.abs()) * 1.0e-6;
-        ((advance - self.advance).abs() <= tolerance)
-            .then_some(())
-            .ok_or_else(PreparationError::invalid_output)
-    }
-
-    pub(crate) fn slice_range(&self) -> Range<usize> {
-        self.slices.clone()
     }
 
     /// Returns the paragraph-local UTF-8 source range.
@@ -346,7 +300,7 @@ impl PreparedInteractionUnitRecord {
         })
     }
 
-    fn source(&self) -> Range<u32> {
+    pub(crate) fn source(&self) -> Range<u32> {
         self.source.clone()
     }
 
@@ -358,11 +312,15 @@ impl PreparedInteractionUnitRecord {
         }
     }
 
-    fn advance(&self) -> f64 {
+    pub(crate) fn advance(&self) -> f64 {
         f64::from(self.advance)
     }
 
-    const fn left(&self) -> PreparedClusterSide {
+    pub(crate) const fn whitespace(&self) -> ClusterWhitespace {
+        self.whitespace
+    }
+
+    pub(crate) const fn left(&self) -> PreparedClusterSide {
         PreparedClusterSide::new(
             if self.flags & LEFT_IS_SOURCE_START != 0 {
                 self.source.start
@@ -377,7 +335,7 @@ impl PreparedInteractionUnitRecord {
         )
     }
 
-    const fn right(&self) -> PreparedClusterSide {
+    pub(crate) const fn right(&self) -> PreparedClusterSide {
         PreparedClusterSide::new(
             if self.flags & LEFT_IS_SOURCE_START != 0 {
                 self.source.end

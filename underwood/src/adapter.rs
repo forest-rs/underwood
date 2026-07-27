@@ -51,7 +51,9 @@ pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
 pub(crate) use prepared::PreparedParagraphFacts;
 pub use prepared::{
     FontSynthesis, PreparedGlyph, PreparedGlyphView, PreparedGlyphs, PreparedLine,
-    PreparedLineView, PreparedLines, PreparedParagraph, PreparedRun, PreparedRunView, PreparedRuns,
+    PreparedLineBuilder, PreparedLineView, PreparedLines, PreparedParagraph,
+    PreparedParagraphBuilder, PreparedParagraphCapacity, PreparedRun, PreparedRunBuilder,
+    PreparedRunView, PreparedRuns,
 };
 
 #[cfg(test)]

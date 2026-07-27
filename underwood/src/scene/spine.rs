@@ -912,14 +912,24 @@ mod tests {
 
     fn segment(paragraph: u32, height: f64) -> Arc<ParagraphSceneSegment> {
         let document = crate::DocumentId::from_bytes(*b"scene-spine-test");
+        let paragraph = ParagraphId {
+            document,
+            index: paragraph,
+        };
+        let artifact = crate::adapter::PreparedParagraphBuilder::with_features(
+            paragraph,
+            0,
+            ResolvedDirection::Ltr,
+            SceneFeatures::DISPLAY,
+        )
+        .finish()
+        .expect("empty test paragraph is valid")
+        .shared_facts();
         Arc::new(ParagraphSceneSegment::new(
-            ParagraphId {
-                document,
-                index: paragraph,
-            },
+            paragraph,
             Arc::new(CachedGeometry {
                 features: SceneFeatures::DISPLAY,
-                artifact: PreparedParagraphFacts::for_test(0, SceneFeatures::DISPLAY, Vec::new()),
+                artifact,
                 facts: Arc::new(CachedGeometryFacts {
                     height,
                     empty_bounds: Rect::ZERO,

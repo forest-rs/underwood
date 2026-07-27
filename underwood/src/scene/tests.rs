@@ -15,7 +15,7 @@ use crate::adapter::{
     ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphInput,
     ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedClusterSide,
     PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
-    PreparedParagraph, PreparedRun, TextAffinity,
+    PreparedParagraphBuilder, PreparedRun, TextAffinity,
 };
 use crate::{
     AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
@@ -47,13 +47,13 @@ impl ParagraphFormation for EchoAdapter {
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         if text_len == 0 {
-            let paragraph = PreparedParagraph::try_new_with_features(
+            let paragraph = PreparedParagraphBuilder::with_features(
                 input.paragraph(),
                 text_len,
                 ResolvedDirection::Ltr,
                 input.features(),
-                [],
-            )?;
+            )
+            .finish()?;
             return Ok(ParagraphFormationOutput::new(
                 paragraph,
                 FormationWork::new(true, true, 0, 0, 0, 0, LineShapingWork::default()),
@@ -128,9 +128,6 @@ impl ParagraphFormation for EchoAdapter {
             FontData::new(Blob::from(vec![0_u8]), 0),
             input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size(),
             synthesis,
-            [],
-            [],
-            glyphs,
         )?;
         let font_size = input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size();
         let line_height = f64::from(
@@ -149,7 +146,6 @@ impl ParagraphFormation for EchoAdapter {
                 vec![
                     PreparedInteractionUnit::try_new(
                         0..1,
-                        0..1,
                         5.0,
                         0,
                         ClusterBoundary::None,
@@ -159,7 +155,6 @@ impl ParagraphFormation for EchoAdapter {
                     )?,
                     PreparedInteractionUnit::try_new(
                         1..text_len,
-                        1..2,
                         5.0,
                         0,
                         ClusterBoundary::None,
@@ -179,7 +174,6 @@ impl ParagraphFormation for EchoAdapter {
                 vec![
                     PreparedInteractionUnit::try_new(
                         0..middle,
-                        0..1,
                         5.0,
                         0,
                         ClusterBoundary::None,
@@ -189,7 +183,6 @@ impl ParagraphFormation for EchoAdapter {
                     )?,
                     PreparedInteractionUnit::try_new(
                         middle..text_len,
-                        1..2,
                         5.0,
                         0,
                         ClusterBoundary::None,
@@ -204,7 +197,6 @@ impl ParagraphFormation for EchoAdapter {
                 vec![PreparedInteractionSlice::try_new(0..text_len, 10.0)?],
                 vec![PreparedInteractionUnit::try_new(
                     0..text_len,
-                    0..1,
                     10.0,
                     0,
                     ClusterBoundary::None,
@@ -214,7 +206,7 @@ impl ParagraphFormation for EchoAdapter {
                 )?],
             )
         };
-        let line = PreparedLine::try_new(
+        let line_data = PreparedLine::try_new(
             0..text_len,
             LineBreakReason::End,
             10.0,
@@ -222,17 +214,31 @@ impl ParagraphFormation for EchoAdapter {
             line_height,
             f64::from(font_size) * 0.75,
             f64::from(font_size) * 0.25,
-            slices,
-            units,
-            [run],
         )?;
-        let paragraph = PreparedParagraph::try_new_with_features(
+        let mut paragraph = PreparedParagraphBuilder::with_features(
             input.paragraph(),
             text_len,
             ResolvedDirection::Ltr,
             input.features(),
-            [line],
-        )?;
+        );
+        let mut line = paragraph.begin_line(line_data)?;
+        for unit in units {
+            let source = unit.source();
+            line.push_unit(
+                unit,
+                slices.iter().copied().filter(|slice| {
+                    let slice = slice.source();
+                    source.start <= slice.start && slice.end <= source.end
+                }),
+            )?;
+        }
+        let mut run_builder = line.begin_run(run);
+        for glyph in glyphs {
+            run_builder.push_glyph(glyph)?;
+        }
+        run_builder.finish()?;
+        line.finish()?;
+        let paragraph = paragraph.finish()?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(
@@ -306,7 +312,7 @@ impl ParagraphFormation for MismatchedEmptyRegionAdapter {
             return Err(PreparationError::invalid_output());
         }
         let paragraph =
-            PreparedParagraph::try_new(input.paragraph(), 0, ResolvedDirection::Ltr, [])?;
+            PreparedParagraphBuilder::new(input.paragraph(), 0, ResolvedDirection::Ltr).finish()?;
         let flow = constraints
             .region_flow()
             .ok_or_else(PreparationError::invalid_output)?;
@@ -465,12 +471,12 @@ fn shared_hit_is_revalidated_against_the_current_projection() {
         )
         .expect("seed preparation succeeds");
 
-    let poisoned = PreparedParagraph::try_new(
+    let poisoned = PreparedParagraphBuilder::new(
         first.snapshot().paragraphs()[0].id,
         0,
         ResolvedDirection::Ltr,
-        [],
     )
+    .finish()
     .expect("empty prepared facts are internally valid");
     layout.replace_first_shared_facts_for_test(poisoned.shared_facts());
 

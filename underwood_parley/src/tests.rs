@@ -14,7 +14,8 @@ use underwood::adapter::{
     LineBreakReason as TestLineBreakReason, LineShapingWork, ParagraphConstraints,
     ParagraphFormation, ParagraphFormationCacheDiagnostics, ParagraphFormationOutput,
     PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
-    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedRun,
+    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphBuilder,
+    PreparedRun,
 };
 use underwood::{
     AnalysisStyle, BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId,
@@ -133,23 +134,50 @@ impl ParagraphFormation for AnalysisCursorProof {
             input.analysis_runs(),
         )?;
         let units = collect_analysis_units(input.text(), &analysis)?;
-        let mut prepared_slices = Vec::with_capacity(units.len());
-        let mut prepared_units = Vec::with_capacity(units.len());
-        let mut glyphs = Vec::with_capacity(units.len());
-        for (id, source) in units.into_iter().enumerate() {
-            let source = checked_source_range(&source)?;
-            let slice_start = prepared_slices.len();
-            prepared_slices.push(PreparedInteractionSlice::try_new(source.clone(), 1.0)?);
-            prepared_units.push(PreparedInteractionUnit::try_new(
+        let source = 0..u32::try_from(input.text().len())
+            .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
+        let unit_count = u32::try_from(units.len())
+            .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
+        let advance = units.len() as f64;
+        let mut paragraph = PreparedParagraphBuilder::with_features(
+            input.paragraph(),
+            source.end,
+            ResolvedDirection::Ltr,
+            input.features(),
+        );
+        let mut line = paragraph.begin_line(PreparedLine::try_new(
+            source.clone(),
+            TestLineBreakReason::End,
+            advance,
+            0.8,
+            1.0,
+            0.8,
+            0.2,
+        )?)?;
+        for source in &units {
+            let source = checked_source_range(source)?;
+            let unit = PreparedInteractionUnit::try_new(
                 source.clone(),
-                slice_start..prepared_slices.len(),
                 1.0,
                 0,
                 ClusterBoundary::None,
                 ClusterWhitespace::None,
                 PreparedClusterSide::new(source.start, TextAffinity::Downstream),
                 PreparedClusterSide::new(source.end, TextAffinity::Upstream),
-            )?);
+            )?;
+            line.push_unit(unit, [PreparedInteractionSlice::try_new(source, 1.0)?])?;
+        }
+        let run = PreparedRun::try_new(
+            source.clone(),
+            0,
+            *b"Zyyy",
+            FontData::new(Blob::from(vec![0_u8]), 0),
+            16.0,
+            FontSynthesis::default(),
+        )?;
+        let mut run = line.begin_run(run);
+        for (id, source) in units.iter().enumerate() {
+            let source = checked_source_range(source)?;
             input
                 .paint_runs()
                 .iter()
@@ -159,49 +187,17 @@ impl ParagraphFormation for AnalysisCursorProof {
                 })
                 .ok_or_else(underwood::adapter::PreparationError::invalid_output)?;
             let paint = GlyphPaintCoverage::whole();
-            glyphs.push(PreparedGlyph::try_new(
+            run.push_glyph(PreparedGlyph::try_new(
                 u32::try_from(id).unwrap_or(u32::MAX),
                 source,
                 Vec2::new(1.0, 0.0),
                 Vec2::ZERO,
                 paint,
-            )?);
+            )?)?;
         }
-        let source = 0..u32::try_from(input.text().len())
-            .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
-        let unit_count = u32::try_from(prepared_units.len())
-            .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
-        let advance = prepared_units.len() as f64;
-        let run = PreparedRun::try_new(
-            source.clone(),
-            0,
-            *b"Zyyy",
-            FontData::new(Blob::from(vec![0_u8]), 0),
-            16.0,
-            FontSynthesis::default(),
-            [],
-            [],
-            glyphs,
-        )?;
-        let line = PreparedLine::try_new(
-            source.clone(),
-            TestLineBreakReason::End,
-            advance,
-            0.8,
-            1.0,
-            0.8,
-            0.2,
-            prepared_slices,
-            prepared_units,
-            [run],
-        )?;
-        let paragraph = PreparedParagraph::try_new_with_features(
-            input.paragraph(),
-            source.end,
-            ResolvedDirection::Ltr,
-            input.features(),
-            [line],
-        )?;
+        run.finish()?;
+        line.finish()?;
+        let paragraph = paragraph.finish()?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(

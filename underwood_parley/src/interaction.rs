@@ -14,7 +14,7 @@ use parley_engine::{Analysis, Boundary, ShapedText, shape::Whitespace};
 use underwood::TextAffinity;
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, PreparationError, PreparedClusterSide,
-    PreparedInteractionSlice, PreparedInteractionUnit,
+    PreparedInteractionUnit, PreparedLineBuilder,
 };
 
 use crate::line_break::RunPiece;
@@ -65,17 +65,12 @@ pub(crate) fn collect_analysis_units_into(
 }
 
 struct VisualInteractionSlice {
-    source: Range<usize>,
+    source: Range<u32>,
     advance: f64,
     bidi_level: u8,
     script: [u8; 4],
     boundary: Boundary,
     whitespace: Whitespace,
-}
-
-pub(crate) struct PreparedInteractionData {
-    pub(crate) slices: Vec<PreparedInteractionSlice>,
-    pub(crate) units: Vec<PreparedInteractionUnit>,
 }
 
 pub(crate) fn lower_visual_units(
@@ -86,7 +81,8 @@ pub(crate) fn lower_visual_units(
     interaction_units: &[Range<usize>],
     line_source: &Range<usize>,
     mandatory_line_end: bool,
-) -> Result<PreparedInteractionData, PreparationError> {
+    output: &mut PreparedLineBuilder<'_>,
+) -> Result<(), PreparationError> {
     let slice_count = pieces.iter().map(|piece| piece.clusters.len()).sum();
     let mut visual_slices = Vec::with_capacity(slice_count);
     for piece in pieces {
@@ -118,15 +114,13 @@ pub(crate) fn lower_visual_units(
         return Err(PreparationError::invalid_output());
     }
     let mut seen = alloc::vec![false; expected.len()];
-    let mut prepared_slices = Vec::with_capacity(visual_slices.len());
-    let mut prepared_units = Vec::with_capacity(expected.len());
     let mut current_owner = None;
     let mut current_start = 0;
     for (index, slice) in visual_slices.iter().enumerate() {
         let owner = interaction_units
-            .partition_point(|unit| unit.start <= slice.source.start)
+            .partition_point(|unit| unit.start <= slice.source.start as usize)
             .checked_sub(1)
-            .filter(|&index| slice.source.end <= interaction_units[index].end)
+            .filter(|&index| slice.source.end as usize <= interaction_units[index].end)
             .ok_or_else(PreparationError::invalid_output)?;
         if !expected.contains(&owner) {
             return Err(PreparationError::invalid_output());
@@ -135,13 +129,13 @@ pub(crate) fn lower_visual_units(
             continue;
         }
         if let Some(previous) = current_owner {
-            prepared_units.push(lower_prepared_unit(
+            lower_prepared_unit(
                 text,
                 &interaction_units[previous],
                 &visual_slices[current_start..index],
-                &mut prepared_slices,
                 mandatory_line_end && interaction_units[previous].end == line_source.end,
-            )?);
+                output,
+            )?;
         }
         if seen[owner - expected.start] {
             return Err(PreparationError::invalid_output());
@@ -151,21 +145,18 @@ pub(crate) fn lower_visual_units(
         current_start = index;
     }
     if let Some(owner) = current_owner {
-        prepared_units.push(lower_prepared_unit(
+        lower_prepared_unit(
             text,
             &interaction_units[owner],
             &visual_slices[current_start..],
-            &mut prepared_slices,
             mandatory_line_end && interaction_units[owner].end == line_source.end,
-        )?);
+            output,
+        )?;
     }
     if seen.iter().any(|seen| !seen) {
         return Err(PreparationError::invalid_output());
     }
-    Ok(PreparedInteractionData {
-        slices: prepared_slices,
-        units: prepared_units,
-    })
+    Ok(())
 }
 
 fn lower_visual_slice(
@@ -188,7 +179,7 @@ fn lower_visual_slice(
         .checked_add(usize::from(cluster.text_len))
         .ok_or_else(PreparationError::invalid_output)?;
     Ok(VisualInteractionSlice {
-        source: start..end,
+        source: checked_source_range(&(start..end))?,
         advance: f64::from(cluster.advance),
         bidi_level: run.bidi_level,
         script,
@@ -201,14 +192,14 @@ fn lower_prepared_unit(
     text: &str,
     source: &Range<usize>,
     slices: &[VisualInteractionSlice],
-    prepared_slices: &mut Vec<PreparedInteractionSlice>,
     mandatory_line_end: bool,
-) -> Result<PreparedInteractionUnit, PreparationError> {
+    output: &mut PreparedLineBuilder<'_>,
+) -> Result<(), PreparationError> {
     let first = slices
         .iter()
         .min_by_key(|slice| slice.source.start)
         .ok_or_else(PreparationError::invalid_output)?;
-    if first.source.start != source.start
+    if first.source.start as usize != source.start
         || slices
             .iter()
             .any(|slice| slice.bidi_level != first.bidi_level)
@@ -252,22 +243,15 @@ fn lower_prepared_unit(
             PreparedClusterSide::new(source.end, TextAffinity::Upstream),
         )
     };
-    let slice_start = prepared_slices.len();
     let mut advance = 0.0;
     for slice in slices {
         advance += slice.advance;
         if !advance.is_finite() {
             return Err(PreparationError::invalid_output());
         }
-        prepared_slices.push(PreparedInteractionSlice::try_new(
-            checked_source_range(&slice.source)?,
-            slice.advance,
-        )?);
     }
-    let slice_end = prepared_slices.len();
-    PreparedInteractionUnit::try_new_with_justification(
+    let unit = PreparedInteractionUnit::try_new_with_justification(
         source,
-        slice_start..slice_end,
         advance,
         bidi_level,
         match boundary {
@@ -286,5 +270,11 @@ fn lower_prepared_unit(
         western_justification_opportunity,
         left,
         right,
+    )?;
+    output.push_unit_parts(
+        unit,
+        slices
+            .iter()
+            .map(|slice| (slice.source.clone(), slice.advance)),
     )
 }

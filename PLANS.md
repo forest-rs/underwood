@@ -220,8 +220,8 @@ work, and all local and protected remote gates are green.
 
 ## Retained O(change) preparation and scene lifecycle
 
-**Status:** Active — Designs 0017 and 0018 approved; Design-0021 proposed at a
-breaking adapter API gate
+**Status:** Active — Designs 0017, 0018, and 0021 approved; compact-artifact
+residency gates green, changed-paragraph CPU/allocation gates in progress
 
 **Beads:** `und-oh0.13.17` and its dependency-ordered children
 
@@ -240,9 +240,9 @@ reusable text-tools completion gate. Design-0017 and its public traversal
 migration were approved on 2026-07-25; implementation remains bound by its
 dependency, `unsafe`, serialization, and renderer-policy gates.
 The matched Parley comparison subsequently falsified the final editable
-retained shape. Design-0021 may replace that shape only after its explicit
-public adapter approval; it preserves the O(change), immutable-publication,
-capability, source-completeness, and `no_std` laws.
+retained shape. Design-0021 and its breaking public adapter migration were
+approved on 2026-07-27; the replacement preserves the O(change),
+immutable-publication, capability, source-completeness, and `no_std` laws.
 
 ### Measured baseline
 
@@ -422,7 +422,7 @@ The final matched high-level Parley gate is now checked in as
 - optional warm adapter retention raises the live delta to 42.0 MB without
   improving matched typing.
 
-Those failures block campaign closure. Proposed Design-0021 changes the
+Those failures block campaign closure. Approved Design-0021 changes the
 canonical story to one source snapshot prepared into one immutable
 paragraph-local artifact, with display, source, hit, selection, movement,
 native, and export behavior exposed as borrowed indexed views. It explicitly
@@ -433,8 +433,18 @@ Parley display residency, 2× Parley default editable residency and edit
 latency, 16 allocations / 8 KiB per edit, zero exact-repeat allocations, and
 no query regression.
 
-The proposed representation and public migration are recorded in
-`docs/design/0017-retained-scene-lifecycle.md`.
+The representation and public migration are recorded in
+`docs/design/0021-compact-paragraph-artifacts.md`. The deletion campaign has
+removed both cursor graphs, copied scene glyph/layout owners, ordinary
+per-glyph paint evidence, the adapter final-output cache, clone-based repaint,
+the nested final lowering path, deep formation keys, and the plain-block
+miniature document. Exact matched live-heap deltas are now 1.07× Parley for
+display and 1.19× for editable labels. Direct canonical artifact construction
+has reduced one changed paragraph from 63 calls / 12,584 requested bytes to
+52 calls / 7,960 bytes. Residency and requested-byte gates are green; the
+16-call and ≤2× edit-latency gates remain open. The running ledger and raw
+checkpoints are in
+`docs/proof/compact-artifact-deletion-ledger-2026-07-27.md`.
 
 ### Risks and controls
 
