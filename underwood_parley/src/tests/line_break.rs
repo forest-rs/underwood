@@ -16,7 +16,6 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("legal wrapping must form a scene");
-    let sources = scene_sources(output.scene());
     let lines = output.scene().lines();
     assert_eq!(lines.len(), 3, "legal opportunities must form three lines");
     assert_eq!(
@@ -32,8 +31,10 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
         underwood::adapter::LineBreakReason::End
     );
     assert_eq!(
-        sources
-            .for_line(lines.get(0).expect("line exists"))
+        lines
+            .get(0)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -42,8 +43,10 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
         0..6
     );
     assert_eq!(
-        sources
-            .for_line(lines.get(1).expect("line exists"))
+        lines
+            .get(1)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -53,8 +56,10 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
         u32::try_from(text.find("beta").expect("beta is present")).expect("fixture range fits")
     );
     assert_eq!(
-        sources
-            .for_line(lines.get(2).expect("line exists"))
+        lines
+            .get(2)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -78,13 +83,11 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("mandatory breaks must form a scene");
-    let sources = scene_sources(output.scene());
     let lines = output.scene().lines();
     let ranges: Vec<_> = lines
         .iter()
         .map(|line| {
-            sources
-                .for_line(line)
+            line.sources()
                 .expect("line belongs to source scene")
                 .next()
                 .expect("source exists")
@@ -97,8 +100,10 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
         "CRLF, LF, LS, and PS form four breaks: {ranges:?}"
     );
     assert_eq!(
-        sources
-            .for_line(lines.get(0).expect("line exists"))
+        lines
+            .get(0)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .next()
             .expect("source exists")
@@ -117,8 +122,10 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
         underwood::adapter::LineBreakReason::End
     );
     assert_eq!(
-        sources
-            .for_line(lines.get(lines.len() - 1).expect("final line exists"))
+        lines
+            .get(lines.len() - 1)
+            .expect("final line exists")
+            .sources()
             .expect("line belongs to source scene")
             .next()
             .expect("source exists")
@@ -204,17 +211,12 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
         .prepare(&document.snapshot(), &request)
         .expect("mixed leaf formation succeeds");
     let line = &output.scene().line(0).expect("line exists");
-    let sources = scene_sources(output.scene());
     assert_eq!(
-        sources
-            .for_line(*line)
-            .expect("line belongs to source scene")
-            .len(),
+        line.sources().expect("line belongs to source scene").len(),
         2
     );
     assert_eq!(
-        sources
-            .for_line(*line)
+        line.sources()
             .expect("line belongs to source scene")
             .next()
             .expect("source exists")
@@ -222,8 +224,7 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
         small
     );
     assert_eq!(
-        sources
-            .for_line(*line)
+        line.sources()
             .expect("line belongs to source scene")
             .next()
             .expect("source exists")
@@ -231,8 +232,7 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
         0..6
     );
     assert_eq!(
-        sources
-            .for_line(*line)
+        line.sources()
             .expect("line belongs to source scene")
             .nth(1)
             .expect("source exists")
@@ -240,8 +240,7 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
         large
     );
     assert_eq!(
-        sources
-            .for_line(*line)
+        line.sources()
             .expect("line belongs to source scene")
             .nth(1)
             .expect("source exists")
@@ -683,7 +682,6 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     let unbroken = engine
         .prepare(&document.snapshot(), &wide)
         .expect("unbroken shaping succeeds");
-    let unbroken_sources = scene_sources(unbroken.scene());
     let unbroken_glyphs: Vec<_> = unbroken
         .scene()
         .fragments()
@@ -692,9 +690,10 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         .map(|glyph| {
             (
                 glyph.id(),
-                unbroken_sources
-                    .first_for_glyph(glyph)
+                glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
+                    .next()
                     .expect("glyph source exists")
                     .bytes(),
             )
@@ -705,7 +704,6 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     let output = engine
         .prepare(&document.snapshot(), &narrow)
         .expect("the legal break reshapes its bounded cursive context");
-    let sources = scene_sources(output.scene());
     assert_eq!(output.work().analysis().paragraphs(), 0);
     assert_eq!(output.work().font_selection().paragraphs(), 0);
     assert_eq!(output.work().shape().paragraphs(), 0);
@@ -720,9 +718,10 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         .map(|glyph| {
             (
                 glyph.id(),
-                sources
-                    .first_for_glyph(glyph)
+                glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
+                    .next()
                     .expect("glyph source exists")
                     .bytes(),
             )
@@ -734,8 +733,11 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     );
     assert_eq!(output.scene().lines().len(), 2);
     assert_eq!(
-        sources
-            .for_line(output.scene().line(0).expect("line exists"))
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -744,8 +746,11 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         0..break_at
     );
     assert_eq!(
-        sources
-            .for_line(output.scene().line(1).expect("line exists"))
+        output
+            .scene()
+            .line(1)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -755,9 +760,10 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     );
     assert!(output.scene().fragments().iter().all(|fragment| {
         fragment.glyphs().iter().all(|glyph| {
-            let source = sources
-                .first_for_glyph(glyph)
+            let source = glyph
+                .sources()
                 .expect("glyph belongs to source scene")
+                .next()
                 .expect("glyph source exists")
                 .bytes();
             source.end <= break_at || source.start >= break_at
@@ -824,12 +830,14 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
             &editable_scene_request(constraint, &styles, &paint),
         )
         .expect("overflowing line-final shaping backs up");
-    let sources = scene_sources(output.scene());
     let prior_source =
         u32::try_from(clusters[prior_safe].source.start).expect("fixture source range fits");
     assert_eq!(
-        sources
-            .for_line(output.scene().line(0).expect("line exists"))
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -867,7 +875,6 @@ fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("mixed bidi formation succeeds");
-    let sources = scene_sources(output.scene());
     let arabic: Vec<_> = output
         .scene()
         .fragments()
@@ -877,9 +884,10 @@ fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
         .map(|glyph| {
             (
                 glyph.position().x,
-                sources
-                    .first_for_glyph(glyph)
+                glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
+                    .next()
                     .expect("glyph source exists")
                     .bytes()
                     .start,

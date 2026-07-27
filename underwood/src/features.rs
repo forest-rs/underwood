@@ -146,6 +146,12 @@ impl SceneFeatures {
             bits: self.bits | other.bits,
         }
     }
+
+    pub(crate) const fn intersection(self, other: Self) -> Self {
+        Self {
+            bits: self.bits & other.bits,
+        }
+    }
 }
 
 impl fmt::Debug for SceneFeatures {

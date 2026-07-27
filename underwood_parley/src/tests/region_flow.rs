@@ -24,7 +24,6 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("text must retry into the second column");
-    let sources = scene_sources(output.scene());
     let transcript = output
         .region_transcript()
         .expect("region preparation retains a transcript");
@@ -53,8 +52,11 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
         0.0
     );
     assert_eq!(
-        sources
-            .for_line(output.scene().line(0).expect("line exists"))
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -104,7 +106,6 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
         .prepare(&document.snapshot(), &request)
         .expect("text must fill both exclusion intervals");
     let lines = output.scene().lines();
-    let sources = scene_sources(output.scene());
 
     assert!(lines.len() >= 2);
     assert_eq!(
@@ -113,15 +114,19 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
     );
     assert!(lines.get(0).expect("line exists").bounds().x1 <= 70.0);
     assert!(lines.get(1).expect("line exists").bounds().x0 >= 110.0);
-    let left_source = sources
-        .for_line(lines.get(0).expect("line exists"))
+    let left_source = lines
+        .get(0)
+        .expect("line exists")
+        .sources()
         .expect("line belongs to source scene")
         .iter()
         .next()
         .expect("source exists")
         .bytes();
-    let right_source = sources
-        .for_line(lines.get(1).expect("line exists"))
+    let right_source = lines
+        .get(1)
+        .expect("line exists")
+        .sources()
         .expect("line belongs to source scene")
         .iter()
         .next()
@@ -147,8 +152,8 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
             .find(|attempt| {
                 attempt.outcome() == RegionAttemptOutcome::Accepted
                     && attempt.source()
-                        == sources
-                            .for_line(line)
+                        == line
+                            .sources()
                             .expect("line belongs to source scene")
                             .iter()
                             .fold(None, |range, source| {
@@ -638,7 +643,6 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
     let transient = engine
         .prepare_composition(&snapshot, &request, &session)
         .expect("composition uses region formation");
-    let sources = projected_scene_sources(transient.scene());
     let transcript = transient
         .region_transcript()
         .expect("composition retains exact region attempts");
@@ -656,8 +660,8 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
             .all(|line| line.bounds().x0 >= 40.0 && line.bounds().y0 >= 20.0)
     );
     assert!(transient.scene().fragments().iter().any(|fragment| {
-        sources
-            .for_fragment(fragment)
+        fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .any(|source| {
                 matches!(

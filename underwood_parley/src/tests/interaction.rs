@@ -553,8 +553,8 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
         .iter()
         .find(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                scene_sources(scene)
-                    .for_glyph(glyph)
+                glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
                     .count()
                     == 2
@@ -604,15 +604,13 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
         .scene()
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .filter_map(|semantic| semantic.source().map(|source| source.text()))
         .collect();
     assert!(semantic_texts.contains(&base));
     assert!(semantic_texts.contains(&mark));
-    let sources = scene_sources(output.scene());
     assert!(output.scene().fragments().iter().any(|fragment| {
-        let texts: Vec<_> = sources
-            .for_fragment(fragment)
+        let texts: Vec<_> = fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .map(|source| source.text())
             .collect();
@@ -661,7 +659,6 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
     let base_semantic = scene
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .find(|semantic| {
             semantic
                 .source()

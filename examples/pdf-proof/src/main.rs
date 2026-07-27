@@ -212,9 +212,6 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     .with_features(SceneFeatures::DISPLAY.with_sources());
     let output = layout.prepare(&snapshot, &request)?;
     let scene = output.scene().clone();
-    let sources = scene
-        .sources()
-        .expect("the PDF proof requests source provenance");
 
     assert!(
         scene
@@ -226,8 +223,8 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     assert!(
         scene.fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                sources
-                    .for_glyph(glyph)
+                glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
                     .count()
                     > 1
@@ -240,8 +237,8 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter(|glyph| {
-            sources
-                .for_glyph(*glyph)
+            glyph
+                .sources()
                 .expect("glyph belongs to source scene")
                 .any(|source| {
                     let bytes = source.bytes();

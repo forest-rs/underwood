@@ -537,13 +537,13 @@ impl LayoutEngine {
                 region_height_rejections,
             })
         });
-        let core = Arc::new(SceneCore {
-            paragraph_count: snapshot.paragraphs().len(),
-            resident: resident_feature_policy(&spine, request.features.default_features()),
+        let core = Arc::new(scene_core(
+            snapshot.paragraphs().len(),
             spine,
             metrics,
             region,
-        });
+            request.features.default_features(),
+        ));
         let output = SceneOutput {
             scene: TextScene {
                 document: snapshot.id(),
@@ -718,13 +718,13 @@ impl LayoutEngine {
                 region_height_rejections,
             })
         });
-        let core = Arc::new(SceneCore {
-            paragraph_count: 1,
-            resident: resident_feature_policy(&spine, request.features.default_features()),
+        let core = Arc::new(scene_core(
+            1,
             spine,
             metrics,
             region,
-        });
+            request.features.default_features(),
+        ));
         let output = SceneOutput {
             scene: TextScene {
                 document: snapshot.id(),
@@ -978,13 +978,13 @@ impl LayoutEngine {
                 .features_for(target_paragraph)
                 .with_native_text_input(),
         );
-        let core = Arc::new(SceneCore {
-            paragraph_count: snapshot.paragraphs().len(),
-            resident: resident_feature_policy(&spine, effective_features.default_features()),
+        let core = Arc::new(scene_core(
+            snapshot.paragraphs().len(),
             spine,
             metrics,
             region,
-        });
+            effective_features.default_features(),
+        ));
         let output = CompositionSceneOutput {
             scene: CompositionScene {
                 document: snapshot.id(),
@@ -1412,13 +1412,13 @@ impl LayoutEngine {
         let core = if changed_count == 0 {
             previous_core
         } else {
-            Arc::new(SceneCore {
+            Arc::new(scene_core(
                 paragraph_count,
-                metrics: TextMetrics::from_summary(summary),
-                resident: resident_feature_policy(&spine, request.features.default_features()),
                 spine,
-                region: None,
-            })
+                TextMetrics::from_summary(summary),
+                None,
+                request.features.default_features(),
+            ))
         };
         let output = SceneOutput {
             scene: TextScene {
@@ -1598,13 +1598,13 @@ impl LayoutEngine {
                 region_height_rejections,
             })
         });
-        let core = Arc::new(SceneCore {
-            paragraph_count: snapshot.paragraphs().len(),
-            metrics: TextMetrics::from_summary(summary),
-            resident: resident_feature_policy(&spine, request.features.default_features()),
+        let core = Arc::new(scene_core(
+            snapshot.paragraphs().len(),
             spine,
+            TextMetrics::from_summary(summary),
             region,
-        });
+            request.features.default_features(),
+        ));
         let output = SceneOutput {
             scene: TextScene {
                 document: snapshot.id(),
@@ -1849,13 +1849,13 @@ impl LayoutEngine {
         let core = if processed == 0 {
             previous_core
         } else {
-            Arc::new(SceneCore {
+            Arc::new(scene_core(
                 paragraph_count,
-                metrics: TextMetrics::from_summary(summary),
-                resident: resident_feature_policy(&spine, request.features.default_features()),
                 spine,
+                TextMetrics::from_summary(summary),
                 region,
-            })
+                request.features.default_features(),
+            ))
         };
         let output = SceneOutput {
             scene: TextScene {
@@ -2951,6 +2951,34 @@ fn effective_composition_features(
             .features_for(target)
             .with_native_text_input(),
     )
+}
+
+fn scene_core(
+    paragraph_count: usize,
+    spine: SceneSpine,
+    metrics: TextMetrics,
+    region: Option<SceneRegionBinding>,
+    default_features: SceneFeatures,
+) -> SceneCore {
+    let mut segments = spine.segments();
+    let (resident_union, resident_intersection) = if let Some(positioned) = segments.next() {
+        let features = positioned.segment.geometry.features;
+        segments.fold((features, features), |(union, intersection), positioned| {
+            let features = positioned.segment.geometry.features;
+            (union.union(features), intersection.intersection(features))
+        })
+    } else {
+        (default_features, default_features)
+    };
+    SceneCore {
+        paragraph_count,
+        resident: resident_feature_policy(&spine, default_features),
+        spine,
+        metrics,
+        region,
+        resident_union,
+        resident_intersection,
+    }
 }
 
 fn resident_feature_policy(spine: &SceneSpine, default: SceneFeatures) -> SceneFeaturePolicy {

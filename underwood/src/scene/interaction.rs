@@ -77,26 +77,10 @@ impl CompositionScene {
         SceneParagraphResidencies::new(&self.requested, &self.core.spine)
     }
 
-    /// Returns unconditional renderer-facing display access.
-    #[must_use]
-    pub const fn display(&self) -> ProjectedSceneDisplay<'_> {
-        ProjectedSceneDisplay::new(self)
-    }
-
-    /// Returns source-aware traversal when every paragraph retained provenance.
-    pub fn sources(&self) -> Result<ProjectedSceneSourceAccess<'_>, MissingSceneCapability> {
-        require_scene_features(
-            &self.core.spine,
-            &self.requested,
-            SceneFeatures::DISPLAY.with_sources(),
-        )?;
-        Ok(ProjectedSceneSourceAccess::new(self))
-    }
-
     /// Returns exact point interaction over paragraphs that retained it.
     pub fn interaction(&self) -> Result<ProjectedSceneInteraction<'_>, MissingSceneCapability> {
         require_any_scene_features(
-            &self.core.spine,
+            &self.core,
             &self.requested,
             SceneFeatures::DISPLAY.with_hit_testing(),
         )?;
@@ -105,24 +89,24 @@ impl CompositionScene {
 
     /// Returns complete native composition interaction and geometry access.
     pub fn editing(&self) -> Result<ProjectedSceneEditing<'_>, MissingSceneCapability> {
-        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        require_any_scene_features(&self.core, &self.requested, SceneFeatures::EDITABLE)?;
         Ok(ProjectedSceneEditing::new(self))
     }
 
     /// Returns semantic structure when every represented paragraph retained it.
-    pub fn semantics(&self) -> Result<ProjectedSceneSemanticAccess<'_>, MissingSceneCapability> {
+    pub fn semantics(&self) -> Result<SceneSemantics<'_>, MissingSceneCapability> {
         require_scene_features(
-            &self.core.spine,
+            &self.core,
             &self.requested,
             SceneFeatures::DISPLAY.with_semantics(),
         )?;
-        Ok(ProjectedSceneSemanticAccess::new(self))
+        Ok(SceneSemantics::new(self.revision, &self.core.spine))
     }
 
     /// Returns visual lines in flow order.
     #[must_use]
     pub fn lines(&self) -> ProjectedSceneLines<'_> {
-        ProjectedSceneLines::new(self.revision, &self.core)
+        ProjectedSceneLines::new(self.revision, &self.core, &self.requested)
     }
 
     /// Returns one visual line by its global flow-order index.
@@ -140,7 +124,7 @@ impl CompositionScene {
     /// Returns paint-homogeneous projected glyph fragments.
     #[must_use]
     pub fn fragments(&self) -> ProjectedSceneFragments<'_> {
-        ProjectedSceneFragments::new(self.revision, &self.core)
+        ProjectedSceneFragments::new(self.revision, &self.core, &self.requested)
     }
 
     /// Returns one projected glyph fragment by its global visual index.
@@ -159,11 +143,6 @@ impl CompositionScene {
     #[must_use]
     pub const fn paint(&self) -> &PaintTable {
         &self.paint
-    }
-
-    /// Iterates semantic fragments in document order.
-    pub(crate) fn semantic_records(&self) -> SceneSemantics<'_> {
-        SceneSemantics::new(self.revision, &self.core.spine)
     }
 
     /// Returns the exact projected interaction unit under a point.
@@ -366,6 +345,8 @@ pub(super) struct SceneCore {
     pub(super) metrics: TextMetrics,
     pub(super) region: Option<SceneRegionBinding>,
     pub(super) resident: SceneFeaturePolicy,
+    pub(super) resident_union: SceneFeatures,
+    pub(super) resident_intersection: SceneFeatures,
 }
 
 impl TextScene {
@@ -412,26 +393,10 @@ impl TextScene {
         SceneParagraphResidencies::new(&self.requested, &self.core.spine)
     }
 
-    /// Returns unconditional renderer-facing display access.
-    #[must_use]
-    pub const fn display(&self) -> SceneDisplay<'_> {
-        SceneDisplay::new(self)
-    }
-
-    /// Returns source-aware access when every represented paragraph retained provenance.
-    pub fn sources(&self) -> Result<SceneSourceAccess<'_>, MissingSceneCapability> {
-        require_scene_features(
-            &self.core.spine,
-            &self.requested,
-            SceneFeatures::DISPLAY.with_sources(),
-        )?;
-        Ok(SceneSourceAccess::new(self))
-    }
-
     /// Returns exact point interaction over paragraphs that retained it.
     pub fn interaction(&self) -> Result<SceneInteraction<'_>, MissingSceneCapability> {
         require_any_scene_features(
-            &self.core.spine,
+            &self.core,
             &self.requested,
             SceneFeatures::DISPLAY.with_hit_testing(),
         )?;
@@ -440,24 +405,24 @@ impl TextScene {
 
     /// Returns complete selection, navigation, and native-input access.
     pub fn editing(&self) -> Result<SceneEditing<'_>, MissingSceneCapability> {
-        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        require_any_scene_features(&self.core, &self.requested, SceneFeatures::EDITABLE)?;
         Ok(SceneEditing::new(self))
     }
 
     /// Returns selection construction and geometry access.
     pub fn selection(&self) -> Result<SceneSelection<'_>, MissingSceneCapability> {
-        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::SELECTABLE)?;
+        require_any_scene_features(&self.core, &self.requested, SceneFeatures::SELECTABLE)?;
         Ok(SceneSelection::new(self))
     }
 
     /// Returns semantic structure when every represented paragraph retained it.
-    pub fn semantics(&self) -> Result<SceneSemanticAccess<'_>, MissingSceneCapability> {
+    pub fn semantics(&self) -> Result<SceneSemantics<'_>, MissingSceneCapability> {
         require_scene_features(
-            &self.core.spine,
+            &self.core,
             &self.requested,
             SceneFeatures::DISPLAY.with_semantics(),
         )?;
-        Ok(SceneSemanticAccess::new(self))
+        Ok(SceneSemantics::new(self.revision, &self.core.spine))
     }
 
     /// Starts one native composition over the current primary insertion point.
@@ -655,7 +620,7 @@ impl TextScene {
     /// Returns visual lines in flow order.
     #[must_use]
     pub fn lines(&self) -> SceneLines<'_> {
-        SceneLines::new(self.revision, &self.core)
+        SceneLines::new(self.revision, &self.core, &self.requested)
     }
 
     /// Returns one visual line by global index.
@@ -673,7 +638,7 @@ impl TextScene {
     /// Returns paint-homogeneous glyph fragments in visual order.
     #[must_use]
     pub fn fragments(&self) -> SceneFragments<'_> {
-        SceneFragments::new(self.revision, &self.core)
+        SceneFragments::new(self.revision, &self.core, &self.requested)
     }
 
     /// Returns one paint-homogeneous fragment by global visual index.
@@ -692,11 +657,6 @@ impl TextScene {
     #[must_use]
     pub const fn paint(&self) -> &PaintTable {
         &self.paint
-    }
-
-    /// Iterates semantic fragments in document order.
-    pub(crate) fn semantic_records(&self) -> SceneSemantics<'_> {
-        SceneSemantics::new(self.revision, &self.core.spine)
     }
 
     /// Returns an exact interaction-unit hit under a scene-space point.
@@ -1251,12 +1211,35 @@ impl TextScene {
 }
 
 fn require_any_scene_features(
-    spine: &SceneSpine,
+    core: &SceneCore,
     requested: &SceneFeaturePolicy,
     required: SceneFeatures,
 ) -> Result<(), MissingSceneCapability> {
+    let summary = core.spine.summary();
+    if summary.paragraphs == 0 {
+        return requested
+            .default_features()
+            .contains(required)
+            .then_some(())
+            .ok_or_else(|| {
+                MissingSceneCapability::new(
+                    None,
+                    required,
+                    requested.default_features(),
+                    requested.default_features(),
+                )
+            });
+    }
+    debug_assert!(
+        !required.has_semantics(),
+        "any-paragraph sessions use the linear interaction capability branch"
+    );
+    if core.resident_union.contains(required) {
+        return Ok(());
+    }
+
     let mut missing = None;
-    for positioned in spine.segments() {
+    for positioned in core.spine.segments() {
         let paragraph = positioned.segment.paragraph;
         let resident = positioned.segment.geometry.features;
         if resident.contains(required) {
@@ -1271,9 +1254,6 @@ fn require_any_scene_features(
             ));
         }
     }
-    if spine.summary().paragraphs == 0 && requested.default_features().contains(required) {
-        return Ok(());
-    }
     Err(missing.unwrap_or_else(|| {
         MissingSceneCapability::new(
             None,
@@ -1285,11 +1265,16 @@ fn require_any_scene_features(
 }
 
 fn require_scene_features(
-    spine: &SceneSpine,
+    core: &SceneCore,
     requested: &SceneFeaturePolicy,
     required: SceneFeatures,
 ) -> Result<(), MissingSceneCapability> {
-    for positioned in spine.segments() {
+    let summary = core.spine.summary();
+    if summary.paragraphs == 0 || core.resident_intersection.contains(required) {
+        return Ok(());
+    }
+
+    for positioned in core.spine.segments() {
         let paragraph = positioned.segment.paragraph;
         let resident = positioned.segment.geometry.features;
         if !resident.contains(required) {

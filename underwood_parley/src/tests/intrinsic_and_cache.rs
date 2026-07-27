@@ -401,7 +401,6 @@ fn identical_blocks_share_only_identity_free_preparation() {
             .scene()
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find_map(|semantic| semantic.source())
             .expect("first inline semantic has source")
             .text(),
@@ -409,7 +408,6 @@ fn identical_blocks_share_only_identity_free_preparation() {
             .scene()
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find_map(|semantic| semantic.source())
             .expect("second inline semantic has source")
             .text(),
@@ -420,7 +418,6 @@ fn identical_blocks_share_only_identity_free_preparation() {
             .scene()
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find(|semantic| semantic.inline_role().is_some())
             .expect("first inline semantic exists")
             .semantic_id(),
@@ -428,7 +425,6 @@ fn identical_blocks_share_only_identity_free_preparation() {
             .scene()
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find(|semantic| semantic.inline_role().is_some())
             .expect("second inline semantic exists")
             .semantic_id(),
@@ -505,7 +501,6 @@ fn shared_preparation_rebuilds_distinct_leaf_and_semantic_topology() {
             .scene()
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .filter(|semantic| semantic.inline_role().is_some())
             .count(),
         1
@@ -514,7 +509,6 @@ fn shared_preparation_rebuilds_distinct_leaf_and_semantic_topology() {
         .scene()
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .filter_map(|semantic| semantic.inline_role())
         .collect();
     assert_eq!(second_roles, [InlineRole::TEXT, InlineRole::EMPHASIS]);
@@ -522,7 +516,6 @@ fn shared_preparation_rebuilds_distinct_leaf_and_semantic_topology() {
         .scene()
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .filter_map(|semantic| semantic.source().map(|source| source.text()))
         .collect();
     assert_eq!(second_texts.len(), 2);
@@ -642,11 +635,9 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
         first_output.scene().composition(),
         second_output.scene().composition()
     );
-    let first_sources = projected_scene_sources(first_output.scene());
-    let second_sources = projected_scene_sources(second_output.scene());
     assert!(first_output.scene().fragments().iter().any(|fragment| {
-        first_sources
-            .for_fragment(fragment)
+        fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .any(|source| {
                 matches!(
@@ -658,8 +649,8 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
             })
     }));
     assert!(second_output.scene().fragments().iter().any(|fragment| {
-        second_sources
-            .for_fragment(fragment)
+        fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .any(|source| {
                 matches!(

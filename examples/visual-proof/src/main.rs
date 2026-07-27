@@ -284,7 +284,6 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     assert!(
         hero.semantics()
             .expect("scene request includes semantics")
-            .iter()
             .any(|fragment| fragment.inline_role() == Some(InlineRole::EMPHASIS)),
         "the hero must retain real inline semantics alongside glyph diagnostics"
     );
@@ -515,10 +514,6 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
         &paint,
     );
     let initial = layout.prepare(published.snapshot(), &request)?;
-    let sources = initial
-        .scene()
-        .sources()
-        .expect("proof request includes sources");
     assert_eq!(
         glyph_count(initial.scene(), suffix),
         4,
@@ -527,9 +522,10 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     assert!(
         initial.scene().fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                let source = sources
-                    .first_for_glyph(glyph)
+                let source = glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
+                    .next()
                     .expect("glyph source exists");
                 source.text() == suffix && source.bytes() == (1..4)
             })
@@ -698,13 +694,12 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         6,
         "explicit liga-off office must preserve six glyphs"
     );
-    let sources = scene.sources().expect("proof request includes sources");
     let arabic_fragment = scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == arabic_text)
         })
@@ -772,14 +767,13 @@ fn variable_style(
 }
 
 fn glyph_count(scene: &TextScene, text: TextId) -> usize {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter(|glyph| {
-            sources
-                .for_glyph(*glyph)
+            glyph
+                .sources()
                 .expect("glyph belongs to source scene")
                 .any(|source| source.text() == text)
         })
@@ -787,13 +781,12 @@ fn glyph_count(scene: &TextScene, text: TextId) -> usize {
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })

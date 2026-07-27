@@ -310,20 +310,6 @@ fn sole_unit_source(unit: &SnapshotTextUnitView<'_>) -> underwood::SnapshotTextR
     source
 }
 
-fn scene_sources(scene: &TextScene) -> underwood::SceneSourceAccess<'_> {
-    scene
-        .sources()
-        .expect("fixture retains authored-source provenance")
-}
-
-fn projected_scene_sources(
-    scene: &underwood::CompositionScene,
-) -> underwood::ProjectedSceneSourceAccess<'_> {
-    scene
-        .sources()
-        .expect("fixture retains projected-source provenance")
-}
-
 fn fixture_engine() -> LayoutEngine {
     fixture_engine_with_budget(32)
 }

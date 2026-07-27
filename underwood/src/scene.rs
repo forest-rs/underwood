@@ -35,24 +35,19 @@ use crate::{
 mod adjustment;
 mod cursor;
 mod engine;
-mod facades;
 mod geometry;
 mod interaction;
 mod output;
 mod projection;
 mod records;
 mod residency;
+mod sessions;
 mod shared_cache;
 mod source_map;
 mod spine;
 mod views;
 
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
-pub use facades::{
-    ForeignSceneView, ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneInteraction,
-    ProjectedSceneSemanticAccess, ProjectedSceneSourceAccess, SceneDisplay, SceneEditing,
-    SceneInteraction, SceneSelection, SceneSemanticAccess, SceneSourceAccess,
-};
 pub use interaction::{CompositionScene, TextScene};
 pub use output::{
     CompositionSceneOutput, PreparationMemory, PreparationReuse, PreparationTrace,
@@ -65,6 +60,10 @@ pub use records::{
 };
 pub use residency::{
     ParagraphSceneResidency, SceneParagraphResidencies, SceneResidency, SceneResidencyBytes,
+};
+pub use sessions::{
+    ProjectedSceneEditing, ProjectedSceneInteraction, SceneEditing, SceneInteraction,
+    SceneSelection,
 };
 pub use views::{
     ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,

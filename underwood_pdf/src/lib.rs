@@ -24,8 +24,7 @@ use krilla::paint::{Fill, FillRule};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use underwood::{
     Affine, Brush, DocumentSnapshot, FontData, PaintSlot, Point, Rect, SceneFragmentId,
-    SceneFragmentView, SceneGlyphInstanceId, SceneGlyphView, SceneSourceAccess, SnapshotTextRange,
-    TextScene, Vec2,
+    SceneFragmentView, SceneGlyphInstanceId, SceneGlyphView, SnapshotTextRange, TextScene, Vec2,
 };
 
 /// Dimensions and scene origin for one exported PDF page.
@@ -176,10 +175,7 @@ pub fn to_pdf(
     page: PdfPage,
 ) -> Result<Vec<u8>, PdfError> {
     validate_snapshot(scene, snapshot)?;
-    let sources = scene
-        .sources()
-        .map_err(|_| PdfError::new(PdfErrorKind::MissingSourceCapability, None))?;
-    let (lines, mut fonts) = prepare_scene(scene, sources, snapshot)?;
+    let (lines, mut fonts) = prepare_scene(scene, snapshot)?;
 
     let mut document = Document::new();
     let settings = PageSettings::from_wh(page.width, page.height)
@@ -275,19 +271,18 @@ type FontCache = Vec<(FontData, Font)>;
 
 fn prepare_scene(
     scene: &TextScene,
-    sources: SceneSourceAccess<'_>,
     snapshot: &DocumentSnapshot,
 ) -> Result<(Vec<PreparedLine>, FontCache), PdfError> {
     let mut fonts = Vec::new();
     for fragment in scene.fragments() {
-        validate_fragment(scene, sources, snapshot, fragment, &mut fonts)?;
+        validate_fragment(scene, snapshot, fragment, &mut fonts)?;
     }
 
     let mut lines = Vec::with_capacity(scene.lines().len());
     for line in scene.lines() {
-        let line_sources = sources
-            .for_line(line)
-            .map_err(|_| PdfError::new(PdfErrorKind::InvalidSource, None))?;
+        let line_sources = line
+            .sources()
+            .map_err(|_| PdfError::new(PdfErrorKind::MissingSourceCapability, None))?;
         let map = LineSourceMap::new(snapshot, line_sources)?;
         let mut groups: Vec<PreparedGroup> = Vec::new();
         let mut seen_instances: Vec<SceneGlyphInstanceId> = Vec::new();
@@ -305,7 +300,7 @@ fn prepare_scene(
                     id: glyph.id(),
                     position: glyph.position(),
                     advance: glyph.advance(),
-                    text_range: map.glyph_range(sources, glyph, fragment.id())?,
+                    text_range: map.glyph_range(glyph, fragment.id())?,
                     text_carrier,
                 });
             }
@@ -332,7 +327,6 @@ fn claim_text_carrier<Identity: Copy + Eq>(seen: &mut Vec<Identity>, identity: I
 
 fn validate_fragment(
     scene: &TextScene,
-    sources: SceneSourceAccess<'_>,
     snapshot: &DocumentSnapshot,
     fragment: SceneFragmentView<'_>,
     fonts: &mut FontCache,
@@ -365,7 +359,7 @@ fn validate_fragment(
         let _ = clip_path(clip, fragment.id())?;
     }
     for glyph in fragment.glyphs() {
-        let _ = glyph_text(sources, snapshot, glyph, fragment.id())?;
+        let _ = glyph_text(snapshot, glyph, fragment.id())?;
         let _ = finite_f32(glyph.position().x, Some(fragment.id()))?;
         let _ = finite_f32(glyph.position().y, Some(fragment.id()))?;
         let _ = finite_f32(glyph.advance().x, Some(fragment.id()))?;
@@ -443,13 +437,12 @@ impl LineSourceMap {
 
     fn glyph_range(
         &self,
-        sources: SceneSourceAccess<'_>,
         glyph: SceneGlyphView<'_>,
         fragment: SceneFragmentId,
     ) -> Result<Range<usize>, PdfError> {
-        let glyph_sources = sources
-            .for_glyph(glyph)
-            .map_err(|_| PdfError::new(PdfErrorKind::InvalidSource, Some(fragment)))?;
+        let glyph_sources = glyph
+            .sources()
+            .map_err(|_| PdfError::new(PdfErrorKind::MissingSourceCapability, Some(fragment)))?;
         let ranges: Vec<_> = glyph_sources
             .map(|source| self.map_source(&source))
             .collect::<Option<_>>()
@@ -587,15 +580,14 @@ fn cached_font(
 }
 
 fn glyph_text(
-    sources: SceneSourceAccess<'_>,
     snapshot: &DocumentSnapshot,
     glyph: SceneGlyphView<'_>,
     fragment: SceneFragmentId,
 ) -> Result<String, PdfError> {
     let mut text = String::new();
-    let glyph_sources = sources
-        .for_glyph(glyph)
-        .map_err(|_| PdfError::new(PdfErrorKind::InvalidSource, Some(fragment)))?;
+    let glyph_sources = glyph
+        .sources()
+        .map_err(|_| PdfError::new(PdfErrorKind::MissingSourceCapability, Some(fragment)))?;
     for source in glyph_sources {
         text.push_str(source_text(snapshot, &source, Some(fragment))?);
     }

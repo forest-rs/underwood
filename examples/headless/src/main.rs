@@ -134,10 +134,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let first_scene = layout.prepare(published.snapshot(), &request)?;
-    let sources = first_scene
-        .scene()
-        .sources()
-        .expect("full scene request includes sources");
     assert!(
         first_scene.scene().lines().len() >= 4,
         "four semantic paragraphs must produce at least four visual lines"
@@ -151,8 +147,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "the first real Parley fragment must contain shaped glyphs"
     );
     assert!(
-        sources
-            .first_for_fragment(fragment)
+        fragment
+            .source()
             .expect("fragment belongs to source scene")
             .is_some(),
         "authored glyph fragments must retain snapshot source"
@@ -187,8 +183,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == first_arabic)
         })
@@ -208,8 +204,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == first_arabic)
                 && fragment
@@ -228,9 +224,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter_map(|glyph| {
-            let source = sources
-                .first_for_glyph(glyph)
+            let source = glyph
+                .sources()
                 .expect("glyph belongs to source scene")
+                .next()
                 .expect("glyph source exists");
             (source.text() == first_arabic).then(|| source.bytes())
         })
@@ -255,8 +252,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == direct_arabic)
         })
@@ -270,7 +267,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .scene()
         .semantics()
         .expect("scene request includes semantics")
-        .iter()
         .find(|semantic| {
             semantic
                 .source()
@@ -305,7 +301,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .scene()
             .semantics()
             .expect("scene request includes semantics")
-            .iter()
             .any(|fragment| { fragment.inline_role() == Some(InlineRole::EMPHASIS) }),
         "inline emphasis must survive projection into scene semantics"
     );
@@ -322,9 +317,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(
         first_scene.scene().fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                let source = sources
-                    .first_for_glyph(glyph)
+                let source = glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
+                    .next()
                     .expect("glyph source exists");
                 source.text() == ligatures_on && source.bytes() == (1..4)
             })
@@ -425,10 +421,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &recolored,
     );
     let reassigned_scene = layout.prepare(changed.snapshot(), &reassigned_request)?;
-    let reassigned_sources = reassigned_scene
-        .scene()
-        .sources()
-        .expect("full scene request includes sources");
     assert_eq!(
         reassigned_scene.work().shape().paragraphs(),
         0,
@@ -445,8 +437,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .fragments()
             .iter()
             .filter(|fragment| {
-                reassigned_sources
-                    .for_fragment(*fragment)
+                fragment
+                    .sources()
                     .expect("fragment belongs to source scene")
                     .any(|source| source.text() == first_suffix)
             })
@@ -723,14 +715,13 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn glyph_count(scene: &TextScene, text: TextId) -> usize {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter(|glyph| {
-            sources
-                .for_glyph(*glyph)
+            glyph
+                .sources()
                 .expect("glyph belongs to source scene")
                 .any(|source| source.text() == text)
         })
@@ -738,13 +729,12 @@ fn glyph_count(scene: &TextScene, text: TextId) -> usize {
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })
@@ -753,13 +743,12 @@ fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
 }
 
 fn synthesis_variations(scene: &TextScene, text: TextId) -> Vec<FontVariation> {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })

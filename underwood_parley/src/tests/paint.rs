@@ -263,11 +263,13 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("bidi format controls must not become phantom glyphs or source gaps");
-    let sources = scene_sources(output.scene());
     assert_eq!(output.scene().lines().len(), 1);
     assert_eq!(
-        sources
-            .for_line(output.scene().line(0).expect("line exists"))
+        output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -281,9 +283,10 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
         .expect("fixture range fits");
     assert!(output.scene().fragments().iter().all(|fragment| {
         fragment.glyphs().iter().all(|glyph| {
-            let source = sources
-                .first_for_glyph(glyph)
+            let source = glyph
+                .sources()
                 .expect("glyph belongs to source scene")
+                .next()
                 .expect("source-aware glyph retains source")
                 .bytes();
             !((source.start <= isolate && source.end >= isolate + 3)

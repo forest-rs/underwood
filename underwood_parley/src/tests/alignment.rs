@@ -503,12 +503,10 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
     for (plain, shifted) in start_scene
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .zip(
             centered_scene
                 .semantics()
-                .expect("test scene requested semantics")
-                .iter(),
+                .expect("test scene requested semantics"),
         )
     {
         assert_eq!(shifted.bounds().x0 - plain.bounds().x0, delta);

@@ -509,13 +509,12 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     let transient = engine
         .prepare_composition(&snapshot, &request, &session)
         .expect("Arabic preedit must shape through Parley");
-    let projected_sources = projected_scene_sources(transient.scene());
     assert_eq!(transient.work().shape().paragraphs(), 1);
     assert_eq!(transient.work().reused_paragraphs(), 2);
     assert!(transient.scene().fragments().iter().any(|fragment| {
         fragment.script() == *b"Arab"
-            && projected_sources
-                .for_fragment(fragment)
+            && fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| {
                     matches!(source, ProjectedTextSource::Composition(range)
@@ -728,7 +727,6 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
     let transient = engine
         .prepare_composition(&snapshot, &request, &session)
         .expect("generated combining mark must shape through Parley");
-    let projected_sources = projected_scene_sources(transient.scene());
     let transient_editing = transient
         .scene()
         .editing()
@@ -761,8 +759,8 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
         "generated provenance must not split the shaping run or change glyph geometry"
     );
     assert!(transient.scene().fragments().iter().any(|fragment| {
-        projected_sources
-            .for_fragment(fragment)
+        fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .any(|source| matches!(source, ProjectedTextSource::Composition(_)))
     }));

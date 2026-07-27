@@ -1082,6 +1082,7 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
         .fragment(0)
         .expect("generated fragment exists")
         .sources()
+        .expect("editable projection retains source provenance")
         .collect();
     let [ProjectedTextSource::Composition(range)] = sources.as_slice() else {
         panic!("collapsed preedit must have one generated source range");
@@ -1211,8 +1212,22 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     );
     assert_eq!(first.paint(), PaintSlot::new(0));
     assert_eq!(second.paint(), PaintSlot::new(1));
-    assert_eq!(first.source().expect("first source").text(), first_text);
-    assert_eq!(second.source().expect("second source").text(), second_text);
+    assert_eq!(
+        first
+            .source()
+            .expect("fragment retains sources")
+            .expect("first source")
+            .text(),
+        first_text
+    );
+    assert_eq!(
+        second
+            .source()
+            .expect("fragment retains sources")
+            .expect("second source")
+            .text(),
+        second_text
+    );
     assert!(first.synthesis().skew_transform().is_some());
     let origin = first.glyphs().first().expect("first glyph").position();
     assert_eq!(first.paint_clip().expect("first clip").x0, origin.x);
@@ -1499,10 +1514,13 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
     assert_eq!(first.work().shape().paragraphs(), 1);
     assert_eq!(first.scene().epoch(), first_epoch);
     assert!(first.scene().fragments().iter().all(|fragment| {
-        fragment.sources().all(|source| {
-            matches!(source, ProjectedTextSource::Composition(range)
+        fragment
+            .sources()
+            .expect("editable projection retains source provenance")
+            .all(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
                         if range.id() == session.id() && range.epoch() == first_epoch)
-        })
+            })
     }));
     assert!(
         !first
@@ -1535,20 +1553,14 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         Arc::ptr_eq(&first.scene().core, &repeated.scene().core),
         "an exact composition epoch must return the published scene core"
     );
-    let first_sources = first
-        .scene()
-        .sources()
-        .expect("editable projection retains source provenance");
     assert!(
-        first_sources
-            .for_line(
-                repeated
-                    .scene()
-                    .line(0)
-                    .expect("the repeated projection has a line")
-            )
+        repeated
+            .scene()
+            .line(0)
+            .expect("the repeated projection has a line")
+            .sources()
             .is_ok(),
-        "views from the same persistent scene root must remain compatible"
+        "a rebound view must retain projected source access"
     );
 
     let selection_epoch = session
@@ -1564,10 +1576,13 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
     assert_eq!(selection_only.work().geometry().paragraphs(), 0);
     assert_eq!(selection_only.work().reused_paragraphs(), 1);
     assert!(selection_only.scene().fragments().iter().all(|fragment| {
-        fragment.sources().all(|source| {
-            matches!(source, ProjectedTextSource::Composition(range)
+        fragment
+            .sources()
+            .expect("editable projection retains source provenance")
+            .all(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
                         if range.epoch() == selection_epoch)
-        })
+            })
     }));
     assert!(
         selection_only
@@ -1577,15 +1592,13 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
             .is_empty()
     );
     assert!(
-        first_sources
-            .for_line(
-                selection_only
-                    .scene()
-                    .line(0)
-                    .expect("the rebound projection has a line")
-            )
-            .is_err(),
-        "a projected view from another prepared root must be rejected"
+        selection_only
+            .scene()
+            .line(0)
+            .expect("the rebound projection has a line")
+            .sources()
+            .is_ok(),
+        "a rebound view owns its source observation"
     );
 
     let second_epoch = session
@@ -1777,14 +1790,24 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
     let first_target_glyph = first
         .scene()
         .fragments()
-        .find(|fragment| fragment.sources().any(|source| source.text() == texts[1]))
+        .find(|fragment| {
+            fragment
+                .sources()
+                .expect("fixture retains source provenance")
+                .any(|source| source.text() == texts[1])
+        })
         .and_then(|fragment| fragment.glyphs().next())
         .expect("old target glyph exists")
         .instance_id();
     let first_after_glyph = first
         .scene()
         .fragments()
-        .find(|fragment| fragment.sources().any(|source| source.text() == texts[2]))
+        .find(|fragment| {
+            fragment
+                .sources()
+                .expect("fixture retains source provenance")
+                .any(|source| source.text() == texts[2])
+        })
         .and_then(|fragment| fragment.glyphs().next())
         .expect("old trailing glyph exists")
         .instance_id();
@@ -1858,14 +1881,24 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
     let second_target_glyph = second
         .scene()
         .fragments()
-        .find(|fragment| fragment.sources().any(|source| source.text() == texts[1]))
+        .find(|fragment| {
+            fragment
+                .sources()
+                .expect("fixture retains source provenance")
+                .any(|source| source.text() == texts[1])
+        })
         .and_then(|fragment| fragment.glyphs().next())
         .expect("new target glyph exists")
         .instance_id();
     let second_after_glyph = second
         .scene()
         .fragments()
-        .find(|fragment| fragment.sources().any(|source| source.text() == texts[2]))
+        .find(|fragment| {
+            fragment
+                .sources()
+                .expect("fixture retains source provenance")
+                .any(|source| source.text() == texts[2])
+        })
         .and_then(|fragment| fragment.glyphs().next())
         .expect("new trailing glyph exists")
         .instance_id();
@@ -1881,6 +1914,7 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
         first.scene().fragments().all(|fragment| {
             fragment
                 .sources()
+                .expect("fixture retains source provenance")
                 .all(|source| source.revision() == first_snapshot.revision())
         }),
         "caller-retained old geometry must mint only its original revision"
@@ -1889,6 +1923,7 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
         second.scene().fragments().all(|fragment| {
             fragment
                 .sources()
+                .expect("fixture retains source provenance")
                 .all(|source| source.revision() == second_publication.snapshot().revision())
         }),
         "new geometry must mint only the new revision"
@@ -2278,19 +2313,25 @@ fn composition_replaces_only_its_persistent_paragraph_path() {
     }
     assert!(
         first.scene().fragments().any(|fragment| {
-            fragment.sources().any(|source| {
-                matches!(source, ProjectedTextSource::Composition(range)
-                    if range.epoch() == first_epoch)
-            })
+            fragment
+                .sources()
+                .expect("projection retains source provenance")
+                .any(|source| {
+                    matches!(source, ProjectedTextSource::Composition(range)
+                        if range.epoch() == first_epoch)
+                })
         }),
         "the caller-retained old scene must keep its original generated epoch"
     );
     assert!(
         second.scene().fragments().any(|fragment| {
-            fragment.sources().any(|source| {
-                matches!(source, ProjectedTextSource::Composition(range)
-                    if range.epoch() == session.epoch())
-            })
+            fragment
+                .sources()
+                .expect("projection retains source provenance")
+                .any(|source| {
+                    matches!(source, ProjectedTextSource::Composition(range)
+                        if range.epoch() == session.epoch())
+                })
         }),
         "the new scene must bind generated provenance to the new epoch"
     );
@@ -2624,11 +2665,15 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
         )
         .expect("display-only scene must prepare");
     let scene = output.scene();
-    assert_eq!(scene.display().line_count(), 1);
-    assert_eq!(scene.display().fragment_count(), 1);
+    assert_eq!(scene.line_count(), 1);
+    assert_eq!(scene.fragment_count(), 1);
 
     for error in [
-        scene.sources().expect_err("display excludes sources"),
+        scene
+            .line(0)
+            .expect("display scene has a line")
+            .sources()
+            .expect_err("display excludes sources"),
         scene
             .interaction()
             .expect_err("display excludes hit testing"),
@@ -2685,7 +2730,7 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
 }
 
 #[test]
-fn source_facade_rejects_views_from_another_scene_without_panicking() {
+fn source_observation_is_bound_to_each_view() {
     let (first_document, first_styles, first_paint) =
         one_leaf_document(*b"source-facade-01", "first");
     let (second_document, second_styles, second_paint) =
@@ -2710,43 +2755,35 @@ fn source_facade_rejects_views_from_another_scene_without_panicking() {
     let second = layout
         .prepare(&second_document.snapshot(), &second_request)
         .expect("display-only scene must prepare");
-    let sources = first
-        .scene()
+    let first_line = first.scene().line(0).expect("the first scene has a line");
+    assert!(
+        first_line.sources().is_ok(),
+        "a source-capable view exposes its own provenance"
+    );
+    let second_line = second.scene().line(0).expect("the second scene has a line");
+    let error = second_line
         .sources()
-        .expect("the first scene retains complete sources");
-    let foreign = second.scene().line(0).expect("the second scene has a line");
-
-    let error = sources
-        .for_line(foreign)
-        .expect_err("a foreign public line view must be rejected");
+        .expect_err("a display-only view rejects source observation");
     assert_eq!(
         error.paragraph(),
-        second_document.snapshot().paragraphs()[0].id
+        Some(second_document.snapshot().paragraphs()[0].id)
     );
 
-    let foreign_fragment = second
+    let display_fragment = second
         .scene()
         .fragment(0)
         .expect("the second scene has a fragment");
     assert!(
-        sources.for_fragment(foreign_fragment).is_err(),
-        "a foreign fragment traversal must be rejected"
+        display_fragment.sources().is_err(),
+        "a display-only fragment rejects source observation"
     );
-    assert!(
-        sources.first_for_fragment(foreign_fragment).is_err(),
-        "a foreign fragment lookup must be rejected"
-    );
-    let foreign_glyph = foreign_fragment
+    let display_glyph = display_fragment
         .glyphs()
         .next()
         .expect("the second scene has a glyph");
     assert!(
-        sources.for_glyph(foreign_glyph).is_err(),
-        "a foreign glyph traversal must be rejected"
-    );
-    assert!(
-        sources.first_for_glyph(foreign_glyph).is_err(),
-        "a foreign glyph lookup must be rejected"
+        display_glyph.sources().is_err(),
+        "a display-only glyph rejects source observation"
     );
 }
 
@@ -2814,8 +2851,12 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
         "point interaction must expose the sparse hit-testable paragraph"
     );
     assert!(
-        scene.sources().is_err(),
-        "whole-scene source traversal must reject the display sibling"
+        scene
+            .line(0)
+            .expect("display sibling has a line")
+            .sources()
+            .is_err(),
+        "the display sibling must reject source observation"
     );
     assert!(
         scene.semantics().is_err(),

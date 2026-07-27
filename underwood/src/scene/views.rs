@@ -5,21 +5,49 @@
 
 use super::*;
 
+fn source_map<'a>(
+    requested: &SceneFeaturePolicy,
+    positioned: PositionedSegment<'a>,
+) -> Result<&'a ParagraphSourceMap, MissingSceneCapability> {
+    let paragraph = positioned.segment.paragraph;
+    let resident = positioned.segment.geometry.features;
+    positioned
+        .segment
+        .geometry
+        .source_map
+        .as_ref()
+        .filter(|_| resident.has_sources())
+        .ok_or_else(|| {
+            MissingSceneCapability::new(
+                Some(paragraph),
+                SceneFeatures::DISPLAY.with_sources(),
+                requested.features_for(paragraph),
+                resident,
+            )
+        })
+}
+
 /// Allocation-free view of visual lines in one committed scene.
 #[derive(Clone, Debug)]
 pub struct SceneLines<'a> {
     revision: DocumentRevision,
     core: &'a SceneCore,
+    requested: &'a SceneFeaturePolicy,
     segments: SpineSegments<'a>,
     current: Option<(PositionedSegment<'a>, usize)>,
     remaining: usize,
 }
 
 impl<'a> SceneLines<'a> {
-    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
+    pub(super) fn new(
+        revision: DocumentRevision,
+        core: &'a SceneCore,
+        requested: &'a SceneFeaturePolicy,
+    ) -> Self {
         Self {
             revision,
             core,
+            requested,
             segments: core.spine.segments(),
             current: None,
             remaining: core.spine.summary().lines,
@@ -29,7 +57,7 @@ impl<'a> SceneLines<'a> {
     /// Returns a fresh iterator over every line.
     #[must_use]
     pub fn iter(&self) -> Self {
-        Self::new(self.revision, self.core)
+        Self::new(self.revision, self.core, self.requested)
     }
 
     /// Returns the number of visual lines.
@@ -50,7 +78,7 @@ impl<'a> SceneLines<'a> {
         self.core
             .spine
             .positioned_line(index)
-            .map(|line| SceneLineView::new(self.revision, self.core, line))
+            .map(|line| SceneLineView::new(self.revision, self.requested, line))
     }
 
     /// Returns the first visual line.
@@ -82,7 +110,7 @@ impl<'a> Iterator for SceneLines<'a> {
                 };
                 *local += 1;
                 self.remaining -= 1;
-                return Some(SceneLineView::new(self.revision, self.core, line));
+                return Some(SceneLineView::new(self.revision, self.requested, line));
             }
             self.current = self.segments.next().map(|positioned| (positioned, 0));
             self.current?;
@@ -112,9 +140,13 @@ pub struct ProjectedSceneLines<'a> {
 }
 
 impl<'a> ProjectedSceneLines<'a> {
-    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
+    pub(super) fn new(
+        revision: DocumentRevision,
+        core: &'a SceneCore,
+        requested: &'a SceneFeaturePolicy,
+    ) -> Self {
         Self {
-            inner: SceneLines::new(revision, core),
+            inner: SceneLines::new(revision, core, requested),
         }
     }
 
@@ -182,10 +214,6 @@ impl<'a> ProjectedSceneLineView<'a> {
         Self { inner }
     }
 
-    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
-        self.inner.source_identity()
-    }
-
     /// Returns scene-space line bounds.
     #[must_use]
     pub fn bounds(self) -> Rect {
@@ -199,7 +227,12 @@ impl<'a> ProjectedSceneLineView<'a> {
     }
 
     /// Iterates authored and generated source slices represented by the line.
-    pub(crate) fn sources(self) -> ProjectedSources<'a> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
         self.inner.projected_sources()
     }
 
@@ -244,29 +277,21 @@ impl<'a> ProjectedSceneLineView<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct SceneLineView<'a> {
     revision: DocumentRevision,
-    core: &'a SceneCore,
+    requested: &'a SceneFeaturePolicy,
     positioned: PositionedLine<'a>,
 }
 
 impl<'a> SceneLineView<'a> {
     fn new(
         revision: DocumentRevision,
-        core: &'a SceneCore,
+        requested: &'a SceneFeaturePolicy,
         positioned: PositionedLine<'a>,
     ) -> Self {
         Self {
             revision,
-            core,
+            requested,
             positioned,
         }
-    }
-
-    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
-        (
-            self.revision,
-            self.core,
-            self.positioned.position.segment.paragraph,
-        )
     }
 
     fn local(self) -> &'a CachedLine {
@@ -302,16 +327,17 @@ impl<'a> SceneLineView<'a> {
     }
 
     /// Iterates source-complete snapshot slices represented by the line.
-    pub(crate) fn sources(self) -> SnapshotSources<'a> {
-        let geometry = &self.positioned.position.segment.geometry;
-        SnapshotSources::new(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
+        Ok(SnapshotSources::new(
             self.revision,
-            geometry
-                .source_map
-                .as_ref()
-                .expect("source-capable lines retain a paragraph source map"),
+            source_map(self.requested, self.positioned.position)?,
             SourceReference::Projected(self.prepared().source().into()),
-        )
+        ))
     }
 
     /// Returns the global scene-fragment range painted by this line.
@@ -362,16 +388,12 @@ impl<'a> SceneLineView<'a> {
         Vec2::new(0.0, self.positioned.position.position.block_origin)
     }
 
-    fn projected_sources(self) -> ProjectedSources<'a> {
-        let geometry = &self.positioned.position.segment.geometry;
-        ProjectedSources::new(
+    fn projected_sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
+        Ok(ProjectedSources::new(
             self.revision,
-            geometry
-                .source_map
-                .as_ref()
-                .expect("source-capable lines retain a paragraph source map"),
+            source_map(self.requested, self.positioned.position)?,
             SourceReference::Projected(self.prepared().source().into()),
-        )
+        ))
     }
 }
 
@@ -380,16 +402,22 @@ impl<'a> SceneLineView<'a> {
 pub struct SceneFragments<'a> {
     revision: DocumentRevision,
     core: &'a SceneCore,
+    requested: &'a SceneFeaturePolicy,
     segments: SpineSegments<'a>,
     current: Option<(PositionedSegment<'a>, usize)>,
     remaining: usize,
 }
 
 impl<'a> SceneFragments<'a> {
-    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
+    pub(super) fn new(
+        revision: DocumentRevision,
+        core: &'a SceneCore,
+        requested: &'a SceneFeaturePolicy,
+    ) -> Self {
         Self {
             revision,
             core,
+            requested,
             segments: core.spine.segments(),
             current: None,
             remaining: core.spine.summary().fragments,
@@ -399,7 +427,7 @@ impl<'a> SceneFragments<'a> {
     /// Returns a fresh iterator over every fragment.
     #[must_use]
     pub fn iter(&self) -> Self {
-        Self::new(self.revision, self.core)
+        Self::new(self.revision, self.core, self.requested)
     }
 
     /// Returns the number of fragments.
@@ -420,7 +448,7 @@ impl<'a> SceneFragments<'a> {
         self.core
             .spine
             .positioned_fragment(index)
-            .map(|fragment| SceneFragmentView::new(self.revision, self.core, fragment))
+            .map(|fragment| SceneFragmentView::new(self.revision, self.requested, fragment))
     }
 
     /// Returns the first fragment.
@@ -452,7 +480,11 @@ impl<'a> Iterator for SceneFragments<'a> {
                 };
                 *local += 1;
                 self.remaining -= 1;
-                return Some(SceneFragmentView::new(self.revision, self.core, fragment));
+                return Some(SceneFragmentView::new(
+                    self.revision,
+                    self.requested,
+                    fragment,
+                ));
             }
             self.current = self.segments.next().map(|positioned| (positioned, 0));
             self.current?;
@@ -482,9 +514,13 @@ pub struct ProjectedSceneFragments<'a> {
 }
 
 impl<'a> ProjectedSceneFragments<'a> {
-    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
+    pub(super) fn new(
+        revision: DocumentRevision,
+        core: &'a SceneCore,
+        requested: &'a SceneFeaturePolicy,
+    ) -> Self {
         Self {
-            inner: SceneFragments::new(revision, core),
+            inner: SceneFragments::new(revision, core, requested),
         }
     }
 
@@ -552,10 +588,6 @@ impl<'a> ProjectedSceneFragmentView<'a> {
         Self { inner }
     }
 
-    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
-        self.inner.source_identity()
-    }
-
     /// Returns the retained fragment identity.
     #[must_use]
     pub fn id(self) -> SceneFragmentId {
@@ -583,22 +615,27 @@ impl<'a> ProjectedSceneFragmentView<'a> {
     }
 
     /// Returns the first authored or generated source slice.
-    #[must_use]
-    pub(crate) fn source(self) -> Option<ProjectedTextSource> {
-        self.sources().next()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn source(self) -> Result<Option<ProjectedTextSource>, MissingSceneCapability> {
+        Ok(self.sources()?.next())
     }
 
     /// Iterates every authored and generated source slice.
-    pub(crate) fn sources(self) -> ProjectedSources<'a> {
-        let geometry = &self.inner.positioned.position.segment.geometry;
-        ProjectedSources::from_fragment(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
+        Ok(ProjectedSources::from_fragment(
             self.inner.revision,
-            geometry
-                .source_map
-                .as_ref()
-                .expect("source-capable fragments retain a paragraph source map"),
+            source_map(self.inner.requested, self.inner.positioned.position)?,
             self.inner,
-        )
+        ))
     }
 
     /// Returns an explicit scene-space partial-paint clip.
@@ -648,29 +685,21 @@ impl<'a> ProjectedSceneFragmentView<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct SceneFragmentView<'a> {
     revision: DocumentRevision,
-    core: &'a SceneCore,
+    requested: &'a SceneFeaturePolicy,
     positioned: PositionedFragment<'a>,
 }
 
 impl<'a> SceneFragmentView<'a> {
     fn new(
         revision: DocumentRevision,
-        core: &'a SceneCore,
+        requested: &'a SceneFeaturePolicy,
         positioned: PositionedFragment<'a>,
     ) -> Self {
         Self {
             revision,
-            core,
+            requested,
             positioned,
         }
-    }
-
-    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
-        (
-            self.revision,
-            self.core,
-            self.positioned.position.segment.paragraph,
-        )
     }
 
     fn local(self) -> &'a CachedFragment {
@@ -805,22 +834,27 @@ impl<'a> SceneFragmentView<'a> {
     }
 
     /// Returns the first source slice covered by this fragment.
-    #[must_use]
-    pub(crate) fn source(self) -> Option<SnapshotTextRange> {
-        self.sources().next()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn source(self) -> Result<Option<SnapshotTextRange>, MissingSceneCapability> {
+        Ok(self.sources()?.next())
     }
 
     /// Iterates every source slice covered by this fragment.
-    pub(crate) fn sources(self) -> SnapshotSources<'a> {
-        let geometry = &self.positioned.position.segment.geometry;
-        SnapshotSources::from_fragment(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
+        Ok(SnapshotSources::from_fragment(
             self.revision,
-            geometry
-                .source_map
-                .as_ref()
-                .expect("source-capable fragments retain a paragraph source map"),
+            source_map(self.requested, self.positioned.position)?,
             self,
-        )
+        ))
     }
 
     /// Returns an explicit scene-space partial-paint clip.
@@ -1036,10 +1070,6 @@ impl<'a> ProjectedSceneGlyphView<'a> {
         Self { inner }
     }
 
-    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
-        self.inner.source_identity()
-    }
-
     /// Returns the identity shared by split-paint observations.
     #[must_use]
     pub fn instance_id(self) -> SceneGlyphInstanceId {
@@ -1065,16 +1095,20 @@ impl<'a> ProjectedSceneGlyphView<'a> {
     }
 
     /// Iterates source-complete authored and generated provenance.
-    pub(crate) fn sources(self) -> ProjectedSources<'a> {
-        let geometry = &self.inner.fragment.positioned.position.segment.geometry;
-        ProjectedSources::new(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
+        Ok(ProjectedSources::new(
             self.inner.revision,
-            geometry
-                .source_map
-                .as_ref()
-                .expect("source-capable glyphs retain a paragraph source map"),
+            source_map(
+                self.inner.fragment.requested,
+                self.inner.fragment.positioned.position,
+            )?,
             self.inner.fragment.source_reference(self.inner.local),
-        )
+        ))
     }
 }
 
@@ -1091,10 +1125,6 @@ pub struct SceneGlyphView<'a> {
 impl<'a> SceneGlyphView<'a> {
     fn prepared(self) -> PreparedGlyphView<'a> {
         self.fragment.prepared_glyph(self.local)
-    }
-
-    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
-        self.fragment.source_identity()
     }
 
     /// Returns the identity shared by split-paint observations.
@@ -1131,16 +1161,17 @@ impl<'a> SceneGlyphView<'a> {
     }
 
     /// Iterates source-complete glyph provenance.
-    pub(crate) fn sources(self) -> SnapshotSources<'a> {
-        let geometry = &self.fragment.positioned.position.segment.geometry;
-        SnapshotSources::new(
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
+        Ok(SnapshotSources::new(
             self.revision,
-            geometry
-                .source_map
-                .as_ref()
-                .expect("source-capable glyphs retain a paragraph source map"),
+            source_map(self.fragment.requested, self.fragment.positioned.position)?,
             self.fragment.source_reference(self.local),
-        )
+        ))
     }
 }
 

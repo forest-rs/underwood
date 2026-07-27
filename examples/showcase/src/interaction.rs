@@ -86,7 +86,6 @@ impl ActionRegistry {
             let semantic = scene
                 .semantics()
                 .expect("scene request includes semantics")
-                .iter()
                 .find(|semantic| {
                     semantic
                         .source()
@@ -1604,14 +1603,10 @@ mod tests {
         let prepared = content
             .prepare(760.0, 0.5)
             .expect("committed Han text must resolve through the bundled font catalog");
-        let sources = prepared
-            .scene
-            .sources()
-            .expect("the showcase requests source provenance");
         assert_ne!(prepared.scene.revision(), revision);
         assert!(prepared.scene.fragments().iter().any(|fragment| {
-            sources
-                .for_fragment(fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == content.editable_text())
                 && fragment.script() == *b"Hani"
@@ -1773,7 +1768,6 @@ mod tests {
         let semantic = scene
             .semantics()
             .expect("scene request includes semantics")
-            .iter()
             .find(|semantic| {
                 semantic
                     .source()
