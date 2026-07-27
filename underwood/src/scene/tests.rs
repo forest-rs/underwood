@@ -590,7 +590,11 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
             .scene_cache_accounted_bytes()
             > 0
     );
-    assert!(cold_trace.memory().scene_output_capacity_bytes() > 0);
+    assert_eq!(
+        cold_trace.memory().scene_output_capacity_bytes(),
+        0,
+        "one paragraph uses the direct spine form rather than allocating a tree node"
+    );
     assert_eq!(cold_trace.memory().scratch_growth_bytes(), 0);
 
     let retained = layout

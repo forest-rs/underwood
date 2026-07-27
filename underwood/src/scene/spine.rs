@@ -257,14 +257,21 @@ impl SceneNode {
 
 #[derive(Clone, Debug)]
 pub(super) struct SceneSpine {
-    root: Option<Arc<SceneNode>>,
+    root: SceneSpineRoot,
     normal_flow: bool,
+}
+
+#[derive(Clone, Debug)]
+enum SceneSpineRoot {
+    Empty,
+    Single(Arc<ParagraphSceneSegment>),
+    Tree(Arc<SceneNode>),
 }
 
 impl SceneSpine {
     pub(super) fn empty(normal_flow: bool) -> Self {
         Self {
-            root: None,
+            root: SceneSpineRoot::Empty,
             normal_flow,
         }
     }
@@ -273,17 +280,23 @@ impl SceneSpine {
         segments: &[Arc<ParagraphSceneSegment>],
         normal_flow: bool,
     ) -> Self {
-        Self {
-            root: build_balanced(segments, normal_flow),
-            normal_flow,
-        }
+        let root = match segments {
+            [] => SceneSpineRoot::Empty,
+            [segment] => SceneSpineRoot::Single(Arc::clone(segment)),
+            _ => SceneSpineRoot::Tree(
+                build_balanced(segments, normal_flow)
+                    .expect("a nonempty segment slice builds a scene tree"),
+            ),
+        };
+        Self { root, normal_flow }
     }
 
     pub(super) fn summary(&self) -> SceneSummary {
-        self.root
-            .as_deref()
-            .map(SceneNode::summary)
-            .unwrap_or_default()
+        match &self.root {
+            SceneSpineRoot::Empty => SceneSummary::default(),
+            SceneSpineRoot::Single(segment) => SceneSummary::from_segment(segment),
+            SceneSpineRoot::Tree(root) => root.summary(),
+        }
     }
 
     pub(super) const fn is_normal_flow(&self) -> bool {
@@ -291,7 +304,11 @@ impl SceneSpine {
     }
 
     pub(super) fn segment(&self, index: usize) -> Option<&Arc<ParagraphSceneSegment>> {
-        let mut node = self.root.as_deref()?;
+        let mut node = match &self.root {
+            SceneSpineRoot::Empty => return None,
+            SceneSpineRoot::Single(segment) => return (index == 0).then_some(segment),
+            SceneSpineRoot::Tree(root) => root.as_ref(),
+        };
         let mut index = index;
         loop {
             match node {
@@ -318,34 +335,17 @@ impl SceneSpine {
         if !self.normal_flow {
             return None;
         }
-        let root = self.root.as_deref()?;
-        let block = if block.is_nan() {
-            return None;
-        } else {
-            block.clamp(0.0, root.summary().block_extent)
-        };
-        let mut node = root;
-        let mut local_block = block;
-        let mut position = SegmentPosition::default();
-        loop {
-            match node {
-                SceneNode::Leaf { segment, .. } => {
-                    return Some(PositionedSegment { segment, position });
-                }
-                SceneNode::Branch { left, right, .. } => {
-                    let left_summary = left.summary();
-                    if local_block < left_summary.block_extent
-                        || right.summary().block_extent == 0.0
-                    {
-                        node = left;
-                    } else {
-                        local_block -= left_summary.block_extent;
-                        position.advance(left_summary, true);
-                        node = right;
-                    }
-                }
+        let root = match &self.root {
+            SceneSpineRoot::Empty => return None,
+            SceneSpineRoot::Single(segment) => (!block.is_nan()).then_some(PositionedSegment {
+                segment,
+                position: SegmentPosition::default(),
+            })?,
+            SceneSpineRoot::Tree(root) => {
+                return positioned_tree_segment_at_block(root, block);
             }
-        }
+        };
+        Some(root)
     }
 
     pub(super) fn replace(
@@ -353,13 +353,15 @@ impl SceneSpine {
         index: usize,
         segment: Arc<ParagraphSceneSegment>,
     ) -> Option<Self> {
+        let root = match &self.root {
+            SceneSpineRoot::Empty => return None,
+            SceneSpineRoot::Single(_) => (index == 0).then_some(SceneSpineRoot::Single(segment))?,
+            SceneSpineRoot::Tree(root) => {
+                SceneSpineRoot::Tree(replace_node(root, index, segment, self.normal_flow)?)
+            }
+        };
         Some(Self {
-            root: Some(replace_node(
-                self.root.as_ref()?,
-                index,
-                segment,
-                self.normal_flow,
-            )?),
+            root,
             normal_flow: self.normal_flow,
         })
     }
@@ -374,33 +376,40 @@ impl SceneSpine {
         }
         let end = start.checked_add(segments.len())?;
         (end <= self.summary().paragraphs).then_some(())?;
+        let root = match &self.root {
+            SceneSpineRoot::Empty => return None,
+            SceneSpineRoot::Single(_) => (start == 0 && segments.len() == 1)
+                .then(|| SceneSpineRoot::Single(Arc::clone(&segments[0])))?,
+            SceneSpineRoot::Tree(root) => {
+                SceneSpineRoot::Tree(replace_node_range(root, start, segments, self.normal_flow)?)
+            }
+        };
         Some(Self {
-            root: Some(replace_node_range(
-                self.root.as_ref()?,
-                start,
-                segments,
-                self.normal_flow,
-            )?),
+            root,
             normal_flow: self.normal_flow,
         })
     }
 
     pub(super) fn append(&self, segment: Arc<ParagraphSceneSegment>) -> Self {
-        let leaf = Arc::new(SceneNode::Leaf {
-            summary: SceneSummary::from_segment(&segment),
-            segment,
-        });
+        let root = match &self.root {
+            SceneSpineRoot::Empty => SceneSpineRoot::Single(segment),
+            SceneSpineRoot::Single(existing) => {
+                let left = leaf(Arc::clone(existing));
+                let right = leaf(segment);
+                SceneSpineRoot::Tree(Arc::new(SceneNode::branch(left, right, self.normal_flow)))
+            }
+            SceneSpineRoot::Tree(root) => {
+                SceneSpineRoot::Tree(append_node(root, leaf(segment), self.normal_flow))
+            }
+        };
         Self {
-            root: Some(match &self.root {
-                Some(root) => append_node(root, leaf, self.normal_flow),
-                None => leaf,
-            }),
+            root,
             normal_flow: self.normal_flow,
         }
     }
 
     pub(super) fn segments(&self) -> SpineSegments<'_> {
-        SpineSegments::new(self.root.as_deref(), self.normal_flow)
+        SpineSegments::new(&self.root, self.normal_flow)
     }
 
     pub(super) fn region_attempts(&self) -> SpineRegionAttempts<'_> {
@@ -408,21 +417,24 @@ impl SceneSpine {
     }
 
     pub(super) fn accounted_node_bytes(&self) -> usize {
-        accounted_node_bytes(self.summary().paragraphs)
+        match &self.root {
+            SceneSpineRoot::Empty | SceneSpineRoot::Single(_) => 0,
+            SceneSpineRoot::Tree(root) => accounted_node_bytes(root.summary().paragraphs),
+        }
     }
 
     pub(super) fn unshared_node_bytes_from(&self, previous: Option<&Self>) -> usize {
-        let Some(current) = &self.root else {
-            return 0;
-        };
         let Some(previous) = previous.filter(|previous| previous.normal_flow == self.normal_flow)
         else {
             return self.accounted_node_bytes();
         };
-        let Some(previous) = &previous.root else {
-            return self.accounted_node_bytes();
-        };
-        unshared_node_count(current, previous).saturating_mul(size_of::<SceneNode>())
+        match (&self.root, &previous.root) {
+            (SceneSpineRoot::Tree(current), SceneSpineRoot::Tree(previous)) => {
+                unshared_node_count(current, previous).saturating_mul(size_of::<SceneNode>())
+            }
+            (SceneSpineRoot::Tree(_), _) => self.accounted_node_bytes(),
+            (SceneSpineRoot::Empty | SceneSpineRoot::Single(_), _) => 0,
+        }
     }
 
     pub(super) fn positioned_line(&self, index: usize) -> Option<PositionedLine<'_>> {
@@ -453,7 +465,20 @@ impl SceneSpine {
         index: usize,
         count: impl Fn(SceneSummary) -> usize,
     ) -> Option<(PositionedSegment<'_>, usize)> {
-        let mut node = self.root.as_deref()?;
+        let mut node = match &self.root {
+            SceneSpineRoot::Empty => return None,
+            SceneSpineRoot::Single(segment) => {
+                let summary = SceneSummary::from_segment(segment);
+                return (index < count(summary)).then_some((
+                    PositionedSegment {
+                        segment,
+                        position: SegmentPosition::default(),
+                    },
+                    index,
+                ));
+            }
+            SceneSpineRoot::Tree(root) => root.as_ref(),
+        };
         let mut index = index;
         let mut position = SegmentPosition::default();
         loop {
@@ -472,6 +497,34 @@ impl SceneSpine {
                         position.advance(left_summary, self.normal_flow);
                         node = right;
                     }
+                }
+            }
+        }
+    }
+}
+
+fn positioned_tree_segment_at_block(root: &SceneNode, block: f64) -> Option<PositionedSegment<'_>> {
+    let block = if block.is_nan() {
+        return None;
+    } else {
+        block.clamp(0.0, root.summary().block_extent)
+    };
+    let mut node = root;
+    let mut local_block = block;
+    let mut position = SegmentPosition::default();
+    loop {
+        match node {
+            SceneNode::Leaf { segment, .. } => {
+                return Some(PositionedSegment { segment, position });
+            }
+            SceneNode::Branch { left, right, .. } => {
+                let left_summary = left.summary();
+                if local_block < left_summary.block_extent || right.summary().block_extent == 0.0 {
+                    node = left;
+                } else {
+                    local_block -= left_summary.block_extent;
+                    position.advance(left_summary, true);
+                    node = right;
                 }
             }
         }
@@ -511,6 +564,13 @@ fn unshared_node_count(current: &Arc<SceneNode>, previous: &Arc<SceneNode>) -> u
             .saturating_mul(2)
             .saturating_sub(1),
     }
+}
+
+fn leaf(segment: Arc<ParagraphSceneSegment>) -> Arc<SceneNode> {
+    Arc::new(SceneNode::Leaf {
+        summary: SceneSummary::from_segment(&segment),
+        segment,
+    })
 }
 
 fn build_balanced(
@@ -716,6 +776,7 @@ pub(super) struct PositionedText<'a> {
 
 #[derive(Clone, Debug)]
 pub(super) struct SpineSegments<'a> {
+    single: Option<&'a ParagraphSceneSegment>,
     stack: [Option<&'a SceneNode>; MAX_SPINE_DEPTH],
     len: usize,
     position: SegmentPosition,
@@ -723,15 +784,18 @@ pub(super) struct SpineSegments<'a> {
 }
 
 impl<'a> SpineSegments<'a> {
-    fn new(root: Option<&'a SceneNode>, normal_flow: bool) -> Self {
+    fn new(root: &'a SceneSpineRoot, normal_flow: bool) -> Self {
         let mut traversal = Self {
+            single: None,
             stack: [None; MAX_SPINE_DEPTH],
             len: 0,
             position: SegmentPosition::default(),
             normal_flow,
         };
-        if let Some(root) = root {
-            traversal.push(root);
+        match root {
+            SceneSpineRoot::Empty => {}
+            SceneSpineRoot::Single(segment) => traversal.single = Some(segment),
+            SceneSpineRoot::Tree(root) => traversal.push(root),
         }
         traversal
     }
@@ -755,6 +819,15 @@ impl<'a> Iterator for SpineSegments<'a> {
     type Item = PositionedSegment<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(segment) = self.single.take() {
+            let positioned = PositionedSegment {
+                segment,
+                position: self.position,
+            };
+            self.position
+                .advance(SceneSummary::from_segment(segment), self.normal_flow);
+            return Some(positioned);
+        }
         while let Some(node) = self.pop() {
             match node {
                 SceneNode::Leaf { summary, segment } => {
@@ -775,11 +848,13 @@ impl<'a> Iterator for SpineSegments<'a> {
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.stack[..self.len]
-            .iter()
-            .flatten()
-            .map(|node| node.summary().paragraphs)
-            .sum();
+        let remaining = usize::from(self.single.is_some()).saturating_add(
+            self.stack[..self.len]
+                .iter()
+                .flatten()
+                .map(|node| node.summary().paragraphs)
+                .sum(),
+        );
         (remaining, Some(remaining))
     }
 }
@@ -906,6 +981,20 @@ mod tests {
     }
 
     #[test]
+    fn single_paragraph_spine_needs_no_persistent_tree_node() {
+        let segment = segment(0, 10.0);
+        let spine = SceneSpine::from_segments(core::slice::from_ref(&segment), true);
+
+        assert_eq!(spine.accounted_node_bytes(), 0);
+        assert!(Arc::ptr_eq(
+            spine.segment(0).expect("single segment exists"),
+            &segment
+        ));
+        assert_eq!(spine.summary().block_extent, 10.0);
+        assert_eq!(spine.segments().len(), 1);
+    }
+
+    #[test]
     fn range_replacement_copies_each_covered_path_once() {
         let segments: Vec<_> = (0..64).map(|paragraph| segment(paragraph, 10.0)).collect();
         let spine = SceneSpine::from_segments(&segments, false);
@@ -957,8 +1046,11 @@ mod tests {
         ));
         assert_eq!(changed.summary().paragraphs, 1_025);
         assert_eq!(changed.summary().block_extent, 10_260.0);
+        let SceneSpineRoot::Tree(root) = &changed.root else {
+            panic!("an appended multi-paragraph spine has a tree root");
+        };
         assert!(
-            changed.root.as_deref().expect("root exists").height() <= 12,
+            root.height() <= 12,
             "sequential append must preserve logarithmic depth"
         );
     }

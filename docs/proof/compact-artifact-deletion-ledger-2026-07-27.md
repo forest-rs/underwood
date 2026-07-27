@@ -519,3 +519,24 @@ samples measured exact hits at 81–87 ns and closest hits at 122–126 ns.
 Matched Parley samples measured 156–163 ns and 198–205 ns respectively. The
 smaller 64-unit case still has a higher Underwood constant factor and remains
 an optimization target.
+
+## Direct single-paragraph scene spine
+
+A one-paragraph `TextBlock` no longer allocates a 240-byte persistent-tree
+leaf merely to point at its one paragraph segment. `SceneSpine` carries that
+segment directly and creates the balanced persistent tree only when a second
+paragraph arrives. Multi-paragraph replacement, range replacement, append
+balancing, prefix sharing, and positioned traversal keep the existing tree
+path.
+
+At 1,000 labels this removes 1,000 cold allocations and 248,000 net allocator
+bytes. Caller-held scene structure accounting falls from 240,000 to zero and
+total caller-held scene accounting falls to 2,169,944 bytes. Stable repeat and
+repaint remain allocation-free. Edited preparation falls from 97 to 96
+allocation calls and retains 872 bytes.
+
+Recomputing the small one-paragraph aggregate did not introduce a timing
+regression in the matched tunnel. Three-sample medians were 143 ns per stable
+label at scale 64 and 190 ns at scale 1,000; localized edit was 9.7 µs and
+10.0 µs respectively. The multi-paragraph tree continues to retain its
+aggregate summaries.
