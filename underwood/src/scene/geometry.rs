@@ -449,9 +449,11 @@ impl CachedGeometry {
     }
 
     pub(super) fn residency_bytes(&self) -> SceneResidencyBytes {
-        let layout =
-            vec_bytes::<CachedLine>(self.lines.capacity())
-                .saturating_add(vec_bytes::<CachedGlyph>(self.glyphs.capacity()));
+        let layout = self
+            .artifact
+            .estimated_owned_bytes()
+            .saturating_add(vec_bytes::<CachedLine>(self.lines.capacity()))
+            .saturating_add(vec_bytes::<CachedGlyph>(self.glyphs.capacity()));
         let sources = self
             .source_map
             .as_ref()

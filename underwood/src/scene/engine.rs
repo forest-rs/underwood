@@ -323,10 +323,12 @@ struct PublishedComposition {
 }
 
 #[derive(Clone, Debug)]
-struct BlockStyles {
-    inline: ComputedInlineStyle,
-    paragraph: ParagraphStyle,
-    map: StyleMap,
+struct PublishedBlock {
+    snapshot: TextBlockSnapshot,
+    last_used: u64,
+    core: Arc<SceneCore>,
+    region_attempts: usize,
+    region_height_rejections: usize,
 }
 
 /// Mutable owner of one paragraph adapter and its retained stage caches.
@@ -344,7 +346,7 @@ pub struct LayoutEngine {
     scratch: PrepareScratch,
     published: BTreeMap<crate::DocumentId, PublishedScene>,
     published_compositions: BTreeMap<crate::DocumentId, PublishedComposition>,
-    block_styles: BTreeMap<crate::DocumentId, BlockStyles>,
+    published_blocks: BTreeMap<crate::DocumentId, PublishedBlock>,
 }
 
 impl core::fmt::Debug for LayoutEngine {
@@ -384,7 +386,7 @@ impl LayoutEngine {
             scratch: PrepareScratch::default(),
             published: BTreeMap::new(),
             published_compositions: BTreeMap::new(),
-            block_styles: BTreeMap::new(),
+            published_blocks: BTreeMap::new(),
         }
     }
 
@@ -573,27 +575,11 @@ impl LayoutEngine {
         snapshot: &TextBlockSnapshot,
         request: &BlockRequest<'_>,
     ) -> Result<SceneOutput, SceneError> {
-        let document = snapshot.document().id();
-        let styles = self
-            .block_styles
-            .get(&document)
-            .filter(|styles| {
-                styles.inline == *request.style && styles.paragraph == request.paragraph_style
-            })
-            .map(|styles| styles.map.clone())
-            .unwrap_or_else(|| {
-                let styles = StyleMap::new(request.style.clone())
-                    .with_default_paragraph_style(request.paragraph_style);
-                self.block_styles.insert(
-                    document,
-                    BlockStyles {
-                        inline: request.style.clone(),
-                        paragraph: request.paragraph_style,
-                        map: styles.clone(),
-                    },
-                );
-                styles
-            });
+        if let Some(output) = self.reuse_published_block(snapshot, request) {
+            return Ok(output);
+        }
+        let styles = StyleMap::new(request.style.clone())
+            .with_default_paragraph_style(request.paragraph_style);
         let scene_request = match request.region_flow {
             Some(flow) => {
                 SceneRequest::new(request.constraint, &styles, request.paint).with_region_flow(flow)
@@ -606,7 +592,23 @@ impl LayoutEngine {
         } else {
             scene_request
         };
-        self.prepare(snapshot.document(), &scene_request)
+        let document = snapshot.materialize_document();
+        let output = self.prepare(&document.snapshot(), &scene_request)?;
+        if let Some(published) = self.published.remove(&snapshot.id()) {
+            self.published_blocks.insert(
+                snapshot.id(),
+                PublishedBlock {
+                    snapshot: snapshot.clone(),
+                    last_used: published.last_used,
+                    core: Arc::clone(&published.core),
+                    region_attempts: published.region_attempts,
+                    region_height_rejections: published.region_height_rejections,
+                },
+            );
+        } else {
+            self.published_blocks.remove(&snapshot.id());
+        }
+        Ok(output)
     }
 
     /// Prepares a transient generated-text scene without evicting committed work.
@@ -861,7 +863,7 @@ impl LayoutEngine {
     pub fn release_document(&mut self, document: crate::DocumentId) {
         self.published.remove(&document);
         self.published_compositions.remove(&document);
-        self.block_styles.remove(&document);
+        self.published_blocks.remove(&document);
         let Some(entries) = self.documents.remove(&document) else {
             return;
         };
@@ -904,7 +906,7 @@ impl LayoutEngine {
         self.documents.clear();
         self.published.clear();
         self.published_compositions.clear();
-        self.block_styles.clear();
+        self.published_blocks.clear();
         self.shared_preparation.clear();
         self.paragraphs.clear();
         self.cache_work.scene_cache_accounted_bytes = 0;
@@ -1031,6 +1033,78 @@ impl LayoutEngine {
                 revision: snapshot.revision(),
                 paint: request.paint.clone(),
                 requested: request.features.clone(),
+                core: Arc::clone(&published.core),
+            },
+            work,
+            trace,
+        })
+    }
+
+    fn reuse_published_block(
+        &mut self,
+        snapshot: &TextBlockSnapshot,
+        request: &BlockRequest<'_>,
+    ) -> Option<SceneOutput> {
+        let paragraph = snapshot.paragraph_id();
+        let published = self.published_blocks.get(&snapshot.id())?;
+        let cache = self.cache.get(&paragraph)?;
+        let preflight = &cache.preflight_key;
+        let region_cursor = request.region_flow.map(RegionFlow::cursor);
+        if !published.snapshot.shares_state_with(snapshot)
+            || published.core.paragraph_count != 1
+            || !cache.segment.geometry.features.contains(request.features)
+            || preflight.version != snapshot.revision().0
+            || preflight.default_style != *request.style
+            || preflight.source_styles.as_slice() != core::slice::from_ref(request.style)
+            || preflight.paragraph_style != request.paragraph_style
+            || preflight.constraint != ConstraintKey::from(request.constraint)
+            || preflight.region_cursor != region_cursor
+            || !region_provenance_matches(preflight.region_flow.as_ref(), request.region_flow)
+            || request.paint.brush(request.style.paint()).is_none()
+        {
+            return None;
+        }
+
+        self.clock = self.clock.saturating_add(1);
+        self.published_blocks
+            .get_mut(&snapshot.id())
+            .expect("the validated block root remains present")
+            .last_used = self.clock;
+        let published = self
+            .published_blocks
+            .get(&snapshot.id())
+            .expect("the refreshed block root remains present");
+        let work = WorkReport {
+            reused_paragraphs: 1,
+            ..WorkReport::default()
+        };
+        let trace = request.trace.then(|| {
+            let diagnostics = self.cache_diagnostics();
+            PreparationTrace {
+                work: work.clone(),
+                reuse: PreparationReuse {
+                    paragraphs: 1,
+                    preflight_reuses: 1,
+                    exact_geometry_reuses: 1,
+                    ..PreparationReuse::default()
+                },
+                memory: PreparationMemory {
+                    cache_before: diagnostics,
+                    cache_after: diagnostics,
+                    scene_output_capacity_bytes: 0,
+                    scratch_capacity_before: self.scratch.accounted_capacity_bytes(),
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts: published.region_attempts,
+                region_height_rejections: published.region_height_rejections,
+            }
+        });
+        Some(SceneOutput {
+            scene: TextScene {
+                document: snapshot.id(),
+                revision: snapshot.revision(),
+                paint: request.paint.clone(),
+                requested: SceneFeaturePolicy::uniform(request.features),
                 core: Arc::clone(&published.core),
             },
             work,
@@ -1826,6 +1900,7 @@ impl LayoutEngine {
             match kind {
                 CacheKind::Committed => {
                     self.published.remove(&paragraph.document);
+                    self.published_blocks.remove(&paragraph.document);
                     if self
                         .published_compositions
                         .get(&paragraph.document)
@@ -1853,7 +1928,6 @@ impl LayoutEngine {
                 entries.remove(&(kind, paragraph));
                 if entries.is_empty() {
                     self.documents.remove(&paragraph.document);
-                    self.block_styles.remove(&paragraph.document);
                 }
             }
             self.cache_work.evictions += 1;
@@ -1865,6 +1939,10 @@ impl LayoutEngine {
             .published
             .get(&paragraph.document)
             .map_or(0, |published| published.last_used);
+        let committed = self
+            .published_blocks
+            .get(&paragraph.document)
+            .map_or(committed, |published| committed.max(published.last_used));
         let composition = self.published_compositions.get(&paragraph.document);
         match kind {
             CacheKind::Committed => composition

@@ -154,7 +154,7 @@ same internal paragraph-source view used by document paragraphs.
 | ordinary per-glyph paint coverage | present | deleted | complete |
 | clone-based repaint | present | deleted | complete |
 | nested-to-flat final lowering | present | deleted | complete |
-| plain-block document tree | present | — | pending |
+| plain-block document tree | present | deleted | complete |
 | one canonical paragraph artifact | absent | present | complete |
 | borrowed indexed capability views | partial | present | complete |
 
@@ -286,3 +286,27 @@ The matched 1,000-label editable live heap measured 12,991,104 bytes raw.
 After subtracting the unchanged 1,820,512-byte Underwood font baseline, the
 retained delta is 11,170,592 bytes: another 439,680-byte reduction, and 3.31×
 the matched 3,378,240-byte Parley delta.
+
+## Compact text-block checkpoint
+
+`TextBlock` no longer retains a `DocumentState`, persistent
+`ParagraphSequence`, paragraph allocation, leaf vector, and publication state
+for a one-leaf label. Its immutable state is exactly a document-compatible
+identity, revision, and shared string. A cache miss temporarily materializes
+the ordinary paragraph contract, then drops it after the same adapter and
+scene pipeline has consumed it.
+
+Stable block repeats use a compact published root over the existing paragraph
+cache. The layout engine no longer retains a per-block `StyleMap` or a general
+published `DocumentSnapshot`; paint-only repeats still rebind paint values
+without preparation.
+
+The matched 1,000-label editable live heap measured 12,200,320 bytes raw, or
+10,379,808 bytes after the same font baseline. This removes another 790,784
+bytes and 4,162 live allocations from the preceding checkpoint. The retained
+delta is now 3.07× Parley, which still fails the 2× gate and therefore does not
+end the deletion campaign.
+
+Canonical prepared-artifact bytes are now charged to scene layout residency.
+The earlier diagnostics counted placement arrays while omitting the artifact
+they index; category accounting must expose, not hide, the remaining owner.

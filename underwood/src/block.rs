@@ -1,68 +1,88 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Retained single-paragraph text over the document and scene foundation.
+//! Compact retained single-paragraph text over the shared scene foundation.
 
 use crate::{
-    ComputedInlineStyle, Document, DocumentId, DocumentSnapshot, EditError, InlineRole, PaintTable,
-    ParagraphRole, ParagraphStyle, SnapshotTextSelectionSet, TextConstraint, TextId,
+    ComputedInlineStyle, Document, DocumentId, DocumentRevision, EditError, EditErrorKind,
+    PaintTable, ParagraphId, ParagraphStyle, SnapshotTextSelectionSet, TextConstraint, TextId,
 };
+use alloc::sync::Arc;
+
+#[derive(Debug)]
+struct BlockState {
+    id: DocumentId,
+    revision: DocumentRevision,
+    text: Arc<str>,
+}
 
 /// Mutable retained single-paragraph text content.
 ///
-/// A block is one ordinary paragraph and one plain semantic text leaf in the
-/// existing document model. It exists to hide construction and publication
-/// ceremony, not to create a separate source or shaping representation.
+/// A block has document-compatible identities but retains only one immutable
+/// text allocation and one compact revision record. Preparation lowers it
+/// through the same paragraph, cache, and scene machinery as a document.
 #[derive(Debug)]
 pub struct TextBlock {
-    document: Document,
-    text: TextId,
+    state: Arc<BlockState>,
 }
 
 impl TextBlock {
     /// Creates one retained plain-text block and publishes its initial revision.
     pub fn plain(id: DocumentId, text: &str) -> Result<Self, EditError> {
-        let mut document = Document::new(id);
-        let mut edit = document.edit();
-        let paragraph = edit.append_paragraph(ParagraphRole::BODY)?;
-        let text = edit.append_text(paragraph, InlineRole::TEXT, text)?;
-        edit.commit()?;
-        Ok(Self { document, text })
+        u32::try_from(text.len())
+            .map_err(|_| EditError::for_document(EditErrorKind::OversizedText, id))?;
+        Ok(Self {
+            state: Arc::new(BlockState {
+                id,
+                revision: DocumentRevision(1),
+                text: Arc::from(text),
+            }),
+        })
     }
 
     /// Returns the stable identity shared with prepared document scenes.
     #[must_use]
     pub fn id(&self) -> DocumentId {
-        self.document.snapshot().id()
+        self.state.id
     }
 
     /// Returns a cheap immutable view of the current exact revision.
     #[must_use]
     pub fn snapshot(&self) -> TextBlockSnapshot {
         TextBlockSnapshot {
-            document: self.document.snapshot(),
-            text: self.text,
+            state: Arc::clone(&self.state),
         }
     }
 
     /// Returns the complete current plain text.
     #[must_use]
     pub fn text(&self) -> &str {
-        self.document
-            .text(self.text)
-            .expect("TextBlock retains its single text leaf")
+        &self.state.text
     }
 
     /// Replaces the complete plain text and atomically publishes one revision.
     ///
     /// Setting the current value again performs no publication.
     pub fn set_text(&mut self, text: &str) -> Result<(), EditError> {
-        if self.document.snapshot().text(self.text) == Some(text) {
+        if self.state.text.as_ref() == text {
             return Ok(());
         }
-        let mut edit = self.document.edit();
-        edit.replace_text(self.text, text)?;
-        edit.commit()?;
+        u32::try_from(text.len())
+            .map_err(|_| EditError::for_document(EditErrorKind::OversizedText, self.state.id))?;
+        let revision = self
+            .state
+            .revision
+            .0
+            .checked_add(1)
+            .map(DocumentRevision)
+            .ok_or_else(|| {
+                EditError::for_document(EditErrorKind::RevisionConflict, self.state.id)
+            })?;
+        self.state = Arc::new(BlockState {
+            id: self.state.id,
+            revision,
+            text: Arc::from(text),
+        });
         Ok(())
     }
 
@@ -77,41 +97,83 @@ impl TextBlock {
         selections: &SnapshotTextSelectionSet,
         replacement: &str,
     ) -> Result<SnapshotTextSelectionSet, EditError> {
-        let replacement = self.document.replace_selections(selections, replacement)?;
-        Ok(replacement.into_parts().1)
+        let mut document = self.snapshot().materialize_document();
+        let replacement = document.replace_selections(selections, replacement)?;
+        let selections = replacement.into_parts().1;
+        let text = Arc::from(
+            document
+                .text(self.text_id())
+                .expect("a materialized block retains its plain text leaf"),
+        );
+        self.state = Arc::new(BlockState {
+            id: self.state.id,
+            revision: selections.revision(),
+            text,
+        });
+        Ok(selections)
+    }
+
+    fn text_id(&self) -> TextId {
+        text_id(self.state.id)
     }
 }
 
 /// Immutable, cheaply cloneable view of one exact text-block revision.
 #[derive(Clone, Debug)]
 pub struct TextBlockSnapshot {
-    document: DocumentSnapshot,
-    text: TextId,
+    state: Arc<BlockState>,
 }
 
 impl TextBlockSnapshot {
     /// Returns the block's stable identity.
     #[must_use]
     pub fn id(&self) -> DocumentId {
-        self.document.id()
+        self.state.id
+    }
+
+    /// Returns this snapshot's exact monotonic revision.
+    #[must_use]
+    pub fn revision(&self) -> DocumentRevision {
+        self.state.revision
     }
 
     /// Returns the complete plain text at this revision.
     #[must_use]
     pub fn text(&self) -> &str {
-        self.document
-            .text(self.text)
-            .expect("TextBlock snapshots retain their single text leaf")
+        &self.state.text
     }
 
     /// Returns the stable text-leaf identity represented by this block.
     #[must_use]
-    pub const fn text_id(&self) -> TextId {
-        self.text
+    pub fn text_id(&self) -> TextId {
+        text_id(self.state.id)
     }
 
-    pub(crate) const fn document(&self) -> &DocumentSnapshot {
-        &self.document
+    pub(crate) fn paragraph_id(&self) -> ParagraphId {
+        ParagraphId {
+            document: self.state.id,
+            index: 0,
+        }
+    }
+
+    pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    pub(crate) fn materialize_document(&self) -> Document {
+        Document::from_plain_block(
+            self.state.id,
+            self.state.revision,
+            Arc::clone(&self.state.text),
+        )
+    }
+}
+
+const fn text_id(document: DocumentId) -> TextId {
+    TextId {
+        document,
+        paragraph: 0,
+        index: 0,
     }
 }
 
@@ -209,7 +271,7 @@ mod tests {
         let before = block.snapshot();
         block.set_text("Save").expect("same text must be accepted");
         let after = block.snapshot();
-        assert_eq!(before.document.revision(), after.document.revision());
+        assert_eq!(before.revision(), after.revision());
         assert_eq!(after.text(), "Save");
     }
 }

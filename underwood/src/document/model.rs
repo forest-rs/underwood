@@ -138,6 +138,40 @@ impl Document {
         }
     }
 
+    pub(crate) fn from_plain_block(
+        id: DocumentId,
+        revision: DocumentRevision,
+        text: Arc<str>,
+    ) -> Self {
+        let paragraph_id = ParagraphId {
+            document: id,
+            index: 0,
+        };
+        let text_id = TextId {
+            document: id,
+            paragraph: 0,
+            index: 0,
+        };
+        let mut paragraphs = ParagraphSequence::default();
+        paragraphs.push(Paragraph {
+            id: paragraph_id,
+            role: ParagraphRole::BODY,
+            version: revision.0,
+            leaves: alloc::vec![TextLeaf {
+                id: text_id,
+                role: InlineRole::TEXT,
+                text: StagedText::Shared(text),
+            }],
+        });
+        Self {
+            state: Arc::new(DocumentState {
+                id,
+                revision,
+                paragraphs,
+            }),
+        }
+    }
+
     pub(crate) fn text(&self, id: TextId) -> Option<&str> {
         if id.document != self.state.id {
             return None;
