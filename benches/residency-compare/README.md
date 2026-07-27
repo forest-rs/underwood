@@ -52,6 +52,23 @@ Record allocation histories separately:
 benches/residency-compare/profile-allocations.sh
 ```
 
+Build the wind tunnel with its optional global counting allocator to partition
+Underwood's label path by lifecycle phase:
+
+```sh
+cargo run --release -p underwood_residency_compare \
+  --features allocation-counting -- underwood-allocation-phases 1000
+```
+
+Append `-warm` to the scenario name to retain adapter formation facts. The
+unadorned scenario uses the normal zero adapter-fact budget so scene residency
+and optional re-formation residency remain distinct.
+
+The phase report distinguishes total allocation churn, peak live growth, and
+net retained bytes for block creation, font and engine setup, cold preparation,
+stable reuse, edit publication, edited preparation, paint-only preparation,
+and teardown. The allocator is confined to this workspace-only benchmark.
+
 The Rust output labels Underwood's deterministic capacity charges as
 `scene_*_bytes` and `adapter_*_bytes`. They exclude allocator metadata, shared
 font blobs, and process runtime state. Parley's equivalent private vector

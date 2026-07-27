@@ -97,6 +97,8 @@ fn main() -> Result<(), Error> {
         "parley-hit-setup" => profile_parley_hit(scale, rounds, Query::Setup),
         "underwood-churn" => profile_underwood_churn(scale),
         "parley-churn" => profile_parley_churn(scale),
+        "underwood-allocation-phases" => profile_underwood_allocation_phases(scale, false),
+        "underwood-allocation-phases-warm" => profile_underwood_allocation_phases(scale, true),
         _ => Err(format!("unknown comparison scenario: {scenario}").into()),
     }
 }
@@ -115,7 +117,9 @@ fn print_usage() {
          underwood-edit | underwood-edit-warm | parley-edit\n\
          underwood-hit-exact | underwood-hit-closest | underwood-position\n\
          parley-hit-exact | parley-hit-closest | parley-position\n\
-         underwood-churn | parley-churn"
+         underwood-churn | parley-churn\n\
+         underwood-allocation-phases | underwood-allocation-phases-warm\n\
+         (allocation phase scenarios require allocation-counting)"
     );
 }
 
@@ -793,6 +797,117 @@ fn profile_parley_churn(count: usize) -> Result<(), Error> {
     );
     black_box((&fonts, &scratch));
     hold_for_profiler(&retained)
+}
+
+#[cfg(feature = "allocation-counting")]
+fn profile_underwood_allocation_phases(count: usize, retain_adapter: bool) -> Result<(), Error> {
+    let mut blocks = count_allocations("block-build", || {
+        (0..count)
+            .map(|index| TextBlock::plain(identity(5, index), corpus_text(index)))
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+    let (style, paint) = count_allocations("style-and-paint", || {
+        Ok::<_, Error>((underwood_style()?, paint()))
+    })?;
+    let fonts = count_allocations("font-catalog", underwood_fonts)?;
+    let mut layout = count_allocations("layout-engine", || {
+        let budget = if retain_adapter {
+            CacheBudget::new(count).with_adapter_facts_bytes(ADAPTER_FACTS_BYTES)
+        } else {
+            CacheBudget::new(count)
+        };
+        LayoutEngine::new(ParleyParagraphEngine::new(fonts), budget)
+    });
+    let constraint = TextConstraint::Wrap(underwood::FiniteWidth::new(f64::from(WIDTH))?);
+    let mut outputs = count_allocations("cold-prepare", || {
+        blocks
+            .iter()
+            .map(|block| {
+                layout.prepare_block(
+                    &block.snapshot(),
+                    &BlockRequest::new(constraint, &style, &paint)
+                        .with_features(SceneFeatures::EDITABLE),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+    })?;
+
+    count_allocations("stable-repeat", || {
+        for (block, output) in blocks.iter().zip(&mut outputs) {
+            *output = layout.prepare_block(
+                &block.snapshot(),
+                &BlockRequest::new(constraint, &style, &paint)
+                    .with_features(SceneFeatures::EDITABLE),
+            )?;
+        }
+        Ok::<_, underwood::SceneError>(())
+    })?;
+
+    let middle = count / 2;
+    count_allocations("edit-publication", || {
+        blocks[middle].set_text("Save the retained change now")
+    })?;
+    count_allocations("edited-prepare", || {
+        outputs[middle] = layout.prepare_block(
+            &blocks[middle].snapshot(),
+            &BlockRequest::new(constraint, &style, &paint).with_features(SceneFeatures::EDITABLE),
+        )?;
+        Ok::<_, underwood::SceneError>(())
+    })?;
+
+    let repainted = count_allocations("paint-table-copy", || {
+        paint.with_brush(
+            PaintSlot::new(0),
+            Brush::Solid(Color::from_rgb8(0x40, 0x58, 0x78)),
+        )
+    })?;
+    count_allocations("paint-only-prepare", || {
+        outputs[middle] = layout.prepare_block(
+            &blocks[middle].snapshot(),
+            &BlockRequest::new(constraint, &style, &repainted)
+                .with_features(SceneFeatures::EDITABLE),
+        )?;
+        Ok::<_, underwood::SceneError>(())
+    })?;
+
+    let state = UnderwoodLabels {
+        blocks,
+        outputs,
+        layout,
+        style,
+        paint: repainted,
+        features: SceneFeatures::EDITABLE,
+    };
+    state.report(if retain_adapter {
+        "allocation-phases-warm"
+    } else {
+        "allocation-phases"
+    });
+    count_allocations("teardown", || drop(state));
+    Ok(())
+}
+
+#[cfg(not(feature = "allocation-counting"))]
+fn profile_underwood_allocation_phases(_count: usize, _retain_adapter: bool) -> Result<(), Error> {
+    Err("underwood-allocation-phases requires --features allocation-counting".into())
+}
+
+#[cfg(feature = "allocation-counting")]
+fn count_allocations<T>(phase: &str, operation: impl FnOnce() -> T) -> T {
+    let mut result = None;
+    let allocations = allocation_counter::measure(|| {
+        result = Some(operation());
+    });
+    println!(
+        "allocations\tphase={phase}\tcalls={}\ttotal_bytes={}\tpeak_calls={}\tpeak_bytes={}\tnet_calls={}\tnet_bytes={}",
+        allocations.count_total,
+        allocations.bytes_total,
+        allocations.count_max,
+        allocations.bytes_max,
+        allocations.count_current,
+        allocations.bytes_current,
+    );
+    result.expect("the measured operation always stores its result")
 }
 
 fn build_parley_layout(

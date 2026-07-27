@@ -310,3 +310,28 @@ end the deletion campaign.
 Canonical prepared-artifact bytes are now charged to scene layout residency.
 The earlier diagnostics counted placement arrays while omitting the artifact
 they index; category accounting must expose, not hide, the remaining owner.
+
+## Global-allocation audit
+
+The workspace-only retained comparison now has an optional global counting
+allocator with phase-scoped measurements. On the 1,000-label editable fixture
+with the normal zero adapter-fact budget:
+
+| Phase | Allocation calls | Allocated bytes | Net bytes |
+|---|---:|---:|---:|
+| compact block build | 2,009 | 118,352 | 110,192 |
+| cold preparation | 97,153 | 24,652,853 | 9,653,136 |
+| exact stable repeat | 0 | 0 | 0 |
+| edit publication | 2 | 104 | 104 |
+| edited-paragraph preparation | 99 | 23,346 | 2,976 |
+| paint-only preparation | 0 | 0 | 0 |
+
+The optional warm run separately charges retained adapter facts instead of
+mixing them into the ordinary scene figure. At 64 labels those facts retain
+408,380 bytes.
+
+`malloc_history -allByCount` then identified the two largest live call-site
+classes as `PreparedParagraphFacts::flatten`: 1,456,000 and 1,302,000 bytes
+across 1,000 allocations each. The next structural checkpoint therefore
+compacts final glyph and interaction records rather than tuning already
+allocation-free repeat or repaint paths.

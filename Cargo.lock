@@ -2109,6 +2109,7 @@ version = "0.0.1"
 name = "underwood_residency_compare"
 version = "0.0.1"
 dependencies = [
+ "allocation-counter",
  "fontique",
  "parley",
  "underwood",
