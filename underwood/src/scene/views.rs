@@ -254,6 +254,10 @@ impl<'a> SceneLineView<'a> {
         &self.positioned.position.segment.geometry.lines[self.positioned.local]
     }
 
+    fn prepared(self) -> &'a PreparedLine {
+        &self.positioned.position.segment.geometry.artifact.lines()[self.positioned.local]
+    }
+
     /// Returns scene-space line bounds.
     #[must_use]
     pub fn bounds(self) -> Rect {
@@ -263,7 +267,12 @@ impl<'a> SceneLineView<'a> {
     /// Returns the actual inline advance, including trailing whitespace.
     #[must_use]
     pub fn advance(self) -> f64 {
-        self.local().advance
+        self.prepared().advance()
+            + self.local().adjustment.opportunity_expansion()
+                * f64::from(
+                    u32::try_from(self.local().adjustment.expanded_opportunities())
+                        .expect("validated line adjustment opportunity count fits u32"),
+                )
     }
 
     /// Iterates source-complete snapshot slices represented by the line.
@@ -275,7 +284,7 @@ impl<'a> SceneLineView<'a> {
                 .source_map
                 .as_deref()
                 .expect("source-capable lines retain a paragraph source map"),
-            SourceReference::Projected(geometry.line_sources[self.positioned.local]),
+            SourceReference::Projected(self.prepared().source().into()),
         )
     }
 
@@ -283,33 +292,38 @@ impl<'a> SceneLineView<'a> {
     #[must_use]
     pub fn fragment_range(self) -> Range<usize> {
         let base = self.positioned.position.position.fragment_base;
-        let local =
-            &self.positioned.position.segment.geometry.line_fragments[self.positioned.local];
-        base + local.start..base + local.end
+        let fragments = &self.positioned.position.segment.geometry.fragments;
+        let line = u32::try_from(self.positioned.local)
+            .expect("validated scene line index fits the retained fragment index");
+        let start = fragments.partition_point(|fragment| fragment.line < line);
+        let end = fragments.partition_point(|fragment| fragment.line <= line);
+        base + start..base + end
     }
 
     /// Returns why this line ended.
     #[must_use]
     pub fn break_reason(self) -> LineBreakReason {
-        self.local().break_reason
+        self.prepared().break_reason()
     }
 
     /// Returns the scene-space baseline.
     #[must_use]
     pub fn baseline(self) -> f64 {
-        self.local().baseline + self.positioned.position.position.block_origin
+        self.local().bounds.y0
+            + self.prepared().baseline()
+            + self.positioned.position.position.block_origin
     }
 
     /// Returns the maximum font ascent contributing to this line.
     #[must_use]
     pub fn content_ascent(self) -> f64 {
-        self.local().content_ascent
+        self.prepared().content_ascent()
     }
 
     /// Returns the maximum font descent contributing to this line.
     #[must_use]
     pub fn content_descent(self) -> f64 {
-        self.local().content_descent
+        self.prepared().content_descent()
     }
 
     /// Returns immutable post-formation placement and expansion evidence.
@@ -330,7 +344,7 @@ impl<'a> SceneLineView<'a> {
                 .source_map
                 .as_deref()
                 .expect("source-capable lines retain a paragraph source map"),
-            SourceReference::Projected(geometry.line_sources[self.positioned.local]),
+            SourceReference::Projected(self.prepared().source().into()),
         )
     }
 }
@@ -546,13 +560,13 @@ impl<'a> ProjectedSceneFragmentView<'a> {
     /// Iterates every authored and generated source slice.
     pub(crate) fn sources(self) -> ProjectedSources<'a> {
         let geometry = &self.inner.positioned.position.segment.geometry;
-        ProjectedSources::from_spans(
+        ProjectedSources::from_fragment(
             self.inner.revision,
             geometry
                 .source_map
                 .as_deref()
                 .expect("source-capable fragments retain a paragraph source map"),
-            &geometry.paint_sources[self.inner.local().glyphs.clone()],
+            self.inner,
         )
     }
 
@@ -618,10 +632,35 @@ impl<'a> SceneFragmentView<'a> {
         &self.positioned.position.segment.geometry.fragments[self.positioned.local]
     }
 
+    fn prepared_run(self) -> &'a PreparedRun {
+        let geometry = &self.positioned.position.segment.geometry;
+        &geometry.artifact.lines()[self.local().line as usize].runs()[self.local().run as usize]
+    }
+
+    fn prepared_glyph(self, glyph: usize) -> &'a PreparedGlyph {
+        &self.prepared_run().glyphs()[glyph]
+    }
+
+    fn source_reference(self, glyph: usize) -> SourceReference {
+        let source = if self.local().segment == WHOLE_GLYPH_PAINT {
+            self.prepared_glyph(glyph).source()
+        } else {
+            self.prepared_glyph(glyph).paint().segments()[self.local().segment as usize].source()
+        };
+        SourceReference::Projected(source.into())
+    }
+
+    fn instance(self, glyph: usize) -> usize {
+        self.local().instance_start + glyph - self.local().glyphs.start as usize
+    }
+
     /// Returns the retained fragment identity.
     #[must_use]
     pub fn id(self) -> SceneFragmentId {
-        self.local().id
+        SceneFragmentId(fragment_identity(
+            self.positioned.position.segment.paragraph,
+            self.positioned.local,
+        ))
     }
 
     /// Returns positioned shaped glyph observations.
@@ -631,8 +670,8 @@ impl<'a> SceneFragmentView<'a> {
         SceneGlyphs {
             revision: self.revision,
             fragment: self,
-            front: glyphs.start,
-            back: glyphs.end,
+            front: glyphs.start as usize,
+            back: glyphs.end as usize,
         }
     }
 
@@ -645,7 +684,7 @@ impl<'a> SceneFragmentView<'a> {
     /// Returns the fragment transform.
     #[must_use]
     pub fn transform(self) -> Affine {
-        self.local().transform
+        Affine::IDENTITY
     }
 
     /// Returns the first source slice covered by this fragment.
@@ -657,13 +696,13 @@ impl<'a> SceneFragmentView<'a> {
     /// Iterates every source slice covered by this fragment.
     pub(crate) fn sources(self) -> SnapshotSources<'a> {
         let geometry = &self.positioned.position.segment.geometry;
-        SnapshotSources::from_spans(
+        SnapshotSources::from_fragment(
             self.revision,
             geometry
                 .source_map
                 .as_deref()
                 .expect("source-capable fragments retain a paragraph source map"),
-            &geometry.paint_sources[self.local().glyphs.clone()],
+            self,
         )
     }
 
@@ -676,37 +715,37 @@ impl<'a> SceneFragmentView<'a> {
     /// Returns exact font bytes and face index.
     #[must_use]
     pub fn font(self) -> &'a FontData {
-        &self.local().font
+        self.prepared_run().font()
     }
 
     /// Returns the scene-unit font size.
     #[must_use]
     pub fn font_size(self) -> f32 {
-        self.local().font_size
+        self.prepared_run().font_size()
     }
 
     /// Returns synthesis suggestions.
     #[must_use]
     pub fn synthesis(self) -> &'a FontSynthesis {
-        &self.local().synthesis
+        self.prepared_run().synthesis()
     }
 
     /// Returns normalized variation coordinates.
     #[must_use]
     pub fn normalized_coords(self) -> &'a [i16] {
-        &self.local().normalized_coords
+        self.prepared_run().normalized_coords()
     }
 
     /// Returns the resolved Unicode bidi level.
     #[must_use]
     pub fn bidi_level(self) -> u8 {
-        self.local().bidi_level
+        self.prepared_run().bidi_level()
     }
 
     /// Returns the resolved ISO 15924 script tag.
     #[must_use]
     pub fn script(self) -> [u8; 4] {
-        self.local().script
+        self.prepared_run().script()
     }
 
     fn translate(self) -> Vec2 {
@@ -731,8 +770,8 @@ impl<'a> SceneGlyphs<'a> {
         Self {
             revision: self.revision,
             fragment: self.fragment,
-            front: glyphs.start,
-            back: glyphs.end,
+            front: glyphs.start as usize,
+            back: glyphs.end as usize,
         }
     }
 
@@ -755,7 +794,7 @@ impl<'a> SceneGlyphs<'a> {
         (index < glyphs.len()).then_some(SceneGlyphView {
             revision: self.revision,
             fragment: self.fragment,
-            local: glyphs.start + index,
+            local: glyphs.start as usize + index,
         })
     }
 
@@ -908,7 +947,7 @@ impl<'a> ProjectedSceneGlyphView<'a> {
                 .source_map
                 .as_deref()
                 .expect("source-capable glyphs retain a paragraph source map"),
-            SourceReference::Projected(geometry.paint_sources[self.inner.local]),
+            self.inner.fragment.source_reference(self.inner.local),
         )
     }
 }
@@ -922,18 +961,13 @@ pub struct SceneGlyphView<'a> {
 }
 
 impl<'a> SceneGlyphView<'a> {
-    fn paint_glyph(self) -> &'a CachedPaintGlyph {
-        &self
-            .fragment
-            .positioned
-            .position
-            .segment
-            .geometry
-            .paint_glyphs[self.local]
+    fn prepared(self) -> &'a PreparedGlyph {
+        self.fragment.prepared_glyph(self.local)
     }
 
-    fn local(self) -> &'a CachedGlyph {
-        &self.fragment.positioned.position.segment.geometry.glyphs[self.paint_glyph().instance]
+    fn placement(self) -> &'a CachedGlyph {
+        &self.fragment.positioned.position.segment.geometry.glyphs
+            [self.fragment.instance(self.local)]
     }
 
     /// Returns the identity shared by split-paint observations.
@@ -941,26 +975,30 @@ impl<'a> SceneGlyphView<'a> {
     pub fn instance_id(self) -> SceneGlyphInstanceId {
         SceneGlyphInstanceId {
             geometry: Arc::as_ptr(&self.fragment.positioned.position.segment.geometry) as usize,
-            glyph: self.paint_glyph().instance,
+            glyph: self.fragment.instance(self.local),
         }
     }
 
     /// Returns the backend glyph identifier.
     #[must_use]
     pub fn id(self) -> u32 {
-        self.local().id
+        self.prepared().id()
     }
 
     /// Returns the scene-space glyph origin.
     #[must_use]
     pub fn position(self) -> Point {
-        self.local().position + self.fragment.translate()
+        self.placement().position + self.fragment.translate()
     }
 
     /// Returns the shaped advance.
     #[must_use]
     pub fn advance(self) -> Vec2 {
-        self.local().advance
+        let advance = self.prepared().advance();
+        Vec2::new(
+            advance.x + self.placement().inline_advance_adjustment,
+            advance.y,
+        )
     }
 
     /// Iterates source-complete glyph provenance.
@@ -972,7 +1010,7 @@ impl<'a> SceneGlyphView<'a> {
                 .source_map
                 .as_deref()
                 .expect("source-capable glyphs retain a paragraph source map"),
-            SourceReference::Projected(geometry.paint_sources[self.local]),
+            self.fragment.source_reference(self.local),
         )
     }
 }
@@ -996,14 +1034,23 @@ impl<'a> SnapshotSources<'a> {
         }
     }
 
-    fn from_spans(
+    fn from_fragment(
         revision: DocumentRevision,
         map: &'a ParagraphSourceMap,
-        spans: &'a [SourceSpan],
+        fragment: SceneFragmentView<'a>,
     ) -> Self {
+        let glyphs = fragment.local().glyphs.clone();
         Self {
             revision,
-            ranges: SourceRangeSequence::new(map, SourceReferences::Spans(spans)),
+            ranges: SourceRangeSequence::new(
+                map,
+                SourceReferences::Glyphs {
+                    glyphs: &fragment.prepared_run().glyphs()
+                        [glyphs.start as usize..glyphs.end as usize],
+                    segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
+                        .then_some(fragment.local().segment as usize),
+                },
+            ),
         }
     }
 
@@ -1072,14 +1119,23 @@ impl<'a> ProjectedSources<'a> {
         }
     }
 
-    fn from_spans(
+    fn from_fragment(
         revision: DocumentRevision,
         map: &'a ParagraphSourceMap,
-        spans: &'a [SourceSpan],
+        fragment: SceneFragmentView<'a>,
     ) -> Self {
+        let glyphs = fragment.local().glyphs.clone();
         Self {
             revision,
-            ranges: SourceRangeSequence::new(map, SourceReferences::Spans(spans)),
+            ranges: SourceRangeSequence::new(
+                map,
+                SourceReferences::Glyphs {
+                    glyphs: &fragment.prepared_run().glyphs()
+                        [glyphs.start as usize..glyphs.end as usize],
+                    segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
+                        .then_some(fragment.local().segment as usize),
+                },
+            ),
         }
     }
 
@@ -1212,21 +1268,31 @@ impl<'a> ProjectedTextUnitView<'a> {
 #[derive(Clone, Copy, Debug)]
 enum SourceReferences<'a> {
     One(SourceReference),
-    Spans(&'a [SourceSpan]),
+    Glyphs {
+        glyphs: &'a [PreparedGlyph],
+        segment: Option<usize>,
+    },
 }
 
 impl SourceReferences<'_> {
     fn len(self) -> usize {
         match self {
             Self::One(_) => 1,
-            Self::Spans(spans) => spans.len(),
+            Self::Glyphs { glyphs, .. } => glyphs.len(),
         }
     }
 
     fn get(self, index: usize) -> Option<SourceReference> {
         match self {
             Self::One(source) => (index == 0).then_some(source),
-            Self::Spans(spans) => spans.get(index).copied().map(SourceReference::Projected),
+            Self::Glyphs { glyphs, segment } => {
+                let glyph = glyphs.get(index)?;
+                let source = match segment {
+                    Some(segment) => glyph.paint().segments().get(segment)?.source(),
+                    None => glyph.source(),
+                };
+                Some(SourceReference::Projected(source.into()))
+            }
         }
     }
 }

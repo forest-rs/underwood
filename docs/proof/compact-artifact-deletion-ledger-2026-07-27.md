@@ -146,8 +146,8 @@ same internal paragraph-source view used by document paragraphs.
 | Obligation | Before | After | Status |
 |---|---|---|---|
 | affected production files | 30 | 31 | in progress; one focused cursor module added |
-| affected physical lines | 19,381 | 19,013 | in progress; −368 |
-| seven duplicate-owner files | 6,161 | 5,380 | in progress; −781 |
+| affected physical lines | 19,381 | 19,011 | in progress; −370 |
+| seven duplicate-owner files | 6,161 | 5,317 | in progress; −844 |
 | portable complete cursor graph | present | deleted | complete |
 | copied scene cursor graph | present | deleted | complete |
 | adapter final-output cache | present | — | pending |
@@ -202,3 +202,42 @@ On the 1,000-unit mixed LTR/RTL query fixture:
 An intermediate scan-based derivation measured 2,709 ns for byte lookup. It
 was rejected and replaced by the conditional 32-bit source-order permutation
 before this checkpoint was accepted.
+
+## Indexed scene-paint checkpoint
+
+The second deletion makes the prepared paragraph artifact authoritative for
+run and glyph identity. Scene records now retain only placement and paint
+binding that cannot be recovered from the artifact:
+
+- `CachedLine` retains bounds and post-formation adjustment, not copied
+  advance, break, baseline, ascent, or descent;
+- `CachedGlyph` retains its positioned origin and justification delta, not a
+  copied glyph ID or complete advance;
+- `CachedFragment` indexes one prepared line, run, and glyph range instead of
+  cloning font data, synthesis, variation coordinates, bidi level, script, and
+  transform;
+- ordinary same-paint glyphs coalesce into a run-local fragment;
+- split clipped glyphs retain a segment index and share one glyph instance;
+- `paint_glyphs`, `paint_sources`, `line_sources`, and `line_fragments` are
+  deleted; borrowed views derive source spans and line fragment ranges from
+  the authoritative tables.
+
+The scene no longer allocates and copies one variation-coordinate array per
+fragment. Public line, fragment, glyph, PDF, and projected-source traversal
+continues to borrow the same values and the complete workspace test suite
+passes unchanged.
+
+The matched 1,000-label macOS live heap, after subtracting the 1,820,512-byte
+Underwood font baseline, measured:
+
+| 1,000 labels | Before | After | Change |
+|---|---:|---:|---:|
+| display | 13,642,272 B | 12,278,272 B | −1,364,000 B |
+| editable/default | 14,618,272 B | 12,902,272 B | −1,716,000 B |
+| editable/warm | 24,317,152 B | 22,601,152 B | −1,716,000 B |
+
+Default editable residency is now 3.82× the matched 3,378,240-byte Parley
+layout delta, down from 5.25× before Design-0021 implementation began. This
+still fails the approved 2× gate; the remaining portable per-glyph paint
+coverage and parallel prepared/placement shapes remain active deletion
+targets.

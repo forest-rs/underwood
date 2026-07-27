@@ -119,9 +119,15 @@ impl SceneSummary {
         let mut max_x = 0.0_f64;
         let mut min_y = 0.0_f64;
         let mut max_y = geometry.height;
-        for line in geometry.lines.iter() {
+        for (line, prepared) in geometry.lines.iter().zip(geometry.artifact.lines()) {
             min_x = min_x.min(line.bounds.x0);
-            max_x = max_x.max(line.bounds.x0 + line.advance);
+            let advance = prepared.advance()
+                + line.adjustment.opportunity_expansion()
+                    * f64::from(
+                        u32::try_from(line.adjustment.expanded_opportunities())
+                            .expect("validated line adjustment opportunity count fits u32"),
+                    );
+            max_x = max_x.max(line.bounds.x0 + advance);
             min_y = min_y.min(line.bounds.y0);
             max_y = max_y.max(line.bounds.y1);
         }
@@ -141,8 +147,16 @@ impl SceneSummary {
             max_x,
             min_y,
             max_y,
-            first_baseline: geometry.lines.first().map(|line| line.baseline),
-            last_baseline: geometry.lines.last().map(|line| line.baseline),
+            first_baseline: geometry
+                .lines
+                .first()
+                .zip(geometry.artifact.lines().first())
+                .map(|(line, prepared)| line.bounds.y0 + prepared.baseline()),
+            last_baseline: geometry
+                .lines
+                .last()
+                .zip(geometry.artifact.lines().last())
+                .map(|(line, prepared)| line.bounds.y0 + prepared.baseline()),
             region_start,
             region_end,
             region_attempts,
@@ -834,12 +848,8 @@ mod tests {
                     lines: Vec::new(),
                     glyphs: Vec::new(),
                 }),
-                line_fragments: Vec::new(),
                 fragments: Vec::new(),
-                paint_glyphs: Vec::new(),
                 source_map: None,
-                line_sources: CachedSidecar::new(false, Vec::new()),
-                paint_sources: CachedSidecar::new(false, Vec::new()),
                 hit_geometry: CachedHitSidecar::new(false, Vec::new()),
                 semantics: CachedSidecar::new(false, Vec::new()),
             }),

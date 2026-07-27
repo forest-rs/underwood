@@ -14,8 +14,8 @@ use crate::adapter::{
     LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationCacheDiagnostics, ParagraphFormationChange, ParagraphFormationReuse,
     ParagraphInput, ParagraphPreparationId, PreparationErrorKind, PreparedClusterSide,
-    PreparedInteractionUnitView, PreparedLine, PreparedParagraph, PreparedParagraphFacts,
-    ShapingRun, ShapingStyleId, TextAffinity,
+    PreparedGlyph, PreparedInteractionUnitView, PreparedLine, PreparedParagraph,
+    PreparedParagraphFacts, PreparedRun, ShapingRun, ShapingStyleId, TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{
