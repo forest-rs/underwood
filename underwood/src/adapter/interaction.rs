@@ -502,113 +502,27 @@ impl DoubleEndedIterator for PreparedInteractionSlices<'_> {
 impl ExactSizeIterator for PreparedInteractionSlices<'_> {}
 impl core::iter::FusedIterator for PreparedInteractionSlices<'_> {}
 
-/// Allocation-free traversal of line-local interaction units.
-#[derive(Clone, Debug)]
-pub struct PreparedInteractionUnits<'a> {
+pub(crate) fn prepared_interaction_unit_view<'a>(
     units: &'a [PreparedInteractionUnitRecord],
-    unit_base: u32,
     slices: &'a [PreparedInteractionSlice],
     spills: &'a [PreparedInteractionSliceSpill],
-    front: usize,
-    back: usize,
-}
-
-impl<'a> PreparedInteractionUnits<'a> {
-    pub(crate) fn new(
-        units: &'a [PreparedInteractionUnitRecord],
-        unit_base: u32,
-        slices: &'a [PreparedInteractionSlice],
-        spills: &'a [PreparedInteractionSliceSpill],
-    ) -> Self {
-        Self {
-            units,
-            unit_base,
-            slices,
-            spills,
-            front: 0,
-            back: units.len(),
-        }
-    }
-
-    /// Returns another iterator over the remaining units.
-    #[must_use]
-    pub fn iter(&self) -> Self {
-        self.clone()
-    }
-
-    /// Returns the number of remaining units.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.back - self.front
-    }
-
-    /// Returns whether no units remain.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.front == self.back
-    }
-
-    fn view(&self, local_index: usize) -> PreparedInteractionUnitView<'a> {
-        let unit = &self.units[local_index];
-        let spilled_slices = (!self.spills.is_empty())
-            .then(|| {
-                let local_index = u32::try_from(local_index)
-                    .expect("validated interaction tables fit u32 indexes");
-                self.unit_base
-                    .checked_add(local_index)
-                    .expect("validated interaction tables fit u32 indexes")
-            })
-            .and_then(|global_index| {
-                self.spills
-                    .binary_search_by_key(&global_index, |spill| spill.unit)
-                    .ok()
-            })
-            .map(|index| {
-                let range = self.spills[index].slices.clone();
-                &self.slices[range.start as usize..range.end as usize]
-            });
-        PreparedInteractionUnitView {
-            unit,
-            spilled_slices,
-        }
-    }
-}
-
-impl<'a> Iterator for PreparedInteractionUnits<'a> {
-    type Item = PreparedInteractionUnitView<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        (self.front < self.back).then(|| {
-            let index = self.front;
-            self.front += 1;
-            self.view(index)
+    index: usize,
+) -> Option<PreparedInteractionUnitView<'a>> {
+    let unit = units.get(index)?;
+    let global_index = u32::try_from(index).expect("validated interaction tables fit u32 indexes");
+    let spilled_slices = (!spills.is_empty())
+        .then(|| {
+            spills
+                .binary_search_by_key(&global_index, |spill| spill.unit)
+                .ok()
         })
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        self.front = self.front.saturating_add(n).min(self.back);
-        self.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
+        .flatten()
+        .map(|index| {
+            let range = spills[index].slices.clone();
+            &slices[range.start as usize..range.end as usize]
+        });
+    Some(PreparedInteractionUnitView {
+        unit,
+        spilled_slices,
+    })
 }
-
-impl<'a> DoubleEndedIterator for PreparedInteractionUnits<'a> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        (self.front < self.back).then(|| {
-            self.back -= 1;
-            self.view(self.back)
-        })
-    }
-
-    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-        self.back = self.back.saturating_sub(n).max(self.front);
-        self.next_back()
-    }
-}
-
-impl ExactSizeIterator for PreparedInteractionUnits<'_> {}
-impl core::iter::FusedIterator for PreparedInteractionUnits<'_> {}

@@ -512,8 +512,9 @@ than being mislabeled as complete conceptual simplification.
 
 ## Conceptual compaction after Design-0021
 
-**Status:** Active — Design-0022 accepted; direct scene traversal landed on
-the campaign branch and flat adapter construction is next
+**Status:** Active — Design-0022 accepted; direct scene traversal and prepared
+iterator-container deletion landed on the campaign branch; flat adapter
+construction is next
 
 **Beads:** `und-0re` and its dependency-ordered children. The separate
 authoring campaign is `und-oh0.18`; its golden call sites inform this work but

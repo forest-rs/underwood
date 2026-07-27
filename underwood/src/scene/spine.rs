@@ -153,7 +153,7 @@ impl SceneSummary {
             first_baseline: geometry
                 .lines
                 .first()
-                .zip(geometry.artifact.lines().first())
+                .zip(geometry.artifact.line(0))
                 .map(|(line, prepared)| line.bounds.y0 + prepared.baseline()),
             last_baseline: geometry
                 .lines

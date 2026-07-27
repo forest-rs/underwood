@@ -2510,7 +2510,6 @@ fn prepare_paragraph_geometry(
     };
     let slots_match = prepared
         .lines()
-        .iter()
         .all(|line| line.slot().is_some() == region_flow.is_some());
     if !slots_match {
         if backend_called {
@@ -3052,7 +3051,7 @@ fn region_output_matches(
     }) {
         return false;
     }
-    if paragraph.lines().is_empty() {
+    if paragraph.line_count() == 0 {
         let mut accepted = transcript
             .attempts()
             .iter()
@@ -3068,7 +3067,7 @@ fn region_output_matches(
         .attempts()
         .iter()
         .filter(|attempt| attempt.outcome() == RegionAttemptOutcome::Accepted);
-    paragraph.lines().iter().all(|line| {
+    paragraph.lines().all(|line| {
         accepted.next().is_some_and(|attempt| {
             line.source() == attempt.source()
                 && line.slot() == Some(attempt.slot())

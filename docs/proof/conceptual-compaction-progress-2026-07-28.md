@@ -83,3 +83,62 @@ campaign-level `<= 17,000` Rust-code gate remains open.
 The final campaign gate will rerun the release allocation, residency, edit,
 repeat, and query wind tunnels after the adapter-construction deletion, rather
 than presenting an intermediate compile/test checkpoint as a performance win.
+
+## Slice 2: ordinary prepared traversal
+
+The second slice deletes the four named traversal containers:
+
+- `PreparedLines`;
+- `PreparedRuns`;
+- `PreparedGlyphs`;
+- `PreparedInteractionUnits`.
+
+The line, run, glyph, and interaction-unit views remain because they perform
+real joins between compact records and shared paragraph tables. Their
+containers did not: each reimplemented slice iteration, indexing, length,
+first, and last over a contiguous table range.
+
+Public traversal now returns opaque exact-size, double-ended iterators.
+Explicit `line`, `run`, `glyph`, and `unit` methods serve indexed queries;
+matching count methods avoid materializing an iterator only to ask its length.
+The cursor implementation keeps its one useful binary search directly over
+the canonical line table. No compatibility wrapper or replacement container
+was introduced.
+
+### Public migration
+
+```rust,ignore
+// Before
+let line = paragraph.lines().get(index)?;
+for run in line.runs().iter() { /* ... */ }
+
+// After
+let line = paragraph.line(index)?;
+for run in line.runs() { /* ... */ }
+```
+
+Every workspace consumer now uses the direct accessors or standard iterator
+operations.
+
+### Source ratchet
+
+| State | Physical lines | Rust code lines |
+|---|---:|---:|
+| Baseline | 21,366 | 18,407 |
+| After slice 1 | 21,013 | 18,157 |
+| After slice 2 | 20,728 | 17,927 |
+| Deleted since baseline | 638 | 480 |
+
+The affected tree still contains the same 31 production files. `tokei` and
+`scc` agree on the Rust-code count. The campaign-level `<= 17,000` gate remains
+open; flat adapter construction is the next deletion.
+
+### Product gates
+
+- workspace tests: green;
+- strict all-target/all-feature Clippy: green;
+- workspace formatting: green;
+- repository policy: green;
+- no dependency or `unsafe` added;
+- adapter traversal, cursor derivation, source mapping, PDF, showcase, and
+  visual snapshot callers remain executable through the migrated API.

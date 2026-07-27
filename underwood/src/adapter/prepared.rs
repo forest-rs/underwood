@@ -354,8 +354,23 @@ impl PreparedParagraph {
 
     /// Returns the source-ordered formed lines.
     #[must_use]
-    pub fn lines(&self) -> PreparedLines<'_> {
+    pub fn lines(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = PreparedLineView<'_>> + ExactSizeIterator + Clone + '_
+    {
         self.facts.lines()
+    }
+
+    /// Returns one formed line by source-order index.
+    #[must_use]
+    pub fn line(&self, index: usize) -> Option<PreparedLineView<'_>> {
+        self.facts.line(index)
+    }
+
+    /// Returns the number of formed lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.facts.lines.len()
     }
 
     /// Returns the deterministic byte charge for this prepared paragraph's
@@ -957,8 +972,35 @@ impl PreparedParagraphFacts {
         self.features
     }
 
-    pub(crate) fn lines(&self) -> PreparedLines<'_> {
-        PreparedLines::new(self)
+    pub(crate) fn lines(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = PreparedLineView<'_>> + ExactSizeIterator + Clone + '_
+    {
+        (0..self.lines.len()).map(|index| PreparedLineView { facts: self, index })
+    }
+
+    pub(crate) fn line(&self, index: usize) -> Option<PreparedLineView<'_>> {
+        (index < self.lines.len()).then_some(PreparedLineView { facts: self, index })
+    }
+
+    pub(crate) fn line_partition_point(
+        &self,
+        mut predicate: impl FnMut(PreparedLineView<'_>) -> bool,
+    ) -> usize {
+        let mut left = 0;
+        let mut right = self.lines.len();
+        while left < right {
+            let middle = left + (right - left) / 2;
+            if predicate(
+                self.line(middle)
+                    .expect("binary-search midpoint remains in the line table"),
+            ) {
+                left = middle + 1;
+            } else {
+                right = middle;
+            }
+        }
+        left
     }
 
     pub(crate) fn line_unit_table_range(&self, line: usize) -> Option<Range<usize>> {
@@ -1008,123 +1050,6 @@ impl PreparedParagraphFacts {
         bytes
     }
 }
-
-/// Borrowed source-ordered formed lines from one canonical paragraph artifact.
-#[derive(Clone, Copy, Debug)]
-pub struct PreparedLines<'a> {
-    facts: &'a PreparedParagraphFacts,
-    front: usize,
-    back: usize,
-}
-
-impl<'a> PreparedLines<'a> {
-    fn new(facts: &'a PreparedParagraphFacts) -> Self {
-        Self {
-            facts,
-            front: 0,
-            back: facts.lines.len(),
-        }
-    }
-
-    /// Returns a fresh traversal over every line.
-    #[must_use]
-    pub fn iter(&self) -> Self {
-        Self::new(self.facts)
-    }
-
-    /// Returns the number of lines.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.back - self.front
-    }
-
-    /// Returns whether the artifact has no formed lines.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns a line by source-order index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<PreparedLineView<'a>> {
-        (index < self.facts.lines.len()).then_some(PreparedLineView {
-            facts: self.facts,
-            index,
-        })
-    }
-
-    /// Returns the first line.
-    #[must_use]
-    pub fn first(&self) -> Option<PreparedLineView<'a>> {
-        self.get(0)
-    }
-
-    /// Returns the final line.
-    #[must_use]
-    pub fn last(self) -> Option<PreparedLineView<'a>> {
-        self.facts
-            .lines
-            .len()
-            .checked_sub(1)
-            .and_then(|index| self.get(index))
-    }
-
-    pub(crate) fn partition_point(
-        &self,
-        mut predicate: impl FnMut(PreparedLineView<'a>) -> bool,
-    ) -> usize {
-        let mut left = 0;
-        let mut right = self.facts.lines.len();
-        while left < right {
-            let middle = left + (right - left) / 2;
-            if predicate(
-                self.get(middle)
-                    .expect("binary-search midpoint remains in the line table"),
-            ) {
-                left = middle + 1;
-            } else {
-                right = middle;
-            }
-        }
-        left
-    }
-}
-
-impl<'a> Iterator for PreparedLines<'a> {
-    type Item = PreparedLineView<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let index = self.front;
-        if index == self.back {
-            return None;
-        }
-        self.front += 1;
-        Some(PreparedLineView {
-            facts: self.facts,
-            index,
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-}
-
-impl DoubleEndedIterator for PreparedLines<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        self.back -= 1;
-        Some(PreparedLineView {
-            facts: self.facts,
-            index: self.back,
-        })
-    }
-}
-
-impl ExactSizeIterator for PreparedLines<'_> {}
 
 /// Borrowed view of one formed line in a canonical paragraph artifact.
 #[derive(Clone, Copy, Debug)]
@@ -1213,16 +1138,37 @@ impl<'a> PreparedLineView<'a> {
 
     /// Returns extended-grapheme units in line-local visual order.
     #[must_use]
-    pub fn units(self) -> PreparedInteractionUnits<'a> {
-        let record = self.record();
-        let unit_base = record.units.start;
-        let units = record.units.as_usize();
-        PreparedInteractionUnits::new(
-            &self.facts.interaction_units[units.clone()],
-            unit_base,
+    pub fn units(
+        self,
+    ) -> impl DoubleEndedIterator<Item = PreparedInteractionUnitView<'a>> + ExactSizeIterator + Clone + 'a
+    {
+        self.record().units.as_usize().map(move |index| {
+            prepared_interaction_unit_view(
+                &self.facts.interaction_units,
+                &self.facts.interaction_slices,
+                &self.facts.interaction_slice_spills,
+                index,
+            )
+            .expect("validated line unit range indexes the interaction table")
+        })
+    }
+
+    /// Returns one interaction unit by line-local visual index.
+    #[must_use]
+    pub fn unit(self, index: usize) -> Option<PreparedInteractionUnitView<'a>> {
+        let global = self.record().units.as_usize().nth(index)?;
+        prepared_interaction_unit_view(
+            &self.facts.interaction_units,
             &self.facts.interaction_slices,
             &self.facts.interaction_slice_spills,
+            global,
         )
+    }
+
+    /// Returns the number of interaction units in this line.
+    #[must_use]
+    pub fn unit_count(self) -> usize {
+        self.record().units.as_usize().len()
     }
 
     pub(crate) fn unit_at_source_rank(
@@ -1232,93 +1178,39 @@ impl<'a> PreparedLineView<'a> {
         let record = self.record();
         let source_order = &self.facts.source_order[record.source_order.as_usize()];
         let index = source_order.get(rank).map_or(rank, |&index| index as usize);
-        self.units().nth(index).map(|unit| (index, unit))
+        self.unit(index).map(|unit| (index, unit))
     }
 
     /// Returns shaped runs in line-local visual order.
     #[must_use]
-    pub fn runs(self) -> PreparedRuns<'a> {
-        PreparedRuns {
-            facts: self.facts,
-            front: self.record().runs.start as usize,
-            back: self.record().runs.end as usize,
-        }
+    pub fn runs(
+        self,
+    ) -> impl DoubleEndedIterator<Item = PreparedRunView<'a>> + ExactSizeIterator + Clone + 'a {
+        self.record()
+            .runs
+            .as_usize()
+            .map(move |index| PreparedRunView {
+                facts: self.facts,
+                index,
+            })
     }
-}
 
-/// Borrowed visual shaped runs from one formed line.
-#[derive(Clone, Copy, Debug)]
-pub struct PreparedRuns<'a> {
-    facts: &'a PreparedParagraphFacts,
-    front: usize,
-    back: usize,
-}
-
-impl<'a> PreparedRuns<'a> {
-    /// Returns a fresh traversal over the same line's runs.
+    /// Returns one shaped run by line-local visual index.
     #[must_use]
-    pub fn iter(&self) -> Self {
-        *self
+    pub fn run(self, index: usize) -> Option<PreparedRunView<'a>> {
+        let index = self.record().runs.as_usize().nth(index)?;
+        Some(PreparedRunView {
+            facts: self.facts,
+            index,
+        })
     }
 
     /// Returns the number of runs.
     #[must_use]
-    pub const fn len(&self) -> usize {
-        self.back - self.front
-    }
-
-    /// Returns whether the line has no shaped runs.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns a run by line-local visual index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<PreparedRunView<'a>> {
-        let index = self.front.checked_add(index)?;
-        (index < self.back).then_some(PreparedRunView {
-            facts: self.facts,
-            index,
-        })
+    pub fn run_count(self) -> usize {
+        self.record().runs.as_usize().len()
     }
 }
-
-impl<'a> Iterator for PreparedRuns<'a> {
-    type Item = PreparedRunView<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        let index = self.front;
-        self.front += 1;
-        Some(PreparedRunView {
-            facts: self.facts,
-            index,
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-}
-
-impl DoubleEndedIterator for PreparedRuns<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        self.back -= 1;
-        Some(PreparedRunView {
-            facts: self.facts,
-            index: self.back,
-        })
-    }
-}
-
-impl ExactSizeIterator for PreparedRuns<'_> {}
 
 /// Borrowed view of one shaped run in the canonical paragraph artifact.
 #[derive(Clone, Copy, Debug)]
@@ -1382,116 +1274,35 @@ impl<'a> PreparedRunView<'a> {
 
     /// Returns glyphs in backend-provided visual order.
     #[must_use]
-    pub fn glyphs(self) -> PreparedGlyphs<'a> {
-        PreparedGlyphs::new(self.facts, self.record().glyphs.as_usize())
-    }
-}
-
-/// Allocation-free traversal of shaped glyphs in canonical visual order.
-#[derive(Clone, Copy, Debug)]
-pub struct PreparedGlyphs<'a> {
-    facts: &'a PreparedParagraphFacts,
-    front: usize,
-    back: usize,
-}
-
-impl<'a> PreparedGlyphs<'a> {
-    fn new(facts: &'a PreparedParagraphFacts, range: Range<usize>) -> Self {
-        Self {
-            facts,
-            front: range.start,
-            back: range.end,
-        }
+    pub fn glyphs(
+        self,
+    ) -> impl DoubleEndedIterator<Item = PreparedGlyphView<'a>> + ExactSizeIterator + Clone + 'a
+    {
+        self.record()
+            .glyphs
+            .as_usize()
+            .map(move |index| PreparedGlyphView {
+                facts: self.facts,
+                index,
+            })
     }
 
-    /// Returns a fresh traversal over the same glyphs.
+    /// Returns one glyph by run-local visual index.
     #[must_use]
-    pub fn iter(&self) -> Self {
-        *self
-    }
-
-    /// Returns the number of remaining glyphs.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.back - self.front
-    }
-
-    /// Returns whether no glyphs remain.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Returns one glyph by traversal-local index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<PreparedGlyphView<'a>> {
-        let index = self.front.checked_add(index)?;
-        (index < self.back).then_some(PreparedGlyphView {
-            facts: self.facts,
-            index,
-        })
-    }
-
-    /// Returns the first glyph.
-    #[must_use]
-    pub fn first(&self) -> Option<PreparedGlyphView<'a>> {
-        self.get(0)
-    }
-
-    /// Returns the final glyph.
-    #[must_use]
-    pub fn last(&self) -> Option<PreparedGlyphView<'a>> {
-        self.len().checked_sub(1).and_then(|index| self.get(index))
-    }
-
-    pub(crate) fn slice(self, range: Range<usize>) -> Option<Self> {
-        if range.start > range.end || range.end > self.len() {
-            return None;
-        }
-        Some(Self {
-            facts: self.facts,
-            front: self.front + range.start,
-            back: self.front + range.end,
-        })
-    }
-}
-
-impl<'a> Iterator for PreparedGlyphs<'a> {
-    type Item = PreparedGlyphView<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        let index = self.front;
-        self.front += 1;
+    pub fn glyph(self, index: usize) -> Option<PreparedGlyphView<'a>> {
+        let index = self.record().glyphs.as_usize().nth(index)?;
         Some(PreparedGlyphView {
             facts: self.facts,
             index,
         })
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
+    /// Returns the number of glyphs in this run.
+    #[must_use]
+    pub fn glyph_count(self) -> usize {
+        self.record().glyphs.as_usize().len()
     }
 }
-
-impl DoubleEndedIterator for PreparedGlyphs<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        if self.front == self.back {
-            return None;
-        }
-        self.back -= 1;
-        Some(PreparedGlyphView {
-            facts: self.facts,
-            index: self.back,
-        })
-    }
-}
-
-impl ExactSizeIterator for PreparedGlyphs<'_> {}
-impl core::iter::FusedIterator for PreparedGlyphs<'_> {}
 
 /// Borrowed shaped glyph from one canonical paragraph artifact.
 #[derive(Clone, Copy, Debug)]

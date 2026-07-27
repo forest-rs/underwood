@@ -318,15 +318,13 @@ impl CachedGeometry {
     fn synthetic_hit_inline_end(&self, line: usize) -> Option<f64> {
         (self.hit_geometry.synthetic_hits > 0)
             .then(|| {
-                self.artifact.lines().get(line).map_or_else(
+                self.artifact.line(line).map_or_else(
                     || {
-                        (line == 0 && self.artifact.lines().is_empty())
+                        (line == 0 && self.artifact.lines().len() == 0)
                             .then_some(self.empty_bounds.x1)
                     },
                     |prepared| {
-                        prepared
-                            .units()
-                            .is_empty()
+                        (prepared.unit_count() == 0)
                             .then(|| self.lines.get(line).map(|line| line.bounds.x0))
                             .flatten()
                     },
@@ -336,8 +334,8 @@ impl CachedGeometry {
     }
 
     fn hit_cluster(&self, line: usize, unit: usize, inline_end: f64) -> Option<CachedCluster<'_>> {
-        let prepared_line = self.artifact.lines().get(line);
-        let prepared = prepared_line.and_then(|line| line.units().nth(unit));
+        let prepared_line = self.artifact.line(line);
+        let prepared = prepared_line.and_then(|line| line.unit(unit));
         let source = prepared.map_or_else(
             || {
                 prepared_line
@@ -575,7 +573,7 @@ pub(super) fn build_geometry(
     let hit_capacity = if !retains_clusters {
         0
     } else {
-        prepared.lines().iter().map(|line| line.units().len()).sum()
+        prepared.lines().map(PreparedLineView::unit_count).sum()
     };
     let mut hit_inline_ends = Vec::with_capacity(hit_capacity);
     let mut synthetic_hits = 0_u32;
@@ -733,7 +731,7 @@ pub(super) fn build_geometry(
             unit_x = next_x;
         }
         if (builds_semantics || retains_clusters)
-            && line.units().is_empty()
+            && line.unit_count() == 0
             && !projection.spans.is_empty()
         {
             let source = line.source();
@@ -797,7 +795,7 @@ pub(super) fn build_geometry(
         line_top = line_top.max(current_line_top + line.height());
     }
     if retains_clusters
-        && prepared.lines().is_empty()
+        && prepared.line_count() == 0
         && projection.mapping.text().is_empty()
         && !projection.spans.is_empty()
     {
@@ -874,7 +872,7 @@ pub(super) fn build_geometry(
     Ok(CachedGeometry {
         features,
         artifact: prepared.shared_facts(),
-        height: if prepared.lines().is_empty() {
+        height: if prepared.line_count() == 0 {
             empty_bounds.y1
         } else {
             line_top
@@ -908,7 +906,7 @@ fn build_paint_fragments(
     }
     let mut fragments: Vec<CachedFragment> = Vec::new();
     let mut instance = 0_usize;
-    for (line_index, (line, cached_line)) in prepared.lines().iter().zip(lines).enumerate() {
+    for (line_index, (line, cached_line)) in prepared.lines().zip(lines).enumerate() {
         let expansion = cached_line.adjustment.opportunity_expansion();
         let opportunity_sources: Vec<_> = if expansion > 0.0 {
             line.western_justification_opportunity_sources().collect()
@@ -916,7 +914,7 @@ fn build_paint_fragments(
             Vec::new()
         };
         let mut inline_origin = cached_line.bounds.x0;
-        for (run_index, run) in line.runs().iter().enumerate() {
+        for (run_index, run) in line.runs().enumerate() {
             let run_source = run.source();
             let Some(source_text) = projection
                 .mapping
@@ -930,7 +928,7 @@ fn build_paint_fragments(
                 ));
             };
             let run_fragment_start = fragments.len();
-            for (glyph_index, glyph) in run.glyphs().iter().enumerate() {
+            for (glyph_index, glyph) in run.glyphs().enumerate() {
                 let glyph_source = glyph.source();
                 if projection
                     .mapping
@@ -1059,7 +1057,7 @@ fn build_paint_fragments(
                             run_source.clone(),
                         )
                     })?;
-                if !run.glyphs().iter().any(|glyph| {
+                if !run.glyphs().any(|glyph| {
                     let source = glyph.source();
                     source.start <= scalar_start && source.end >= scalar_end
                 }) && !run

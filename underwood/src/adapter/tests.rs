@@ -225,7 +225,7 @@ fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage
     .expect("the line flattens into a canonical paragraph artifact");
     let unit = paragraph
         .lines()
-        .first()
+        .next()
         .expect("the paragraph has one line")
         .units()
         .next()
@@ -316,13 +316,14 @@ fn prepared_run_accepts_control_only_source_without_a_phantom_glyph() {
     assert!(
         paragraph
             .lines()
-            .first()
+            .next()
             .expect("the paragraph has one line")
             .runs()
             .next()
             .expect("the line has one run")
             .glyphs()
-            .is_empty(),
+            .len()
+            == 0,
         "control-only runs must retain an honest empty glyph sequence"
     );
 }

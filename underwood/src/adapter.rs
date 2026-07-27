@@ -43,17 +43,18 @@ pub use formation::{
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedClusterSide,
     PreparedInteractionSlice, PreparedInteractionSlices, PreparedInteractionUnit,
-    PreparedInteractionUnitView, PreparedInteractionUnits, TextAffinity,
+    PreparedInteractionUnitView, TextAffinity,
 };
-pub(crate) use interaction::{PreparedInteractionSliceSpill, PreparedInteractionUnitRecord};
+pub(crate) use interaction::{
+    PreparedInteractionSliceSpill, PreparedInteractionUnitRecord, prepared_interaction_unit_view,
+};
 pub(crate) use paint::whole_glyph_paint;
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
 pub(crate) use prepared::PreparedParagraphFacts;
 pub use prepared::{
-    FontSynthesis, PreparedGlyph, PreparedGlyphView, PreparedGlyphs, PreparedLine,
-    PreparedLineBuilder, PreparedLineView, PreparedLines, PreparedParagraph,
-    PreparedParagraphBuilder, PreparedParagraphCapacity, PreparedRun, PreparedRunBuilder,
-    PreparedRunView, PreparedRuns,
+    FontSynthesis, PreparedGlyph, PreparedGlyphView, PreparedLine, PreparedLineBuilder,
+    PreparedLineView, PreparedParagraph, PreparedParagraphBuilder, PreparedParagraphCapacity,
+    PreparedRun, PreparedRunBuilder, PreparedRunView,
 };
 
 #[cfg(test)]

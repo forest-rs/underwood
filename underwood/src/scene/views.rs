@@ -304,8 +304,7 @@ impl<'a> SceneLineView<'a> {
             .segment
             .geometry
             .artifact
-            .lines()
-            .get(self.positioned.local)
+            .line(self.positioned.local)
             .expect("positioned line indexes the canonical artifact")
     }
 
@@ -710,8 +709,7 @@ impl<'a> SceneFragmentView<'a> {
         let geometry = &self.positioned.position.segment.geometry;
         geometry
             .artifact
-            .lines()
-            .get(self.local().line as usize)
+            .line(self.local().line as usize)
             .expect("paint fragment indexes the canonical line table")
     }
 
@@ -727,15 +725,13 @@ impl<'a> SceneFragmentView<'a> {
 
     fn prepared_run(self) -> PreparedRunView<'a> {
         self.prepared_line()
-            .runs()
-            .get(self.local().run as usize)
+            .run(self.local().run as usize)
             .expect("paint fragment indexes the canonical artifact")
     }
 
     fn prepared_glyph(self, glyph: usize) -> PreparedGlyphView<'a> {
         self.prepared_run()
-            .glyphs()
-            .get(glyph)
+            .glyph(glyph)
             .expect("paint fragment indexes the canonical glyph table")
     }
 
@@ -1205,11 +1201,9 @@ impl<'a> SnapshotSources<'a> {
             ranges: SourceRangeSequence::new(
                 map,
                 SourceReferences::Glyphs {
-                    glyphs: fragment
-                        .prepared_run()
-                        .glyphs()
-                        .slice(glyphs.start as usize..glyphs.end as usize)
-                        .expect("paint fragment indexes its prepared run"),
+                    run: fragment.prepared_run(),
+                    start: glyphs.start as usize,
+                    end: glyphs.end as usize,
                     segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
                         .then_some(fragment.local().segment as usize),
                 },
@@ -1293,11 +1287,9 @@ impl<'a> ProjectedSources<'a> {
             ranges: SourceRangeSequence::new(
                 map,
                 SourceReferences::Glyphs {
-                    glyphs: fragment
-                        .prepared_run()
-                        .glyphs()
-                        .slice(glyphs.start as usize..glyphs.end as usize)
-                        .expect("paint fragment indexes its prepared run"),
+                    run: fragment.prepared_run(),
+                    start: glyphs.start as usize,
+                    end: glyphs.end as usize,
                     segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
                         .then_some(fragment.local().segment as usize),
                 },
@@ -1435,7 +1427,9 @@ impl<'a> ProjectedTextUnitView<'a> {
 enum SourceReferences<'a> {
     One(SourceReference),
     Glyphs {
-        glyphs: PreparedGlyphs<'a>,
+        run: PreparedRunView<'a>,
+        start: usize,
+        end: usize,
         segment: Option<usize>,
     },
 }
@@ -1444,15 +1438,24 @@ impl SourceReferences<'_> {
     fn len(self) -> usize {
         match self {
             Self::One(_) => 1,
-            Self::Glyphs { glyphs, .. } => glyphs.len(),
+            Self::Glyphs { start, end, .. } => end - start,
         }
     }
 
     fn get(self, index: usize) -> Option<SourceReference> {
         match self {
             Self::One(source) => (index == 0).then_some(source),
-            Self::Glyphs { glyphs, segment } => {
-                let glyph = glyphs.get(index)?;
+            Self::Glyphs {
+                run,
+                start,
+                end,
+                segment,
+            } => {
+                let index = start.checked_add(index)?;
+                if index >= end {
+                    return None;
+                }
+                let glyph = run.glyph(index)?;
                 let source = match segment {
                     Some(segment) => glyph.paint().split_segments()?.get(segment)?.source(),
                     None => glyph.source(),
