@@ -93,7 +93,6 @@ pub(crate) fn lower_visual_units(
     analysis: &Analysis,
     char_starts: &[u32],
     shaped_text: &ShapedText,
-    scripts: &[[u8; 4]],
     pieces: &[RunPiece],
     interaction_units: &[Range<usize>],
     line_source: &Range<usize>,
@@ -113,16 +112,13 @@ pub(crate) fn lower_visual_units(
             .runs()
             .get(piece.run)
             .ok_or_else(PreparationError::invalid_output)?;
-        let script = *scripts
-            .get(piece.run)
-            .ok_or_else(PreparationError::invalid_output)?;
         if run.bidi_level & 1 == 1 {
             for index in piece.clusters.clone().rev() {
-                visual_slices.push(lower_visual_slice(shaped_text, run, script, index)?);
+                visual_slices.push(lower_visual_slice(shaped_text, run, index)?);
             }
         } else {
             for index in piece.clusters.clone() {
-                visual_slices.push(lower_visual_slice(shaped_text, run, script, index)?);
+                visual_slices.push(lower_visual_slice(shaped_text, run, index)?);
             }
         }
     }
@@ -190,7 +186,6 @@ pub(crate) fn lower_visual_units(
 fn lower_visual_slice(
     shaped_text: &ShapedText,
     run: &parley_engine::ShapedRun,
-    script: [u8; 4],
     index: usize,
 ) -> Result<VisualInteractionSlice, PreparationError> {
     let cluster = shaped_text
@@ -210,7 +205,7 @@ fn lower_visual_slice(
         source: checked_source_range(&(start..end))?,
         advance: f64::from(cluster.advance),
         bidi_level: run.bidi_level,
-        script,
+        script: run.script.to_bytes(),
         boundary: cluster.info.boundary(),
         whitespace: cluster.info.whitespace(),
     })

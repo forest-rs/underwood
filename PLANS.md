@@ -91,9 +91,10 @@ toolkit behavior or pixel production.
 - Steps 1–4 and the independent shared-font-catalog part of step 7 are landed
   and protected.
 - Step 5 is implemented through the real public scene path. Underwood consumes
-  Unicode `Joining_Type` from the small Parley Engine integration commit
-  `97b874719f810c375025f3fa727b245530a87f9f`; no script table or new production
-  dependency was added.
+  Unicode `Joining_Type`, generated joining-script facts, and resolved
+  `ShapedRun` script metadata from Parley PR #712 at
+  `519bd5832897f1772e60ed7c26f0d138f7adbe4a`. The adapter no longer retains a
+  parallel per-run script table, and no production dependency was added.
 - The exact Overstory computed-style and editable-control lowering type-checks
   after its disposable consumer proof uses one Parlance type universe and
   applies two stale presentation-pattern fixes. The branch's 25 non-alignment

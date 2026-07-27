@@ -217,7 +217,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             cache.style_indices.clear();
             cache.inline_flow_indices.clear();
             cache.shaped_text.clear();
-            cache.scripts.clear();
             cache.base_cluster_advances.clear();
             cache.base_glyph_advances.clear();
             cache.logical_clusters.clear();
@@ -249,7 +248,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     input.inline_flow_styles(),
                     input.inline_flow_runs(),
                     &mut cache.shaped_text,
-                    &mut cache.scripts,
                     &mut cache.style_indices,
                     &mut cache.inline_flow_indices,
                 )?;
@@ -265,7 +263,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     input.inline_flow_styles(),
                     input.inline_flow_runs(),
                     &mut self.reshape_scratch,
-                    &mut cache.scripts,
                     &mut cache.style_indices,
                     &mut cache.inline_flow_indices,
                 )?;
@@ -348,7 +345,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 update_line_metrics(
                     input.text(),
                     &cache.shaped_text,
-                    &cache.scripts,
                     &mut cache.formed_lines,
                     input.inline_flow_styles(),
                     input.inline_flow_runs(),
@@ -356,7 +352,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             } else {
                 let analysis = &cache.analysis;
                 let canonical_text = &cache.shaped_text;
-                let scripts = &cache.scripts;
                 let logical_clusters = &cache.logical_clusters;
                 let style_indices = &cache.style_indices;
                 let inline_flow_indices = &cache.inline_flow_indices;
@@ -367,14 +362,13 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     input.paragraph(),
                     input.text(),
                     canonical_text,
-                    scripts,
                     logical_clusters,
                     input.inline_flow_styles(),
                     input.inline_flow_runs(),
                     &constraints,
                     formed_lines,
                     &mut self.line_scratch,
-                    |source, line_text, scripts| {
+                    |source, line_text| {
                         let output = shape_line(
                             &mut self.shaper,
                             analysis,
@@ -386,7 +380,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                             inline_flow_indices,
                             source,
                             line_text,
-                            scripts,
                         )?;
                         apply_spacing(
                             line_text,
@@ -452,11 +445,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
         paragraph.reserve_exact(prepared_capacity(input.text(), preparation)?);
         for formed in &preparation.formed_lines {
             let plan = &formed.plan;
-            let (shaped_text, scripts) =
-                formed.shaping(&preparation.shaped_text, &preparation.scripts);
-            if shaped_text.runs().len() != scripts.len() {
-                return Err(PreparationError::invalid_output());
-            }
+            let shaped_text = formed.shaping(&preparation.shaped_text);
             line_run_pieces_into(shaped_text, plan.clusters.clone(), &mut self.run_pieces)?;
             reorder_visual_pieces(shaped_text, &mut self.run_pieces);
             let mut line = paragraph.begin_line(PreparedLine::try_new_in_slot(
@@ -474,7 +463,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 &preparation.analysis,
                 &preparation.char_starts,
                 shaped_text,
-                scripts,
                 &self.run_pieces,
                 &preparation.interaction_units,
                 &plan.source,
@@ -485,9 +473,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             for piece in &self.run_pieces {
                 let run = shaped_text
                     .runs()
-                    .get(piece.run)
-                    .ok_or_else(PreparationError::invalid_output)?;
-                let script = scripts
                     .get(piece.run)
                     .ok_or_else(PreparationError::invalid_output)?;
                 let font = shaped_text
@@ -516,7 +501,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 let mut prepared_run = line.begin_run(PreparedRun::try_new(
                     checked_source_range(&source)?,
                     run.bidi_level,
-                    *script,
+                    run.script.to_bytes(),
                     font.font.clone(),
                     run.font_size,
                     synthesis,
@@ -627,7 +612,6 @@ struct PreparationCache {
     style_indices: Vec<u16>,
     inline_flow_indices: Vec<u16>,
     shaped_text: ShapedText,
-    scripts: Vec<[u8; 4]>,
     base_cluster_advances: Vec<f32>,
     base_glyph_advances: Vec<f32>,
     logical_clusters: Vec<LogicalCluster>,
@@ -646,7 +630,7 @@ fn prepared_capacity(
     let mut glyphs = 0_usize;
     let mut normalized_coords = 0_usize;
     for formed in &preparation.formed_lines {
-        let (shaped_text, _) = formed.shaping(&preparation.shaped_text, &preparation.scripts);
+        let shaped_text = formed.shaping(&preparation.shaped_text);
         for run in shaped_text.runs() {
             let start = run.clusters_range.start.max(formed.plan.clusters.start);
             let end = run.clusters_range.end.min(formed.plan.clusters.end);
@@ -684,7 +668,6 @@ impl PreparationCache {
             style_indices: Vec::new(),
             inline_flow_indices: Vec::new(),
             shaped_text: ShapedText::new(),
-            scripts: Vec::new(),
             base_cluster_advances: Vec::new(),
             base_glyph_advances: Vec::new(),
             logical_clusters: Vec::new(),
@@ -706,7 +689,6 @@ impl PreparationCache {
             .saturating_add(vec_bytes::<u16>(self.style_indices.capacity()))
             .saturating_add(vec_bytes::<u16>(self.inline_flow_indices.capacity()))
             .saturating_add(shaped_text_accounted_bytes(&self.shaped_text))
-            .saturating_add(vec_bytes::<[u8; 4]>(self.scripts.capacity()))
             .saturating_add(vec_bytes::<f32>(self.base_cluster_advances.capacity()))
             .saturating_add(vec_bytes::<f32>(self.base_glyph_advances.capacity()))
             .saturating_add(vec_bytes::<LogicalCluster>(
