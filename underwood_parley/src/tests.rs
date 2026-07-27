@@ -52,6 +52,8 @@ const LATIN_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/RobotoFlex-VariableFont.ttf");
 const ARABIC_FONT: &[u8] =
     include_bytes!("../../examples/headless/fonts/NotoKufiArabic-Regular.otf");
+const DEVANAGARI_FONT: &[u8] =
+    include_bytes!("../../conformance/fonts/NotoSansDevanagari-Regular.subset.ttf");
 
 fn editable_scene_request<'a>(
     constraint: TextConstraint,
@@ -344,10 +346,13 @@ fn fixture_paragraph_engine() -> ParleyParagraphEngine {
     let fonts = FontSet::try_from_fonts([
         Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
         Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
+        Font::from_bytes("devanagari", DEVANAGARI_FONT).expect("Devanagari fixture font is valid"),
     ])
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
-    .expect("Arabic fallback is valid");
+    .expect("Arabic fallback is valid")
+    .with_fallbacks(Script::from_bytes(*b"Deva"), None, ["Noto Sans Devanagari"])
+    .expect("Devanagari fallback is valid");
     ParleyParagraphEngine::new(fonts)
 }
 

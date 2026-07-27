@@ -90,6 +90,8 @@ struct VisualInteractionSlice {
 
 pub(crate) fn lower_visual_units(
     text: &str,
+    analysis: &Analysis,
+    char_starts: &[u32],
     shaped_text: &ShapedText,
     scripts: &[[u8; 4]],
     pieces: &[RunPiece],
@@ -153,6 +155,8 @@ pub(crate) fn lower_visual_units(
         if let Some(previous) = current_owner {
             lower_prepared_unit(
                 text,
+                analysis,
+                char_starts,
                 &interaction_units[previous],
                 &visual_slices[current_start..index],
                 mandatory_line_end && interaction_units[previous].end == line_source.end,
@@ -169,6 +173,8 @@ pub(crate) fn lower_visual_units(
     if let Some(owner) = current_owner {
         lower_prepared_unit(
             text,
+            analysis,
+            char_starts,
             &interaction_units[owner],
             &visual_slices[current_start..],
             mandatory_line_end && interaction_units[owner].end == line_source.end,
@@ -212,25 +218,23 @@ fn lower_visual_slice(
 
 fn lower_prepared_unit(
     text: &str,
+    analysis: &Analysis,
+    char_starts: &[u32],
     source: &Range<usize>,
     slices: &[VisualInteractionSlice],
     mandatory_line_end: bool,
     output: &mut PreparedLineBuilder<'_>,
 ) -> Result<(), PreparationError> {
-    let first = slices
+    let logical_first = slices
         .iter()
         .min_by_key(|slice| slice.source.start)
         .ok_or_else(PreparationError::invalid_output)?;
-    if first.source.start as usize != source.start
-        || slices
-            .iter()
-            .any(|slice| slice.bidi_level != first.bidi_level)
-        || slices.iter().any(|slice| slice.script != first.script)
-    {
+    if logical_first.source.start as usize != source.start {
         return Err(PreparationError::invalid_output());
     }
-    let bidi_level = first.bidi_level;
-    let boundary = first.boundary;
+    let bidi_level =
+        interaction_unit_bidi_level(analysis, char_starts, source, slices, logical_first)?;
+    let boundary = logical_first.boundary;
     let mut whitespace = Whitespace::None;
     for slice in slices {
         if slice.whitespace == Whitespace::None {
@@ -252,7 +256,7 @@ fn lower_prepared_unit(
         .get(source.clone())
         .ok_or_else(PreparationError::invalid_output)?;
     let western_justification_opportunity =
-        source_text == " " && matches!(&first.script, b"Latn" | b"Grek" | b"Cyrl");
+        source_text == " " && matches!(&logical_first.script, b"Latn" | b"Grek" | b"Cyrl");
     let source = checked_source_range(source)?;
     let (left, right) = if bidi_level & 1 == 1 {
         (
@@ -299,4 +303,58 @@ fn lower_prepared_unit(
             .iter()
             .map(|slice| (slice.source.clone(), slice.advance)),
     )
+}
+
+/// Resolves one atomic grapheme's caret direction without requiring all shaped
+/// slices to share a bidi level.
+///
+/// Leading format characters can resolve differently from the scalar that
+/// actually shapes the visible unit. Prefer the first shaping contributor and
+/// fall back to the logical-leading scalar for an all-control unit.
+fn interaction_unit_bidi_level(
+    analysis: &Analysis,
+    char_starts: &[u32],
+    source: &Range<usize>,
+    slices: &[VisualInteractionSlice],
+    logical_first: &VisualInteractionSlice,
+) -> Result<u8, PreparationError> {
+    if slices
+        .iter()
+        .all(|slice| slice.bidi_level == logical_first.bidi_level)
+    {
+        return Ok(logical_first.bidi_level);
+    }
+
+    let start = u32::try_from(source.start).map_err(|_| PreparationError::invalid_output())?;
+    let end = u32::try_from(source.end).map_err(|_| PreparationError::invalid_output())?;
+    let first_character = char_starts
+        .binary_search(&start)
+        .map_err(|_| PreparationError::invalid_output())?;
+    let after_last_character = char_starts
+        .binary_search(&end)
+        .map_err(|_| PreparationError::invalid_output())?;
+    let info = analysis
+        .char_info()
+        .get(first_character..after_last_character)
+        .filter(|info| !info.is_empty())
+        .ok_or_else(PreparationError::invalid_output)?;
+    let levels = analysis.bidi_levels();
+    if !levels.is_empty() && levels.len() != analysis.char_info().len() {
+        return Err(PreparationError::invalid_output());
+    }
+    let level_at = |index: usize| {
+        levels
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| analysis.paragraph_level())
+    };
+    let primary = info
+        .iter()
+        .position(|info| info.contributes_to_shaping())
+        .map_or(first_character, |offset| first_character + offset);
+    let bidi_level = level_at(primary);
+    if !slices.iter().any(|slice| slice.bidi_level == bidi_level) {
+        return Err(PreparationError::invalid_output());
+    }
+    Ok(bidi_level)
 }
