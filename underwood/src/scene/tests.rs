@@ -2634,12 +2634,14 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     let display = edit
         .append_paragraph(ParagraphRole::BODY)
         .expect("display paragraph must append");
-    edit.append_text(display, InlineRole::TEXT, "display")
+    let display_text = edit
+        .append_text(display, InlineRole::TEXT, "display")
         .expect("display text must append");
     let editor = edit
         .append_paragraph(ParagraphRole::BODY)
         .expect("editor paragraph must append");
-    edit.append_text(editor, InlineRole::TEXT, "editor")
+    let editor_text = edit
+        .append_text(editor, InlineRole::TEXT, "editor")
         .expect("editor text must append");
     edit.commit().expect("fixture must publish");
     let style = ComputedInlineStyle::new(
@@ -2663,18 +2665,39 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
         },
         CacheBudget::new(8),
     );
+    let snapshot = document.snapshot();
     let output = layout
-        .prepare(&document.snapshot(), &request)
+        .prepare(&snapshot, &request)
         .expect("mixed-capability scene must prepare");
     let scene = output.scene();
 
-    let error = scene
+    let editing = scene
         .editing()
-        .expect_err("whole-scene editing must reject the display sibling");
-    assert_eq!(error.paragraph(), Some(display));
-    assert_eq!(error.requested(), crate::SceneFeatures::DISPLAY);
-    assert_eq!(error.resident(), crate::SceneFeatures::DISPLAY);
-
+        .expect("scene editing must expose the sparse editable paragraph");
+    assert!(
+        editing.position_at(editor_text, 0).is_some(),
+        "the editable paragraph must be queryable"
+    );
+    assert!(
+        editing.position_at(display_text, 0).is_none(),
+        "the display sibling must not acquire editing facts"
+    );
+    assert!(
+        scene.selection().is_ok(),
+        "selection access must expose the sparse selectable paragraph"
+    );
+    assert!(
+        scene.interaction().is_ok(),
+        "point interaction must expose the sparse hit-testable paragraph"
+    );
+    assert!(
+        scene.sources().is_err(),
+        "whole-scene source traversal must reject the display sibling"
+    );
+    assert!(
+        scene.semantics().is_err(),
+        "editing does not imply semantic structure"
+    );
     let display_geometry = layout
         .cached_geometry_for_test(display)
         .expect("display sibling remains resident");
@@ -2730,6 +2753,30 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     assert_eq!(
         cache_residency.sources(),
         editor_residency.bytes().sources()
+    );
+
+    let position = editing
+        .position_at(editor_text, 0)
+        .expect("editor start remains represented");
+    let selection = editing
+        .collapsed_selection(&position)
+        .expect("editor caret forms a selection");
+    let selections = editing
+        .selection_set([selection])
+        .expect("editor selection set is valid");
+    let mut composition = editing
+        .begin_composition(&selections, CompositionId::from_bytes(*b"sparse-compose01"))
+        .expect("sparse editor begins composition")
+        .into_session();
+    composition
+        .update(composition.epoch(), CompositionUpdate::new("preedit"))
+        .expect("sparse composition updates");
+    let projected = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("sparse composition prepares");
+    assert!(
+        projected.scene().editing().is_ok(),
+        "projected editing must expose the sparse composition target"
     );
 }
 

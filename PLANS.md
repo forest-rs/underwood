@@ -458,6 +458,33 @@ contract, while `TextBlock` mutates one exactly sized string directly. The
 running ledger and raw checkpoints are in
 `docs/proof/compact-artifact-deletion-ledger-2026-07-27.md`.
 
+The final three-sample live-heap rerun improves those ordinary-tier ratios
+again: 1,000 display labels retain 3,220,368 bytes above the Underwood font
+baseline versus Parley's 3,378,240-byte delta (**0.95×**), while editable
+labels retain 3,564,368 bytes (**1.06×**). The bounded 64-entry churn window is
+1.07× Parley's live delta and requests fewer bytes over 1,000 creations.
+Seven-sample medians keep localized edits at 1.95× Parley and make all
+1,000-unit exact/closest/position queries faster than the matched Parley
+queries.
+
+The final capability audit also corrected a facade mirage: sparse policies
+previously retained one editor without permitting the scene-wide checked
+editing facade. Interaction, selection, and editing facades now open when at
+least one represented paragraph retains the required closure and traverse only
+resident observations; display siblings remain absent and unqueryable.
+Whole-scene source and semantic facades retain their stricter all-paragraph
+gate. The complete upgrade, churn, source-heavy, bidi, native-composition,
+portability, and repository proof is recorded in
+`docs/proof/capability-scaled-scenes-progress-2026-07-26.md`.
+
+Design-0021 is a runtime-representation compaction, not yet a source-code
+compaction. Its Rook audit records 19,756 affected production lines after
+excluding inline test modules, up from 18,380 before the design. All duplicate
+retained owners are genuinely deleted, but the streaming builder and facade
+vocabulary remains large. Follow-up `und-0re` has no compatibility promise and
+must materially delete that construction/forwarding complexity without a new
+`ShapedText` API or private Parley fork.
+
 ### Risks and controls
 
 - **Arc optimism:** shared paragraph records are not sufficient if every
@@ -477,9 +504,10 @@ localized-edit work laws; unchanged records are shared rather than copied;
 adapter hits do not re-lower; one-byte edits do not clone untouched paragraph
 or leaf storage; common records avoid per-glyph allocation; and the full Rust
 1.88, `no_std`, formatting, lint, test, documentation, repository, and
-protected-remote gates pass. The final representation must also pass the
-Design-0021 residency, edit, allocation, query, churn, and deletion gates; an
-O(change) result with an unacceptable constant factor is not complete.
+protected-remote gates pass. The final representation passes the Design-0021
+residency, edit, allocation, query, churn, and named-owner deletion gates. The
+larger construction source surface is explicitly carried by `und-0re` rather
+than being mislabeled as complete conceptual simplification.
 
 ## Module boundaries and Parley Engine convergence
 

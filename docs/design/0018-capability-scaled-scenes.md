@@ -116,28 +116,38 @@ let selection = scene.selection();
 let editing = scene.editing();
 ```
 
-A fallible facade returns `Result<_, MissingSceneCapability>` and names the
-required, requested, and resident capabilities when it is unavailable.
-Methods that require that facade do not remain on the unconditional display
-surface. This is a programming diagnostic, not a recoverable approximation or
-a request to allocate lazily.
+A fallible facade returns `Result<_, MissingSceneCapability>` when no
+represented paragraph retains the required closure and names one concrete
+missing request. Methods that require that facade do not remain on the
+unconditional display surface. This is a programming diagnostic, not a
+recoverable approximation or a request to allocate lazily.
 
-The shortcuts above apply when every paragraph required by the operation has
-the capability. A mixed-capability scene also exposes paragraph views:
+In a mixed-capability scene the interaction, selection, and editing facades
+traverse only paragraphs that physically retained their observations. A
+position in an omitted paragraph is unrepresented; selection or editing
+rejects it through the operation's ordinary validation result. Normal-flow
+point lookup identifies the layout paragraph first and therefore does not jump
+from a display-only paragraph to a distant interactive sibling. Region-flow
+closest-hit behavior remains defined over the physically retained hit
+geometry.
+
+Source and semantic traversal retain their stricter whole-scene gate because
+their accessors accept arbitrary public line, fragment, and glyph views.
+Opening those facades for a sparse subset would either make every accessor
+fallible or admit a panic when a caller supplies a display-only record. A
+future paragraph-scoped structural view may relax that gate without weakening
+the current contract.
+
+This keeps the sparse case usable without introducing one forwarding facade
+type per paragraph and capability:
 
 ```rust
-let editor = scene
-    .paragraph(editor_id)
-    .expect("the paragraph is represented");
-let editing = editor
+let editing = scene
     .editing()
-    .expect("the paragraph is missing native text input");
+    .expect("the scene contains no editable paragraph");
+let caret = editing.position_at(editor_text, 0);
+assert!(editing.position_at(display_text, 0).is_none());
 ```
-
-A point query may use layout-base indexes to identify a paragraph before
-checking its hit sidecar. If that paragraph lacks hit testing, the query
-returns `MissingSceneCapability` naming the paragraph; it does not skip to
-another paragraph or synthesize an approximate hit.
 
 ## Capability model
 

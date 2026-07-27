@@ -2206,14 +2206,22 @@ fn assert_mixed_residency(
                 paragraph.bytes().hit_testing() > 0,
                 "the editor must retain hit-testing facts"
             );
-            assert!(
-                paragraph.bytes().selection() > 0,
-                "the editor must retain selection facts"
+            assert_eq!(
+                paragraph.bytes().selection(),
+                0,
+                "selection must derive from the shared interaction artifact"
             );
-            assert!(
-                paragraph.bytes().navigation() > 0,
-                "the editor must retain navigation facts"
+            assert_eq!(
+                paragraph.bytes().navigation(),
+                0,
+                "navigation must derive from the shared interaction artifact"
             );
+            scene
+                .selection()
+                .expect("the editable request must expose selection");
+            scene
+                .editing()
+                .expect("the editable request must expose navigation");
         } else {
             display_paragraphs += 1;
             assert_eq!(

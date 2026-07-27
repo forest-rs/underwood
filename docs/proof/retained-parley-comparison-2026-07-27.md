@@ -2,9 +2,18 @@
 
 ## Verdict
 
-The current retained stack passes its asymptotic repeat and query claims, but
-fails the memory, edit-latency, allocation, and churn comparison badly enough
-to block completion of `und-oh0.13.17`.
+The baseline retained stack passed its asymptotic repeat and query claims, but
+failed memory, edit latency, allocation, and churn badly enough to select and
+block on Design-0021. The historical tables below preserve that failure.
+
+The completed compact-artifact implementation reverses the verdict. At 1,000
+labels, current display and editable live-heap deltas are 0.95× and 1.06× the
+matched Parley deltas. A localized edit has a 6.09 µs median versus Parley's
+3.12 µs, uses 16 operation-owned preparation allocations and 3,200 requested
+bytes, and remains independent of unchanged sibling count. Exact repeats
+allocate nothing. The matched 1,000-unit hit queries are faster than Parley.
+The current result passes every blocking Design-0021 numeric gate without a
+Parley fork or new `ShapedText` API.
 
 This is not a claim that Underwood and Parley expose identical products.
 Underwood additionally retains revision-safe source mapping, capability
@@ -201,24 +210,39 @@ Design-0021 sets blocking targets of at most 1.5× Parley display residency,
 and 8 KiB requested bytes per edit. The current epic is not complete until
 those gates pass or a separately approved design replaces them.
 
-## Design-0021 progress checkpoint
+## Design-0021 completion checkpoint
 
 The baseline above records the problem that selected Design-0021. The compact
 artifact work subsequently removed duplicate movement forms, per-glyph paint
 owners, deep scene publication, inline diagnostic payloads, and the deep
 formation key.
 
-The current exact 1,000-label live-heap deltas are 3,611,328 bytes for
-display-only Underwood and 4,035,328 bytes for editable Underwood, against
-3,378,240 bytes for Parley: 1.07× and 1.19× respectively. The ordinary
-residency gates now pass with room to spare. Optional warm adapter retention
-is still 4.07× and remains disabled by default.
+Three current live-heap samples were byte-for-byte stable. After subtracting
+the corresponding font baseline, the 1,000-label deltas are:
 
-The epic is not complete: localized edit is still about 3.2× Parley and makes
-88 allocation calls, so it misses both the 2× latency gate and the 16-call
-gate. This checkpoint supersedes the baseline ratios for current-state
+| Tier | Underwood | Parley | Ratio |
+|---|---:|---:|---:|
+| display labels | 3,220,368 B | 3,378,240 B | **0.95×** |
+| editable labels | 3,564,368 B | 3,378,240 B | **1.06×** |
+| 64-entry churn after creating 1,000 labels | 310,496 B | 291,008 B | **1.07×** |
+
+Seven current release samples at 1,000 labels give a 6.09 µs median localized
+edit versus 3.12 µs for Parley, or **1.95×**. The allocation-counter tunnel
+attributes exactly 16 preparation calls and 3,200 requested bytes to the
+changed paragraph; publication adds two small host-visible allocations in the
+independent `malloc_history` process. Exact repeat and repaint remain
+allocation-free.
+
+At 1,000 units, current exact hit, closest hit, and byte-position medians are
+83, 127, and 129 ns, versus Parley's 160, 200, and 181 ns. Bounded creation
+churn has an 8.92 µs median versus Parley's 5.11 µs, evicts exactly 936 entries
+to retain 64, and requests 3,006,152 bytes over 1,000 creations versus
+Parley's 3,204,854 bytes.
+
+This final checkpoint supersedes the baseline ratios for current-state
 decisions without rewriting the historical measurements that motivated the
-design.
+design. Optional warm adapter retention remains separately observable and
+disabled by default.
 
 ## Non-claims
 

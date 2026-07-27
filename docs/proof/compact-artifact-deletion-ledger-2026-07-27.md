@@ -145,9 +145,10 @@ same internal paragraph-source view used by document paragraphs.
 
 | Obligation | Before | After | Status |
 |---|---|---|---|
-| affected production files | 30 | 31 | in progress; one focused cursor module added |
-| affected physical lines | 19,381 | 19,011 | in progress; −370 |
-| seven duplicate-owner files | 6,161 | 5,317 | in progress; −844 |
+| affected production files | 30 | 31 | reviewed; one focused cursor module added |
+| affected physical lines | 19,381 | 21,154 | reviewed; +1,773 including inline tests |
+| production lines before inline test modules | 18,380 | 19,756 | reviewed; +1,376 |
+| seven duplicate-owner files | 6,161 | 6,810 | reviewed; +649 |
 | portable complete cursor graph | present | deleted | complete |
 | copied scene cursor graph | present | deleted | complete |
 | adapter final-output cache | present | deleted | complete |
@@ -158,8 +159,53 @@ same internal paragraph-source view used by document paragraphs.
 | one canonical paragraph artifact | absent | present | complete |
 | borrowed indexed capability views | partial | present | complete |
 
-This ledger stays pending until the implementation, numeric gates, and
-requirement-by-requirement audit are complete.
+The size screen did its job: runtime ownership became smaller while
+construction and facade source became larger. The closure audit below does not
+rename that growth as simplification. Follow-up `und-0re` owns a fresh
+conceptual-compaction design with the post-0021 production count as its
+ratchet.
+
+## Rook closure audit
+
+### Real
+
+- Every named duplicate retained owner is deleted; `rg` finds no cursor graph,
+  copied scene graph, adapter final-output cache, clone-repaint, nested
+  flattening, or miniature-document symbol.
+- The live allocator confirms the representation win rather than merely the
+  deterministic accounting: current display and editable label deltas are
+  0.95× and 1.06× matched Parley.
+- Exact repeat and repaint allocate nothing. One changed paragraph reaches the
+  16-call / 3,200-byte gate and a 1.95× median edit-time ratio without an
+  upstream patch.
+- Selection and navigation are borrowed derivations over the shared artifact,
+  not zero-length owners hidden behind capability names.
+- Sparse capabilities are usable, not only resident: checked interaction,
+  selection, and editing facades expose the paragraphs that retained a closure
+  while display siblings remain physically absent.
+
+### Mirage
+
+The implementation does **not** earn a claim that Design-0021 made the source
+code smaller. `PreparedParagraphBuilder`, its line/run state machines, compact
+record types, borrowed views, and scene facades add more production code than
+the deleted owners. That code no longer duplicates retained glyph, source, or
+cursor data, but the construction vocabulary remains too large to call
+conceptually compact.
+
+### Most dangerous remaining gap
+
+The public checked adapter boundary and the trusted in-tree Parley adapter use
+the same verbose streaming state machines. A future maintainer could preserve
+all of that ceremony merely because it is now public, even if a smaller
+boundary can express the same proof. This is architecture debt, not a reason
+to restore duplicate values or retain validation on hot scene traversal.
+
+`und-0re` therefore starts from the current representation with no
+compatibility promise. It must delete a complete construction/forwarding
+concept and materially reduce the 19,756 production-line screen while
+preserving the numeric gates. Tom's current upstream boundary is explicit:
+that work may not depend on new `ShapedText` methods or a private Parley fork.
 
 ## Cursor-derivation checkpoint
 

@@ -434,6 +434,73 @@ cargo check -p underwood -p underwood_parley \
 cargo xtask check
 ```
 
-The final proof will rerun these gates and the complete matched
-allocation/residency matrices after the remaining representation and
-wind-tunnel work is complete.
+## Final capability and churn audit
+
+Design-0021 subsequently replaced the maximal interaction representation with
+one compact paragraph artifact and derived selection/navigation views. The
+capability model remains physical: a sparse editable paragraph retains sources
+and hit placement, while selection, movement, and native-input operations
+derive from the shared artifact and therefore report zero dedicated sidecar
+bytes. The final capability wind tunnel was corrected to assert queryability
+instead of requiring the deleted duplicate selection and navigation owners.
+
+That rerun exposed and fixed one API mirage. Sparse feature policies previously
+saved memory, but the checked scene facades required every paragraph to retain
+the requested closure. A scene with one editor and 999 display siblings could
+not acquire its editing facade. Interaction, selection, and editing facades
+now open when at least one represented paragraph retains the closure and
+traverse only physically resident observations. Operations targeting an
+omitted display paragraph continue to return their ordinary absent/invalid
+result. Whole-scene source and semantic traversal keep the all-paragraph gate
+because their accessors accept arbitrary public display records. A
+display-only scene still returns `MissingSceneCapability`.
+
+The current 1,000-paragraph capability allocation matrix reports:
+
+| Scenario | Allocation calls | Requested bytes |
+|---|---:|---:|
+| cold display | 10,415 | 2,087,024 |
+| cold accessible | 14,415 | 2,583,024 |
+| cold hit-testable link | 16,415 | 2,719,024 |
+| cold selectable | 13,415 | 2,319,024 |
+| cold editable | 13,415 | 2,319,024 |
+| warm display → accessible | 14,000 | 2,040,000 |
+| warm display → link | 16,000 | 2,176,000 |
+| warm display → selectable | 13,001 | 1,776,320 |
+| warm display → editable | 13,000 | 1,776,000 |
+| editable → display | 0 | 0 |
+| one sparse editor upgrade | 2,017 | 522,032 |
+| exact sparse-scene repeat | 0 | 0 |
+
+Every warm upgrade asserts zero analysis, shaping, and line formation. The
+mixed upgrade asserts exactly one geometry/capability change and no sibling
+promotion. Exact repeat remains allocation-free.
+
+The separate matched Parley churn tunnel now creates 1,000 identities while
+retaining 64:
+
+| Engine | Median ns/create | Allocation calls | Requested bytes | Live delta |
+|---|---:|---:|---:|---:|
+| Underwood | 8,918 | 15,044 | 3,006,152 | 310,496 B |
+| Parley | 5,110 | 11,252 | 3,204,854 | 291,008 B |
+
+Underwood evicts exactly 936 cache entries, retains no adapter facts by
+default, requests fewer total bytes, and holds 1.07× Parley's live delta.
+
+The source-heavy/bidi/native matrix is not a prose claim. Workspace
+regressions exercise:
+
+- collapsed whitespace across semantic leaves with complete source ownership;
+- one grapheme split across leaves as one hit, movement, and replacement unit;
+- mixed-bidi visual selection with disjoint logical ranges;
+- mixed-bidi alignment and region offsets moving paint, hits, carets,
+  selections, and semantics together;
+- generated combining marks and collapsed generated composition provenance;
+- multi-selection composition normalization and exact composition epochs;
+- the showcase's Chinese IME commit through real bundled fallback.
+
+The final Rust 1.88, native and wasm `no_std`, rustdoc, formatting, Clippy,
+workspace tests, examples, snapshots, and repository-policy gates pass. The
+matched current residency, edit, query, and churn results are recorded in
+`retained-parley-comparison-2026-07-27.md` and
+`compact-artifact-deletion-ledger-2026-07-27.md`.

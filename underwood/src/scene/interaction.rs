@@ -93,9 +93,9 @@ impl CompositionScene {
         Ok(ProjectedSceneSourceAccess::new(self))
     }
 
-    /// Returns exact point interaction when every represented paragraph retained it.
+    /// Returns exact point interaction over paragraphs that retained it.
     pub fn interaction(&self) -> Result<ProjectedSceneInteraction<'_>, MissingSceneCapability> {
-        require_scene_features(
+        require_any_scene_features(
             &self.core.spine,
             &self.requested,
             SceneFeatures::DISPLAY.with_hit_testing(),
@@ -105,7 +105,7 @@ impl CompositionScene {
 
     /// Returns complete native composition interaction and geometry access.
     pub fn editing(&self) -> Result<ProjectedSceneEditing<'_>, MissingSceneCapability> {
-        require_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
         Ok(ProjectedSceneEditing::new(self))
     }
 
@@ -428,9 +428,9 @@ impl TextScene {
         Ok(SceneSourceAccess::new(self))
     }
 
-    /// Returns exact point interaction when every represented paragraph retained it.
+    /// Returns exact point interaction over paragraphs that retained it.
     pub fn interaction(&self) -> Result<SceneInteraction<'_>, MissingSceneCapability> {
-        require_scene_features(
+        require_any_scene_features(
             &self.core.spine,
             &self.requested,
             SceneFeatures::DISPLAY.with_hit_testing(),
@@ -440,13 +440,13 @@ impl TextScene {
 
     /// Returns complete selection, navigation, and native-input access.
     pub fn editing(&self) -> Result<SceneEditing<'_>, MissingSceneCapability> {
-        require_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
         Ok(SceneEditing::new(self))
     }
 
     /// Returns selection construction and geometry access.
     pub fn selection(&self) -> Result<SceneSelection<'_>, MissingSceneCapability> {
-        require_scene_features(&self.core.spine, &self.requested, SceneFeatures::SELECTABLE)?;
+        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::SELECTABLE)?;
         Ok(SceneSelection::new(self))
     }
 
@@ -1240,6 +1240,40 @@ impl TextScene {
                 .map(move |cluster| (positioned, cluster))
         })
     }
+}
+
+fn require_any_scene_features(
+    spine: &SceneSpine,
+    requested: &SceneFeaturePolicy,
+    required: SceneFeatures,
+) -> Result<(), MissingSceneCapability> {
+    let mut missing = None;
+    for positioned in spine.segments() {
+        let paragraph = positioned.segment.paragraph;
+        let resident = positioned.segment.geometry.features;
+        if resident.contains(required) {
+            return Ok(());
+        }
+        if missing.is_none() {
+            missing = Some(MissingSceneCapability::new(
+                Some(paragraph),
+                required,
+                requested.features_for(paragraph),
+                resident,
+            ));
+        }
+    }
+    if spine.summary().paragraphs == 0 && requested.default_features().contains(required) {
+        return Ok(());
+    }
+    Err(missing.unwrap_or_else(|| {
+        MissingSceneCapability::new(
+            None,
+            required,
+            requested.default_features(),
+            requested.default_features(),
+        )
+    }))
 }
 
 fn require_scene_features(
