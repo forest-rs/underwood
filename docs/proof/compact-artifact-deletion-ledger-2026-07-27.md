@@ -454,3 +454,22 @@ accounting falls to 3,342,394 bytes and caller-held scene accounting to
 2,910,128 bytes. Edited-paragraph preparation retains 1,056 net bytes. The
 exception table adds no allocation to paragraphs whose glyphs all use the
 ordinary representation.
+
+The matched live-heap rerun after the slice and glyph changes measured
+6,730,848 bytes above Underwood's font baseline versus 3,378,240 bytes above
+Parley's: 1.99× for 1,000 editable labels. Display-only labels measured
+1.81×. This passes the original editable ceiling, but not the lower target.
+
+## Indexed contiguous paragraph cache
+
+Large `ParagraphCache` values no longer live inline in B-tree nodes. One
+compact `ParagraphId → usize` tree indexes a contiguous entry vector, so
+lookup remains logarithmic while payload residency is paid once. Replacement
+updates in place; removal uses swap-remove and repairs the one moved index.
+Document release and bounded LRU eviction still scan the authoritative store
+without parallel membership or recency owners.
+
+The allocation-counter tunnel removes another 305,592 net bytes at 1,000
+labels. Stable repeat, repaint, and edited-paragraph retention are unchanged.
+The vector's geometric growth adds nine cold allocation events; those are
+creation-time capacity events, not per-edit or steady-state work.

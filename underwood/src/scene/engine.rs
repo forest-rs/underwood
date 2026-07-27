@@ -334,8 +334,8 @@ struct PublishedBlock {
 /// Mutable owner of one paragraph adapter and its retained stage caches.
 pub struct LayoutEngine {
     paragraphs: Box<dyn ParagraphFormation>,
-    cache: BTreeMap<ParagraphId, ParagraphCache>,
-    composition_cache: BTreeMap<ParagraphId, ParagraphCache>,
+    cache: ParagraphCacheStore,
+    composition_cache: ParagraphCacheStore,
     clock: u64,
     budget: CacheBudget,
     cache_work: CacheWork,
@@ -371,8 +371,8 @@ impl LayoutEngine {
         paragraphs.set_retained_facts_budget(budget.adapter_facts_bytes);
         Self {
             paragraphs,
-            cache: BTreeMap::new(),
-            composition_cache: BTreeMap::new(),
+            cache: ParagraphCacheStore::default(),
+            composition_cache: ParagraphCacheStore::default(),
             clock: 0,
             budget,
             cache_work: CacheWork::default(),
@@ -1945,7 +1945,7 @@ struct CacheAccess {
 }
 
 fn reuse_paragraph_geometry(
-    cache: &mut BTreeMap<ParagraphId, ParagraphCache>,
+    cache: &mut ParagraphCacheStore,
     paragraph: &Paragraph,
     request: &SceneRequest<'_>,
     region_cursor: Option<RegionCursor>,
@@ -1981,7 +1981,7 @@ fn reuse_paragraph_geometry(
 
 fn prepare_paragraph_geometry(
     paragraphs: &mut dyn ParagraphFormation,
-    cache: &mut BTreeMap<ParagraphId, ParagraphCache>,
+    cache: &mut ParagraphCacheStore,
     alternate: Option<&ParagraphCache>,
     cache_kind: CacheKind,
     paragraph: &Paragraph,
@@ -2695,6 +2695,81 @@ struct ParagraphCache {
     paint_runs: Vec<PaintRun>,
     segment: Arc<ParagraphSceneSegment>,
     accounted_bytes: usize,
+}
+
+#[derive(Debug, Default)]
+struct ParagraphCacheStore {
+    index: BTreeMap<ParagraphId, usize>,
+    entries: Vec<(ParagraphId, ParagraphCache)>,
+}
+
+impl ParagraphCacheStore {
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn clear(&mut self) {
+        self.index.clear();
+        self.entries.clear();
+    }
+
+    fn contains_key(&self, paragraph: &ParagraphId) -> bool {
+        self.index.contains_key(paragraph)
+    }
+
+    fn get(&self, paragraph: &ParagraphId) -> Option<&ParagraphCache> {
+        let index = *self.index.get(paragraph)?;
+        self.entries.get(index).map(|(_, entry)| entry)
+    }
+
+    fn get_mut(&mut self, paragraph: &ParagraphId) -> Option<&mut ParagraphCache> {
+        let index = *self.index.get(paragraph)?;
+        self.entries.get_mut(index).map(|(_, entry)| entry)
+    }
+
+    fn insert(&mut self, paragraph: ParagraphId, entry: ParagraphCache) -> Option<ParagraphCache> {
+        if let Some(index) = self.index.get(&paragraph).copied() {
+            return Some(core::mem::replace(&mut self.entries[index].1, entry));
+        }
+        let index = self.entries.len();
+        self.entries.push((paragraph, entry));
+        self.index.insert(paragraph, index);
+        None
+    }
+
+    fn remove(&mut self, paragraph: &ParagraphId) -> Option<ParagraphCache> {
+        let index = self.index.remove(paragraph)?;
+        let (_, removed) = self.entries.swap_remove(index);
+        if let Some((moved, _)) = self.entries.get(index) {
+            *self
+                .index
+                .get_mut(moved)
+                .expect("the swapped cache entry remains indexed") = index;
+        }
+        Some(removed)
+    }
+
+    fn retain(&mut self, mut keep: impl FnMut(&ParagraphId, &ParagraphCache) -> bool) {
+        let mut index = 0;
+        while index < self.entries.len() {
+            if keep(&self.entries[index].0, &self.entries[index].1) {
+                index += 1;
+            } else {
+                let paragraph = self.entries[index].0;
+                self.remove(&paragraph);
+            }
+        }
+    }
+
+    fn values(&self) -> impl Iterator<Item = &ParagraphCache> {
+        self.entries.iter().map(|(_, entry)| entry)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (&ParagraphId, &ParagraphCache)> {
+        self.entries
+            .iter()
+            .map(|(paragraph, entry)| (paragraph, entry))
+    }
 }
 
 impl ParagraphCache {
