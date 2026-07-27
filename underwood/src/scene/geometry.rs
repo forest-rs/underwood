@@ -107,6 +107,13 @@ impl CachedHitSidecar {
             retain || clusters.is_empty() && slices.is_empty(),
             "discarded hit geometry must not be built"
         );
+        debug_assert!(
+            clusters.windows(2).all(|pair| {
+                pair[0].line < pair[1].line
+                    || pair[0].line == pair[1].line && pair[0].bounds.x1 <= pair[1].bounds.x1
+            }),
+            "retained clusters must remain ordered by line and visual inline end"
+        );
         Self {
             records: retain.then(|| Arc::new(CachedHitGeometry { clusters, slices })),
         }

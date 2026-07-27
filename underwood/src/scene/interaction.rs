@@ -1531,10 +1531,7 @@ fn hit_cluster(
     let geometry = &positioned.segment.geometry;
     let local = HORIZONTAL_AXES.local_point(positioned, point);
     if geometry.lines.is_empty() {
-        return geometry
-            .hit_geometry
-            .iter()
-            .find(|cluster| HORIZONTAL_AXES.rect(cluster.bounds).contains(local));
+        return exact_in_clusters(&geometry.hit_geometry, local);
     }
     if normal_flow {
         let line = geometry
@@ -1544,11 +1541,7 @@ fn hit_cluster(
         if local.block < bounds.block_start || local.block > bounds.block_end {
             return None;
         }
-        return geometry
-            .hit_geometry
-            .clusters_for_line(line)
-            .iter()
-            .find(|cluster| HORIZONTAL_AXES.rect(cluster.bounds).contains(local));
+        return exact_in_clusters(geometry.hit_geometry.clusters_for_line(line), local);
     }
     geometry
         .lines
@@ -1557,13 +1550,7 @@ fn hit_cluster(
         .find_map(|(line, bounds)| {
             let bounds = HORIZONTAL_AXES.rect(bounds.bounds);
             (bounds.block_start <= local.block && local.block <= bounds.block_end)
-                .then(|| {
-                    geometry
-                        .hit_geometry
-                        .clusters_for_line(line)
-                        .iter()
-                        .find(|cluster| HORIZONTAL_AXES.rect(cluster.bounds).contains(local))
-                })
+                .then(|| exact_in_clusters(geometry.hit_geometry.clusters_for_line(line), local))
                 .flatten()
         })
 }
@@ -1640,14 +1627,44 @@ fn closest_cluster<'a>(
 }
 
 fn closest_in_clusters(clusters: &[CachedCluster], point: LogicalPoint) -> Option<&CachedCluster> {
-    clusters.iter().min_by(|first, second| {
-        let first = distance_to_rect_axes(point, HORIZONTAL_AXES.rect(first.bounds));
-        let second = distance_to_rect_axes(point, HORIZONTAL_AXES.rect(second.bounds));
-        first
-            .0
-            .total_cmp(&second.0)
-            .then_with(|| first.1.total_cmp(&second.1))
-    })
+    let next = clusters
+        .partition_point(|cluster| HORIZONTAL_AXES.rect(cluster.bounds).inline_end < point.inline);
+    let mut closest = match (next.checked_sub(1), (next < clusters.len()).then_some(next)) {
+        (Some(before), Some(after)) => {
+            let before_distance =
+                distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[before].bounds));
+            let after_distance =
+                distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[after].bounds));
+            if before_distance.0 < after_distance.0
+                || before_distance.0 == after_distance.0 && before_distance.1 <= after_distance.1
+            {
+                before
+            } else {
+                after
+            }
+        }
+        (Some(index), None) | (None, Some(index)) => index,
+        (None, None) => return None,
+    };
+    let closest_distance =
+        distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[closest].bounds));
+    while let Some(previous) = closest.checked_sub(1)
+        && distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[previous].bounds))
+            == closest_distance
+    {
+        closest = previous;
+    }
+    clusters.get(closest)
+}
+
+fn exact_in_clusters(clusters: &[CachedCluster], point: LogicalPoint) -> Option<&CachedCluster> {
+    let index = clusters
+        .partition_point(|cluster| HORIZONTAL_AXES.rect(cluster.bounds).inline_end < point.inline);
+    let cluster = clusters.get(index)?;
+    HORIZONTAL_AXES
+        .rect(cluster.bounds)
+        .contains(point)
+        .then_some(cluster)
 }
 
 fn cached_caret_at(carets: &[CachedCaret], position: SourcePosition) -> Option<&CachedCaret> {
