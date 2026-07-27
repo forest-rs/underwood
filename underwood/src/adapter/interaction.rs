@@ -498,6 +498,11 @@ impl<'a> Iterator for PreparedInteractionUnits<'a> {
         Some(self.view(unit))
     }
 
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        let unit = self.units.nth(n)?;
+        Some(self.view(unit))
+    }
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         self.units.size_hint()
     }
@@ -506,6 +511,11 @@ impl<'a> Iterator for PreparedInteractionUnits<'a> {
 impl<'a> DoubleEndedIterator for PreparedInteractionUnits<'a> {
     fn next_back(&mut self) -> Option<Self::Item> {
         let unit = self.units.next_back()?;
+        Some(self.view(unit))
+    }
+
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        let unit = self.units.nth_back(n)?;
         Some(self.view(unit))
     }
 }

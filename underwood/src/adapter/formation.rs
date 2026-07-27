@@ -174,15 +174,13 @@ pub enum ParagraphFormationReuse {
     Cold,
     /// Reusable analysis, shaping, or formed-line facts were available.
     RetainedFacts,
-    /// The exact portable prepared output was already retained.
-    RetainedOutput,
 }
 
 impl ParagraphFormationReuse {
     /// Returns whether the output used any retained adapter facts.
     #[must_use]
     pub const fn is_hit(self) -> bool {
-        matches!(self, Self::RetainedFacts | Self::RetainedOutput)
+        matches!(self, Self::RetainedFacts)
     }
 }
 
@@ -316,9 +314,7 @@ impl ParagraphFormationChange {
         self.paint
     }
 
-    /// Returns whether the exact validated prepared output remains reusable.
-    #[must_use]
-    pub const fn output_retained(self) -> bool {
+    pub(crate) const fn is_unchanged(self) -> bool {
         !self.analysis
             && !self.font_selection
             && !self.ligature_policy
@@ -335,7 +331,6 @@ impl ParagraphFormationChange {
 #[derive(Clone, Copy, Debug)]
 pub struct ParagraphInput<'a> {
     preparation: ParagraphPreparationId,
-    reuse_preparation: Option<ParagraphPreparationId>,
     change: ParagraphFormationChange,
     features: SceneFeatures,
     paragraph: ParagraphId,
@@ -353,7 +348,6 @@ pub struct ParagraphInput<'a> {
 impl<'a> ParagraphInput<'a> {
     pub(crate) const fn new(
         preparation: ParagraphPreparationId,
-        reuse_preparation: Option<ParagraphPreparationId>,
         change: ParagraphFormationChange,
         features: SceneFeatures,
         paragraph: ParagraphId,
@@ -369,7 +363,6 @@ impl<'a> ParagraphInput<'a> {
     ) -> Self {
         Self {
             preparation,
-            reuse_preparation,
             change,
             features,
             paragraph,
@@ -389,15 +382,6 @@ impl<'a> ParagraphInput<'a> {
     #[must_use]
     pub const fn preparation(&self) -> ParagraphPreparationId {
         self.preparation
-    }
-
-    /// Returns another lane whose exact prepared output may be rebound here.
-    ///
-    /// `LayoutEngine` supplies this only after proving every backend-visible
-    /// formation and paint facet equal. Backends may ignore the opportunity.
-    #[must_use]
-    pub const fn reusable_preparation(&self) -> Option<ParagraphPreparationId> {
-        self.reuse_preparation
     }
 
     /// Returns facets proven changed since this preparation identity last ran.

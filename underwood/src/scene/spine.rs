@@ -43,7 +43,6 @@ pub(super) struct SceneSummary {
     pub(super) lines: usize,
     pub(super) fragments: usize,
     pub(super) clusters: usize,
-    pub(super) carets: usize,
     pub(super) movements: usize,
     pub(super) texts: usize,
     pub(super) semantics: usize,
@@ -76,7 +75,6 @@ impl Default for SceneSummary {
             lines: 0,
             fragments: 0,
             clusters: 0,
-            carets: 0,
             movements: 0,
             texts: 0,
             semantics: 0,
@@ -133,8 +131,7 @@ impl SceneSummary {
             lines: geometry.lines.len(),
             fragments: geometry.fragments.len(),
             clusters: geometry.hit_geometry.len(),
-            carets: geometry.carets.len(),
-            movements: geometry.movements.len(),
+            movements: geometry.movement_count(),
             texts: geometry
                 .source_map
                 .as_deref()
@@ -178,7 +175,6 @@ impl SceneSummary {
             lines: left.lines.saturating_add(right.lines),
             fragments: left.fragments.saturating_add(right.fragments),
             clusters: left.clusters.saturating_add(right.clusters),
-            carets: left.carets.saturating_add(right.carets),
             movements: left.movements.saturating_add(right.movements),
             texts: left.texts.saturating_add(right.texts),
             semantics: left.semantics.saturating_add(right.semantics),
@@ -651,7 +647,6 @@ pub(super) struct SegmentPosition {
     pub(super) line_base: usize,
     pub(super) fragment_base: usize,
     pub(super) cluster_base: usize,
-    pub(super) caret_base: usize,
     pub(super) movement_base: usize,
     pub(super) text_base: usize,
     pub(super) semantic_base: usize,
@@ -666,7 +661,6 @@ impl SegmentPosition {
         self.line_base = self.line_base.saturating_add(summary.lines);
         self.fragment_base = self.fragment_base.saturating_add(summary.fragments);
         self.cluster_base = self.cluster_base.saturating_add(summary.clusters);
-        self.caret_base = self.caret_base.saturating_add(summary.carets);
         self.movement_base = self.movement_base.saturating_add(summary.movements);
         self.text_base = self.text_base.saturating_add(summary.texts);
         self.semantic_base = self.semantic_base.saturating_add(summary.semantics);
@@ -823,6 +817,7 @@ impl ExactSizeIterator for SpineRegionAttempts<'_> {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapter::PreparedCursorTopology;
 
     fn segment(paragraph: u32, height: f64) -> Arc<ParagraphSceneSegment> {
         let document = crate::DocumentId::from_bytes(*b"scene-spine-test");
@@ -833,8 +828,14 @@ mod tests {
             },
             Arc::new(CachedGeometry {
                 features: SceneFeatures::DISPLAY,
+                artifact: PreparedParagraphFacts::for_test(
+                    0,
+                    SceneFeatures::DISPLAY,
+                    PreparedCursorTopology::from_movements(Vec::new(), Vec::new(), 0),
+                ),
                 facts: Arc::new(CachedGeometryFacts {
                     height,
+                    empty_bounds: Rect::ZERO,
                     lines: Vec::new(),
                     glyphs: Vec::new(),
                 }),
@@ -844,9 +845,7 @@ mod tests {
                 source_map: None,
                 line_sources: CachedSidecar::new(false, Vec::new()),
                 paint_sources: CachedSidecar::new(false, Vec::new()),
-                hit_geometry: CachedHitSidecar::new(false, Vec::new(), Vec::new()),
-                carets: CachedSidecar::new(false, Vec::new()),
-                movements: CachedSidecar::new(false, Vec::new()),
+                hit_geometry: CachedHitSidecar::new(false, Vec::new()),
                 semantics: CachedSidecar::new(false, Vec::new()),
             }),
             None,

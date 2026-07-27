@@ -300,6 +300,10 @@ impl PreparedLine {
         self.trailing_whitespace_advance
     }
 
+    pub(crate) const fn trailing_whitespace_start(&self) -> u32 {
+        self.trailing_whitespace_start
+    }
+
     /// Returns the number of explicit Western inter-word opportunities.
     #[must_use]
     pub fn western_justification_opportunities(&self) -> usize {
@@ -357,13 +361,322 @@ impl PreparedLine {
     }
 }
 
+const NO_CURSOR_INDEX: u32 = u32::MAX;
+
+#[derive(Clone, Copy, Debug)]
+struct CompactCursorStep {
+    target: u32,
+    source: u32,
+}
+
+impl CompactCursorStep {
+    const NONE: Self = Self {
+        target: NO_CURSOR_INDEX,
+        source: NO_CURSOR_INDEX,
+    };
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CompactCursorMovement {
+    position: PreparedClusterSide,
+    caret: PreparedCaret,
+    steps: [CompactCursorStep; 4],
+}
+
+#[derive(Debug)]
+pub(crate) struct PreparedCursorTopology {
+    movements: Vec<CompactCursorMovement>,
+    unit_sources: Vec<Range<u32>>,
+}
+
+impl PreparedCursorTopology {
+    fn try_new(
+        mut movements: Vec<PreparedCursorMovement>,
+        unit_sources: Vec<Range<u32>>,
+        lines: &[PreparedLine],
+        text_len: u32,
+        features: SceneFeatures,
+    ) -> Result<Self, PreparationError> {
+        if !features.has_selection() {
+            if !movements.is_empty() {
+                return Err(PreparationError::invalid_output());
+            }
+            return Ok(Self {
+                movements: Vec::new(),
+                unit_sources: Vec::new(),
+            });
+        }
+        movements.sort_by_key(|movement| cluster_side_key(movement.position()));
+        if movements
+            .windows(2)
+            .any(|pair| pair[0].position() == pair[1].position())
+        {
+            return Err(PreparationError::invalid_output());
+        }
+        let mut compact = Vec::with_capacity(movements.len());
+        for movement in &movements {
+            if movement.position().offset() > text_len {
+                return Err(PreparationError::invalid_output());
+            }
+            let line = usize::try_from(movement.caret().line())
+                .map_err(|_| PreparationError::invalid_output())?;
+            if if lines.is_empty() {
+                line != 0 || movement.caret().inline() != 0.0
+            } else {
+                lines
+                    .get(line)
+                    .is_none_or(|line| movement.caret().inline() > line.advance)
+            } {
+                return Err(PreparationError::invalid_output());
+            }
+            compact.push(CompactCursorMovement {
+                position: movement.position(),
+                caret: movement.caret(),
+                steps: [
+                    compact_cursor_step(movement.previous_visual(), &movements, &unit_sources)?,
+                    compact_cursor_step(movement.next_visual(), &movements, &unit_sources)?,
+                    compact_cursor_step(movement.previous_logical(), &movements, &unit_sources)?,
+                    compact_cursor_step(movement.next_logical(), &movements, &unit_sources)?,
+                ],
+            });
+        }
+        Ok(Self {
+            movements: compact,
+            unit_sources,
+        })
+    }
+
+    pub(crate) fn movements(&self) -> PreparedCursorMovements<'_> {
+        PreparedCursorMovements { topology: self }
+    }
+
+    fn contains(&self, position: PreparedClusterSide) -> bool {
+        self.movements
+            .binary_search_by_key(&cluster_side_key(position), |movement| {
+                cluster_side_key(movement.position)
+            })
+            .is_ok()
+    }
+
+    pub(crate) fn accounted_owned_bytes(&self) -> usize {
+        vec_bytes::<CompactCursorMovement>(self.movements.capacity()).saturating_add(vec_bytes::<
+            Range<u32>,
+        >(
+            self.unit_sources.capacity(),
+        ))
+    }
+
+    fn selection_owned_bytes(&self) -> usize {
+        self.movements.capacity().saturating_mul(
+            size_of::<PreparedClusterSide>().saturating_add(size_of::<PreparedCaret>()),
+        )
+    }
+
+    fn navigation_owned_bytes(&self) -> usize {
+        self.accounted_owned_bytes()
+            .saturating_sub(self.selection_owned_bytes())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_movements(
+        movements: Vec<PreparedCursorMovement>,
+        unit_sources: impl IntoIterator<Item = Range<u32>>,
+        text_len: u32,
+    ) -> Arc<Self> {
+        Arc::new(
+            Self::try_new(
+                movements,
+                unit_sources.into_iter().collect(),
+                &[],
+                text_len,
+                SceneFeatures::EDITABLE,
+            )
+            .expect("test cursor topology must be valid"),
+        )
+    }
+}
+
+fn compact_cursor_step(
+    step: Option<&PreparedCursorStep>,
+    movements: &[PreparedCursorMovement],
+    unit_sources: &[Range<u32>],
+) -> Result<CompactCursorStep, PreparationError> {
+    let Some(step) = step else {
+        return Ok(CompactCursorStep::NONE);
+    };
+    let target = movements
+        .binary_search_by_key(&cluster_side_key(step.target()), |movement| {
+            cluster_side_key(movement.position())
+        })
+        .map_err(|_| PreparationError::invalid_output())?;
+    let source = step
+        .source()
+        .map(|source| {
+            unit_sources
+                .iter()
+                .position(|candidate| *candidate == source)
+                .ok_or_else(PreparationError::invalid_output)
+        })
+        .transpose()?;
+    Ok(CompactCursorStep {
+        target: u32::try_from(target).map_err(|_| PreparationError::invalid_output())?,
+        source: source
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| PreparationError::invalid_output())?
+            .unwrap_or(NO_CURSOR_INDEX),
+    })
+}
+
+const fn cluster_side_key(position: PreparedClusterSide) -> (u32, u8) {
+    (
+        position.offset(),
+        match position.affinity() {
+            TextAffinity::Upstream => 0,
+            TextAffinity::Downstream => 1,
+        },
+    )
+}
+
+/// Borrowed complete cursor topology for one prepared paragraph.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedCursorMovements<'a> {
+    topology: &'a PreparedCursorTopology,
+}
+
+impl<'a> PreparedCursorMovements<'a> {
+    /// Returns the number of represented cursor positions.
+    #[must_use]
+    pub fn len(self) -> usize {
+        self.topology.movements.len()
+    }
+
+    /// Returns whether no cursor positions are represented.
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self.topology.movements.is_empty()
+    }
+
+    /// Iterates represented positions in paragraph-local source order.
+    pub fn iter(self) -> impl ExactSizeIterator<Item = PreparedCursorMovementView<'a>> {
+        (0..self.topology.movements.len()).map(|index| PreparedCursorMovementView {
+            topology: self.topology,
+            index,
+        })
+    }
+
+    pub(crate) fn get(
+        self,
+        position: PreparedClusterSide,
+    ) -> Option<PreparedCursorMovementView<'a>> {
+        let index = self
+            .topology
+            .movements
+            .binary_search_by_key(&cluster_side_key(position), |movement| {
+                cluster_side_key(movement.position)
+            })
+            .ok()?;
+        Some(PreparedCursorMovementView {
+            topology: self.topology,
+            index,
+        })
+    }
+
+    pub(crate) fn selection_owned_bytes(self) -> usize {
+        self.topology.selection_owned_bytes()
+    }
+
+    pub(crate) fn navigation_owned_bytes(self) -> usize {
+        self.topology.navigation_owned_bytes()
+    }
+}
+
+/// Borrowed cursor transitions for one paragraph-local position.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedCursorMovementView<'a> {
+    topology: &'a PreparedCursorTopology,
+    index: usize,
+}
+
+impl<'a> PreparedCursorMovementView<'a> {
+    fn record(self) -> CompactCursorMovement {
+        self.topology.movements[self.index]
+    }
+
+    /// Returns the source position for these transitions.
+    #[must_use]
+    pub fn position(self) -> PreparedClusterSide {
+        self.record().position
+    }
+
+    /// Returns the exact paragraph-local caret placement.
+    #[must_use]
+    pub fn caret(self) -> PreparedCaret {
+        self.record().caret
+    }
+
+    /// Returns the preceding position in visual order.
+    #[must_use]
+    pub fn previous_visual(self) -> Option<PreparedCursorStepView<'a>> {
+        self.step(0)
+    }
+
+    /// Returns the following position in visual order.
+    #[must_use]
+    pub fn next_visual(self) -> Option<PreparedCursorStepView<'a>> {
+        self.step(1)
+    }
+
+    /// Returns the preceding interaction-unit boundary in logical order.
+    #[must_use]
+    pub fn previous_logical(self) -> Option<PreparedCursorStepView<'a>> {
+        self.step(2)
+    }
+
+    /// Returns the following interaction-unit boundary in logical order.
+    #[must_use]
+    pub fn next_logical(self) -> Option<PreparedCursorStepView<'a>> {
+        self.step(3)
+    }
+
+    fn step(self, index: usize) -> Option<PreparedCursorStepView<'a>> {
+        let step = self.record().steps[index];
+        (step.target != NO_CURSOR_INDEX).then_some(PreparedCursorStepView {
+            topology: self.topology,
+            step,
+        })
+    }
+}
+
+/// Borrowed destination and crossed unit for one cursor transition.
+#[derive(Clone, Copy, Debug)]
+pub struct PreparedCursorStepView<'a> {
+    topology: &'a PreparedCursorTopology,
+    step: CompactCursorStep,
+}
+
+impl PreparedCursorStepView<'_> {
+    /// Returns the destination position.
+    #[must_use]
+    pub fn target(self) -> PreparedClusterSide {
+        self.topology.movements[self.step.target as usize].position
+    }
+
+    /// Returns the complete interaction unit crossed by this step.
+    #[must_use]
+    pub fn source(self) -> Option<Range<u32>> {
+        (self.step.source != NO_CURSOR_INDEX)
+            .then(|| self.topology.unit_sources[self.step.source as usize].clone())
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PreparedParagraphFacts {
     text_len: u32,
     resolved_direction: ResolvedDirection,
     features: SceneFeatures,
     lines: Vec<PreparedLine>,
-    movements: Arc<Vec<PreparedCursorMovement>>,
+    movements: Arc<PreparedCursorTopology>,
 }
 
 /// Validated owned formed lines for one paragraph.
@@ -442,14 +755,6 @@ impl PreparedParagraph {
         if positions.is_empty() && text_len == 0 {
             positions.push(PreparedClusterSide::new(0, TextAffinity::Downstream));
         }
-        let movements = Arc::new(movements.into_iter().collect::<Vec<_>>());
-        if !features.has_selection() && !movements.is_empty() {
-            return Err(PreparationError::invalid_output());
-        }
-        let movement_positions: Vec<_> = movements
-            .iter()
-            .map(PreparedCursorMovement::position)
-            .collect();
         let unit_sources: Vec<_> = lines
             .iter()
             .flat_map(|line| {
@@ -459,41 +764,17 @@ impl PreparedParagraph {
                     .map(PreparedInteractionUnit::source)
             })
             .collect();
+        let movements = PreparedCursorTopology::try_new(
+            movements.into_iter().collect(),
+            unit_sources,
+            &lines,
+            text_len,
+            features,
+        )?;
         if features.has_selection()
             && positions
                 .iter()
-                .any(|position| !movement_positions.contains(position))
-            || movements.iter().enumerate().any(|(index, movement)| {
-                movements[..index]
-                    .iter()
-                    .any(|previous| previous.position() == movement.position())
-                    || movement.position().offset() > text_len
-                    || usize::try_from(movement.caret().line()).map_or(true, |line| {
-                        if lines.is_empty() {
-                            line != 0 || movement.caret().inline() != 0.0
-                        } else {
-                            lines
-                                .get(line)
-                                .is_none_or(|line| movement.caret().inline() > line.advance)
-                        }
-                    })
-                    || movement.previous_visual().is_some_and(|step| {
-                        !movement_positions.contains(&step.target())
-                            || !valid_step_source(step, &unit_sources)
-                    })
-                    || movement.next_visual().is_some_and(|step| {
-                        !movement_positions.contains(&step.target())
-                            || !valid_step_source(step, &unit_sources)
-                    })
-                    || movement.previous_logical().is_some_and(|step| {
-                        !movement_positions.contains(&step.target())
-                            || !valid_step_source(step, &unit_sources)
-                    })
-                    || movement.next_logical().is_some_and(|step| {
-                        !movement_positions.contains(&step.target())
-                            || !valid_step_source(step, &unit_sources)
-                    })
-            })
+                .any(|position| !movements.contains(*position))
         {
             return Err(PreparationError::invalid_output());
         }
@@ -504,7 +785,7 @@ impl PreparedParagraph {
                 resolved_direction,
                 features,
                 lines,
-                movements,
+                movements: Arc::new(movements),
             }),
         })
     }
@@ -552,8 +833,8 @@ impl PreparedParagraph {
 
     /// Returns complete paragraph-local cursor transitions.
     #[must_use]
-    pub fn movements(&self) -> &[PreparedCursorMovement] {
-        &self.facts.movements
+    pub fn movements(&self) -> PreparedCursorMovements<'_> {
+        self.facts.movements.movements()
     }
 
     /// Returns the deterministic byte charge for this prepared paragraph's
@@ -566,69 +847,6 @@ impl PreparedParagraph {
     pub fn accounted_owned_bytes(&self) -> usize {
         self.facts.estimated_owned_bytes()
     }
-
-    /// Replaces only glyph paint coverage while retaining all other prepared facts.
-    ///
-    /// The original paragraph has already proved line, interaction, source,
-    /// and cursor invariants. Each replacement coverage is validated against
-    /// its glyph source; line and movement validation is intentionally not
-    /// repeated.
-    pub fn try_map_glyph_paint(
-        &self,
-        mut map: impl FnMut(&PreparedGlyph) -> Result<GlyphPaintCoverage, PreparationError>,
-    ) -> Result<Self, PreparationError> {
-        let mut lines = Vec::with_capacity(self.facts.lines.len());
-        for line in &self.facts.lines {
-            let mut runs = Vec::with_capacity(line.runs.len());
-            for run in &line.runs {
-                let mut glyphs = Vec::with_capacity(run.glyphs.len());
-                for glyph in &run.glyphs {
-                    glyphs.push(PreparedGlyph::try_new(
-                        glyph.id,
-                        glyph.source.clone(),
-                        glyph.advance,
-                        glyph.offset,
-                        map(glyph)?,
-                    )?);
-                }
-                runs.push(PreparedRun {
-                    source: run.source.clone(),
-                    bidi_level: run.bidi_level,
-                    script: run.script,
-                    font: run.font.clone(),
-                    font_size: run.font_size,
-                    synthesis: run.synthesis.clone(),
-                    normalized_coords: Arc::clone(&run.normalized_coords),
-                    unrendered_source: Arc::clone(&run.unrendered_source),
-                    glyphs,
-                });
-            }
-            lines.push(PreparedLine {
-                slot: line.slot,
-                source: line.source.clone(),
-                break_reason: line.break_reason,
-                advance: line.advance,
-                trailing_whitespace_start: line.trailing_whitespace_start,
-                trailing_whitespace_advance: line.trailing_whitespace_advance,
-                baseline: line.baseline,
-                height: line.height,
-                content_ascent: line.content_ascent,
-                content_descent: line.content_descent,
-                interaction: Arc::clone(&line.interaction),
-                runs,
-            });
-        }
-        Ok(Self {
-            paragraph: self.paragraph,
-            facts: Arc::new(PreparedParagraphFacts {
-                text_len: self.facts.text_len,
-                resolved_direction: self.facts.resolved_direction,
-                features: self.facts.features,
-                lines,
-                movements: Arc::clone(&self.facts.movements),
-            }),
-        })
-    }
 }
 
 impl PreparedParagraphFacts {
@@ -636,12 +854,33 @@ impl PreparedParagraphFacts {
         self.features
     }
 
+    pub(crate) fn movements(&self) -> PreparedCursorMovements<'_> {
+        self.movements.movements()
+    }
+
+    pub(crate) fn lines(&self) -> &[PreparedLine] {
+        &self.lines
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        text_len: u32,
+        features: SceneFeatures,
+        movements: Arc<PreparedCursorTopology>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            text_len,
+            resolved_direction: ResolvedDirection::Ltr,
+            features,
+            lines: Vec::new(),
+            movements,
+        })
+    }
+
     pub(crate) fn estimated_owned_bytes(&self) -> usize {
         let mut bytes = size_of::<Self>()
             .saturating_add(vec_bytes::<PreparedLine>(self.lines.capacity()))
-            .saturating_add(vec_bytes::<PreparedCursorMovement>(
-                self.movements.capacity(),
-            ));
+            .saturating_add(self.movements.accounted_owned_bytes());
         for line in &self.lines {
             bytes = bytes
                 .saturating_add(vec_bytes::<PreparedInteractionUnit>(
@@ -675,11 +914,6 @@ impl PreparedParagraphFacts {
 
 const fn vec_bytes<T>(capacity: usize) -> usize {
     size_of::<T>().saturating_mul(capacity)
-}
-
-fn valid_step_source(step: &PreparedCursorStep, unit_sources: &[Range<u32>]) -> bool {
-    step.source()
-        .is_none_or(|source| unit_sources.contains(&source))
 }
 
 fn push_unique_position(positions: &mut Vec<PreparedClusterSide>, position: PreparedClusterSide) {

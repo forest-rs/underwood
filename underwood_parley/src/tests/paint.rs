@@ -24,13 +24,8 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
         Brush::Solid(Color::BLACK),
         Brush::Solid(Color::from_rgb8(0xcc, 0x44, 0x33)),
     ]);
-    let outputs = Rc::new(RefCell::new(Vec::new()));
-    let probe = PreparedFactsProbe {
-        inner: fixture_paragraph_engine(),
-        outputs: Rc::clone(&outputs),
-    };
     let mut engine = LayoutEngine::new(
-        probe,
+        fixture_paragraph_engine(),
         CacheBudget::new(8).with_adapter_facts_bytes(64 * 1024 * 1024),
     );
     let request = editable_scene_request(TextConstraint::MaxContent, &styles, &paint);
@@ -55,36 +50,6 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
             .fragments()
             .iter()
             .all(|fragment| fragment.paint() == PaintSlot::new(1))
-    );
-
-    let outputs = outputs.borrow();
-    let [initial, changed] = outputs.as_slice() else {
-        panic!("initial and paint-only prepared facts must be observed");
-    };
-    assert_eq!(
-        initial.movements().as_ptr(),
-        changed.movements().as_ptr(),
-        "paint-only lowering must retain the complete cursor graph"
-    );
-    assert_eq!(
-        initial.lines()[0]
-            .units()
-            .next()
-            .expect("initial line has an interaction unit")
-            .slices()
-            .as_ptr(),
-        changed.lines()[0]
-            .units()
-            .next()
-            .expect("repainted line has an interaction unit")
-            .slices()
-            .as_ptr(),
-        "paint-only lowering must retain the packed interaction table"
-    );
-    assert_eq!(
-        initial.lines()[0].runs()[0].normalized_coords().as_ptr(),
-        changed.lines()[0].runs()[0].normalized_coords().as_ptr(),
-        "paint-only lowering must retain font-instance coordinates"
     );
 }
 

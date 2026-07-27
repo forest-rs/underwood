@@ -45,16 +45,6 @@ impl SourcePosition {
     pub(super) const fn new(offset: u32, affinity: TextAffinity) -> Self {
         Self { offset, affinity }
     }
-
-    pub(super) const fn key(self) -> (u32, u8) {
-        (
-            self.offset,
-            match self.affinity {
-                TextAffinity::Upstream => 0,
-                TextAffinity::Downstream => 1,
-            },
-        )
-    }
 }
 
 /// Source represented by a retained record.
@@ -86,6 +76,7 @@ struct SourceRelation {
 struct SourceLeaf {
     paragraph: SourceSpan,
     text: TextId,
+    semantic: SemanticId,
     source: SourceLeafKind,
 }
 
@@ -103,7 +94,7 @@ enum SourceLeafKind {
 
 impl ParagraphSourceMap {
     #[cfg(test)]
-    pub(super) fn snapshot_leaf(text: TextId, len: u32) -> Self {
+    pub(super) fn snapshot_leaf(text: TextId, semantic: SemanticId, len: u32) -> Self {
         Self {
             source_len: len,
             projected_len: len,
@@ -112,6 +103,7 @@ impl ParagraphSourceMap {
             leaves: alloc::vec![SourceLeaf {
                 paragraph: SourceSpan::new(0, len),
                 text,
+                semantic,
                 source: SourceLeafKind::Snapshot { start: 0 },
             }],
         }
@@ -150,6 +142,7 @@ impl ParagraphSourceMap {
             leaves.push(SourceLeaf {
                 paragraph: span.paragraph.clone().into(),
                 text: span.text,
+                semantic: span.semantic,
                 source: match span.source {
                     LeafSpanSource::Snapshot { start } => SourceLeafKind::Snapshot { start },
                     LeafSpanSource::Composition { id, epoch, start } => {
@@ -204,6 +197,36 @@ impl ParagraphSourceMap {
 
     pub(super) fn leaf_indices_for_span(&self, span: SourceSpan) -> Range<usize> {
         self.leaf_indices_for_source(self.source_range(span))
+    }
+
+    pub(super) fn semantic_for_span(&self, span: SourceSpan) -> Option<SemanticId> {
+        let owner_affinity = if span.is_empty() {
+            TextAffinity::Upstream
+        } else {
+            TextAffinity::Downstream
+        };
+        let owner = self.source_position(span.start, owner_affinity);
+        let transformed = !span.is_empty()
+            && self.relations.iter().any(|relation| {
+                relation.kind != ProjectionKind::Identity
+                    && !relation.projected.is_empty()
+                    && relation.projected.start <= span.start
+                    && span.end <= relation.projected.end
+            });
+        if span.is_empty() || transformed {
+            return self
+                .leaf_for_position(owner, TextAffinity::Downstream)
+                .or_else(|| self.leaf_for_position(owner, TextAffinity::Upstream))
+                .map(|index| self.leaves[index].semantic);
+        }
+
+        let source = self.source_range(span);
+        let indices = self.leaf_indices_for_source(source);
+        let first = self.leaves.get(indices.start)?.semantic;
+        self.leaves[indices]
+            .iter()
+            .all(|leaf| leaf.semantic == first)
+            .then_some(first)
     }
 
     pub(super) fn ranges_for_leaf(&self, index: u32) -> LocalRanges<'_> {

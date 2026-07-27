@@ -36,19 +36,10 @@ fn alignment_only_change_reuses_adapter_prepared_facts() {
         .expect("alignment-only scene prepares");
     assert_eq!(adjusted.work().flow().paragraphs(), 0);
 
-    let outputs = outputs.borrow();
-    let [initial, retained] = outputs.as_slice() else {
-        panic!("alignment change must make exactly two adapter observations");
-    };
     assert_eq!(
-        initial.lines().as_ptr(),
-        retained.lines().as_ptr(),
-        "alignment-only adjustment must clone retained prepared facts instead of lowering again"
-    );
-    assert_eq!(
-        initial.movements().as_ptr(),
-        retained.movements().as_ptr(),
-        "alignment-only adjustment must retain the validated cursor graph"
+        outputs.borrow().len(),
+        1,
+        "alignment-only adjustment must use the published paragraph artifact without another adapter call"
     );
 }
 
@@ -111,23 +102,13 @@ fn composition_preparation_does_not_displace_committed_adapter_facts() {
     assert_eq!(adjusted.work().flow().paragraphs(), 0);
 
     let outputs = outputs.borrow();
-    let [initial, composition, retained] = outputs.as_slice() else {
-        panic!("committed, composition, and retained committed facts must be observed");
+    let [initial, composition] = outputs.as_slice() else {
+        panic!("only the initial committed and transient composition facts must be observed");
     };
     assert_ne!(
         initial.lines().as_ptr(),
         composition.lines().as_ptr(),
         "composition must own distinct prepared facts"
-    );
-    assert_eq!(
-        initial.lines().as_ptr(),
-        retained.lines().as_ptr(),
-        "composition preparation must not evict the retained committed facts"
-    );
-    assert_eq!(
-        initial.movements().as_ptr(),
-        retained.movements().as_ptr(),
-        "the committed cursor graph must survive composition preparation"
     );
 }
 

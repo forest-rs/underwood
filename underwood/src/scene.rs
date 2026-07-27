@@ -13,8 +13,10 @@ use crate::adapter::{
     AnalysisRun, AnalysisStyleId, FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId,
     LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationCacheDiagnostics, ParagraphFormationChange, ParagraphFormationReuse,
-    ParagraphInput, ParagraphPreparationId, PreparationErrorKind, PreparedParagraph,
-    PreparedParagraphFacts, ShapingRun, ShapingStyleId, TextAffinity,
+    ParagraphInput, ParagraphPreparationId, PreparationErrorKind, PreparedClusterSide,
+    PreparedCursorMovementView, PreparedCursorMovements, PreparedCursorStepView,
+    PreparedInteractionUnitView, PreparedLine, PreparedParagraph, PreparedParagraphFacts,
+    ShapingRun, ShapingStyleId, TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{

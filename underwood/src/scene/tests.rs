@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{rc::Rc, sync::Arc, vec, vec::Vec};
-use core::cell::Cell;
+use core::{cell::Cell, iter::once};
 
 use peniko::Blob;
 
@@ -14,9 +14,9 @@ use crate::adapter::{
     GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphInput,
     ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedCaret,
-    PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph,
-    PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
-    PreparedRun, TextAffinity,
+    PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedCursorTopology,
+    PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
+    PreparedParagraph, PreparedRun, TextAffinity,
 };
 use crate::{
     AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
@@ -2565,48 +2565,57 @@ fn visual_selection_uses_the_reciprocal_caret_path() {
         .expect("test text must append");
     edit.commit().expect("test document must commit");
     let snapshot = document.snapshot();
+    let semantic = snapshot.paragraphs()[0].leaves[0].semantic_id();
     let start = SnapshotTextPosition::new(snapshot.revision(), text, 0, TextAffinity::Downstream);
     let end = SnapshotTextPosition::new(snapshot.revision(), text, 2, TextAffinity::Upstream);
     let source = SnapshotTextRange::new(snapshot.revision(), text, 0..2);
-    let local_start = super::SourcePosition::new(0, TextAffinity::Downstream);
-    let local_end = super::SourcePosition::new(2, TextAffinity::Upstream);
-    let local_source = super::SourceSpan::new(0, 2);
+    let local_start = PreparedClusterSide::new(0, TextAffinity::Downstream);
+    let local_end = PreparedClusterSide::new(2, TextAffinity::Upstream);
     let segment = Arc::new(super::ParagraphSceneSegment::new(
         paragraph,
         Arc::new(super::CachedGeometry {
             features: crate::SceneFeatures::EDITABLE,
+            artifact: super::PreparedParagraphFacts::for_test(
+                2,
+                crate::SceneFeatures::EDITABLE,
+                PreparedCursorTopology::from_movements(
+                    vec![
+                        PreparedCursorMovement::new(
+                            local_start,
+                            PreparedCaret::try_new(0, 0.0).expect("test caret"),
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                        PreparedCursorMovement::new(
+                            local_end,
+                            PreparedCaret::try_new(0, 0.0).expect("test caret"),
+                            Some(PreparedCursorStep::new(local_start, Some(0..2))),
+                            None,
+                            None,
+                            None,
+                        ),
+                    ],
+                    once(0..2),
+                    2,
+                ),
+            ),
             facts: Arc::new(super::CachedGeometryFacts {
                 height: 0.0,
+                empty_bounds: Rect::ZERO,
                 lines: Vec::new(),
                 glyphs: Vec::new(),
             }),
             line_fragments: Vec::new(),
             fragments: Vec::new(),
             paint_glyphs: Vec::new(),
-            source_map: Some(Arc::new(super::ParagraphSourceMap::snapshot_leaf(text, 2))),
+            source_map: Some(Arc::new(super::ParagraphSourceMap::snapshot_leaf(
+                text, semantic, 2,
+            ))),
             line_sources: super::CachedSidecar::from_records(Vec::new()),
             paint_sources: super::CachedSidecar::from_records(Vec::new()),
-            hit_geometry: super::CachedHitSidecar::from_records(Vec::new(), Vec::new()),
-            carets: super::CachedSidecar::from_records(Vec::new()),
-            movements: super::CachedSidecar::from_records(vec![
-                super::CachedCursorMovement {
-                    position: local_start,
-                    previous_visual: None,
-                    next_visual: None,
-                    previous_logical: None,
-                    next_logical: None,
-                },
-                super::CachedCursorMovement {
-                    position: local_end,
-                    previous_visual: Some(super::CachedCursorStep {
-                        target: local_start,
-                        source: Some(local_source),
-                    }),
-                    next_visual: None,
-                    previous_logical: None,
-                    next_logical: None,
-                },
-            ]),
+            hit_geometry: super::CachedHitSidecar::from_records(Vec::new()),
             semantics: super::CachedSidecar::from_records(Vec::new()),
         }),
         None,
@@ -2737,8 +2746,7 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
         .cached_geometry_for_test(paragraph)
         .expect("display geometry remains resident");
     assert!(geometry.hit_geometry.is_empty());
-    assert!(geometry.carets.is_empty());
-    assert!(geometry.movements.is_empty());
+    assert_eq!(geometry.movement_count(), 0);
     assert!(geometry.source_map.is_none());
     assert!(geometry.semantics.is_empty());
 
@@ -2829,9 +2837,9 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
         .cached_geometry_for_test(editor)
         .expect("editor paragraph remains resident");
     assert_eq!(display_geometry.features, crate::SceneFeatures::DISPLAY);
-    assert!(display_geometry.movements.is_empty());
+    assert_eq!(display_geometry.movement_count(), 0);
     assert_eq!(editor_geometry.features, crate::SceneFeatures::EDITABLE);
-    assert!(!editor_geometry.movements.is_empty());
+    assert_ne!(editor_geometry.movement_count(), 0);
 
     let residency = scene.residency();
     assert_eq!(residency.paragraphs(), 2);

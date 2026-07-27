@@ -1998,20 +1998,6 @@ fn prepare_paragraph_geometry(
                     entry.paint_runs != projection.paint_runs,
                 )
             });
-    let reusable_preparation = alternate
-        .filter(|entry| {
-            entry
-                .formation_key
-                .adapter_change(
-                    projection,
-                    constraint,
-                    region_flow,
-                    region_cursor,
-                    entry.paint_runs != projection.paint_runs,
-                )
-                .output_retained()
-        })
-        .map(|entry| entry.preparation);
     let cached = cache.contains_key(&paragraph.id);
     let formation_matches = cache.get(&paragraph.id).is_some_and(|entry| {
         entry.formation_key.matches(
@@ -2122,7 +2108,59 @@ fn prepare_paragraph_geometry(
     let shared_hit = shared_query
         .as_ref()
         .and_then(|query| shared_preparation.lookup(query, current_use));
-    let (prepared, candidate_transcript, formation_reuse) = if let Some(hit) = shared_hit {
+    let retained_artifact = (formation_matches && paint_matches)
+        .then(|| cache.get(&paragraph.id))
+        .flatten()
+        .filter(|entry| {
+            entry
+                .segment
+                .geometry
+                .artifact
+                .features()
+                .contains(features)
+        })
+        .map(|entry| {
+            (
+                Arc::clone(&entry.segment.geometry.artifact),
+                entry.segment.region_transcript.clone(),
+            )
+        })
+        .or_else(|| {
+            alternate
+                .filter(|entry| {
+                    entry
+                        .formation_key
+                        .adapter_change(
+                            projection,
+                            constraint,
+                            region_flow,
+                            region_cursor,
+                            entry.paint_runs != projection.paint_runs,
+                        )
+                        .is_unchanged()
+                        && entry
+                            .segment
+                            .geometry
+                            .artifact
+                            .features()
+                            .contains(features)
+                })
+                .map(|entry| {
+                    (
+                        Arc::clone(&entry.segment.geometry.artifact),
+                        entry.segment.region_transcript.clone(),
+                    )
+                })
+        });
+    let (prepared, candidate_transcript, formation_reuse) = if let Some((facts, transcript)) =
+        retained_artifact
+    {
+        (
+            PreparedParagraph::from_shared_facts(paragraph.id, facts),
+            transcript,
+            None,
+        )
+    } else if let Some(hit) = shared_hit {
         // The shared result may represent a state the identity-bound backend
         // never observed. Drop any older lane-local facts so a later call
         // cannot apply a relative change record to the wrong base.
@@ -2155,7 +2193,6 @@ fn prepare_paragraph_geometry(
         let output = match paragraphs.form(
             ParagraphInput::new(
                 preparation,
-                reusable_preparation,
                 formation_change,
                 features,
                 paragraph.id,
@@ -2198,8 +2235,7 @@ fn prepare_paragraph_geometry(
                     reuse.cold_capability_upgrades =
                         reuse.cold_capability_upgrades.saturating_add(1);
                 }
-                ParagraphFormationReuse::RetainedFacts
-                | ParagraphFormationReuse::RetainedOutput => {
+                ParagraphFormationReuse::RetainedFacts => {
                     reuse.warm_capability_upgrades =
                         reuse.warm_capability_upgrades.saturating_add(1);
                 }

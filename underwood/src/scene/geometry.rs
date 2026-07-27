@@ -13,6 +13,7 @@ use core::{mem::size_of, ops::Deref};
 #[derive(Clone, Debug)]
 pub(super) struct CachedGeometry {
     pub(super) features: SceneFeatures,
+    pub(super) artifact: Arc<PreparedParagraphFacts>,
     pub(super) facts: Arc<CachedGeometryFacts>,
     pub(super) line_fragments: Vec<Range<usize>>,
     pub(super) fragments: Vec<CachedFragment>,
@@ -21,14 +22,13 @@ pub(super) struct CachedGeometry {
     pub(super) line_sources: CachedSidecar<SourceSpan>,
     pub(super) paint_sources: CachedSidecar<SourceSpan>,
     pub(super) hit_geometry: CachedHitSidecar,
-    pub(super) carets: CachedSidecar<CachedCaret>,
-    pub(super) movements: CachedSidecar<CachedCursorMovement>,
     pub(super) semantics: CachedSidecar<CachedSemantic>,
 }
 
 #[derive(Clone, Debug)]
 pub(super) struct CachedGeometryFacts {
     pub(super) height: f64,
+    pub(super) empty_bounds: Rect,
     pub(super) lines: Vec<CachedLine>,
     pub(super) glyphs: Vec<CachedGlyph>,
 }
@@ -93,49 +93,49 @@ pub(super) struct CachedHitSidecar {
 
 #[derive(Clone, Debug)]
 struct CachedHitGeometry {
-    clusters: Vec<CachedCluster>,
-    slices: Vec<CachedHitSlice>,
+    placements: Vec<CachedHitPlacement>,
 }
 
 impl CachedHitSidecar {
-    pub(super) fn new(
-        retain: bool,
-        clusters: Vec<CachedCluster>,
-        slices: Vec<CachedHitSlice>,
-    ) -> Self {
+    pub(super) fn new(retain: bool, placements: Vec<CachedHitPlacement>) -> Self {
         debug_assert!(
-            retain || clusters.is_empty() && slices.is_empty(),
+            retain || placements.is_empty(),
             "discarded hit geometry must not be built"
         );
         debug_assert!(
-            clusters.windows(2).all(|pair| {
+            placements.windows(2).all(|pair| {
                 pair[0].line < pair[1].line
-                    || pair[0].line == pair[1].line && pair[0].bounds.x1 <= pair[1].bounds.x1
+                    || pair[0].line == pair[1].line && pair[0].inline_end <= pair[1].inline_end
             }),
-            "retained clusters must remain ordered by line and visual inline end"
+            "retained hit placements must remain ordered by line and visual inline end"
         );
         Self {
-            records: retain.then(|| Arc::new(CachedHitGeometry { clusters, slices })),
+            records: retain.then(|| Arc::new(CachedHitGeometry { placements })),
         }
     }
 
     #[cfg(test)]
-    pub(super) fn from_records(clusters: Vec<CachedCluster>, slices: Vec<CachedHitSlice>) -> Self {
+    pub(super) fn from_records(placements: Vec<CachedHitPlacement>) -> Self {
         Self {
-            records: Some(Arc::new(CachedHitGeometry { clusters, slices })),
+            records: Some(Arc::new(CachedHitGeometry { placements })),
         }
     }
 
-    fn cluster_capacity(&self) -> usize {
+    fn capacity(&self) -> usize {
         self.records
             .as_ref()
-            .map_or(0, |records| records.clusters.capacity())
+            .map_or(0, |records| records.placements.capacity())
     }
 
-    fn slice_capacity(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.records
             .as_ref()
-            .map_or(0, |records| records.slices.capacity())
+            .map_or(0, |records| records.placements.len())
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     fn retain_from(&mut self, retained: &Self) {
@@ -144,44 +144,17 @@ impl CachedHitSidecar {
         }
     }
 
-    pub(super) fn slices_for(&self, cluster: &CachedCluster) -> &[CachedHitSlice] {
-        let records = self
-            .records
-            .as_ref()
-            .expect("a cached cluster belongs to retained hit geometry");
-        &records.slices[cluster.hit_slices.clone()]
-    }
-
-    pub(super) fn clusters_for_line(&self, line: usize) -> &[CachedCluster] {
-        let Some(records) = &self.records else {
-            return &[];
-        };
-        let start = records
-            .clusters
-            .partition_point(|cluster| cluster.line < line);
-        let end = records
-            .clusters
-            .partition_point(|cluster| cluster.line <= line);
-        &records.clusters[start..end]
-    }
-}
-
-impl Deref for CachedHitSidecar {
-    type Target = [CachedCluster];
-
-    fn deref(&self) -> &Self::Target {
+    fn placements(&self) -> &[CachedHitPlacement] {
         self.records
             .as_deref()
-            .map_or(&[], |records| records.clusters.as_slice())
+            .map_or(&[], |records| records.placements.as_slice())
     }
-}
 
-impl<'a> IntoIterator for &'a CachedHitSidecar {
-    type Item = &'a CachedCluster;
-    type IntoIter = core::slice::Iter<'a, CachedCluster>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
+    fn placements_for_line(&self, line: u32) -> &[CachedHitPlacement] {
+        let placements = self.placements();
+        let start = placements.partition_point(|placement| placement.line < line);
+        let end = placements.partition_point(|placement| placement.line <= line);
+        &placements[start..end]
     }
 }
 
@@ -238,46 +211,27 @@ struct PaintTopology {
     line_fragments: Vec<Range<usize>>,
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct CachedCluster {
+const SYNTHETIC_HIT_UNIT: u32 = u32::MAX;
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CachedHitPlacement {
+    line: u32,
+    unit: u32,
+    inline_end: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct CachedCluster<'a> {
     pub(super) source: SourceSpan,
     pub(super) semantic_id: SemanticId,
     pub(super) boundary: ClusterBoundary,
     pub(super) whitespace: ClusterWhitespace,
-    pub(super) hit_slices: Range<usize>,
     pub(super) bounds: Rect,
     pub(super) line: usize,
     pub(super) left: SourcePosition,
     pub(super) right: SourcePosition,
     pub(super) bidi_level: u8,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct CachedHitSlice {
-    pub(super) semantic_id: SemanticId,
-    pub(super) x0: f64,
-    pub(super) x1: f64,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct CachedCaret {
-    pub(super) position: SourcePosition,
-    pub(super) bounds: Rect,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct CachedCursorMovement {
-    pub(super) position: SourcePosition,
-    pub(super) previous_visual: Option<CachedCursorStep>,
-    pub(super) next_visual: Option<CachedCursorStep>,
-    pub(super) previous_logical: Option<CachedCursorStep>,
-    pub(super) next_logical: Option<CachedCursorStep>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct CachedCursorStep {
-    pub(super) target: SourcePosition,
-    pub(super) source: Option<SourceSpan>,
+    pub(super) prepared: Option<PreparedInteractionUnitView<'a>>,
 }
 
 #[derive(Clone, Debug)]
@@ -318,6 +272,183 @@ pub(super) enum LocalPosition {
 }
 
 impl CachedGeometry {
+    pub(super) fn hit_clusters(&self) -> impl Iterator<Item = CachedCluster<'_>> {
+        self.hit_geometry
+            .placements()
+            .iter()
+            .filter_map(|placement| self.hit_cluster(*placement))
+    }
+
+    pub(super) fn exact_hit_cluster(&self, line: usize, inline: f64) -> Option<CachedCluster<'_>> {
+        let line = u32::try_from(line).ok()?;
+        let placements = self.hit_geometry.placements_for_line(line);
+        let index = placements.partition_point(|placement| placement.inline_end < inline);
+        let cluster = self.hit_cluster(*placements.get(index)?)?;
+        (cluster.bounds.x0 <= inline && inline <= cluster.bounds.x1).then_some(cluster)
+    }
+
+    pub(super) fn closest_hit_cluster(
+        &self,
+        line: usize,
+        inline: f64,
+    ) -> Option<CachedCluster<'_>> {
+        let line = u32::try_from(line).ok()?;
+        let placements = self.hit_geometry.placements_for_line(line);
+        let next = placements.partition_point(|placement| placement.inline_end < inline);
+        let before = next.checked_sub(1);
+        let after = (next < placements.len()).then_some(next);
+        let mut closest = match (before, after) {
+            (Some(before), Some(after)) => {
+                let before_distance =
+                    inline_distance_to_rect(inline, self.hit_cluster(placements[before])?.bounds);
+                let after_distance =
+                    inline_distance_to_rect(inline, self.hit_cluster(placements[after])?.bounds);
+                if after_distance < before_distance {
+                    after
+                } else {
+                    before
+                }
+            }
+            (Some(index), None) | (None, Some(index)) => index,
+            (None, None) => return None,
+        };
+        let distance =
+            inline_distance_to_rect(inline, self.hit_cluster(placements[closest])?.bounds);
+        while let Some(previous) = closest.checked_sub(1) {
+            let previous_distance =
+                inline_distance_to_rect(inline, self.hit_cluster(placements[previous])?.bounds);
+            if previous_distance != distance {
+                break;
+            }
+            closest = previous;
+        }
+        self.hit_cluster(placements[closest])
+    }
+
+    fn hit_cluster(&self, placement: CachedHitPlacement) -> Option<CachedCluster<'_>> {
+        let line = usize::try_from(placement.line).ok()?;
+        let prepared_line = self.artifact.lines().get(line);
+        let prepared = (placement.unit != SYNTHETIC_HIT_UNIT)
+            .then(|| {
+                let unit = usize::try_from(placement.unit).ok()?;
+                prepared_line?.units().nth(unit)
+            })
+            .flatten();
+        let source = prepared.map_or_else(
+            || {
+                prepared_line
+                    .map(PreparedLine::source)
+                    .unwrap_or(0..0)
+                    .into()
+            },
+            |unit| unit.source().into(),
+        );
+        let source_map = self
+            .source_map
+            .as_deref()
+            .expect("hit-testing capability retains source provenance");
+        let semantic_source = prepared
+            .and_then(|unit| unit.slices().first())
+            .map_or(source, |slice| slice.source().into());
+        let semantic_id = source_map
+            .semantic_for_span(semantic_source)
+            .expect("validated hit units retain semantic ownership");
+        let (left, right, boundary, whitespace, bidi_level) = prepared.map_or_else(
+            || {
+                let offset = prepared_line.map_or(0, |line| line.source().start);
+                let affinity = if offset == 0 {
+                    TextAffinity::Downstream
+                } else {
+                    TextAffinity::Upstream
+                };
+                let position = SourcePosition::new(offset, affinity);
+                (
+                    position,
+                    position,
+                    ClusterBoundary::None,
+                    ClusterWhitespace::None,
+                    0,
+                )
+            },
+            |unit| {
+                (
+                    SourcePosition::new(unit.left().offset(), unit.left().affinity()),
+                    SourcePosition::new(unit.right().offset(), unit.right().affinity()),
+                    unit.boundary(),
+                    unit.whitespace(),
+                    unit.bidi_level(),
+                )
+            },
+        );
+        let bounds = if let Some(line_bounds) = self.lines.get(line).map(|line| line.bounds) {
+            let inline_start = if placement.unit == 0 {
+                line_bounds.x0
+            } else if placement.unit == SYNTHETIC_HIT_UNIT {
+                placement.inline_end
+            } else {
+                let previous = placement.unit.checked_sub(1)?;
+                self.hit_geometry
+                    .placements_for_line(placement.line)
+                    .get(usize::try_from(previous).ok()?)?
+                    .inline_end
+            };
+            Rect::new(
+                inline_start,
+                line_bounds.y0,
+                placement.inline_end,
+                line_bounds.y1,
+            )
+        } else {
+            self.empty_bounds
+        };
+        Some(CachedCluster {
+            source,
+            semantic_id,
+            boundary,
+            whitespace,
+            bounds,
+            line,
+            left,
+            right,
+            bidi_level,
+            prepared,
+        })
+    }
+
+    pub(super) fn movements(&self) -> Option<PreparedCursorMovements<'_>> {
+        self.features
+            .has_selection()
+            .then(|| self.artifact.movements())
+    }
+
+    pub(super) fn movement_count(&self) -> usize {
+        self.movements().map_or(0, PreparedCursorMovements::len)
+    }
+
+    pub(super) fn caret_bounds(&self, movement: PreparedCursorMovementView<'_>) -> Option<Rect> {
+        let caret = movement.caret();
+        let line = usize::try_from(caret.line()).ok()?;
+        let (line_bounds, adjusted_inline) =
+            match (self.artifact.lines().get(line), self.lines.get(line)) {
+                (Some(prepared), Some(cached)) => (
+                    cached.bounds,
+                    adjusted_caret_inline(prepared, cached.adjustment, caret.inline())?,
+                ),
+                (None, None)
+                    if self.artifact.lines().is_empty() && line == 0 && caret.inline() == 0.0 =>
+                {
+                    (self.empty_bounds, 0.0)
+                }
+                _ => return None,
+            };
+        Some(Rect::new(
+            line_bounds.x0 + adjusted_inline,
+            line_bounds.y0,
+            line_bounds.x0 + adjusted_inline + 1.0,
+            line_bounds.y1,
+        ))
+    }
+
     pub(super) fn retain_sidecars_from(&mut self, retained: &Self) {
         self.features = self.features.union(retained.features);
         if self.source_map.is_none() {
@@ -326,8 +457,13 @@ impl CachedGeometry {
         self.line_sources.retain_from(&retained.line_sources);
         self.paint_sources.retain_from(&retained.paint_sources);
         self.hit_geometry.retain_from(&retained.hit_geometry);
-        self.carets.retain_from(&retained.carets);
-        self.movements.retain_from(&retained.movements);
+        if retained
+            .artifact
+            .features()
+            .contains(self.artifact.features())
+        {
+            self.artifact = Arc::clone(&retained.artifact);
+        }
         self.semantics.retain_from(&retained.semantics);
     }
 
@@ -348,18 +484,15 @@ impl CachedGeometry {
                     .as_ref()
                     .map_or(0, |map| map.accounted_owned_bytes()),
             );
-        let hit_testing = vec_bytes::<CachedCluster>(self.hit_geometry.cluster_capacity())
-            .saturating_add(vec_bytes::<CachedHitSlice>(
-                self.hit_geometry.slice_capacity(),
-            ));
+        let hit_testing = vec_bytes::<CachedHitPlacement>(self.hit_geometry.capacity());
         SceneResidencyBytes::from_categories(
             layout,
             paint,
             sources,
             vec_bytes::<CachedSemantic>(self.semantics.capacity()),
             hit_testing,
-            vec_bytes::<CachedCaret>(self.carets.capacity()),
-            vec_bytes::<CachedCursorMovement>(self.movements.capacity()),
+            self.artifact.movements().selection_owned_bytes(),
+            self.artifact.movements().navigation_owned_bytes(),
             0,
         )
     }
@@ -367,6 +500,53 @@ impl CachedGeometry {
     pub(super) fn accounted_owned_bytes(&self) -> usize {
         self.residency_bytes().total()
     }
+}
+
+fn inline_distance_to_rect(inline: f64, bounds: Rect) -> f64 {
+    if inline < bounds.x0 {
+        bounds.x0 - inline
+    } else if inline > bounds.x1 {
+        inline - bounds.x1
+    } else {
+        0.0
+    }
+}
+
+fn adjusted_caret_inline(
+    line: &PreparedLine,
+    adjustment: LineAdjustment,
+    inline: f64,
+) -> Option<f64> {
+    const TOLERANCE: f64 = 1.0e-6;
+    let expansion = adjustment.opportunity_expansion();
+    let mut original_start = 0.0;
+    let mut adjusted_start = 0.0;
+    for unit in line.units() {
+        let original_end = original_start + unit.advance();
+        let adjusted_end = adjusted_start
+            + unit.advance()
+            + if expansion > 0.0
+                && unit.is_western_justification_opportunity()
+                && unit.source().end <= line.trailing_whitespace_start()
+            {
+                expansion
+            } else {
+                0.0
+            };
+        if (inline - original_start).abs() <= TOLERANCE {
+            return Some(adjusted_start);
+        }
+        if (inline - original_end).abs() <= TOLERANCE {
+            return Some(adjusted_end);
+        }
+        if original_start < inline && inline < original_end {
+            let fraction = (inline - original_start) / (original_end - original_start);
+            return Some(adjusted_start + fraction * (adjusted_end - adjusted_start));
+        }
+        original_start = original_end;
+        adjusted_start = adjusted_end;
+    }
+    (line.units().is_empty() && inline == 0.0).then_some(0.0)
 }
 
 const fn vec_bytes<T>(capacity: usize) -> usize {
@@ -395,6 +575,25 @@ pub(super) fn build_geometry(
         .then(|| ParagraphSourceMap::from_projection(projection))
         .transpose()?
         .map(Arc::new);
+    if features.has_selection() {
+        for movement in prepared.movements().iter() {
+            let offset = movement.position().offset();
+            let offset_usize = usize::try_from(offset).map_err(|_| {
+                SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    prepared.paragraph(),
+                    offset..offset,
+                )
+            })?;
+            if !projection.mapping.text().is_char_boundary(offset_usize) {
+                return Err(SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    prepared.paragraph(),
+                    offset..offset,
+                ));
+            }
+        }
+    }
     let map = source_map.as_deref();
     let empty_line_height = projection.empty_line_height();
     let empty_slot = region_transcript.and_then(|transcript| {
@@ -431,7 +630,7 @@ pub(super) fn build_geometry(
     let mut line_sources = Vec::new();
     let retains_clusters = features.has_hit_testing() || features.has_selection();
     let builds_semantics = features.has_semantics();
-    let cluster_capacity = if !retains_clusters {
+    let hit_capacity = if !retains_clusters {
         0
     } else if prepared.lines().is_empty() {
         usize::from(projection.mapping.text().is_empty() && !projection.spans.is_empty())
@@ -449,20 +648,7 @@ pub(super) fn build_geometry(
             })
             .sum()
     };
-    let hit_slice_capacity = if retains_clusters {
-        prepared
-            .lines()
-            .iter()
-            .flat_map(|line| line.units())
-            .map(|unit| unit.slices().len())
-            .sum()
-    } else {
-        0
-    };
-    let mut clusters = Vec::with_capacity(cluster_capacity);
-    let mut hit_slices = Vec::with_capacity(hit_slice_capacity);
-    let mut carets = Vec::new();
-    let mut caret_maps = Vec::new();
+    let mut hit_placements = Vec::with_capacity(hit_capacity);
     let mut semantic_bounds: Vec<Option<Rect>> = Vec::with_capacity(if builds_semantics {
         projection.spans.len()
     } else {
@@ -498,14 +684,7 @@ pub(super) fn build_geometry(
             Vec::new()
         };
         let mut unit_x = inline_start;
-        let mut original_unit_x = 0.0;
-        let mut adjusted_unit_x = 0.0;
-        let mut caret_map = CaretAdjustmentMap::with_capacity(if features.has_selection() {
-            line.units().len()
-        } else {
-            0
-        });
-        for unit in line.units() {
+        for (unit_index, unit) in line.units().enumerate() {
             let paragraph_source = unit.source();
             let unit_expansion = if opportunity_sources.contains(&paragraph_source) {
                 expansion
@@ -520,44 +699,28 @@ pub(super) fn build_geometry(
             } else {
                 None
             };
-            let left = retains_clusters
-                .then(|| projection.source_position(unit.left().offset(), unit.left().affinity()))
-                .transpose()?;
-            let right = retains_clusters
-                .then(|| projection.source_position(unit.right().offset(), unit.right().affinity()))
-                .transpose()?;
             let mut slice_x = unit_x;
-            let hit_slice_start = hit_slices.len();
             for slice in unit.slices() {
                 let next_x = slice_x + slice.advance();
-                let source = slice.source();
                 if retains_clusters {
-                    map.expect("interaction capabilities retain a source map")
+                    let source = slice.source();
+                    let local = map
+                        .expect("interaction capabilities retain a source map")
                         .span(source.clone(), prepared.paragraph())?;
-                    hit_slices.push(CachedHitSlice {
-                        semantic_id: projection.semantic_for_range(source)?,
-                        x0: slice_x,
-                        x1: next_x,
-                    });
+                    if map
+                        .expect("interaction capabilities retain a source map")
+                        .semantic_for_span(local)
+                        .is_none()
+                    {
+                        return Err(SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            source,
+                        ));
+                    }
                 }
                 slice_x = next_x;
             }
-            let hit_slice_end = hit_slices.len();
-            if unit_expansion > 0.0
-                && let Some(last) = hit_slices
-                    .get_mut(hit_slice_start..hit_slice_end)
-                    .and_then(<[CachedHitSlice]>::last_mut)
-            {
-                last.x1 += unit_expansion;
-            }
-            let semantic_id = if retains_clusters {
-                hit_slices.get(hit_slice_start).map_or_else(
-                    || projection.semantic_for_range(paragraph_source),
-                    |slice| Ok(slice.semantic_id),
-                )?
-            } else {
-                projection.paragraph_semantic
-            };
             let adjusted_unit_advance = unit.advance() + unit_expansion;
             let next_x = unit_x + adjusted_unit_advance;
             let bounds = Rect::new(
@@ -580,33 +743,24 @@ pub(super) fn build_geometry(
                 }
             }
             if retains_clusters {
-                clusters.push(CachedCluster {
-                    source: source.expect("cluster construction retains its source span"),
-                    semantic_id,
-                    boundary: unit.boundary(),
-                    whitespace: unit.whitespace(),
-                    hit_slices: hit_slice_start..hit_slice_end,
-                    bounds,
-                    line: line_index,
-                    left: left.expect("cluster construction resolves the left position"),
-                    right: right.expect("cluster construction resolves the right position"),
-                    bidi_level: unit.bidi_level(),
+                hit_placements.push(CachedHitPlacement {
+                    line: u32::try_from(line_index).map_err(|_| {
+                        SceneError::for_paragraph(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                        )
+                    })?,
+                    unit: u32::try_from(unit_index).map_err(|_| {
+                        SceneError::for_paragraph(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                        )
+                    })?,
+                    inline_end: next_x,
                 });
             }
-            if features.has_selection() {
-                caret_map.push(
-                    original_unit_x,
-                    original_unit_x + unit.advance(),
-                    adjusted_unit_x,
-                    adjusted_unit_x + adjusted_unit_advance,
-                );
-            }
-            original_unit_x += unit.advance();
-            adjusted_unit_x += adjusted_unit_advance;
             unit_x = next_x;
         }
-        caret_map.finish_empty();
-        caret_maps.push(caret_map);
         if (builds_semantics || retains_clusters)
             && line.units().is_empty()
             && !projection.spans.is_empty()
@@ -638,18 +792,27 @@ pub(super) fn build_geometry(
                 } else {
                     TextAffinity::Upstream
                 };
-                let position = projection.source_position(source.start, affinity)?;
-                clusters.push(CachedCluster {
-                    semantic_id: projection.semantic_for_range(source)?,
-                    source: local_source,
-                    boundary: ClusterBoundary::None,
-                    whitespace: ClusterWhitespace::None,
-                    hit_slices: hit_slices.len()..hit_slices.len(),
-                    bounds,
-                    line: line_index,
-                    left: position,
-                    right: position,
-                    bidi_level: 0,
+                projection.source_position(source.start, affinity)?;
+                if map
+                    .expect("interaction capabilities retain a source map")
+                    .semantic_for_span(local_source)
+                    .is_none()
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                        source,
+                    ));
+                }
+                hit_placements.push(CachedHitPlacement {
+                    line: u32::try_from(line_index).map_err(|_| {
+                        SceneError::for_paragraph(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                        )
+                    })?,
+                    unit: SYNTHETIC_HIT_UNIT,
+                    inline_end: bounds.x1,
                 });
             }
         }
@@ -688,21 +851,25 @@ pub(super) fn build_geometry(
         && projection.mapping.text().is_empty()
         && !projection.spans.is_empty()
     {
-        let position = projection.source_position(0, TextAffinity::Downstream)?;
+        projection.source_position(0, TextAffinity::Downstream)?;
         let source = map
             .expect("interaction capabilities retain a source map")
             .span(0..0, prepared.paragraph())?;
-        clusters.push(CachedCluster {
-            semantic_id: projection.semantic_for_range(0..0)?,
-            source,
-            boundary: ClusterBoundary::None,
-            whitespace: ClusterWhitespace::None,
-            hit_slices: hit_slices.len()..hit_slices.len(),
-            bounds: empty_bounds,
+        if map
+            .expect("interaction capabilities retain a source map")
+            .semantic_for_span(source)
+            .is_none()
+        {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                prepared.paragraph(),
+                0..0,
+            ));
+        }
+        hit_placements.push(CachedHitPlacement {
             line: 0,
-            left: position,
-            right: position,
-            bidi_level: 0,
+            unit: SYNTHETIC_HIT_UNIT,
+            inline_end: empty_bounds.x1,
         });
     }
 
@@ -756,92 +923,16 @@ pub(super) fn build_geometry(
             bounds: bounds.unwrap_or(empty_bounds),
         });
     }
-    let mut movements = if projection.spans.is_empty() || !features.has_navigation() {
-        Vec::new()
-    } else {
-        prepared
-            .movements()
-            .iter()
-            .map(|movement| {
-                Ok(CachedCursorMovement {
-                    position: projection.source_position(
-                        movement.position().offset(),
-                        movement.position().affinity(),
-                    )?,
-                    previous_visual: cached_cursor_step(
-                        movement.previous_visual(),
-                        projection,
-                        map.expect("navigation capability retains a source map"),
-                    )?,
-                    next_visual: cached_cursor_step(
-                        movement.next_visual(),
-                        projection,
-                        map.expect("navigation capability retains a source map"),
-                    )?,
-                    previous_logical: cached_cursor_step(
-                        movement.previous_logical(),
-                        projection,
-                        map.expect("navigation capability retains a source map"),
-                    )?,
-                    next_logical: cached_cursor_step(
-                        movement.next_logical(),
-                        projection,
-                        map.expect("navigation capability retains a source map"),
-                    )?,
-                })
-            })
-            .collect::<Result<Vec<_>, SceneError>>()?
-    };
-    for prepared_movement in prepared
-        .movements()
-        .iter()
-        .filter(|_| features.has_selection() && !projection.spans.is_empty())
-    {
-        let caret = prepared_movement.caret();
-        let line = usize::try_from(caret.line()).map_err(|_| {
-            SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
-        })?;
-        let line_bounds = lines.get(line).map(|line| line.bounds).unwrap_or(Rect::new(
-            empty_bounds.x0,
-            empty_bounds.y0,
-            empty_bounds.x0 + 1.0,
-            empty_bounds.y1,
-        ));
-        let adjusted_inline = match caret_maps.get(line) {
-            Some(map) => map.adjusted_inline(caret.inline()).ok_or_else(|| {
-                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
-            })?,
-            None if prepared.lines().is_empty() && caret.inline() == 0.0 => 0.0,
-            None => {
-                return Err(SceneError::for_paragraph(
-                    SceneErrorKind::SourceCoverage,
-                    prepared.paragraph(),
-                ));
-            }
-        };
-        carets.push(CachedCaret {
-            position: projection.source_position(
-                prepared_movement.position().offset(),
-                prepared_movement.position().affinity(),
-            )?,
-            bounds: Rect::new(
-                line_bounds.x0 + adjusted_inline,
-                line_bounds.y0,
-                line_bounds.x0 + adjusted_inline + 1.0,
-                line_bounds.y1,
-            ),
-        });
-    }
-    movements.sort_by_key(|movement| movement.position.key());
-    carets.sort_by_key(|caret| caret.position.key());
     Ok(CachedGeometry {
         features,
+        artifact: prepared.shared_facts(),
         facts: Arc::new(CachedGeometryFacts {
             height: if prepared.lines().is_empty() {
                 empty_bounds.y1
             } else {
                 line_top
             },
+            empty_bounds,
             lines,
             glyphs,
         }),
@@ -851,9 +942,7 @@ pub(super) fn build_geometry(
         source_map,
         line_sources: CachedSidecar::new(features.has_sources(), line_sources),
         paint_sources: CachedSidecar::new(features.has_sources(), paint.sources),
-        hit_geometry: CachedHitSidecar::new(retains_clusters, clusters, hit_slices),
-        carets: CachedSidecar::new(features.has_selection(), carets),
-        movements: CachedSidecar::new(features.has_navigation(), movements),
+        hit_geometry: CachedHitSidecar::new(retains_clusters, hit_placements),
         semantics: CachedSidecar::new(features.has_semantics(), semantics),
     })
 }
@@ -866,6 +955,7 @@ pub(super) fn repaint_geometry(
     let paint = build_paint_fragments(prepared, retained.features, &retained.glyphs)?;
     Ok(CachedGeometry {
         features: retained.features,
+        artifact: Arc::clone(&retained.artifact),
         facts: Arc::clone(&retained.facts),
         line_fragments: paint.line_fragments,
         fragments: paint.fragments,
@@ -874,8 +964,6 @@ pub(super) fn repaint_geometry(
         line_sources: retained.line_sources.clone(),
         paint_sources: CachedSidecar::new(retained.features.has_sources(), paint.sources),
         hit_geometry: retained.hit_geometry.clone(),
-        carets: retained.carets.clone(),
-        movements: retained.movements.clone(),
         semantics: retained.semantics.clone(),
     })
 }
@@ -1045,24 +1133,6 @@ fn build_paint_fragments(
     })
 }
 
-pub(super) fn cached_cursor_step(
-    step: Option<&crate::adapter::PreparedCursorStep>,
-    projection: &Projection<'_>,
-    source_map: &ParagraphSourceMap,
-) -> Result<Option<CachedCursorStep>, SceneError> {
-    step.map(|step| {
-        let target = step.target();
-        Ok(CachedCursorStep {
-            target: projection.source_position(target.offset(), target.affinity())?,
-            source: step
-                .source()
-                .map(|source| source_map.span(source, projection.paragraph))
-                .transpose()?,
-        })
-    })
-    .transpose()
-}
-
 pub(super) fn fragment_identity(paragraph: ParagraphId, fragment: usize) -> u64 {
     let mut identity = 0xcbf2_9ce4_8422_2325_u64;
     for byte in paragraph.document.opaque_bytes() {
@@ -1132,13 +1202,18 @@ pub(super) fn materialize_optional_snapshot_range(
 
 pub(super) fn materialize_cursor_step(
     source_map: &ParagraphSourceMap,
-    step: Option<&CachedCursorStep>,
+    step: Option<PreparedCursorStepView<'_>>,
     revision: DocumentRevision,
 ) -> Option<SceneCursorStep> {
     step.map(|step| SceneCursorStep {
-        target: materialize_position(source_map, step.target, revision),
+        target: materialize_position(
+            source_map,
+            SourcePosition::new(step.target().offset(), step.target().affinity()),
+            revision,
+        ),
         source: step
-            .source
+            .source()
+            .map(SourceSpan::from)
             .map(|source| materialize_snapshot_unit(source_map, source, revision)),
     })
 }

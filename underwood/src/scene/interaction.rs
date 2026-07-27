@@ -206,10 +206,11 @@ impl CompositionScene {
     ) -> Option<SceneCaret<ProjectedTextPosition>> {
         let (positioned, source_map, source) =
             positioned_projected_source(&self.core.spine, self.revision, position)?;
-        let caret = cached_caret_at(&positioned.segment.geometry.carets, source)?;
+        let movement = prepared_movement_at(&positioned.segment.geometry, source)?;
+        let bounds = positioned.segment.geometry.caret_bounds(movement)?;
         Some(SceneCaret {
-            position: projected_position(source_map, caret.position, self.revision),
-            bounds: caret.bounds + Vec2::new(0.0, positioned.position.block_origin),
+            position: projected_position(source_map, source, self.revision),
+            bounds: bounds + Vec2::new(0.0, positioned.position.block_origin),
         })
     }
 
@@ -222,14 +223,19 @@ impl CompositionScene {
     ) -> Option<ProjectedTextPosition> {
         let (positioned, source_map, source) =
             positioned_projected_source(&self.core.spine, self.revision, position)?;
-        let record = cached_movement_at(&positioned.segment.geometry.movements, source)?;
+        let record = prepared_movement_at(&positioned.segment.geometry, source)?;
         let step = match movement {
-            TextMovement::PreviousVisual => record.previous_visual.as_ref(),
-            TextMovement::NextVisual => record.next_visual.as_ref(),
-            TextMovement::PreviousLogical => record.previous_logical.as_ref(),
-            TextMovement::NextLogical => record.next_logical.as_ref(),
+            TextMovement::PreviousVisual => record.previous_visual(),
+            TextMovement::NextVisual => record.next_visual(),
+            TextMovement::PreviousLogical => record.previous_logical(),
+            TextMovement::NextLogical => record.next_logical(),
         }?;
-        Some(projected_position(source_map, step.target, self.revision))
+        let target = step.target();
+        Some(projected_position(
+            source_map,
+            SourcePosition::new(target.offset(), target.affinity()),
+            self.revision,
+        ))
     }
 
     /// Resolves highlight rectangles for the selected range inside preedit.
@@ -330,13 +336,14 @@ impl CompositionScene {
             .collect()
     }
 
-    fn positioned_clusters(&self) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCluster)> {
+    fn positioned_clusters(
+        &self,
+    ) -> impl Iterator<Item = (PositionedSegment<'_>, CachedCluster<'_>)> {
         self.core.spine.segments().flat_map(|positioned| {
             positioned
                 .segment
                 .geometry
-                .hit_geometry
-                .iter()
+                .hit_clusters()
                 .map(move |cluster| (positioned, cluster))
         })
     }
@@ -735,10 +742,11 @@ impl TextScene {
             byte: position.byte(),
             affinity: position.affinity(),
         })?;
-        let caret = cached_caret_at(&positioned.segment.geometry.carets, source)?;
+        let movement = prepared_movement_at(&positioned.segment.geometry, source)?;
+        let bounds = positioned.segment.geometry.caret_bounds(movement)?;
         Some(SceneCaret {
-            position: materialize_position(source_map, caret.position, self.revision),
-            bounds: caret.bounds + Vec2::new(0.0, positioned.position.block_origin),
+            position: materialize_position(source_map, source, self.revision),
+            bounds: bounds + Vec2::new(0.0, positioned.position.block_origin),
         })
     }
 
@@ -754,10 +762,17 @@ impl TextScene {
             .position
             .segment
             .geometry
-            .movements
+            .movements()?
             .iter()
-            .filter(|movement| movement.previous_logical.is_none())
-            .map(|movement| materialize_position(source_map, movement.position, self.revision))
+            .filter(|movement| movement.previous_logical().is_none())
+            .map(|movement| {
+                let position = movement.position();
+                materialize_position(
+                    source_map,
+                    SourcePosition::new(position.offset(), position.affinity()),
+                    self.revision,
+                )
+            })
             .min_by_key(logical_position_key)
     }
 
@@ -778,10 +793,17 @@ impl TextScene {
         last.position
             .segment
             .geometry
-            .movements
+            .movements()?
             .iter()
-            .filter(|movement| movement.next_logical.is_none())
-            .map(|movement| materialize_position(source_map, movement.position, self.revision))
+            .filter(|movement| movement.next_logical().is_none())
+            .map(|movement| {
+                let position = movement.position();
+                materialize_position(
+                    source_map,
+                    SourcePosition::new(position.offset(), position.affinity()),
+                    self.revision,
+                )
+            })
             .max_by_key(logical_position_key)
     }
 
@@ -818,12 +840,11 @@ impl TextScene {
             }) else {
                 continue;
             };
-            if let Some(movement) =
-                cached_movement_at(&positioned.segment.geometry.movements, source)
-            {
+            if let Some(movement) = prepared_movement_at(&positioned.segment.geometry, source) {
+                let position = movement.position();
                 return Some(materialize_position(
                     source_map,
-                    movement.position,
+                    SourcePosition::new(position.offset(), position.affinity()),
                     self.revision,
                 ));
             }
@@ -866,7 +887,7 @@ impl TextScene {
         (
             PositionedSegment<'a>,
             &'a ParagraphSourceMap,
-            &'a CachedCursorMovement,
+            PreparedCursorMovementView<'a>,
         ),
         SelectionError,
     > {
@@ -890,7 +911,7 @@ impl TextScene {
                 affinity: position.affinity(),
             })
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
-        let movement = cached_movement_at(&positioned.segment.geometry.movements, source)
+        let movement = prepared_movement_at(&positioned.segment.geometry, source)
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
         Ok((positioned, source_map, movement))
     }
@@ -1068,10 +1089,10 @@ impl TextScene {
     ) -> Result<Option<SceneCursorStep>, SelectionError> {
         let (_, source_map, record) = self.movement_record(position)?;
         let step = match movement {
-            TextMovement::PreviousVisual => record.previous_visual.as_ref(),
-            TextMovement::NextVisual => record.next_visual.as_ref(),
-            TextMovement::PreviousLogical => record.previous_logical.as_ref(),
-            TextMovement::NextLogical => record.next_logical.as_ref(),
+            TextMovement::PreviousVisual => record.previous_visual(),
+            TextMovement::NextVisual => record.next_visual(),
+            TextMovement::PreviousLogical => record.previous_logical(),
+            TextMovement::NextLogical => record.next_logical(),
         };
         let step = materialize_cursor_step(source_map, step, self.revision);
         Ok(step.or_else(|| self.adjacent_paragraph_step(position, movement)))
@@ -1093,7 +1114,7 @@ impl TextScene {
             current
                 .position
                 .movement_base
-                .saturating_add(current.segment.geometry.movements.len())
+                .saturating_add(current.segment.geometry.movement_count())
         };
         let adjacent = self.core.spine.positioned_movement(global)?;
         let source_map = adjacent.position.segment.geometry.source_map.as_deref()?;
@@ -1101,15 +1122,20 @@ impl TextScene {
             .position
             .segment
             .geometry
-            .movements
+            .movements()?
             .iter()
             .filter(|record| match movement {
-                TextMovement::PreviousVisual => record.next_visual.is_none(),
-                TextMovement::NextVisual => record.previous_visual.is_none(),
-                TextMovement::PreviousLogical => record.next_logical.is_none(),
-                TextMovement::NextLogical => record.previous_logical.is_none(),
+                TextMovement::PreviousVisual => record.next_visual().is_none(),
+                TextMovement::NextVisual => record.previous_visual().is_none(),
+                TextMovement::PreviousLogical => record.next_logical().is_none(),
+                TextMovement::NextLogical => record.previous_logical().is_none(),
             });
-        let target = materialize_position(source_map, candidates.next()?.position, self.revision);
+        let target = candidates.next()?.position();
+        let target = materialize_position(
+            source_map,
+            SourcePosition::new(target.offset(), target.affinity()),
+            self.revision,
+        );
         if candidates.next().is_some() {
             return None;
         }
@@ -1228,13 +1254,14 @@ impl TextScene {
             .collect()
     }
 
-    fn positioned_clusters(&self) -> impl Iterator<Item = (PositionedSegment<'_>, &CachedCluster)> {
+    fn positioned_clusters(
+        &self,
+    ) -> impl Iterator<Item = (PositionedSegment<'_>, CachedCluster<'_>)> {
         self.core.spine.segments().flat_map(|positioned| {
             positioned
                 .segment
                 .geometry
-                .hit_geometry
-                .iter()
+                .hit_clusters()
                 .map(move |cluster| (positioned, cluster))
         })
     }
@@ -1451,7 +1478,7 @@ fn positioned_hit_cluster(
     spine: &SceneSpine,
     point: Point,
     mode: HitMode,
-) -> Option<(PositionedSegment<'_>, &CachedCluster)> {
+) -> Option<(PositionedSegment<'_>, CachedCluster<'_>)> {
     if spine.is_normal_flow() {
         let positioned =
             spine.positioned_segment_at_block(HORIZONTAL_AXES.scene_point(point).block)?;
@@ -1466,7 +1493,7 @@ fn positioned_hit_cluster(
             hit_cluster(positioned, point, false).map(|cluster| (positioned, cluster))
         }),
         HitMode::Closest => {
-            let mut closest: Option<(PositionedSegment<'_>, &CachedCluster, f64, f64)> = None;
+            let mut closest: Option<(PositionedSegment<'_>, CachedCluster<'_>, f64, f64)> = None;
             for positioned in spine.segments() {
                 let Some(cluster) = closest_cluster(positioned, point, false) else {
                     continue;
@@ -1527,11 +1554,14 @@ fn hit_cluster(
     positioned: PositionedSegment<'_>,
     point: Point,
     normal_flow: bool,
-) -> Option<&CachedCluster> {
+) -> Option<CachedCluster<'_>> {
     let geometry = &positioned.segment.geometry;
     let local = HORIZONTAL_AXES.local_point(positioned, point);
     if geometry.lines.is_empty() {
-        return exact_in_clusters(&geometry.hit_geometry, local);
+        if !HORIZONTAL_AXES.rect(geometry.empty_bounds).contains(local) {
+            return None;
+        }
+        return geometry.exact_hit_cluster(0, local.inline);
     }
     if normal_flow {
         let line = geometry
@@ -1541,7 +1571,7 @@ fn hit_cluster(
         if local.block < bounds.block_start || local.block > bounds.block_end {
             return None;
         }
-        return exact_in_clusters(geometry.hit_geometry.clusters_for_line(line), local);
+        return geometry.exact_hit_cluster(line, local.inline);
     }
     geometry
         .lines
@@ -1550,7 +1580,7 @@ fn hit_cluster(
         .find_map(|(line, bounds)| {
             let bounds = HORIZONTAL_AXES.rect(bounds.bounds);
             (bounds.block_start <= local.block && local.block <= bounds.block_end)
-                .then(|| exact_in_clusters(geometry.hit_geometry.clusters_for_line(line), local))
+                .then(|| geometry.exact_hit_cluster(line, local.inline))
                 .flatten()
         })
 }
@@ -1559,11 +1589,11 @@ fn closest_cluster<'a>(
     positioned: PositionedSegment<'a>,
     point: Point,
     normal_flow: bool,
-) -> Option<&'a CachedCluster> {
+) -> Option<CachedCluster<'a>> {
     let geometry = &positioned.segment.geometry;
     let local = HORIZONTAL_AXES.local_point(positioned, point);
     if geometry.lines.is_empty() {
-        return closest_in_clusters(&geometry.hit_geometry, local);
+        return geometry.closest_hit_cluster(0, local.inline);
     }
     if normal_flow {
         let next = geometry
@@ -1595,9 +1625,9 @@ fn closest_cluster<'a>(
                 closest
             }
         });
-        return closest_in_clusters(geometry.hit_geometry.clusters_for_line(line), local);
+        return geometry.closest_hit_cluster(line, local.inline);
     }
-    let mut closest: Option<(&CachedCluster, f64, f64)> = None;
+    let mut closest: Option<(CachedCluster<'_>, f64, f64)> = None;
     for (line, bounds) in geometry.lines.iter().enumerate() {
         let bounds = HORIZONTAL_AXES.rect(bounds.bounds);
         let block_distance =
@@ -1605,9 +1635,7 @@ fn closest_cluster<'a>(
         if closest.is_some_and(|(_, current, _)| block_distance > current) {
             continue;
         }
-        let Some(cluster) =
-            closest_in_clusters(geometry.hit_geometry.clusters_for_line(line), local)
-        else {
+        let Some(cluster) = geometry.closest_hit_cluster(line, local.inline) else {
             continue;
         };
         let cluster_bounds = HORIZONTAL_AXES.rect(cluster.bounds);
@@ -1626,66 +1654,17 @@ fn closest_cluster<'a>(
     closest.map(|(cluster, _, _)| cluster)
 }
 
-fn closest_in_clusters(clusters: &[CachedCluster], point: LogicalPoint) -> Option<&CachedCluster> {
-    let next = clusters
-        .partition_point(|cluster| HORIZONTAL_AXES.rect(cluster.bounds).inline_end < point.inline);
-    let mut closest = match (next.checked_sub(1), (next < clusters.len()).then_some(next)) {
-        (Some(before), Some(after)) => {
-            let before_distance =
-                distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[before].bounds));
-            let after_distance =
-                distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[after].bounds));
-            if before_distance.0 < after_distance.0
-                || before_distance.0 == after_distance.0 && before_distance.1 <= after_distance.1
-            {
-                before
-            } else {
-                after
-            }
-        }
-        (Some(index), None) | (None, Some(index)) => index,
-        (None, None) => return None,
-    };
-    let closest_distance =
-        distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[closest].bounds));
-    while let Some(previous) = closest.checked_sub(1)
-        && distance_to_rect_axes(point, HORIZONTAL_AXES.rect(clusters[previous].bounds))
-            == closest_distance
-    {
-        closest = previous;
-    }
-    clusters.get(closest)
-}
-
-fn exact_in_clusters(clusters: &[CachedCluster], point: LogicalPoint) -> Option<&CachedCluster> {
-    let index = clusters
-        .partition_point(|cluster| HORIZONTAL_AXES.rect(cluster.bounds).inline_end < point.inline);
-    let cluster = clusters.get(index)?;
-    HORIZONTAL_AXES
-        .rect(cluster.bounds)
-        .contains(point)
-        .then_some(cluster)
-}
-
-fn cached_caret_at(carets: &[CachedCaret], position: SourcePosition) -> Option<&CachedCaret> {
-    carets
-        .binary_search_by_key(&position.key(), |caret| caret.position.key())
-        .ok()
-        .and_then(|index| carets.get(index))
-}
-
-fn cached_movement_at(
-    movements: &[CachedCursorMovement],
+fn prepared_movement_at<'a>(
+    geometry: &'a CachedGeometry,
     position: SourcePosition,
-) -> Option<&CachedCursorMovement> {
-    movements
-        .binary_search_by_key(&position.key(), |movement| movement.position.key())
-        .ok()
-        .and_then(|index| movements.get(index))
+) -> Option<PreparedCursorMovementView<'a>> {
+    geometry
+        .movements()?
+        .get(PreparedClusterSide::new(position.offset, position.affinity))
 }
 
 fn cached_snapshot_hit<'a>(
-    cluster: &CachedCluster,
+    cluster: CachedCluster<'a>,
     positioned: PositionedSegment<'a>,
     revision: DocumentRevision,
     point: Point,
@@ -1706,7 +1685,7 @@ fn cached_snapshot_hit<'a>(
 }
 
 fn cached_projected_hit<'a>(
-    cluster: &CachedCluster,
+    cluster: CachedCluster<'a>,
     positioned: PositionedSegment<'a>,
     revision: DocumentRevision,
     point: Point,
@@ -1727,26 +1706,42 @@ fn cached_projected_hit<'a>(
 }
 
 fn cached_hit_facts(
-    cluster: &CachedCluster,
+    cluster: CachedCluster<'_>,
     positioned: PositionedSegment<'_>,
     point: Point,
 ) -> (SourcePosition, SemanticId) {
     let point = HORIZONTAL_AXES.local_point(positioned, point);
     let bounds = HORIZONTAL_AXES.rect(cluster.bounds);
     let midpoint = bounds.inline_start + (bounds.inline_end - bounds.inline_start) * 0.5;
-    let semantic =
-        positioned
-            .segment
-            .geometry
-            .hit_geometry
-            .slices_for(cluster)
+    let source_map = positioned
+        .segment
+        .geometry
+        .source_map
+        .as_deref()
+        .expect("hit-testing capability retains source provenance");
+    let semantic = cluster.prepared.map_or(cluster.semantic_id, |unit| {
+        let mut inline = bounds.inline_start;
+        unit.slices()
             .iter()
-            .filter(|slice| slice.x0 < slice.x1)
-            .min_by(|first, second| {
-                distance_to_interval(point.inline, first.x0, first.x1)
-                    .total_cmp(&distance_to_interval(point.inline, second.x0, second.x1))
+            .enumerate()
+            .filter_map(|(index, slice)| {
+                let mut end = inline + slice.advance();
+                if index + 1 == unit.slices().len() {
+                    end = bounds.inline_end;
+                }
+                let start = inline;
+                inline = end;
+                (start < end).then(|| {
+                    let source = SourceSpan::from(slice.source());
+                    let semantic = source_map
+                        .semantic_for_span(source)
+                        .expect("validated hit slices retain semantic ownership");
+                    (semantic, distance_to_interval(point.inline, start, end))
+                })
             })
-            .map_or(cluster.semantic_id, |slice| slice.semantic_id);
+            .min_by(|(_, first), (_, second)| first.total_cmp(second))
+            .map_or(cluster.semantic_id, |(semantic, _)| semantic)
+    });
     let position = if point.inline <= midpoint {
         cluster.left
     } else {

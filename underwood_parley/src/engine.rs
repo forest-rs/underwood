@@ -33,8 +33,7 @@ use crate::line_break::{
     shaped_text_accounted_bytes, update_line_metrics,
 };
 use crate::lowering::{
-    checked_source_range, index_char_starts, lower_glyphs, paint_coverage, portable_synthesis,
-    unrendered_source,
+    checked_source_range, index_char_starts, lower_glyphs, portable_synthesis, unrendered_source,
 };
 use crate::shaping::{
     analyze_text_with_styles, prepare_inline_flow_indices, reshape_paragraph_with_retained_fonts,
@@ -56,7 +55,6 @@ pub struct ParleyParagraphEngine {
     line_scratch: LineFormationScratch,
     reshape_scratch: ShapedText,
     cache: BTreeMap<ParagraphPreparationId, PreparationCache>,
-    outputs: BTreeMap<ParagraphPreparationId, RetainedOutput>,
     retention_budget: usize,
     retention_clock: u64,
     retention_work: RetentionWork,
@@ -73,7 +71,6 @@ impl ParleyParagraphEngine {
             line_scratch: LineFormationScratch::default(),
             reshape_scratch: ShapedText::new(),
             cache: BTreeMap::new(),
-            outputs: BTreeMap::new(),
             retention_budget: 0,
             retention_clock: 0,
             retention_work: RetentionWork::default(),
@@ -100,50 +97,21 @@ impl ParleyParagraphEngine {
         true
     }
 
-    fn remove_output(&mut self, preparation: ParagraphPreparationId, release: bool) -> bool {
-        let Some(output) = self.outputs.remove(&preparation) else {
-            return false;
-        };
-        self.retention_work.resident_bytes = self
-            .retention_work
-            .resident_bytes
-            .saturating_sub(output.accounted_bytes);
-        if release {
-            self.retention_work.releases = self.retention_work.releases.saturating_add(1);
-        }
-        true
-    }
-
     fn release_entry(&mut self, preparation: ParagraphPreparationId, release: bool) {
         self.remove_cache(preparation, release);
-        self.remove_output(preparation, release);
     }
 
     fn enforce_retention_budget(&mut self) {
         while self.retention_work.resident_bytes > self.retention_budget {
-            let cache = self
+            let oldest = self
                 .cache
                 .iter()
-                .map(|(id, entry)| (entry.last_used, 0_u8, *id))
+                .map(|(id, entry)| (entry.last_used, *id))
                 .min();
-            let output = self
-                .outputs
-                .iter()
-                .map(|(id, entry)| (entry.last_used, 1_u8, *id))
-                .min();
-            let oldest = match (cache, output) {
-                (Some(cache), Some(output)) => Some(cache.min(output)),
-                (Some(cache), None) => Some(cache),
-                (None, Some(output)) => Some(output),
-                (None, None) => None,
-            };
-            let Some((_, kind, preparation)) = oldest else {
+            let Some((_, preparation)) = oldest else {
                 break;
             };
-            let removed = match kind {
-                0 => self.remove_cache(preparation, false),
-                _ => self.remove_output(preparation, false),
-            };
+            let removed = self.remove_cache(preparation, false);
             if !removed {
                 break;
             }
@@ -164,63 +132,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
     ) -> Result<ParagraphFormationOutput, PreparationError> {
         let preparation_id = input.preparation();
         let change = input.change();
-        if change.output_retained() {
-            let output = self
-                .cache
-                .get(&preparation_id)
-                .and_then(|cache| {
-                    cache
-                        .prepared
-                        .as_ref()
-                        .filter(|prepared| prepared.features().contains(input.features()))
-                        .map(|prepared| RetainedOutput {
-                            prepared: prepared.clone(),
-                            region_transcript: cache.region_transcript.clone(),
-                            last_used: 0,
-                            accounted_bytes: 0,
-                        })
-                })
-                .or_else(|| {
-                    self.outputs
-                        .get(&preparation_id)
-                        .filter(|output| output.prepared.features().contains(input.features()))
-                        .cloned()
-                });
-            if let Some(output) = output {
-                self.retention_work.hits = self.retention_work.hits.saturating_add(1);
-                return Ok(output.into_formation_output());
-            }
-        }
-        if let Some(source) = input.reusable_preparation() {
-            let output = self
-                .cache
-                .get(&source)
-                .and_then(|cache| {
-                    cache
-                        .prepared
-                        .as_ref()
-                        .filter(|prepared| prepared.features().contains(input.features()))
-                        .map(|prepared| RetainedOutput {
-                            prepared: prepared.clone(),
-                            region_transcript: cache.region_transcript.clone(),
-                            last_used: 0,
-                            accounted_bytes: 0,
-                        })
-                })
-                .or_else(|| {
-                    self.outputs
-                        .get(&source)
-                        .filter(|output| output.prepared.features().contains(input.features()))
-                        .cloned()
-                });
-            if let Some(output) = output {
-                self.release_entry(preparation_id, true);
-                self.outputs.insert(preparation_id, output.clone());
-                self.retention_work.hits = self.retention_work.hits.saturating_add(1);
-                return Ok(output.into_formation_output());
-            }
-        }
-        self.remove_output(preparation_id, true);
         let retained = self.cache.contains_key(&preparation_id);
         let formation_reuse = if retained {
             self.retention_work.hits = self.retention_work.hits.saturating_add(1);
@@ -318,8 +229,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         constraints: None,
                         formed_lines: Vec::new(),
                         region_transcript: None,
-                        prepared: None,
-                        prepared_paint_runs: Vec::new(),
                         last_used: 0,
                         accounted_bytes: 0,
                     },
@@ -446,11 +355,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .cache
                 .get_mut(&preparation_id)
                 .ok_or_else(PreparationError::invalid_output)?;
-            // Once formation inputs change, no previously lowered handle can
-            // prove the new line and interaction facts. Invalidate it before
-            // fallible work so a later request cannot observe stale output.
-            cache.prepared = None;
-            cache.prepared_paint_runs.clear();
             if !shaped
                 && !spacing_changed
                 && !break_policy_changed
@@ -561,50 +465,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 LineShapingWork::default()
             },
         );
-        if !needs_formation
-            && !change.paint_changed()
-            && let Some(prepared) = preparation
-                .prepared
-                .as_ref()
-                .filter(|prepared| prepared.features().contains(input.features()))
-        {
-            return match preparation.region_transcript.clone() {
-                Some(transcript) => {
-                    Ok(
-                        ParagraphFormationOutput::in_regions(prepared.clone(), work, transcript)
-                            .with_reuse(formation_reuse),
-                    )
-                }
-                None => Ok(ParagraphFormationOutput::new(prepared.clone(), work)
-                    .with_reuse(formation_reuse)),
-            };
-        }
-        if !needs_formation
-            && change.paint_changed()
-            && let Some(prepared) = preparation
-                .prepared
-                .as_ref()
-                .filter(|prepared| prepared.features().contains(input.features()))
-        {
-            let repainted = prepared
-                .try_map_glyph_paint(|glyph| paint_coverage(glyph.source(), input.paint_runs()))?;
-            let region_transcript = preparation.region_transcript.clone();
-            let cache = self
-                .cache
-                .get_mut(&preparation_id)
-                .ok_or_else(PreparationError::invalid_output)?;
-            cache.prepared = Some(repainted.clone());
-            cache.prepared_paint_runs = input.paint_runs().to_vec();
-            return match region_transcript {
-                Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
-                    repainted, work, transcript,
-                )
-                .with_reuse(formation_reuse)),
-                None => {
-                    Ok(ParagraphFormationOutput::new(repainted, work).with_reuse(formation_reuse))
-                }
-            };
-        }
         let mut prepared_lines = Vec::with_capacity(preparation.formed_lines.len());
         for formed in &preparation.formed_lines {
             let plan = &formed.plan;
@@ -717,12 +577,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             movements,
         )?;
         let region_transcript = preparation.region_transcript.clone();
-        let cache = self
-            .cache
-            .get_mut(&preparation_id)
-            .ok_or_else(PreparationError::invalid_output)?;
-        cache.prepared = Some(paragraph.clone());
-        cache.prepared_paint_runs = input.paint_runs().to_vec();
         match region_transcript {
             Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
                 paragraph, work, transcript,
@@ -740,9 +594,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
         self.retention_work.releases = self
             .retention_work
             .releases
-            .saturating_add(self.cache.len().saturating_add(self.outputs.len()));
+            .saturating_add(self.cache.len());
         self.cache.clear();
-        self.outputs.clear();
         self.retention_work.resident_bytes = 0;
     }
 
@@ -765,17 +618,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .retention_work
                 .resident_bytes
                 .saturating_add(cache.accounted_bytes);
-        } else if let Some(output) = self.outputs.get_mut(&preparation) {
-            self.retention_work.resident_bytes = self
-                .retention_work
-                .resident_bytes
-                .saturating_sub(output.accounted_bytes);
-            output.last_used = current_use;
-            output.accounted_bytes = output.calculate_accounted_owned_bytes();
-            self.retention_work.resident_bytes = self
-                .retention_work
-                .resident_bytes
-                .saturating_add(output.accounted_bytes);
         }
         self.retention_work.peak_bytes = self
             .retention_work
@@ -791,7 +633,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
     fn retained_facts(&self) -> Option<ParagraphFormationCacheDiagnostics> {
         Some(ParagraphFormationCacheDiagnostics::new(
             self.retention_budget,
-            self.cache.len().saturating_add(self.outputs.len()),
+            self.cache.len(),
             self.retention_work.resident_bytes,
             self.retention_work.peak_bytes,
             self.scratch_accounted_bytes(),
@@ -828,8 +670,6 @@ struct PreparationCache {
     constraints: Option<ParagraphConstraints>,
     formed_lines: Vec<FormedLine>,
     region_transcript: Option<RegionTranscript>,
-    prepared: Option<PreparedParagraph>,
-    prepared_paint_runs: Vec<underwood::adapter::PaintRun>,
     last_used: u64,
     accounted_bytes: usize,
 }
@@ -860,10 +700,7 @@ impl PreparationCache {
                 self.inline_flow_styles.capacity(),
             ))
             .saturating_add(vec_bytes::<InlineFlowRun>(self.inline_flow_runs.capacity()))
-            .saturating_add(vec_bytes::<FormedLine>(self.formed_lines.capacity()))
-            .saturating_add(vec_bytes::<underwood::adapter::PaintRun>(
-                self.prepared_paint_runs.capacity(),
-            ));
+            .saturating_add(vec_bytes::<FormedLine>(self.formed_lines.capacity()));
         for line in &self.formed_lines {
             bytes = bytes.saturating_add(line.accounted_owned_bytes());
         }
@@ -872,43 +709,7 @@ impl PreparationCache {
                 size_of::<RegionAttempt>().saturating_mul(transcript.attempts().len()),
             );
         }
-        if let Some(prepared) = &self.prepared {
-            bytes = bytes.saturating_add(prepared.accounted_owned_bytes());
-        }
         bytes
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RetainedOutput {
-    prepared: PreparedParagraph,
-    region_transcript: Option<RegionTranscript>,
-    last_used: u64,
-    accounted_bytes: usize,
-}
-
-impl RetainedOutput {
-    fn calculate_accounted_owned_bytes(&self) -> usize {
-        size_of::<Self>()
-            .saturating_add(self.prepared.accounted_owned_bytes())
-            .saturating_add(self.region_transcript.as_ref().map_or(0, |transcript| {
-                size_of::<RegionAttempt>().saturating_mul(transcript.attempts().len())
-            }))
-    }
-}
-
-impl RetainedOutput {
-    fn into_formation_output(self) -> ParagraphFormationOutput {
-        match self.region_transcript {
-            Some(transcript) => ParagraphFormationOutput::in_regions(
-                self.prepared,
-                FormationWork::default(),
-                transcript,
-            )
-            .with_reuse(ParagraphFormationReuse::RetainedOutput),
-            None => ParagraphFormationOutput::new(self.prepared, FormationWork::default())
-                .with_reuse(ParagraphFormationReuse::RetainedOutput),
-        }
     }
 }
 

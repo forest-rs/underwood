@@ -358,66 +358,6 @@ impl<'a> Projection<'a> {
         Ok(())
     }
 
-    pub(super) fn semantic_for_range(
-        &self,
-        paragraph: Range<u32>,
-    ) -> Result<SemanticId, SceneError> {
-        let owner = self.mapping.source_owner(paragraph.clone()).map_err(|_| {
-            SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph.clone(),
-            )
-        })?;
-        let transformed_unit = !paragraph.is_empty()
-            && self.mapping.segments().any(|segment| {
-                segment.kind() != ProjectionKind::Identity
-                    && !segment.projected().is_empty()
-                    && segment.projected().start <= paragraph.start
-                    && paragraph.end <= segment.projected().end
-            });
-        if paragraph.is_empty() || transformed_unit {
-            return span_for_position(&self.spans, owner, TextAffinity::Downstream)
-                .or_else(|| span_for_position(&self.spans, owner, TextAffinity::Upstream))
-                .map(|span| span.semantic)
-                .ok_or_else(|| {
-                    SceneError::for_source(
-                        SceneErrorKind::SourceCoverage,
-                        self.paragraph,
-                        paragraph,
-                    )
-                });
-        }
-
-        let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
-            SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph.clone(),
-            )
-        })?;
-        let mut semantics = self
-            .spans
-            .iter()
-            .filter(|span| span.paragraph.start < source.end && source.start < span.paragraph.end)
-            .map(|span| span.semantic);
-        let Some(first) = semantics.next() else {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph,
-            ));
-        };
-        if semantics.any(|semantic| semantic != first) {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph,
-            ));
-        }
-        Ok(first)
-    }
-
     pub(super) fn source_position(
         &self,
         paragraph_offset: u32,
