@@ -8,7 +8,7 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
     let text = "alpha beta gamma";
     let (document, styles, paint) = fixture_document(text, 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -16,27 +16,51 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("legal wrapping must form a scene");
+    let sources = scene_sources(output.scene());
     let lines = output.scene().lines();
     assert_eq!(lines.len(), 3, "legal opportunities must form three lines");
     assert_eq!(
-        lines[0].break_reason(),
+        lines.get(0).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::Regular
     );
     assert_eq!(
-        lines[1].break_reason(),
+        lines.get(1).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::Regular
     );
     assert_eq!(
-        lines[2].break_reason(),
+        lines.get(2).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::End
     );
-    assert_eq!(lines[0].sources()[0].bytes(), 0..6);
     assert_eq!(
-        lines[1].sources()[0].bytes().start,
+        sources
+            .for_line(lines.get(0).expect("line exists"))
+            .expect("line belongs to source scene")
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
+        0..6
+    );
+    assert_eq!(
+        sources
+            .for_line(lines.get(1).expect("line exists"))
+            .expect("line belongs to source scene")
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes()
+            .start,
         u32::try_from(text.find("beta").expect("beta is present")).expect("fixture range fits")
     );
     assert_eq!(
-        lines[2].sources()[0].bytes().start,
+        sources
+            .for_line(lines.get(2).expect("line exists"))
+            .expect("line belongs to source scene")
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes()
+            .start,
         u32::try_from(text.find("gamma").expect("gamma is present")).expect("fixture range fits")
     );
 }
@@ -46,7 +70,7 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
     let text = "a\r\nb\nc\u{2028}d\u{2029}e";
     let (document, styles, paint) = fixture_document(text, 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -54,25 +78,50 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("mandatory breaks must form a scene");
+    let sources = scene_sources(output.scene());
     let lines = output.scene().lines();
-    let ranges: Vec<_> = lines.iter().map(|line| line.sources()[0].bytes()).collect();
+    let ranges: Vec<_> = lines
+        .iter()
+        .map(|line| {
+            sources
+                .for_line(line)
+                .expect("line belongs to source scene")
+                .next()
+                .expect("source exists")
+                .bytes()
+        })
+        .collect();
     assert_eq!(
         lines.len(),
         5,
         "CRLF, LF, LS, and PS form four breaks: {ranges:?}"
     );
-    assert_eq!(lines[0].sources()[0].bytes(), 0..3, "CRLF stays together");
+    assert_eq!(
+        sources
+            .for_line(lines.get(0).expect("line exists"))
+            .expect("line belongs to source scene")
+            .next()
+            .expect("source exists")
+            .bytes(),
+        0..3,
+        "CRLF stays together"
+    );
     assert!(
-        lines[..4]
+        lines
             .iter()
+            .take(4)
             .all(|line| line.break_reason() == underwood::adapter::LineBreakReason::Mandatory)
     );
     assert_eq!(
-        lines[4].break_reason(),
+        lines.get(4).expect("line exists").break_reason(),
         underwood::adapter::LineBreakReason::End
     );
     assert_eq!(
-        lines.last().expect("final line exists").sources()[0]
+        sources
+            .for_line(lines.get(lines.len() - 1).expect("final line exists"))
+            .expect("line belongs to source scene")
+            .next()
+            .expect("source exists")
             .bytes()
             .end,
         u32::try_from(text.len()).expect("fixture length fits")
@@ -83,7 +132,7 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
 fn product_path_uses_font_metrics_for_the_baseline() {
     let (document, styles, paint) = fixture_document("Ag", 1.5);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -91,12 +140,21 @@ fn product_path_uses_font_metrics_for_the_baseline() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("metric-backed formation must succeed");
-    let line = &output.scene().lines()[0];
+    let line = &output.scene().line(0).expect("line exists");
     assert_eq!(line.bounds().height(), 30.0);
     assert!(line.baseline() > line.bounds().y0 && line.baseline() < line.bounds().y1);
     assert_eq!(
         line.baseline(),
-        output.scene().fragments()[0].glyphs()[0].position().y
+        output
+            .scene()
+            .fragment(0)
+            .expect("fragment exists")
+            .glyphs()
+            .iter()
+            .next()
+            .expect("glyph exists")
+            .position()
+            .y
     );
     assert_ne!(
         line.baseline() - line.bounds().y0,
@@ -137,7 +195,7 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
     styles.set(large, large_style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -145,12 +203,51 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("mixed leaf formation succeeds");
-    let line = &output.scene().lines()[0];
-    assert_eq!(line.sources().len(), 2);
-    assert_eq!(line.sources()[0].text(), small);
-    assert_eq!(line.sources()[0].bytes(), 0..6);
-    assert_eq!(line.sources()[1].text(), large);
-    assert_eq!(line.sources()[1].bytes(), 0..3);
+    let line = &output.scene().line(0).expect("line exists");
+    let sources = scene_sources(output.scene());
+    assert_eq!(
+        sources
+            .for_line(*line)
+            .expect("line belongs to source scene")
+            .len(),
+        2
+    );
+    assert_eq!(
+        sources
+            .for_line(*line)
+            .expect("line belongs to source scene")
+            .next()
+            .expect("source exists")
+            .text(),
+        small
+    );
+    assert_eq!(
+        sources
+            .for_line(*line)
+            .expect("line belongs to source scene")
+            .next()
+            .expect("source exists")
+            .bytes(),
+        0..6
+    );
+    assert_eq!(
+        sources
+            .for_line(*line)
+            .expect("line belongs to source scene")
+            .nth(1)
+            .expect("source exists")
+            .text(),
+        large
+    );
+    assert_eq!(
+        sources
+            .for_line(*line)
+            .expect("line belongs to source scene")
+            .nth(1)
+            .expect("source exists")
+            .bytes(),
+        0..3
+    );
     assert_eq!(line.bounds().height(), 60.0);
     assert!(
         output
@@ -173,7 +270,7 @@ fn non_breaking_space_and_unbreakable_words_overflow_honestly() {
     for text in ["alpha\u{a0}beta", "supercalifragilisticexpialidocious"] {
         let (document, styles, paint) = fixture_document(text, 1.2);
         let mut engine = fixture_engine();
-        let request = SceneRequest::new(
+        let request = editable_scene_request(
             TextConstraint::Wrap(FiniteWidth::new(10.0).expect("test width is valid")),
             &styles,
             &paint,
@@ -187,23 +284,29 @@ fn non_breaking_space_and_unbreakable_words_overflow_honestly() {
             "unbreakable source must not be split: {text:?}"
         );
         assert_eq!(
-            output.scene().lines()[0].break_reason(),
+            output.scene().line(0).expect("line exists").break_reason(),
             underwood::adapter::LineBreakReason::End
         );
         assert!(
-            output.scene().lines()[0].bounds().width() > 10.0,
+            output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .width()
+                > 10.0,
             "overflow must remain visible rather than report a false fit: {text:?}"
         );
     }
 }
 
 #[test]
-fn width_reshapes_committed_lines_while_line_height_reuses_them() {
+fn width_reuses_whitespace_separated_shaping_and_line_height_reuses_lines() {
     let text = "alpha beta gamma";
     let (document, compact_styles, paint) = fixture_document(text, 1.2);
     let (_, spacious_styles, _) = fixture_document(text, 1.8);
     let mut engine = fixture_engine();
-    let wide = SceneRequest::new(
+    let wide = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &compact_styles,
         &paint,
@@ -212,7 +315,7 @@ fn width_reshapes_committed_lines_while_line_height_reuses_them() {
         .prepare(&document.snapshot(), &wide)
         .expect("initial formation succeeds");
 
-    let narrow = SceneRequest::new(
+    let narrow = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
         &compact_styles,
         &paint,
@@ -224,12 +327,12 @@ fn width_reshapes_committed_lines_while_line_height_reuses_them() {
     assert_eq!(narrowed.work().itemization().paragraphs(), 0);
     assert_eq!(narrowed.work().font_selection().paragraphs(), 0);
     assert_eq!(narrowed.work().shape().paragraphs(), 0);
-    assert_eq!(narrowed.work().line_font_resolution().paragraphs(), 1);
-    assert_eq!(narrowed.work().line_shape().paragraphs(), 1);
-    assert!(narrowed.work().line_reshapes() > 0);
+    assert_eq!(narrowed.work().line_font_resolution().paragraphs(), 0);
+    assert_eq!(narrowed.work().line_shape().paragraphs(), 0);
+    assert_eq!(narrowed.work().line_reshapes(), 0);
     assert_eq!(narrowed.work().flow().paragraphs(), 1);
 
-    let spacious = SceneRequest::new(
+    let spacious = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(72.0).expect("test width is valid")),
         &spacious_styles,
         &paint,
@@ -243,8 +346,18 @@ fn width_reshapes_committed_lines_while_line_height_reuses_them() {
     assert_eq!(respaced.work().line_reshapes(), 0);
     assert_eq!(respaced.work().flow().paragraphs(), 1);
     assert!(
-        respaced.scene().lines()[0].bounds().height()
-            > narrowed.scene().lines()[0].bounds().height()
+        respaced
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .height()
+            > narrowed
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .height()
     );
 }
 
@@ -267,19 +380,32 @@ fn all_line_height_bases_recompute_metrics_without_reshaping() {
     let metrics_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &metrics, &paint),
+            &editable_scene_request(constraint, &metrics, &paint),
         )
         .expect("metrics-relative line height prepares");
-    let metrics_height = metrics_output.scene().lines()[0].bounds().height();
+    let metrics_height = metrics_output
+        .scene()
+        .line(0)
+        .expect("line exists")
+        .bounds()
+        .height();
     assert!(metrics_height > 0.0);
 
     let font_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &font_relative, &paint),
+            &editable_scene_request(constraint, &font_relative, &paint),
         )
         .expect("font-size-relative line height prepares");
-    assert_eq!(font_output.scene().lines()[0].bounds().height(), 40.0);
+    assert_eq!(
+        font_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .height(),
+        40.0
+    );
     assert_eq!(font_output.work().analysis().paragraphs(), 0);
     assert_eq!(font_output.work().font_selection().paragraphs(), 0);
     assert_eq!(font_output.work().shape().paragraphs(), 0);
@@ -288,10 +414,18 @@ fn all_line_height_bases_recompute_metrics_without_reshaping() {
     let absolute_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &absolute, &paint),
+            &editable_scene_request(constraint, &absolute, &paint),
         )
         .expect("absolute line height prepares");
-    assert_eq!(absolute_output.scene().lines()[0].bounds().height(), 50.0);
+    assert_eq!(
+        absolute_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .height(),
+        50.0
+    );
     assert_eq!(absolute_output.work().analysis().paragraphs(), 0);
     assert_eq!(absolute_output.work().font_selection().paragraphs(), 0);
     assert_eq!(absolute_output.work().shape().paragraphs(), 0);
@@ -319,10 +453,10 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     let plain = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &plain_styles, &paint),
+            &editable_scene_request(constraint, &plain_styles, &paint),
         )
         .expect("plain shaping prepares");
-    let plain_width = plain.scene().lines()[0].bounds().width();
+    let plain_width = plain.scene().line(0).expect("line exists").bounds().width();
     let plain_glyphs: usize = plain
         .scene()
         .fragments()
@@ -333,7 +467,7 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     let tracked_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &tracked, &paint),
+            &editable_scene_request(constraint, &tracked, &paint),
         )
         .expect("tracked shaping prepares");
     let tracked_glyphs: usize = tracked_output
@@ -345,7 +479,15 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     assert_eq!(tracked_output.work().analysis().paragraphs(), 0);
     assert_eq!(tracked_output.work().font_selection().paragraphs(), 0);
     assert_eq!(tracked_output.work().shape().paragraphs(), 1);
-    assert!(tracked_output.scene().lines()[0].bounds().width() > plain_width);
+    assert!(
+        tracked_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width()
+            > plain_width
+    );
     assert!(
         tracked_glyphs > plain_glyphs,
         "default optional ligatures must be disabled when tracking is nonzero"
@@ -354,15 +496,25 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     let wider_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &wider, &paint),
+            &editable_scene_request(constraint, &wider, &paint),
         )
         .expect("changing a nonzero spacing amount prepares");
     assert_eq!(wider_output.work().analysis().paragraphs(), 0);
     assert_eq!(wider_output.work().font_selection().paragraphs(), 0);
     assert_eq!(wider_output.work().shape().paragraphs(), 0);
     assert!(
-        wider_output.scene().lines()[0].bounds().width()
-            > tracked_output.scene().lines()[0].bounds().width(),
+        wider_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width()
+            > tracked_output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .width(),
         "advance-only changes must reach geometry without reshaping"
     );
 
@@ -375,15 +527,25 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     let wider_words_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &wider_words, &paint),
+            &editable_scene_request(constraint, &wider_words, &paint),
         )
         .expect("changing only word spacing prepares");
     assert_eq!(wider_words_output.work().analysis().paragraphs(), 0);
     assert_eq!(wider_words_output.work().font_selection().paragraphs(), 0);
     assert_eq!(wider_words_output.work().shape().paragraphs(), 0);
     assert!(
-        wider_words_output.scene().lines()[0].bounds().width()
-            > wider_output.scene().lines()[0].bounds().width(),
+        wider_words_output
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width()
+            > wider_output
+                .scene()
+                .line(0)
+                .expect("line exists")
+                .bounds()
+                .width(),
         "word spacing must adjust retained separator advances"
     );
 
@@ -398,7 +560,7 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     let plain = arabic_engine
         .prepare(
             &arabic_document.snapshot(),
-            &SceneRequest::new(constraint, &arabic_plain, &paint),
+            &editable_scene_request(constraint, &arabic_plain, &paint),
         )
         .expect("plain Arabic prepares");
     let plain_glyphs: Vec<_> = plain
@@ -411,7 +573,7 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
     let tracked = arabic_engine
         .prepare(
             &arabic_document.snapshot(),
-            &SceneRequest::new(constraint, &arabic_tracked, &paint),
+            &editable_scene_request(constraint, &arabic_tracked, &paint),
         )
         .expect("tracked Arabic prepares");
     let tracked_glyphs: Vec<_> = tracked
@@ -423,8 +585,13 @@ fn spacing_reuses_fonts_and_keeps_joining_text_connected() {
         .collect();
     assert_eq!(tracked_glyphs, plain_glyphs);
     assert_eq!(
-        tracked.scene().lines()[0].bounds().width(),
-        plain.scene().lines()[0].bounds().width()
+        tracked
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .bounds()
+            .width(),
+        plain.scene().line(0).expect("line exists").bounds().width()
     );
 }
 
@@ -451,7 +618,7 @@ fn wrap_and_overflow_policy_reach_product_formation() {
     let normal = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(narrow, &normal_styles, &paint),
+            &editable_scene_request(narrow, &normal_styles, &paint),
         )
         .expect("normal overflow prepares");
     assert_eq!(normal.scene().lines().len(), 1);
@@ -459,7 +626,7 @@ fn wrap_and_overflow_policy_reach_product_formation() {
     let emergency = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(narrow, &anywhere, &paint),
+            &editable_scene_request(narrow, &anywhere, &paint),
         )
         .expect("anywhere overflow prepares");
     assert!(emergency.scene().lines().len() > 1);
@@ -469,7 +636,7 @@ fn wrap_and_overflow_policy_reach_product_formation() {
     let no_wrap_output = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(narrow, &no_wrap, &paint),
+            &editable_scene_request(narrow, &no_wrap, &paint),
         )
         .expect("no-wrap prepares");
     assert_eq!(no_wrap_output.scene().lines().len(), 1);
@@ -479,13 +646,13 @@ fn wrap_and_overflow_policy_reach_product_formation() {
     let anywhere_min = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MinContent, &anywhere, &paint),
+            &editable_scene_request(TextConstraint::MinContent, &anywhere, &paint),
         )
         .expect("anywhere min-content prepares");
     let break_word_min = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(TextConstraint::MinContent, &break_word, &paint),
+            &editable_scene_request(TextConstraint::MinContent, &break_word, &paint),
         )
         .expect("break-word min-content prepares");
     assert!(anywhere_min.scene().lines().len() > 1);
@@ -504,8 +671,11 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
     .expect("Arabic fallback is valid");
-    let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
-    let wide = SceneRequest::new(
+    let mut engine = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(32).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
+    let wide = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -513,18 +683,29 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     let unbroken = engine
         .prepare(&document.snapshot(), &wide)
         .expect("unbroken shaping succeeds");
+    let unbroken_sources = scene_sources(unbroken.scene());
     let unbroken_glyphs: Vec<_> = unbroken
         .scene()
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
-        .map(|glyph| (glyph.id(), glyph.source().bytes()))
+        .map(|glyph| {
+            (
+                glyph.id(),
+                unbroken_sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .expect("glyph source exists")
+                    .bytes(),
+            )
+        })
         .collect();
 
-    let narrow = SceneRequest::new(TextConstraint::MinContent, &styles, &paint);
+    let narrow = editable_scene_request(TextConstraint::MinContent, &styles, &paint);
     let output = engine
         .prepare(&document.snapshot(), &narrow)
         .expect("the legal break reshapes its bounded cursive context");
+    let sources = scene_sources(output.scene());
     assert_eq!(output.work().analysis().paragraphs(), 0);
     assert_eq!(output.work().font_selection().paragraphs(), 0);
     assert_eq!(output.work().shape().paragraphs(), 0);
@@ -536,21 +717,49 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
-        .map(|glyph| (glyph.id(), glyph.source().bytes()))
+        .map(|glyph| {
+            (
+                glyph.id(),
+                sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .expect("glyph source exists")
+                    .bytes(),
+            )
+        })
         .collect();
     assert_ne!(
         broken_glyphs, unbroken_glyphs,
         "committing the break must change real Arabic glyph output"
     );
     assert_eq!(output.scene().lines().len(), 2);
-    assert_eq!(output.scene().lines()[0].sources()[0].bytes(), 0..break_at);
     assert_eq!(
-        output.scene().lines()[1].sources()[0].bytes(),
+        sources
+            .for_line(output.scene().line(0).expect("line exists"))
+            .expect("line belongs to source scene")
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
+        0..break_at
+    );
+    assert_eq!(
+        sources
+            .for_line(output.scene().line(1).expect("line exists"))
+            .expect("line belongs to source scene")
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes(),
         break_at..u32::try_from(text.len()).expect("fixture range fits")
     );
     assert!(output.scene().fragments().iter().all(|fragment| {
         fragment.glyphs().iter().all(|glyph| {
-            let source = glyph.source().bytes();
+            let source = sources
+                .first_for_glyph(glyph)
+                .expect("glyph belongs to source scene")
+                .expect("glyph source exists")
+                .bytes();
             source.end <= break_at || source.start >= break_at
         })
     }));
@@ -612,18 +821,27 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
     let output = fixture_engine()
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &styles, &paint),
+            &editable_scene_request(constraint, &styles, &paint),
         )
         .expect("overflowing line-final shaping backs up");
+    let sources = scene_sources(output.scene());
     let prior_source =
         u32::try_from(clusters[prior_safe].source.start).expect("fixture source range fits");
     assert_eq!(
-        output.scene().lines()[0].sources()[0].bytes().end,
+        sources
+            .for_line(output.scene().line(0).expect("line exists"))
+            .expect("line belongs to source scene")
+            .iter()
+            .next()
+            .expect("source exists")
+            .bytes()
+            .end,
         prior_source
     );
-    assert!(
-        output.work().line_reshapes() >= 3,
-        "rejected candidate, accepted candidate, and remainder must be visible work"
+    assert_eq!(
+        output.work().line_reshapes(),
+        1,
+        "only the rejected joining-sensitive candidate requires reshaping"
     );
     assert_eq!(
         output.work().rejected_line_candidates(),
@@ -641,7 +859,7 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
 fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
     let (document, styles, paint) = fixture_document("office مرحبا world", 1.2);
     let mut engine = fixture_engine();
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_000.0).expect("test width is valid")),
         &styles,
         &paint,
@@ -649,14 +867,23 @@ fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("mixed bidi formation succeeds");
+    let sources = scene_sources(output.scene());
     let arabic: Vec<_> = output
         .scene()
         .fragments()
         .iter()
         .filter(|fragment| fragment.bidi_level() & 1 == 1)
-        .map(|fragment| {
-            let glyph = &fragment.glyphs()[0];
-            (glyph.position().x, glyph.source().bytes().start)
+        .flat_map(|fragment| fragment.glyphs())
+        .map(|glyph| {
+            (
+                glyph.position().x,
+                sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .expect("glyph source exists")
+                    .bytes()
+                    .start,
+            )
         })
         .collect();
     assert!(arabic.len() > 1, "Arabic run must expose multiple glyphs");

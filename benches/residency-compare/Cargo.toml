@@ -1,0 +1,24 @@
+[package]
+name = "underwood_residency_compare"
+version.workspace = true
+authors = ["Underwood Contributors"]
+edition.workspace = true
+rust-version.workspace = true
+description = "Matched retained-memory and interaction wind tunnel for Underwood and Parley"
+homepage = "https://github.com/forest-rs/underwood"
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+allocation-counting = ["dep:allocation-counter"]
+
+[dependencies]
+allocation-counter = { version = "0.8.1", optional = true }
+fontique = { workspace = true, features = ["std"] }
+parley = { workspace = true, features = ["std"] }
+underwood.workspace = true
+underwood_parley = { workspace = true, features = ["std"] }
+
+[lints]
+workspace = true

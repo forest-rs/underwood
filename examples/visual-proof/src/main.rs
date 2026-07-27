@@ -16,11 +16,19 @@ use imaging_vello_cpu::VelloCpuRenderer;
 use underwood::{
     Brush, CacheBudget, ComputedInlineStyle, Document, DocumentId, FiniteWidth, FontFeature,
     FontStyle, FontVariation, FontWeight, FontWidth, InlineFlowStyle, InlineRole, Language,
-    LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, SceneRequest,
-    Script, ShapingStyle, StyleMap, Tag, TextAlignment, TextConstraint, TextId, TextScene,
-    adapter::LineBreakReason,
+    LayoutEngine, LineHeight, PaintSlot, PaintTable, ParagraphRole, ParagraphStyle, SceneFeatures,
+    SceneRequest, Script, ShapingStyle, StyleMap, Tag, TextAlignment, TextConstraint, TextId,
+    TextScene, adapter::LineBreakReason,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
+
+fn proof_scene_request<'a>(
+    constraint: TextConstraint,
+    styles: &'a StyleMap,
+    paint: &'a PaintTable,
+) -> SceneRequest<'a> {
+    SceneRequest::new(constraint, styles, paint).with_features(SceneFeatures::ACCESSIBLE)
+}
 
 const WIDTH: u16 = 1_600;
 const HEIGHT: u16 = 1_000;
@@ -178,13 +186,13 @@ impl<'a> TextSceneAdapter<'a> {
     }
 
     fn paint_diagnostics_above<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
-        for fragment in self
+        for glyph in self
             .scene
             .fragments()
             .iter()
-            .filter(|fragment| is_zero_advance_glyph(fragment))
+            .flat_map(|fragment| fragment.glyphs())
+            .filter(|glyph| glyph.advance().x == 0.0)
         {
-            let glyph = &fragment.glyphs()[0];
             let origin = glyph.position();
             let advance_end = origin.x + glyph.advance().x;
             let rail_x1 = if origin.x == advance_end {
@@ -248,7 +256,8 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     let zero_advance_glyphs = hero
         .fragments()
         .iter()
-        .filter(|fragment| is_zero_advance_glyph(fragment))
+        .flat_map(|fragment| fragment.glyphs())
+        .filter(|glyph| glyph.advance().x == 0.0)
         .count();
     assert!(
         zero_advance_glyphs > 0,
@@ -274,6 +283,8 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     );
     assert!(
         hero.semantics()
+            .expect("scene request includes semantics")
+            .iter()
             .any(|fragment| fragment.inline_role() == Some(InlineRole::EMPHASIS)),
         "the hero must retain real inline semantics alongside glyph diagnostics"
     );
@@ -307,26 +318,40 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
         "the mixed-direction specimen must prove finite-width formation"
     );
     assert_eq!(
-        mixed_direction.lines()[0].break_reason(),
+        mixed_direction
+            .line(0)
+            .expect("first mixed-direction line")
+            .break_reason(),
         LineBreakReason::Regular,
         "the specimen must wrap at a legal Parley opportunity"
     );
     assert_eq!(
-        mixed_direction.lines()[1].break_reason(),
+        mixed_direction
+            .line(1)
+            .expect("second mixed-direction line")
+            .break_reason(),
         LineBreakReason::End,
         "the second line must end with the paragraph"
     );
     assert_eq!(
-        mixed_direction.lines()[0].adjustment().alignment(),
+        mixed_direction
+            .line(0)
+            .expect("first mixed-direction line")
+            .adjustment()
+            .alignment(),
         TextAlignment::Justify,
         "the mixed-direction specimen must use public paragraph alignment"
     );
     assert!(
-        mixed_direction.lines()[0]
+        mixed_direction
+            .line(0)
+            .expect("first mixed-direction line")
             .adjustment()
             .expanded_opportunities()
             > 0
-            && mixed_direction.lines()[0]
+            && mixed_direction
+                .line(0)
+                .expect("first mixed-direction line")
                 .adjustment()
                 .opportunity_expansion()
                 > 0.0,
@@ -459,7 +484,10 @@ fn layout_engine() -> Result<LayoutEngine, AnyError> {
         ["Noto Kufi Arabic"],
     )?;
     let paragraphs = ParleyParagraphEngine::new(fonts);
-    Ok(LayoutEngine::new(paragraphs, CacheBudget::new(256)))
+    Ok(LayoutEngine::new(
+        paragraphs,
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
+    ))
 }
 
 fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> {
@@ -481,12 +509,16 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     styles.set(prefix, base.clone().with_paint(CORAL));
     styles.set(suffix, base.with_paint(CYAN));
     let paint = poster_paints();
-    let request = SceneRequest::new(
+    let request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(700.0)?),
         &styles,
         &paint,
     );
     let initial = layout.prepare(published.snapshot(), &request)?;
+    let sources = initial
+        .scene()
+        .sources()
+        .expect("proof request includes sources");
     assert_eq!(
         glyph_count(initial.scene(), suffix),
         4,
@@ -494,9 +526,13 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     );
     assert!(
         initial.scene().fragments().iter().any(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == suffix && source.bytes() == (1..4))
+            fragment.glyphs().iter().any(|glyph| {
+                let source = sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .expect("glyph source exists");
+                source.text() == suffix && source.bytes() == (1..4)
+            })
         }),
         "the retained ffi glyph must own its complete source range"
     );
@@ -517,7 +553,7 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     );
 
     let recolored = paint.with_brush(CYAN, Brush::Solid(GOLD_COLOR))?;
-    let paint_request = SceneRequest::new(
+    let paint_request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(700.0)?),
         &styles,
         &recolored,
@@ -639,7 +675,7 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
     styles.set(arabic_text, arabic_style);
 
     let paints = poster_paints();
-    let request = SceneRequest::new(
+    let request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(1_350.0)?),
         &styles,
         &paints,
@@ -662,13 +698,15 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         6,
         "explicit liga-off office must preserve six glyphs"
     );
+    let sources = scene.sources().expect("proof request includes sources");
     let arabic_fragment = scene
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == arabic_text)
+            sources
+                .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == arabic_text)
         })
         .expect("Fontique fallback specimen must produce a fragment");
     assert_eq!(
@@ -706,8 +744,8 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
     assert!(
         scene
             .lines()
-            .windows(2)
-            .any(|lines| lines[0].bounds().height() != lines[1].bounds().height()),
+            .zip(scene.lines().skip(1))
+            .any(|(first, second)| first.bounds().height() != second.bounds().height()),
         "the specimen must execute heterogeneous line heights"
     );
     Ok(scene.clone())
@@ -734,26 +772,30 @@ fn variable_style(
 }
 
 fn glyph_count(scene: &TextScene, text: TextId) -> usize {
+    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
-        .filter(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
+        .flat_map(|fragment| fragment.glyphs())
+        .filter(|glyph| {
+            sources
+                .for_glyph(*glyph)
+                .expect("glyph belongs to source scene")
+                .any(|source| source.text() == text)
         })
-        .map(|fragment| fragment.glyphs().len())
-        .sum()
+        .count()
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
+    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
+            sources
+                .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == text)
         })
         .map(|fragment| fragment.normalized_coords().to_vec())
         .unwrap_or_default()
@@ -821,7 +863,7 @@ fn layout_scene_aligned(
     }
     styles.set_paragraph_style(paragraph, ParagraphStyle::DEFAULT.with_alignment(alignment));
     let paints = poster_paints();
-    let request = SceneRequest::new(
+    let request = proof_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(width)?),
         &styles,
         &paints,
@@ -838,10 +880,6 @@ fn poster_paints() -> PaintTable {
         Brush::Solid(GOLD_COLOR),
         Brush::Solid(MUTED_COLOR),
     ])
-}
-
-fn is_zero_advance_glyph(fragment: &underwood::SceneFragment) -> bool {
-    fragment.glyphs().len() == 1 && fragment.glyphs()[0].advance().x == 0.0
 }
 
 fn paint_backdrop<S: PaintSink + ?Sized>(painter: &mut Painter<'_, S>) {

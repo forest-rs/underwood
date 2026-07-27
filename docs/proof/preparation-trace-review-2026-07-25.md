@@ -42,7 +42,9 @@ paint both change reports both facts. Exact geometry reuse, shared preparation,
 and an adapter call are mutually exclusive outcomes.
 
 An ordinary untraced request returns `None` from `SceneOutput::trace()` and
-does not run the deep scene-output capacity pass. The always-on reuse counters
+does not run the deep scene-output capacity pass or reserve the trace payload
+inside the output. The output stores only a nullable shared handle; a traced
+request allocates the immutable trace out of line. The always-on reuse counters
 are scalar increments folded into existing cache decisions.
 
 ## Memory vocabulary
@@ -117,6 +119,15 @@ The final traced record reported:
 These are capacity charges, not process allocation or live-byte claims. The
 existing `profile-allocations.sh` and `malloc_history` path remains the
 allocation authority.
+
+Design-0017 subsequently replaced flat output vectors with a persistent scene
+spine. `scene_output_capacity_bytes` now reports only the spine-node payload
+newly retained relative to a reusable prior publication. A one-paragraph scene
+uses the direct segment form and reports zero tree bytes; multi-paragraph
+scenes report only their persistent tree nodes. Exact shared roots also report
+zero, and paragraph geometry remains in scene-cache accounting. The follow-on
+law and its composition correction are recorded in
+`retained-lifecycle-progress-2026-07-25.md`.
 
 ## Host timing and product path
 

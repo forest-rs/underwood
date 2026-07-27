@@ -52,7 +52,7 @@ Implementation ownership is deliberately private and narrow:
 - `line_break` adapts Underwood constraints and line metrics to that reusable
   kernel, then owns line-local bidi ordering;
 - `lowering` produces portable glyph, source, synthesis, and paint records;
-- `interaction` produces source-complete grapheme units and cursor movement;
+- `interaction` produces source-complete grapheme units and visual-side facts;
 - `validation` rejects incomplete or non-canonical adapter inputs.
 
 The crate root contains only documentation, private module declarations, and

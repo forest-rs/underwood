@@ -6,6 +6,7 @@
 //! This module owns persistent semantic document state; it explicitly does not
 //! own edit validation or staged transaction algorithms.
 
+use super::sequence::{ChangedParagraphs, ParagraphSequence};
 use super::*;
 
 /// Opaque identity of one document.
@@ -55,6 +56,24 @@ pub struct SemanticId {
     text: Option<u32>,
 }
 
+impl SemanticId {
+    pub(crate) const fn for_paragraph(paragraph: ParagraphId) -> Self {
+        Self {
+            document: paragraph.document,
+            paragraph: paragraph.index,
+            text: None,
+        }
+    }
+
+    pub(crate) const fn for_text(text: TextId) -> Self {
+        Self {
+            document: text.document,
+            paragraph: text.paragraph,
+            text: Some(text.index),
+        }
+    }
+}
+
 /// Semantic role of a block paragraph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ParagraphRole(u8);
@@ -86,7 +105,7 @@ impl InlineRole {
 pub(crate) struct TextLeaf {
     pub(crate) id: TextId,
     pub(crate) role: InlineRole,
-    pub(crate) text: Arc<str>,
+    text: StagedText,
 }
 
 #[derive(Clone, Debug)]
@@ -101,7 +120,13 @@ pub(crate) struct Paragraph {
 pub(crate) struct DocumentState {
     pub(crate) id: DocumentId,
     pub(crate) revision: DocumentRevision,
-    pub(crate) paragraphs: Vec<Paragraph>,
+    pub(super) paragraphs: ParagraphSequence,
+}
+
+#[derive(Clone, Debug)]
+enum StagedText {
+    Shared(Arc<str>),
+    Owned(String),
 }
 
 /// Mutable owner of the current immutable document snapshot.
@@ -118,7 +143,7 @@ impl Document {
             state: Arc::new(DocumentState {
                 id,
                 revision: DocumentRevision(0),
-                paragraphs: Vec::new(),
+                paragraphs: ParagraphSequence::default(),
             }),
         }
     }
@@ -129,19 +154,6 @@ impl Document {
         DocumentSnapshot {
             state: Arc::clone(&self.state),
         }
-    }
-
-    pub(crate) fn text(&self, id: TextId) -> Option<&str> {
-        if id.document != self.state.id {
-            return None;
-        }
-        self.state
-            .paragraphs
-            .get(id.paragraph as usize)?
-            .leaves
-            .get(id.index as usize)
-            .filter(|leaf| leaf.id == id)
-            .map(|leaf| leaf.text.as_ref())
     }
 
     /// Starts an atomic staged edit.
@@ -167,32 +179,8 @@ impl Document {
     ) -> Result<SelectionReplacement, EditError> {
         let replacement_len = u32::try_from(replacement.len())
             .map_err(|_| EditError::for_document(EditErrorKind::OversizedText, self.state.id))?;
-        let plans = validate_replacement_plans(&self.state, selections, replacement_len)?;
-        let mut operations = Vec::new();
-        for plan in &plans {
-            for (range_index, range) in plan.ranges.iter().enumerate() {
-                operations.push(ReplacementOperation {
-                    selection: plan.selection,
-                    text: range.text,
-                    bytes: range.bytes.clone(),
-                    inserts: range_index == 0,
-                });
-            }
-        }
-        operations.sort_unstable_by(|first, second| {
-            (
-                second.text.paragraph,
-                second.text.index,
-                second.bytes.start,
-                second.bytes.end,
-            )
-                .cmp(&(
-                    first.text.paragraph,
-                    first.text.index,
-                    first.bytes.start,
-                    first.bytes.end,
-                ))
-        });
+        let plans = validate_replacement_plans(self.state.as_ref(), selections, replacement_len)?;
+        let operations = replacement_operations(&plans);
 
         let mut edit = self.edit();
         for operation in &operations {
@@ -204,50 +192,16 @@ impl Document {
         }
         let publication = edit.commit()?;
         let revision = publication.snapshot().revision();
-        let mut resulting = Vec::with_capacity(plans.len());
-        for plan in &plans {
-            let mut byte = i64::from(plan.insertion.byte);
-            for operation in &operations {
-                if operation.text != plan.insertion.text {
-                    continue;
-                }
-                if !operation.bytes.is_empty() && operation.bytes.end <= plan.insertion.byte {
-                    byte -= i64::from(operation.bytes.end - operation.bytes.start);
-                }
-                if operation.inserts
-                    && (operation.bytes.start < plan.insertion.byte
-                        || operation.selection == plan.selection)
-                {
-                    byte += i64::from(replacement_len);
-                }
-            }
-            let byte = u32::try_from(byte).map_err(|_| {
-                EditError::for_text(EditErrorKind::OversizedText, plan.insertion.text)
-            })?;
-            let position = SnapshotTextPosition::new(
-                revision,
-                plan.insertion.text,
-                byte,
-                if byte == 0 {
-                    TextAffinity::Downstream
-                } else {
-                    TextAffinity::Upstream
-                },
-            );
-            resulting.push(SnapshotTextSelection::new(
-                position,
-                position,
-                TextSelectionMode::Logical,
-                alloc::vec![SnapshotTextRange::new(
-                    revision,
-                    plan.insertion.text,
-                    byte..byte,
-                )],
-            ));
-        }
+        let selections = rebind_replacement_selections(
+            self.state.id,
+            revision,
+            &plans,
+            &operations,
+            replacement_len,
+        )?;
         Ok(SelectionReplacement {
             publication,
-            selections: SnapshotTextSelectionSet::new(self.state.id, revision, resulting),
+            selections,
         })
     }
 }
@@ -273,11 +227,38 @@ impl DocumentSnapshot {
     /// Returns a text leaf when the identity belongs to this document and exists in this revision.
     #[must_use]
     pub fn text(&self, id: TextId) -> Option<&str> {
-        self.leaf(id).map(|leaf| leaf.text.as_ref())
+        self.leaf(id).map(TextLeaf::text)
     }
 
-    pub(crate) fn paragraphs(&self) -> &[Paragraph] {
+    pub(crate) fn paragraphs(&self) -> &ParagraphSequence {
         &self.state.paragraphs
+    }
+
+    pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    pub(crate) fn changed_paragraphs_from<'a>(
+        &'a self,
+        previous: &'a Self,
+    ) -> Option<ChangedParagraphs<'a>> {
+        (self.id() == previous.id())
+            .then(|| {
+                self.state
+                    .paragraphs
+                    .changed_indices(&previous.state.paragraphs)
+            })
+            .flatten()
+    }
+
+    pub(crate) fn appended_paragraphs_from(&self, previous: &Self) -> Option<Range<usize>> {
+        (self.id() == previous.id())
+            .then(|| {
+                self.state
+                    .paragraphs
+                    .appended_range_from(&previous.state.paragraphs)
+            })
+            .flatten()
     }
 
     pub(crate) fn leaf(&self, id: TextId) -> Option<&TextLeaf> {
@@ -355,29 +336,76 @@ impl ChangeSet {
 }
 
 impl Paragraph {
-    pub(crate) fn projected_text(&self) -> String {
-        let mut text = String::new();
-        for leaf in &self.leaves {
-            text.push_str(&leaf.text);
-        }
-        text
-    }
-
     pub(crate) fn semantic_id(&self) -> SemanticId {
-        SemanticId {
-            document: self.id.document,
-            paragraph: self.id.index,
-            text: None,
-        }
+        SemanticId::for_paragraph(self.id)
     }
 }
 
 impl TextLeaf {
+    pub(super) fn new(id: TextId, role: InlineRole, text: &str) -> Self {
+        Self {
+            id,
+            role,
+            text: StagedText::Shared(Arc::from(text)),
+        }
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        self.text.as_str()
+    }
+
+    pub(super) fn replace(&mut self, replacement: &str) {
+        self.text = StagedText::Owned(String::from(replacement));
+    }
+
+    pub(super) fn replace_range(&mut self, bytes: Range<u32>, replacement: &str) -> Result<(), ()> {
+        let bytes = bytes.start as usize..bytes.end as usize;
+        if self.text().get(bytes.clone()).is_none() {
+            return Err(());
+        }
+        let value = self.text.make_owned();
+        value.replace_range(bytes, replacement);
+        Ok(())
+    }
+
+    pub(super) fn freeze(&mut self) {
+        self.text.freeze();
+    }
+
+    #[cfg(test)]
+    pub(super) fn staged_buffer_ptr(&self) -> Option<*const u8> {
+        match &self.text {
+            StagedText::Shared(_) => None,
+            StagedText::Owned(value) => Some(value.as_ptr()),
+        }
+    }
+
     pub(crate) fn semantic_id(&self) -> SemanticId {
-        SemanticId {
-            document: self.id.document,
-            paragraph: self.id.paragraph,
-            text: Some(self.id.index),
+        SemanticId::for_text(self.id)
+    }
+}
+
+impl StagedText {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Shared(value) => value,
+            Self::Owned(value) => value,
+        }
+    }
+
+    fn make_owned(&mut self) -> &mut String {
+        if let Self::Shared(value) = self {
+            *self = Self::Owned(String::from(value.as_ref()));
+        }
+        match self {
+            Self::Owned(value) => value,
+            Self::Shared(_) => unreachable!("shared text was converted to owned text"),
+        }
+    }
+
+    fn freeze(&mut self) {
+        if let Self::Owned(value) = self {
+            *self = Self::Shared(Arc::from(core::mem::take(value)));
         }
     }
 }

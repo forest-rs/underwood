@@ -17,22 +17,11 @@ pub struct TextMetrics {
 }
 
 impl TextMetrics {
-    pub(super) fn from_lines<Source>(lines: &[SceneLine<Source>], height: f64) -> Self {
-        let mut min_x = 0.0_f64;
-        let mut max_x = 0.0_f64;
-        let mut min_y = 0.0_f64;
-        let mut max_y = height;
-        for line in lines {
-            let bounds = line.bounds();
-            min_x = min_x.min(bounds.x0);
-            max_x = max_x.max(bounds.x0 + line.advance());
-            min_y = min_y.min(bounds.y0);
-            max_y = max_y.max(bounds.y1);
-        }
+    pub(super) fn from_summary(summary: SceneSummary) -> Self {
         Self {
-            size: Size::new(max_x - min_x, max_y - min_y),
-            first_baseline: lines.first().map(SceneLine::baseline),
-            last_baseline: lines.last().map(SceneLine::baseline),
+            size: Size::new(summary.max_x - summary.min_x, summary.max_y - summary.min_y),
+            first_baseline: summary.first_baseline,
+            last_baseline: summary.last_baseline,
         }
     }
 
@@ -102,8 +91,7 @@ pub enum ProjectedTextPosition {
 pub struct SceneOutput {
     pub(super) scene: TextScene,
     pub(super) work: WorkReport,
-    pub(super) trace: Option<PreparationTrace>,
-    pub(super) region_transcript: Option<RegionTranscript>,
+    pub(super) trace: Option<Arc<PreparationTrace>>,
 }
 
 /// Immutable transient scene for one exact composition epoch.
@@ -111,9 +99,90 @@ pub struct SceneOutput {
 pub struct CompositionSceneOutput {
     pub(super) scene: CompositionScene,
     pub(super) work: WorkReport,
-    pub(super) trace: Option<PreparationTrace>,
-    pub(super) region_transcript: Option<RegionTranscript>,
+    pub(super) trace: Option<Arc<PreparationTrace>>,
 }
+
+/// Cheap immutable view of document-level region attempts retained in scene segments.
+///
+/// Paragraph attempt blocks remain structurally shared with the prepared
+/// scene. Cloning this value clones one scene-core handle; iterating attempts
+/// does not flatten or copy those blocks.
+#[derive(Clone, Debug)]
+pub struct SceneRegionTranscript {
+    core: Arc<SceneCore>,
+}
+
+impl SceneRegionTranscript {
+    pub(super) fn new(core: Arc<SceneCore>) -> Option<Self> {
+        core.region.map(|_| Self { core })
+    }
+
+    /// Returns the cursor before the first paragraph attempt.
+    #[must_use]
+    pub fn start(&self) -> RegionCursor {
+        self.core
+            .region
+            .expect("a scene region transcript retains its binding")
+            .start
+    }
+
+    /// Returns the cursor after the final paragraph attempt.
+    #[must_use]
+    pub fn end(&self) -> RegionCursor {
+        self.core
+            .region
+            .expect("a scene region transcript retains its binding")
+            .end
+    }
+
+    /// Iterates exact attempts in paragraph and execution order.
+    #[must_use]
+    pub fn attempts(&self) -> SceneRegionAttempts<'_> {
+        SceneRegionAttempts {
+            inner: self.core.spine.region_attempts(),
+        }
+    }
+
+    /// Replays every retained paragraph block against one region flow.
+    pub fn replay(&self, flow: &RegionFlow) -> Result<RegionCursor, SceneError> {
+        let mut cursor = self.start();
+        for attempt in self.attempts() {
+            if flow.slot(cursor) != Some(attempt.slot()) {
+                return Err(SceneError::new(SceneErrorKind::Flow));
+            }
+            cursor = match attempt.outcome() {
+                RegionAttemptOutcome::Accepted => {
+                    flow.accept(cursor, attempt.slot(), attempt.line_height())?
+                }
+                RegionAttemptOutcome::HeightRejected => flow.reject(cursor, attempt.slot())?,
+            };
+        }
+        if cursor != self.end() {
+            return Err(SceneError::new(SceneErrorKind::Flow));
+        }
+        Ok(cursor)
+    }
+}
+
+/// Allocation-free iterator over region attempts retained by one scene.
+#[derive(Clone, Debug)]
+pub struct SceneRegionAttempts<'a> {
+    inner: SpineRegionAttempts<'a>,
+}
+
+impl<'a> Iterator for SceneRegionAttempts<'a> {
+    type Item = &'a crate::RegionAttempt;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+impl ExactSizeIterator for SceneRegionAttempts<'_> {}
 
 impl CompositionSceneOutput {
     /// Returns the prepared transient scene.
@@ -130,14 +199,14 @@ impl CompositionSceneOutput {
 
     /// Returns requested preparation decisions, work, and memory accounting.
     #[must_use]
-    pub const fn trace(&self) -> Option<&PreparationTrace> {
-        self.trace.as_ref()
+    pub fn trace(&self) -> Option<&PreparationTrace> {
+        self.trace.as_deref()
     }
 
     /// Returns replayable region attempts for this transient request.
     #[must_use]
-    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
-        self.region_transcript.as_ref()
+    pub fn region_transcript(&self) -> Option<SceneRegionTranscript> {
+        SceneRegionTranscript::new(Arc::clone(&self.scene.core))
     }
 }
 
@@ -156,14 +225,14 @@ impl SceneOutput {
 
     /// Returns requested preparation decisions, work, and memory accounting.
     #[must_use]
-    pub const fn trace(&self) -> Option<&PreparationTrace> {
-        self.trace.as_ref()
+    pub fn trace(&self) -> Option<&PreparationTrace> {
+        self.trace.as_deref()
     }
 
     /// Returns replayable region attempts for this request.
     #[must_use]
-    pub const fn region_transcript(&self) -> Option<&RegionTranscript> {
-        self.region_transcript.as_ref()
+    pub fn region_transcript(&self) -> Option<SceneRegionTranscript> {
+        SceneRegionTranscript::new(Arc::clone(&self.scene.core))
     }
 }
 
@@ -176,9 +245,14 @@ impl SceneOutput {
 pub struct PreparationReuse {
     pub(super) paragraphs: usize,
     pub(super) cold_paragraphs: usize,
+    pub(super) preflight_reuses: usize,
     pub(super) exact_geometry_reuses: usize,
     pub(super) shared_preparation_reuses: usize,
     pub(super) adapter_calls: usize,
+    pub(super) adapter_fact_hits: usize,
+    pub(super) adapter_fact_misses: usize,
+    pub(super) warm_capability_upgrades: usize,
+    pub(super) cold_capability_upgrades: usize,
     pub(super) formation_invalidations: usize,
     pub(super) adjustment_invalidations: usize,
     pub(super) paint_invalidations: usize,
@@ -197,6 +271,12 @@ impl PreparationReuse {
         self.cold_paragraphs
     }
 
+    /// Returns paragraphs accepted from provenance before projection was built.
+    #[must_use]
+    pub const fn preflight_reuses(self) -> usize {
+        self.preflight_reuses
+    }
+
     /// Returns paragraphs that reused exact identity-local geometry.
     #[must_use]
     pub const fn exact_geometry_reuses(self) -> usize {
@@ -213,6 +293,31 @@ impl PreparationReuse {
     #[must_use]
     pub const fn adapter_calls(self) -> usize {
         self.adapter_calls
+    }
+
+    /// Returns adapter calls that found identity-local retained facts.
+    #[must_use]
+    pub const fn adapter_fact_hits(self) -> usize {
+        self.adapter_fact_hits
+    }
+
+    /// Returns adapter calls that began without identity-local retained facts.
+    #[must_use]
+    pub const fn adapter_fact_misses(self) -> usize {
+        self.adapter_fact_misses
+    }
+
+    /// Returns capability upgrades built from resident adapter facts.
+    #[must_use]
+    pub const fn warm_capability_upgrades(self) -> usize {
+        self.warm_capability_upgrades
+    }
+
+    /// Returns capability upgrades that repeated formation after adapter-fact
+    /// release or eviction.
+    #[must_use]
+    pub const fn cold_capability_upgrades(self) -> usize {
+        self.cold_capability_upgrades
     }
 
     /// Returns cached paragraphs whose text, shaping, flow, or region key changed.
@@ -261,7 +366,12 @@ impl PreparationMemory {
         self.cache_after
     }
 
-    /// Returns the capacity charge for the newly published scene's owned vectors.
+    /// Returns the payload-byte charge for scene-spine nodes newly retained by
+    /// this publication relative to its reusable prior spine.
+    ///
+    /// Shared spine nodes contribute zero. Paragraph geometry and its owned
+    /// collection capacities are reported through the scene-cache diagnostics
+    /// instead.
     #[must_use]
     pub const fn scene_output_capacity_bytes(self) -> usize {
         self.scene_output_capacity_bytes

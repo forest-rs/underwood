@@ -7,11 +7,20 @@ use underwood::adapter::PreparationErrorKind;
 use underwood::{
     Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, FiniteWidth,
     GenericFamily, InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight, PaintSlot,
-    PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap, Tag, TextConstraint,
-    TextId, TextScene,
+    PaintTable, ParagraphRole, SceneFeatures, SceneRequest, Script, ShapingStyle, StyleMap, Tag,
+    TextConstraint, TextId, TextScene,
 };
 use underwood::{FontFeature, FontStyle, FontVariation, FontWeight, FontWidth};
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
+
+fn full_scene_request<'a>(
+    constraint: TextConstraint,
+    styles: &'a StyleMap,
+    paint: &'a PaintTable,
+) -> SceneRequest<'a> {
+    SceneRequest::new(constraint, styles, paint)
+        .with_features(SceneFeatures::EDITABLE.with_semantics())
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut document = Document::new(DocumentId::from_bytes(*b"underwood-demo-1"));
@@ -114,25 +123,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let fonts = font_catalog()?;
     let paragraphs = ParleyParagraphEngine::new(fonts);
-    let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(256));
-    let request = SceneRequest::new(
+    let mut layout = LayoutEngine::new(
+        paragraphs,
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
+    let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(420.0)?),
         &styles,
         &paint,
     );
 
     let first_scene = layout.prepare(published.snapshot(), &request)?;
+    let sources = first_scene
+        .scene()
+        .sources()
+        .expect("full scene request includes sources");
     assert!(
         first_scene.scene().lines().len() >= 4,
         "four semantic paragraphs must produce at least four visual lines"
     );
-    let fragment = &first_scene.scene().fragments()[0];
+    let fragment = first_scene
+        .scene()
+        .fragment(0)
+        .expect("the first real fragment exists");
     assert!(
         !fragment.glyphs().is_empty(),
         "the first real Parley fragment must contain shaped glyphs"
     );
     assert!(
-        fragment.source().is_some(),
+        sources
+            .first_for_fragment(fragment)
+            .expect("fragment belongs to source scene")
+            .is_some(),
         "authored glyph fragments must retain snapshot source"
     );
     assert!(
@@ -165,9 +187,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == first_arabic)
+            sources
+                .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == first_arabic)
         })
         .expect("Arabic fallback leaf must produce a scene fragment");
     assert_eq!(
@@ -185,10 +208,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == first_arabic)
-                && fragment.glyphs()[0].advance().x == 0.0
+            sources
+                .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == first_arabic)
+                && fragment
+                    .glyphs()
+                    .iter()
+                    .any(|glyph| glyph.advance().x == 0.0)
         })
         .expect("Noto Kufi must expose a zero-advance Arabic mark");
     assert!(
@@ -199,11 +226,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .scene()
         .fragments()
         .iter()
-        .filter_map(|fragment| {
-            fragment
-                .source()
-                .filter(|source| source.text() == first_arabic)
-                .map(|source| source.bytes())
+        .flat_map(|fragment| fragment.glyphs())
+        .filter_map(|glyph| {
+            let source = sources
+                .first_for_glyph(glyph)
+                .expect("glyph belongs to source scene")
+                .expect("glyph source exists");
+            (source.text() == first_arabic).then(|| source.bytes())
         })
         .collect();
     assert!(
@@ -226,9 +255,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == direct_arabic)
+            sources
+                .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == direct_arabic)
         })
         .expect("direct named-family leaf must produce a scene fragment");
     assert_eq!(
@@ -239,6 +269,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hit_point = first_scene
         .scene()
         .semantics()
+        .expect("scene request includes semantics")
+        .iter()
         .find(|semantic| {
             semantic
                 .source()
@@ -247,12 +279,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("the authored prefix must expose semantic interaction geometry")
         .bounds()
         .center();
-    let hit = first_scene
+    let editing = first_scene
         .scene()
+        .editing()
+        .expect("scene request includes editing");
+    let hit = editing
         .hit_test(hit_point)
         .expect("the first fragment must be hittable");
-    let caret = first_scene
-        .scene()
+    let caret = editing
         .caret(hit.position())
         .expect("the hit position must resolve in its source scene");
     assert!(
@@ -270,6 +304,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         first_scene
             .scene()
             .semantics()
+            .expect("scene request includes semantics")
+            .iter()
             .any(|fragment| { fragment.inline_role() == Some(InlineRole::EMPHASIS) }),
         "inline emphasis must survive projection into scene semantics"
     );
@@ -285,9 +321,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert!(
         first_scene.scene().fragments().iter().any(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == ligatures_on && source.bytes() == (1..4))
+            fragment.glyphs().iter().any(|glyph| {
+                let source = sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .expect("glyph source exists");
+                source.text() == ligatures_on && source.bytes() == (1..4)
+            })
         }),
         "the retained ffi glyph must own the full three-character source range"
     );
@@ -350,7 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PaintSlot::new(1),
         Brush::Solid(Color::from_rgb8(0xa0, 0x20, 0x20)),
     )?;
-    let paint_request = SceneRequest::new(
+    let paint_request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(420.0)?),
         &styles,
         &recolored,
@@ -379,12 +419,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut reassigned_paint = styles.clone();
     reassigned_paint.set(first_suffix, base);
-    let reassigned_request = SceneRequest::new(
+    let reassigned_request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(420.0)?),
         &reassigned_paint,
         &recolored,
     );
     let reassigned_scene = layout.prepare(changed.snapshot(), &reassigned_request)?;
+    let reassigned_sources = reassigned_scene
+        .scene()
+        .sources()
+        .expect("full scene request includes sources");
     assert_eq!(
         reassigned_scene.work().shape().paragraphs(),
         0,
@@ -401,9 +445,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .fragments()
             .iter()
             .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_some_and(|source| source.text() == first_suffix)
+                reassigned_sources
+                    .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
+                    .any(|source| source.text() == first_suffix)
             })
             .all(|fragment| fragment.paint() == PaintSlot::new(0)),
         "retained geometry must still receive the new paint-slot assignment"
@@ -411,7 +456,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut shaping_styles = reassigned_paint.clone();
     shaping_styles.set(ligatures_off, ligatures_on_style);
-    let shaping_request = SceneRequest::new(
+    let shaping_request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(420.0)?),
         &shaping_styles,
         &recolored,
@@ -438,7 +483,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         variable_light,
         light_style.with_inline_flow(InlineFlowStyle::new(LineHeight::from_multiplier(1.8)?)),
     );
-    let flow_request = SceneRequest::new(
+    let flow_request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(420.0)?),
         &flow_styles,
         &recolored,
@@ -470,7 +515,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "line height must rebuild only its paragraph geometry"
     );
 
-    let narrow_request = SceneRequest::new(
+    let narrow_request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(90.0)?),
         &flow_styles,
         &recolored,
@@ -486,9 +531,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
         "width must retain canonical shaping"
     );
-    assert!(
-        narrow_scene.work().line_shape().paragraphs() > 0,
-        "new wrapped ranges must expose line-final shaping"
+    assert_eq!(
+        narrow_scene.work().line_shape().paragraphs(),
+        0,
+        "whitespace-separated wrapped ranges must borrow canonical shaping"
     );
     assert_eq!(
         narrow_scene.work().flow().paragraphs(),
@@ -551,9 +597,9 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
     ]);
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(font_catalog()?),
-        CacheBudget::new(256),
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
     );
-    let request = SceneRequest::new(
+    let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0)?),
         &styles,
         &paint,
@@ -567,7 +613,7 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         PaintSlot::new(0),
     );
     styles.set(changed_text, black.clone());
-    let request = SceneRequest::new(
+    let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0)?),
         &styles,
         &paint,
@@ -609,7 +655,7 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         PaintSlot::new(0),
     );
     styles.set(changed_text, missing);
-    let request = SceneRequest::new(
+    let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0)?),
         &styles,
         &paint,
@@ -623,7 +669,7 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
         "missing family failure must retain the stable MissingFont diagnostic"
     );
     styles.set(changed_text, black.with_paint(PaintSlot::new(1)));
-    let request = SceneRequest::new(
+    let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0)?),
         &styles,
         &paint,
@@ -656,8 +702,11 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
         "latin",
         include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"),
     )?])?;
-    let mut layout = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(256));
-    let request = SceneRequest::new(
+    let mut layout = LayoutEngine::new(
+        ParleyParagraphEngine::new(fonts),
+        CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
+    let request = full_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(400.0)?),
         &styles,
         &paint,
@@ -674,39 +723,45 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn glyph_count(scene: &TextScene, text: TextId) -> usize {
+    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
-        .filter(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
+        .flat_map(|fragment| fragment.glyphs())
+        .filter(|glyph| {
+            sources
+                .for_glyph(*glyph)
+                .expect("glyph belongs to source scene")
+                .any(|source| source.text() == text)
         })
-        .map(|fragment| fragment.glyphs().len())
-        .sum()
+        .count()
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
+    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
+            sources
+                .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == text)
         })
         .map(|fragment| fragment.normalized_coords().to_vec())
         .unwrap_or_default()
 }
 
 fn synthesis_variations(scene: &TextScene, text: TextId) -> Vec<FontVariation> {
+    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == text)
+            sources
+                .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == text)
         })
         .map(|fragment| fragment.synthesis().variations().to_vec())
         .unwrap_or_default()

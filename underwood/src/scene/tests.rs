@@ -1,7 +1,7 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use alloc::{rc::Rc, vec, vec::Vec};
+use alloc::{rc::Rc, sync::Arc, vec, vec::Vec};
 use core::cell::Cell;
 
 use peniko::Blob;
@@ -12,10 +12,10 @@ use super::{
 use crate::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationOutput, ParagraphInput, PreparationError, PreparationErrorKind,
-    PreparedCaret, PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedGlyph,
-    PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
-    PreparedRun, TextAffinity,
+    ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphInput,
+    ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedClusterSide,
+    PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
+    PreparedParagraphBuilder, PreparedRun, TextAffinity,
 };
 use crate::{
     AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
@@ -26,7 +26,7 @@ use crate::{
     RegionAttemptOutcome, RegionFlow, RegionTranscript, ResolvedDirection, SceneErrorKind,
     SceneRequest, ShapingStyle, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
     SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAlignment,
-    TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
+    TextConstraint, TextId, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 
 #[derive(Debug)]
@@ -47,22 +47,13 @@ impl ParagraphFormation for EchoAdapter {
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         if text_len == 0 {
-            let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
-            let movements = [PreparedCursorMovement::new(
-                position,
-                PreparedCaret::try_new(0, 0.0)?,
-                None,
-                None,
-                None,
-                None,
-            )];
-            let paragraph = PreparedParagraph::try_new(
+            let paragraph = PreparedParagraphBuilder::with_features(
                 input.paragraph(),
                 text_len,
                 ResolvedDirection::Ltr,
-                [],
-                movements,
-            )?;
+                input.features(),
+            )
+            .finish()?;
             return Ok(ParagraphFormationOutput::new(
                 paragraph,
                 FormationWork::new(true, true, 0, 0, 0, 0, LineShapingWork::default()),
@@ -92,13 +83,25 @@ impl ParagraphFormation for EchoAdapter {
                         Rect::new(5.0, -8.0, 10.0, 2.0),
                     )?,
                 ])?
+            } else if self.mismatched_paint {
+                if glyph_source.end - glyph_source.start < 2 {
+                    return Err(PreparationError::invalid_output());
+                }
+                let middle = glyph_source.start + 1;
+                GlyphPaintCoverage::try_from_segments([
+                    GlyphPaintSegment::clipped(
+                        glyph_source.start..middle,
+                        PaintSlot::new(99),
+                        Rect::new(0.0, -8.0, 5.0, 2.0),
+                    )?,
+                    GlyphPaintSegment::clipped(
+                        middle..glyph_source.end,
+                        PaintSlot::new(99),
+                        Rect::new(5.0, -8.0, 10.0, 2.0),
+                    )?,
+                ])?
             } else {
-                let slot = if self.mismatched_paint {
-                    PaintSlot::new(99)
-                } else {
-                    input.paint_runs()[0].slot()
-                };
-                GlyphPaintCoverage::whole(glyph_source.clone(), slot)?
+                GlyphPaintCoverage::whole()
             };
             let offset = if self.split_paint {
                 Vec2::new(3.0, 4.0)
@@ -125,9 +128,6 @@ impl ParagraphFormation for EchoAdapter {
             FontData::new(Blob::from(vec![0_u8]), 0),
             input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size(),
             synthesis,
-            [],
-            [],
-            glyphs,
         )?;
         let font_size = input.shaping_styles()[input.shaping_runs()[0].style().index()].font_size();
         let line_height = f64::from(
@@ -137,40 +137,76 @@ impl ParagraphFormation for EchoAdapter {
         );
         let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
         let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
-        let units = if self.split_paint {
+        let (slices, units) = if self.interior_cursor {
+            (
+                vec![
+                    PreparedInteractionSlice::try_new(0..1, 5.0)?,
+                    PreparedInteractionSlice::try_new(1..text_len, 5.0)?,
+                ],
+                vec![
+                    PreparedInteractionUnit::try_new(
+                        0..1,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        start,
+                        PreparedClusterSide::new(1, TextAffinity::Upstream),
+                    )?,
+                    PreparedInteractionUnit::try_new(
+                        1..text_len,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        PreparedClusterSide::new(1, TextAffinity::Downstream),
+                        end,
+                    )?,
+                ],
+            )
+        } else if self.split_paint {
             let middle = input.paint_runs()[0].bytes().end;
-            vec![
-                PreparedInteractionUnit::try_new(
-                    0..middle,
-                    [PreparedInteractionSlice::try_new(0..middle, 5.0)?],
+            (
+                vec![
+                    PreparedInteractionSlice::try_new(0..middle, 5.0)?,
+                    PreparedInteractionSlice::try_new(middle..text_len, 5.0)?,
+                ],
+                vec![
+                    PreparedInteractionUnit::try_new(
+                        0..middle,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        start,
+                        PreparedClusterSide::new(middle, TextAffinity::Downstream),
+                    )?,
+                    PreparedInteractionUnit::try_new(
+                        middle..text_len,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        PreparedClusterSide::new(middle, TextAffinity::Upstream),
+                        end,
+                    )?,
+                ],
+            )
+        } else {
+            (
+                vec![PreparedInteractionSlice::try_new(0..text_len, 10.0)?],
+                vec![PreparedInteractionUnit::try_new(
+                    0..text_len,
+                    10.0,
                     0,
                     ClusterBoundary::None,
                     ClusterWhitespace::None,
                     start,
-                    PreparedClusterSide::new(middle, TextAffinity::Upstream),
-                )?,
-                PreparedInteractionUnit::try_new(
-                    middle..text_len,
-                    [PreparedInteractionSlice::try_new(middle..text_len, 5.0)?],
-                    0,
-                    ClusterBoundary::None,
-                    ClusterWhitespace::None,
-                    PreparedClusterSide::new(middle, TextAffinity::Upstream),
                     end,
-                )?,
-            ]
-        } else {
-            vec![PreparedInteractionUnit::try_new(
-                0..text_len,
-                [PreparedInteractionSlice::try_new(0..text_len, 10.0)?],
-                0,
-                ClusterBoundary::None,
-                ClusterWhitespace::None,
-                start,
-                end,
-            )?]
+                )?],
+            )
         };
-        let line = PreparedLine::try_new(
+        let line_data = PreparedLine::try_new(
             0..text_len,
             LineBreakReason::End,
             10.0,
@@ -178,81 +214,31 @@ impl ParagraphFormation for EchoAdapter {
             line_height,
             f64::from(font_size) * 0.75,
             f64::from(font_size) * 0.25,
-            units,
-            [run],
         )?;
-        let mut movements = if self.split_paint {
-            let middle_offset = input.paint_runs()[0].bytes().end;
-            let middle = PreparedClusterSide::new(middle_offset, TextAffinity::Upstream);
-            vec![
-                PreparedCursorMovement::new(
-                    start,
-                    PreparedCaret::try_new(0, 0.0)?,
-                    None,
-                    Some(PreparedCursorStep::new(middle, Some(0..middle_offset))),
-                    None,
-                    Some(PreparedCursorStep::new(middle, Some(0..middle_offset))),
-                ),
-                PreparedCursorMovement::new(
-                    middle,
-                    PreparedCaret::try_new(0, 5.0)?,
-                    Some(PreparedCursorStep::new(start, Some(0..middle_offset))),
-                    Some(PreparedCursorStep::new(end, Some(middle_offset..text_len))),
-                    Some(PreparedCursorStep::new(start, Some(0..middle_offset))),
-                    Some(PreparedCursorStep::new(end, Some(middle_offset..text_len))),
-                ),
-                PreparedCursorMovement::new(
-                    end,
-                    PreparedCaret::try_new(0, 10.0)?,
-                    Some(PreparedCursorStep::new(
-                        middle,
-                        Some(middle_offset..text_len),
-                    )),
-                    None,
-                    Some(PreparedCursorStep::new(
-                        middle,
-                        Some(middle_offset..text_len),
-                    )),
-                    None,
-                ),
-            ]
-        } else {
-            vec![
-                PreparedCursorMovement::new(
-                    start,
-                    PreparedCaret::try_new(0, 0.0)?,
-                    None,
-                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
-                    None,
-                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
-                ),
-                PreparedCursorMovement::new(
-                    end,
-                    PreparedCaret::try_new(0, 10.0)?,
-                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
-                    None,
-                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
-                    None,
-                ),
-            ]
-        };
-        if self.interior_cursor {
-            movements.push(PreparedCursorMovement::new(
-                PreparedClusterSide::new(1, TextAffinity::Downstream),
-                PreparedCaret::try_new(0, 5.0)?,
-                None,
-                None,
-                None,
-                None,
-            ));
-        }
-        let paragraph = PreparedParagraph::try_new(
+        let mut paragraph = PreparedParagraphBuilder::with_features(
             input.paragraph(),
             text_len,
             ResolvedDirection::Ltr,
-            [line],
-            movements,
-        )?;
+            input.features(),
+        );
+        let mut line = paragraph.begin_line(line_data)?;
+        for unit in units {
+            let source = unit.source();
+            line.push_unit(
+                unit,
+                slices.iter().copied().filter(|slice| {
+                    let slice = slice.source();
+                    source.start <= slice.start && slice.end <= source.end
+                }),
+            )?;
+        }
+        let mut run_builder = line.begin_run(run);
+        for glyph in glyphs {
+            run_builder.push_glyph(glyph)?;
+        }
+        run_builder.finish()?;
+        line.finish()?;
+        let paragraph = paragraph.finish()?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(
@@ -290,7 +276,7 @@ impl ParagraphFormation for RetainingInvalidAdapter {
         .form(input, constraints)
     }
 
-    fn release(&mut self, _paragraph: crate::ParagraphId) {
+    fn release(&mut self, _preparation: ParagraphPreparationId) {
         self.retained = false;
     }
 
@@ -298,8 +284,18 @@ impl ParagraphFormation for RetainingInvalidAdapter {
         self.retained = false;
     }
 
-    fn retained_entries(&self) -> Option<usize> {
-        Some(usize::from(self.retained))
+    fn retained_facts(&self) -> Option<ParagraphFormationCacheDiagnostics> {
+        Some(ParagraphFormationCacheDiagnostics::new(
+            usize::MAX,
+            usize::from(self.retained),
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ))
     }
 }
 
@@ -315,22 +311,8 @@ impl ParagraphFormation for MismatchedEmptyRegionAdapter {
         if !input.text().is_empty() {
             return Err(PreparationError::invalid_output());
         }
-        let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
-        let movements = [PreparedCursorMovement::new(
-            position,
-            PreparedCaret::try_new(0, 0.0)?,
-            None,
-            None,
-            None,
-            None,
-        )];
-        let paragraph = PreparedParagraph::try_new(
-            input.paragraph(),
-            0,
-            ResolvedDirection::Ltr,
-            [],
-            movements,
-        )?;
+        let paragraph =
+            PreparedParagraphBuilder::new(input.paragraph(), 0, ResolvedDirection::Ltr).finish()?;
         let flow = constraints
             .region_flow()
             .ok_or_else(PreparationError::invalid_output)?;
@@ -489,21 +471,12 @@ fn shared_hit_is_revalidated_against_the_current_projection() {
         )
         .expect("seed preparation succeeds");
 
-    let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
-    let poisoned = PreparedParagraph::try_new(
+    let poisoned = PreparedParagraphBuilder::new(
         first.snapshot().paragraphs()[0].id,
         0,
         ResolvedDirection::Ltr,
-        [],
-        [PreparedCursorMovement::new(
-            position,
-            PreparedCaret::try_new(0, 0.0).expect("empty caret is valid"),
-            None,
-            None,
-            None,
-            None,
-        )],
     )
+    .finish()
     .expect("empty prepared facts are internally valid");
     layout.replace_first_shared_facts_for_test(poisoned.shared_facts());
 
@@ -568,7 +541,8 @@ fn invalid_first_output_releases_untracked_backend_state() {
         TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::EDITABLE);
     layout
         .prepare(&document.snapshot(), &request)
         .expect_err("mid-scalar adapter source must be rejected");
@@ -579,7 +553,10 @@ fn invalid_first_output_releases_untracked_backend_state() {
         "invalid output must not create geometry residency"
     );
     assert_eq!(
-        layout.cache_diagnostics().backend_entries(),
+        layout
+            .cache_diagnostics()
+            .adapter_facts()
+            .map(ParagraphFormationCacheDiagnostics::entries),
         Some(0),
         "invalid output must release backend state with no geometry owner"
     );
@@ -619,13 +596,21 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
             .scene_cache_accounted_bytes()
             > 0
     );
-    assert!(cold_trace.memory().scene_output_capacity_bytes() > 0);
-    assert_eq!(cold_trace.memory().scratch_growth_bytes(), 0);
+    assert_eq!(
+        cold_trace.memory().scene_output_capacity_bytes(),
+        0,
+        "one paragraph uses the direct spine form rather than allocating a tree node"
+    );
+    assert!(
+        cold_trace.memory().scratch_growth_bytes() > 0,
+        "cold preparation retains reusable projection capacity"
+    );
 
     let retained = layout
         .prepare(&document.snapshot(), &request)
         .expect("retained trace fixture prepares");
     let retained_trace = retained.trace().expect("trace was requested");
+    assert_eq!(retained_trace.reuse().preflight_reuses(), 1);
     assert_eq!(retained_trace.reuse().exact_geometry_reuses(), 1);
     assert_eq!(retained_trace.reuse().adapter_calls(), 0);
     assert_eq!(retained.work().reused_paragraphs(), 1);
@@ -653,6 +638,10 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
     assert_eq!(adjusted_trace.reuse().formation_invalidations(), 0);
     assert_eq!(adjusted_trace.reuse().adjustment_invalidations(), 1);
     assert_eq!(adjusted_trace.reuse().paint_invalidations(), 0);
+    let paragraph = document.snapshot().paragraphs()[0].id;
+    let adjusted_geometry = layout
+        .cached_geometry_for_test(paragraph)
+        .expect("adjusted paragraph remains cached");
 
     let painted_styles =
         StyleMap::new(styles.default_style().clone().with_paint(PaintSlot::new(1)))
@@ -670,6 +659,18 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
     assert_eq!(painted_trace.reuse().formation_invalidations(), 0);
     assert_eq!(painted_trace.reuse().adjustment_invalidations(), 0);
     assert_eq!(painted_trace.reuse().paint_invalidations(), 1);
+    let painted_geometry = layout
+        .cached_geometry_for_test(paragraph)
+        .expect("painted paragraph remains cached");
+    assert!(
+        Arc::ptr_eq(&adjusted_geometry, &painted_geometry),
+        "paint-only preparation must share the complete immutable geometry"
+    );
+    assert_eq!(
+        painted.scene().fragment(0).expect("paint fragment").paint(),
+        PaintSlot::new(1),
+        "the paint topology must still expose the new slot"
+    );
 
     let mut untraced = LayoutEngine::new(
         EchoAdapter {
@@ -813,7 +814,8 @@ fn layout_rejects_a_cursor_inside_a_utf8_scalar() {
         TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::EDITABLE);
     let error = layout
         .prepare(&document.snapshot(), &request)
         .expect_err("mid-scalar cursor output must be rejected");
@@ -897,7 +899,7 @@ fn layout_reports_adapter_paint_mismatch_as_invalid_preparation() {
         error.preparation(),
         Some(PreparationErrorKind::InvalidOutput)
     );
-    assert_eq!(error.source(), Some(0..2));
+    assert_eq!(error.source(), Some(0..1));
 }
 
 #[test]
@@ -944,12 +946,16 @@ fn fragment_identity_is_distinct_across_documents() {
         .prepare(&second.snapshot(), &second_request)
         .expect("second scene must prepare");
     assert_ne!(
-        first_scene.scene().fragments()[0].id(),
-        second_scene.scene().fragments()[0].id(),
+        first_scene.scene().fragment(0).expect("fragment").id(),
+        second_scene.scene().fragment(0).expect("fragment").id(),
         "document identity must participate in retained fragment identity"
     );
     assert_eq!(
-        first_scene.scene().fragments()[0].paint_clip(),
+        first_scene
+            .scene()
+            .fragment(0)
+            .expect("fragment")
+            .paint_clip(),
         None,
         "ordinary whole-glyph paint must not create a renderer clip"
     );
@@ -971,11 +977,43 @@ fn paragraph_style_override_from_another_document_is_rejected() {
         },
         CacheBudget::new(32),
     );
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
     let error = layout
         .prepare(&first.snapshot(), &request)
         .expect_err("a foreign paragraph style must not be silently ignored");
     assert_eq!(error.kind(), SceneErrorKind::InvalidStyle);
+}
+
+#[test]
+fn feature_override_from_another_document_is_rejected_on_an_exact_scene_hit() {
+    let (first, styles, paint) = one_leaf_document(*b"scene-feat-doc01", "a");
+    let (second, _, _) = one_leaf_document(*b"scene-feat-doc02", "b");
+    let foreign = second.snapshot().paragraphs()[0].id;
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let valid = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    layout
+        .prepare(&first.snapshot(), &valid)
+        .expect("the valid scene must establish an exact reusable root");
+
+    let invalid = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_feature_policy(
+            crate::SceneFeaturePolicy::default()
+                .with_paragraph(foreign, crate::SceneFeatures::DISPLAY),
+        );
+    let error = layout
+        .prepare(&first.snapshot(), &invalid)
+        .expect_err("warm reuse must not bypass feature-policy validation");
+    assert_eq!(error.kind(), SceneErrorKind::InvalidFeatures);
 }
 
 #[test]
@@ -987,7 +1025,8 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
         paragraph,
         ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
     );
-    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
@@ -1011,7 +1050,9 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
         .expect("right side must hit");
     let selection = committed
         .scene()
-        .selection(
+        .editing()
+        .expect("fixture retains editable scene data")
+        .selection_between(
             left.position(),
             right.position(),
             TextSelectionMode::Logical,
@@ -1036,10 +1077,13 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
     let transient = layout
         .prepare_composition(&snapshot, &request, &session)
         .expect("collapsed whitespace preedit must prepare");
-    let source = transient.scene().fragments()[0]
-        .source()
-        .expect("generated glyph must retain provenance");
-    let [ProjectedTextSource::Composition(range)] = source.sources() else {
+    let sources: Vec<_> = transient
+        .scene()
+        .fragment(0)
+        .expect("generated fragment exists")
+        .sources()
+        .collect();
+    let [ProjectedTextSource::Composition(range)] = sources.as_slice() else {
         panic!("collapsed preedit must have one generated source range");
     };
     assert_eq!(
@@ -1049,6 +1093,55 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
     );
     assert_eq!(range.id(), session.id());
     assert_eq!(range.epoch(), session.epoch());
+}
+
+#[test]
+fn position_index_maps_authored_boundaries_through_whitespace_collapse() {
+    let (document, mut styles, paint) = one_leaf_document(*b"collapse-pos-001", "a   b");
+    let snapshot = document.snapshot();
+    let paragraph = snapshot.paragraphs()[0].id;
+    let text = snapshot.paragraphs()[0].leaves[0].id;
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::DEFAULT.with_whitespace_collapse(WhitespaceCollapse::Collapse),
+    );
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(1),
+    );
+    let output = layout
+        .prepare(&snapshot, &request)
+        .expect("collapsed fixture must prepare");
+    let editing = output
+        .scene()
+        .editing()
+        .expect("fixture retains navigation");
+    let start = editing
+        .position_at(text, 0)
+        .expect("authored start maps to the projected start");
+    let end = editing
+        .position_at(text, 5)
+        .expect("authored end maps to the projected end");
+    assert_eq!(start.byte(), 0);
+    assert_eq!(start.affinity(), TextAffinity::Downstream);
+    assert_eq!(end.byte(), 5);
+    assert_eq!(end.affinity(), TextAffinity::Upstream);
+    assert!(
+        editing.position_at(text, 2).is_none(),
+        "the adapter did not represent an interior collapsed-whitespace caret"
+    );
+    assert!(
+        editing.caret(&end).is_some(),
+        "caret lookup uses the same reverse source index"
+    );
 }
 
 #[test]
@@ -1082,7 +1175,8 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
         TextConstraint::Wrap(FiniteWidth::new(100.0).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::DISPLAY.with_sources());
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
@@ -1096,19 +1190,23 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     let output = layout
         .prepare(&document.snapshot(), &request)
         .expect("explicitly clipped split paint must lower");
-    let [first, second] = output.scene().fragments() else {
-        panic!("one split glyph must lower to exactly two draw fragments");
-    };
+    let mut fragments = output.scene().fragments();
+    let first = fragments.next().expect("first split fragment");
+    let second = fragments.next().expect("second split fragment");
+    assert!(fragments.next().is_none());
 
-    assert_eq!(first.glyphs()[0].id(), second.glyphs()[0].id());
     assert_eq!(
-        first.glyphs()[0].instance_id(),
-        second.glyphs()[0].instance_id(),
+        first.glyphs().first().expect("first glyph").id(),
+        second.glyphs().first().expect("second glyph").id()
+    );
+    assert_eq!(
+        first.glyphs().first().expect("first glyph").instance_id(),
+        second.glyphs().first().expect("second glyph").instance_id(),
         "partial-paint observations must retain one shaped-glyph identity"
     );
     assert_eq!(
-        first.glyphs()[0].position(),
-        second.glyphs()[0].position(),
+        first.glyphs().first().expect("first glyph").position(),
+        second.glyphs().first().expect("second glyph").position(),
         "paint splitting must not duplicate shaping or move the glyph"
     );
     assert_eq!(first.paint(), PaintSlot::new(0));
@@ -1116,7 +1214,7 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     assert_eq!(first.source().expect("first source").text(), first_text);
     assert_eq!(second.source().expect("second source").text(), second_text);
     assert!(first.synthesis().skew_transform().is_some());
-    let origin = first.glyphs()[0].position();
+    let origin = first.glyphs().first().expect("first glyph").position();
     assert_eq!(first.paint_clip().expect("first clip").x0, origin.x);
     assert_eq!(first.paint_clip().expect("first clip").x1, origin.x + 5.0);
     assert_eq!(first.paint_clip().expect("first clip").y0, origin.y - 8.0);
@@ -1129,7 +1227,7 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     assert_eq!(second.paint_clip().expect("second clip").y0, origin.y - 8.0);
     assert_eq!(second.paint_clip().expect("second clip").y1, origin.y + 2.0);
     assert_eq!(
-        output.scene().lines()[0].fragment_range(),
+        output.scene().line(0).expect("line").fragment_range(),
         0..2,
         "the line must identify both paint fragments directly"
     );
@@ -1200,7 +1298,7 @@ fn paragraph_projection_interns_repeated_style_partitions() {
         paragraph,
     )
     .expect("repeated style must intern");
-    assert_eq!(shaping_styles, [&first, &second]);
+    assert_eq!(shaping_styles, [first, second]);
     assert_eq!(shaping_runs[0].style().index(), 0);
     assert_eq!(shaping_runs[1].style().index(), 1);
     assert_eq!(shaping_runs[2].style().index(), 0);
@@ -1281,8 +1379,14 @@ fn empty_paragraph_line_height_has_a_flow_identity() {
         .expect("spacious scene must prepare");
     assert_eq!(spacious_scene.work().shape().paragraphs(), 0);
     assert_eq!(spacious_scene.work().flow().paragraphs(), 1);
-    assert_eq!(compact_scene.scene().lines()[0].bounds().y0, 10.0);
-    assert_eq!(spacious_scene.scene().lines()[0].bounds().y0, 20.0);
+    assert_eq!(
+        compact_scene.scene().line(0).expect("line").bounds().y0,
+        10.0
+    );
+    assert_eq!(
+        spacious_scene.scene().line(0).expect("line").bounds().y0,
+        20.0
+    );
 }
 
 #[test]
@@ -1303,7 +1407,8 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         TextConstraint::Wrap(FiniteWidth::new(100.).expect("test width is valid")),
         &styles,
         &paint,
-    );
+    )
+    .with_features(crate::SceneFeatures::EDITABLE);
     let committed = layout
         .prepare(&snapshot, &request)
         .expect("committed scene must prepare");
@@ -1317,7 +1422,9 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         .expect("right cluster side must hit");
     let selection = committed
         .scene()
-        .selection(
+        .editing()
+        .expect("fixture retains editable scene data")
+        .selection_between(
             left.position(),
             right.position(),
             TextSelectionMode::Logical,
@@ -1392,11 +1499,9 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
     assert_eq!(first.work().shape().paragraphs(), 1);
     assert_eq!(first.scene().epoch(), first_epoch);
     assert!(first.scene().fragments().iter().all(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source.sources().iter().all(|segment| {
-                matches!(segment, ProjectedTextSource::Composition(range)
+        fragment.sources().all(|source| {
+            matches!(source, ProjectedTextSource::Composition(range)
                         if range.id() == session.id() && range.epoch() == first_epoch)
-            })
         })
     }));
     assert!(
@@ -1426,6 +1531,25 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         .expect("same epoch must reuse transient work");
     assert_eq!(repeated.work().shape().paragraphs(), 0);
     assert_eq!(repeated.work().reused_paragraphs(), 1);
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &repeated.scene().core),
+        "an exact composition epoch must return the published scene core"
+    );
+    let first_sources = first
+        .scene()
+        .sources()
+        .expect("editable projection retains source provenance");
+    assert!(
+        first_sources
+            .for_line(
+                repeated
+                    .scene()
+                    .line(0)
+                    .expect("the repeated projection has a line")
+            )
+            .is_ok(),
+        "views from the same persistent scene root must remain compatible"
+    );
 
     let selection_epoch = session
         .update(
@@ -1440,11 +1564,9 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
     assert_eq!(selection_only.work().geometry().paragraphs(), 0);
     assert_eq!(selection_only.work().reused_paragraphs(), 1);
     assert!(selection_only.scene().fragments().iter().all(|fragment| {
-        fragment.source().is_some_and(|source| {
-            source.sources().iter().all(|segment| {
-                matches!(segment, ProjectedTextSource::Composition(range)
+        fragment.sources().all(|source| {
+            matches!(source, ProjectedTextSource::Composition(range)
                         if range.epoch() == selection_epoch)
-            })
         })
     }));
     assert!(
@@ -1453,6 +1575,17 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
             .composition_selection_geometry(&session)
             .expect("rebound selected range must resolve")
             .is_empty()
+    );
+    assert!(
+        first_sources
+            .for_line(
+                selection_only
+                    .scene()
+                    .line(0)
+                    .expect("the rebound projection has a line")
+            )
+            .is_err(),
+        "a projected view from another prepared root must be rejected"
     );
 
     let second_epoch = session
@@ -1551,70 +1684,876 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
 }
 
 #[test]
-fn visual_selection_uses_the_reciprocal_caret_path() {
-    let mut document = Document::new(DocumentId::from_bytes(*b"scene-visual-dir"));
+fn unrelated_equal_styles_use_checked_value_preflight() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-preflight1", "provenance");
+    let equal_styles = StyleMap::new(styles.default_style().clone());
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial preparation succeeds");
+
+    let fallback = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &equal_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("equal unrelated style state remains reusable");
+    let fallback_reuse = fallback.trace().expect("trace was requested").reuse();
+    assert_eq!(fallback_reuse.preflight_reuses(), 1);
+    assert_eq!(fallback_reuse.exact_geometry_reuses(), 1);
+    assert_eq!(fallback_reuse.adapter_calls(), 0);
+
+    let retained = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &equal_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("equal value preflight remains reusable");
+    assert_eq!(
+        retained
+            .trace()
+            .expect("trace was requested")
+            .reuse()
+            .preflight_reuses(),
+        1
+    );
+}
+
+#[test]
+fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-local-path"));
+    let mut edit = document.edit();
+    let mut texts = Vec::new();
+    for value in ["before", "target", "after"] {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        texts.push(
+            edit.append_text(paragraph, InlineRole::TEXT, value)
+                .expect("fixture text appends"),
+        );
+    }
+    let first_publication = edit.commit().expect("fixture publishes");
+    let first_snapshot = first_publication.snapshot().clone();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let dark = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let light = PaintTable::from_brushes([Brush::Solid(Color::WHITE)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(16),
+    );
+    let first = layout
+        .prepare(
+            &first_snapshot,
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark)
+                .with_features(crate::SceneFeatures::DISPLAY.with_sources()),
+        )
+        .expect("initial scene prepares");
+    let first_target_glyph = first
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[1]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("old target glyph exists")
+        .instance_id();
+    let first_after_glyph = first
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[2]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("old trailing glyph exists")
+        .instance_id();
+    let repainted = layout
+        .prepare(
+            &first_snapshot,
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &light)
+                .with_features(crate::SceneFeatures::DISPLAY.with_sources()),
+        )
+        .expect("paint-only scene prepares");
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &repainted.scene().core),
+        "paint values must rebind one persistent geometry root"
+    );
+
+    let mut edit = document.edit();
+    edit.replace_text(texts[1], "changed")
+        .expect("middle paragraph edits");
+    let second_publication = edit.commit().expect("localized edit publishes");
+    let second = layout
+        .prepare(
+            second_publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &dark)
+                .with_features(crate::SceneFeatures::DISPLAY.with_sources())
+                .with_preparation_trace(),
+        )
+        .expect("localized scene prepares");
+    assert_eq!(second.work().shape().paragraphs(), 1);
+    assert_eq!(second.work().reused_paragraphs(), 2);
+    assert_eq!(second.work().paint().paragraphs(), 1);
+    let localized_reuse = second.trace().expect("trace was requested").reuse();
+    assert_eq!(localized_reuse.adapter_calls(), 1);
+    assert_eq!(localized_reuse.preflight_reuses(), 2);
+    assert_eq!(localized_reuse.exact_geometry_reuses(), 2);
+    for index in [0, 2] {
+        assert!(
+            Arc::ptr_eq(
+                first
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("old sibling exists"),
+                second
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("new sibling exists"),
+            ),
+            "localized publication must share unchanged paragraph segments"
+        );
+    }
+    assert!(
+        !Arc::ptr_eq(
+            first
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("old target exists"),
+            second
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("new target exists"),
+        ),
+        "localized publication must replace the changed paragraph segment"
+    );
+    let second_target_glyph = second
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[1]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("new target glyph exists")
+        .instance_id();
+    let second_after_glyph = second
+        .scene()
+        .fragments()
+        .find(|fragment| fragment.sources().any(|source| source.text() == texts[2]))
+        .and_then(|fragment| fragment.glyphs().next())
+        .expect("new trailing glyph exists")
+        .instance_id();
+    assert_ne!(
+        first_target_glyph, second_target_glyph,
+        "replaced paragraph geometry must receive distinct glyph identities"
+    );
+    assert_eq!(
+        first_after_glyph, second_after_glyph,
+        "shared paragraph geometry must retain glyph identities despite changed prefixes"
+    );
+    assert!(
+        first.scene().fragments().all(|fragment| {
+            fragment
+                .sources()
+                .all(|source| source.revision() == first_snapshot.revision())
+        }),
+        "caller-retained old geometry must mint only its original revision"
+    );
+    assert!(
+        second.scene().fragments().all(|fragment| {
+            fragment
+                .sources()
+                .all(|source| source.revision() == second_publication.snapshot().revision())
+        }),
+        "new geometry must mint only the new revision"
+    );
+}
+
+#[test]
+fn no_op_publication_reuses_the_exact_scene_core_at_the_new_revision() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-noop-revis"));
     let mut edit = document.edit();
     let paragraph = edit
         .append_paragraph(ParagraphRole::BODY)
-        .expect("test paragraph must append");
-    let text = edit
-        .append_text(paragraph, InlineRole::TEXT, "ab")
-        .expect("test text must append");
-    edit.commit().expect("test document must commit");
+        .expect("paragraph appends");
+    edit.append_text(paragraph, InlineRole::TEXT, "stable")
+        .expect("text appends");
+    edit.commit().expect("fixture publishes");
+
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(4),
+    );
+    let first = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    let publication = document
+        .edit()
+        .commit()
+        .expect("an empty transaction still publishes its revision");
+    let second = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("the new revision reuses its unchanged paragraph root");
+
+    assert_ne!(first.scene().revision(), second.scene().revision());
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &second.scene().core),
+        "a metadata-only revision must retain the exact scene core"
+    );
+    assert_eq!(second.work().reused_paragraphs(), 1);
+    assert_eq!(second.work().analysis().paragraphs(), 0);
+    assert_eq!(second.work().shape().paragraphs(), 0);
+    assert_eq!(second.work().geometry().paragraphs(), 0);
+    assert_eq!(second.work().paint().paragraphs(), 0);
+    let reuse = second.trace().expect("trace was requested").reuse();
+    assert_eq!(reuse.preflight_reuses(), 1);
+    assert_eq!(reuse.exact_geometry_reuses(), 1);
+    assert_eq!(reuse.adapter_calls(), 0);
+}
+
+#[test]
+fn localized_style_branch_prepares_only_its_paragraph() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-style-path"));
+    let mut edit = document.edit();
+    let mut target = None;
+    for index in 0..64 {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        let text = edit
+            .append_text(paragraph, InlineRole::TEXT, "stable")
+            .expect("fixture text appends");
+        if index == 31 {
+            target = Some(text);
+        }
+    }
+    let publication = edit.commit().expect("fixture publishes");
+    let base = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(base.clone());
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(128),
+    );
+    let first = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    let mut changed_styles = styles.clone();
+    changed_styles.set(
+        target.expect("target exists"),
+        ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Test"), 12.0).expect("changed style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        ),
+    );
+    let changed = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &changed_styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("localized style prepares");
+
+    assert_eq!(changed.work().shape().paragraphs(), 1);
+    assert_eq!(changed.work().paint().paragraphs(), 1);
+    assert_eq!(changed.work().reused_paragraphs(), 63);
+    for index in [0, 63] {
+        assert!(Arc::ptr_eq(
+            first
+                .scene()
+                .core
+                .spine
+                .segment(index)
+                .expect("old sibling exists"),
+            changed
+                .scene()
+                .core
+                .spine
+                .segment(index)
+                .expect("new sibling exists")
+        ));
+    }
+}
+
+#[test]
+fn appended_paragraph_extends_the_persistent_scene_path() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-appendpath"));
+    let mut edit = document.edit();
+    for _ in 0..64 {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        edit.append_text(paragraph, InlineRole::TEXT, "stable")
+            .expect("fixture text appends");
+    }
+    let first_publication = edit.commit().expect("fixture publishes");
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(128),
+    );
+    let first = layout
+        .prepare(
+            first_publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    let mut edit = document.edit();
+    let paragraph = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("appended paragraph is valid");
+    edit.append_text(paragraph, InlineRole::TEXT, "appended")
+        .expect("appended text is valid");
+    let publication = edit.commit().expect("append publishes");
+    let appended = layout
+        .prepare(
+            publication.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+                .with_preparation_trace(),
+        )
+        .expect("appended scene prepares");
+
+    assert_eq!(appended.work().shape().paragraphs(), 1);
+    assert_eq!(appended.work().paint().paragraphs(), 1);
+    assert_eq!(appended.work().reused_paragraphs(), 64);
+    assert_eq!(appended.scene().core.paragraph_count, 65);
+    assert!(Arc::ptr_eq(
+        first
+            .scene()
+            .core
+            .spine
+            .segment(31)
+            .expect("old prefix exists"),
+        appended
+            .scene()
+            .core
+            .spine
+            .segment(31)
+            .expect("old prefix remains")
+    ));
+    assert!(
+        appended
+            .trace()
+            .expect("trace exists")
+            .memory()
+            .scene_output_capacity_bytes()
+            < first.scene().core.spine.accounted_node_bytes(),
+        "append must publish a logarithmic spine path rather than rebuild the root"
+    );
+}
+
+#[test]
+fn composition_replaces_only_its_persistent_paragraph_path() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-comp-spine"));
+    let mut edit = document.edit();
+    let mut texts = Vec::new();
+    for value in ["before", "target", "after"] {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph appends");
+        texts.push(
+            edit.append_text(paragraph, InlineRole::TEXT, value)
+                .expect("fixture text appends"),
+        );
+    }
+    edit.commit().expect("fixture publishes");
     let snapshot = document.snapshot();
-    let start = SnapshotTextPosition::new(snapshot.revision(), text, 0, TextAffinity::Downstream);
-    let end = SnapshotTextPosition::new(snapshot.revision(), text, 2, TextAffinity::Upstream);
-    let source = SnapshotTextRange::new(snapshot.revision(), text, 0..2);
-    let scene = super::TextScene {
-        document: snapshot.id(),
-        revision: snapshot.revision(),
-        metrics: super::TextMetrics::default(),
-        lines: Vec::new(),
-        fragments: Vec::new(),
-        clusters: Vec::new(),
-        carets: Vec::new(),
-        movements: vec![
-            super::SceneCursorMovement {
-                position: start,
-                previous_visual: None,
-                next_visual: None,
-                previous_logical: None,
-                next_logical: None,
-            },
-            super::SceneCursorMovement {
-                position: end,
-                previous_visual: Some(super::SceneCursorStep {
-                    target: start,
-                    source: Some(crate::SnapshotTextUnit::new(vec![source.clone()])),
-                }),
-                next_visual: None,
-                previous_logical: None,
-                next_logical: None,
-            },
-        ],
-        texts: vec![source.clone()],
-        paint: PaintTable::from_brushes([Brush::Solid(Color::BLACK)]),
-        semantics: Vec::new(),
-    };
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 10.0).expect("fixture style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE)
+        .with_preparation_trace();
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(16),
+    );
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed fixture prepares");
+    let target = committed
+        .scene()
+        .position_at(texts[1], 0)
+        .expect("target start is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&target)
+        .expect("target caret validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("target selection validates");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"scene-comp-path1"))
+        .expect("composition starts")
+        .into_session();
+    session
+        .update(
+            session.epoch(),
+            CompositionUpdate::new("generated").with_selection(9..9),
+        )
+        .expect("first epoch updates");
 
-    let forward = scene
-        .selection(&start, &end, TextSelectionMode::Visual)
-        .expect("selection must use the equivalent reverse traversal");
-    let reverse = scene
-        .selection(&end, &start, TextSelectionMode::Visual)
-        .expect("the represented traversal must select");
-    assert_eq!(forward.ranges(), reverse.ranges());
-    assert_eq!(forward.ranges(), [source]);
+    let first = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("first projected scene prepares");
+    assert_eq!(first.work().reused_paragraphs(), 2);
+    assert!(
+        first
+            .trace()
+            .expect("trace was requested")
+            .memory()
+            .scene_output_capacity_bytes()
+            > 0,
+        "the first composition publication must account for its unshared spine path"
+    );
+    for index in [0, 2] {
+        assert!(
+            Arc::ptr_eq(
+                committed
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("committed sibling exists"),
+                first
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("projected sibling exists"),
+            ),
+            "composition must share every unchanged committed sibling"
+        );
+    }
+    assert!(
+        !Arc::ptr_eq(
+            committed
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("committed target exists"),
+            first
+                .scene()
+                .core
+                .spine
+                .segment(1)
+                .expect("projected target exists"),
+        ),
+        "composition must replace its target segment"
+    );
 
-    let selections = scene
-        .selection_set([forward])
-        .expect("direction-independent selection must validate");
-    let collapsed = scene
-        .move_selections(&selections, TextMovement::PreviousVisual, false)
-        .expect("visual ordering must use the reciprocal traversal");
+    let repeated = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("same epoch reuses its root");
+    assert!(
+        Arc::ptr_eq(&first.scene().core, &repeated.scene().core),
+        "an exact composition request must reuse its root"
+    );
     assert_eq!(
-        collapsed.primary().expect("caret must survive").extent(),
-        &start
+        repeated
+            .trace()
+            .expect("trace was requested")
+            .memory()
+            .scene_output_capacity_bytes(),
+        0,
+        "an exact composition publication retains no new spine nodes"
+    );
+
+    let first_epoch = session.epoch();
+    session
+        .update(
+            first_epoch,
+            CompositionUpdate::new("generated").with_selection(0..0),
+        )
+        .expect("selection-only epoch updates");
+    let second = layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("next projected epoch prepares");
+    for index in [0, 2] {
+        assert!(
+            Arc::ptr_eq(
+                first
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("first sibling exists"),
+                second
+                    .scene()
+                    .core
+                    .spine
+                    .segment(index)
+                    .expect("second sibling exists"),
+            ),
+            "a new epoch must continue sharing unchanged siblings"
+        );
+    }
+    assert!(
+        first.scene().fragments().any(|fragment| {
+            fragment.sources().any(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
+                    if range.epoch() == first_epoch)
+            })
+        }),
+        "the caller-retained old scene must keep its original generated epoch"
+    );
+    assert!(
+        second.scene().fragments().any(|fragment| {
+            fragment.sources().any(|source| {
+                matches!(source, ProjectedTextSource::Composition(range)
+                    if range.epoch() == session.epoch())
+            })
+        }),
+        "the new scene must bind generated provenance to the new epoch"
+    );
+}
+
+#[test]
+fn composition_residency_never_evicts_committed_geometry() {
+    let (document, styles, paint) = one_leaf_document(*b"comp-budget-doc1", "committed");
+    let snapshot = document.snapshot();
+    let text = snapshot.paragraphs()[0].leaves[0].id;
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE)
+        .with_preparation_trace();
+    let adapter = || EchoAdapter {
+        split_utf8: false,
+        split_paint: false,
+        mismatched_paint: false,
+        glyphless: false,
+        interior_cursor: false,
+    };
+    let mut layout = LayoutEngine::new(adapter(), CacheBudget::new(1));
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed scene prepares");
+    let position = committed
+        .scene()
+        .position_at(text, 0)
+        .expect("composition target is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&position)
+        .expect("composition selection validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("composition selection set validates");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"comp-budget-0001"))
+        .expect("composition begins")
+        .into_session();
+    session
+        .update(session.epoch(), CompositionUpdate::new("generated"))
+        .expect("composition text updates");
+
+    layout
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("composition scene prepares");
+    let retained = layout.cache_diagnostics();
+    assert_eq!(retained.budget(), 1);
+    assert_eq!(retained.composition_budget(), 1);
+    assert_eq!(retained.committed_entries(), 1);
+    assert_eq!(retained.composition_entries(), 1);
+    assert_eq!(
+        retained.current_entries(),
+        2,
+        "independent lanes may each retain their configured limit"
+    );
+
+    let cancelled = layout
+        .prepare(&snapshot, &request)
+        .expect("cancelling composition reuses committed geometry");
+    assert!(
+        Arc::ptr_eq(&committed.scene().core, &cancelled.scene().core),
+        "composition residency must not evict the exact committed root"
+    );
+    assert_eq!(cancelled.work().shape().paragraphs(), 0);
+    assert_eq!(cancelled.work().geometry().paragraphs(), 0);
+
+    let mut unretained =
+        LayoutEngine::new(adapter(), CacheBudget::new(1).with_composition_entries(0));
+    let committed = unretained
+        .prepare(&snapshot, &request)
+        .expect("zero-composition-budget fixture prepares");
+    let position = committed
+        .scene()
+        .position_at(text, 0)
+        .expect("composition target is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&position)
+        .expect("composition selection validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("composition selection set validates");
+    let mut session = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"comp-budget-0002"))
+        .expect("composition begins")
+        .into_session();
+    session
+        .update(session.epoch(), CompositionUpdate::new("generated"))
+        .expect("composition text updates");
+    let first = unretained
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("zero-budget composition still materializes");
+    assert!(!first.scene().fragments().is_empty());
+    let diagnostics = unretained.cache_diagnostics();
+    assert_eq!(diagnostics.committed_entries(), 1);
+    assert_eq!(diagnostics.composition_entries(), 0);
+    assert_eq!(diagnostics.composition_budget(), 0);
+    let repeated = unretained
+        .prepare_composition(&snapshot, &request, &session)
+        .expect("unretained composition may prepare again");
+    assert_eq!(
+        repeated.work().shape().paragraphs(),
+        1,
+        "a zero transient budget trades residency for observable re-formation"
+    );
+    let cancelled = unretained
+        .prepare(&snapshot, &request)
+        .expect("zero transient retention preserves the committed root");
+    assert!(
+        Arc::ptr_eq(&committed.scene().core, &cancelled.scene().core),
+        "evicting transient geometry must not invalidate committed publication"
+    );
+}
+
+#[test]
+fn exact_scene_hits_refresh_root_recency_lazily() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: Rc::new(Cell::new(None)),
+        },
+        CacheBudget::new(2),
+    );
+    let (first, first_styles, first_paint) = one_leaf_document(*b"scene-lru-doc-01", "first");
+    let (second, second_styles, second_paint) = one_leaf_document(*b"scene-lru-doc-02", "second");
+    let (third, third_styles, third_paint) = one_leaf_document(*b"scene-lru-doc-03", "third");
+    let first_request = SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint);
+    let second_request =
+        SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint);
+    let third_request = SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint);
+
+    let first_output = layout
+        .prepare(&first.snapshot(), &first_request)
+        .expect("first document prepares");
+    layout
+        .prepare(&second.snapshot(), &second_request)
+        .expect("second document prepares");
+    let exact = layout
+        .prepare(&first.snapshot(), &first_request)
+        .expect("first exact root is reused");
+    assert!(Arc::ptr_eq(&first_output.scene().core, &exact.scene().core));
+    assert_eq!(calls.get(), 2);
+
+    layout
+        .prepare(&third.snapshot(), &third_request)
+        .expect("third document creates cache pressure");
+    assert_eq!(layout.cache_diagnostics().evictions(), 1);
+    let retained = layout
+        .prepare(&first.snapshot(), &first_request)
+        .expect("recently reused first root survives pressure");
+    assert!(
+        Arc::ptr_eq(&first_output.scene().core, &retained.scene().core),
+        "root-level recency must be folded into stale paragraph entries during eviction"
+    );
+    assert_eq!(calls.get(), 3);
+
+    layout
+        .prepare(&second.snapshot(), &second_request)
+        .expect("the genuinely oldest document prepares again");
+    assert_eq!(
+        calls.get(),
+        4,
+        "the untouched second root, rather than the exact-hit first root, must be evicted"
+    );
+}
+
+#[test]
+fn composition_root_recency_protects_only_segments_it_names() {
+    let calls = Rc::new(Cell::new(0));
+    let mut layout = LayoutEngine::new(
+        SharedEligibilityAdapter {
+            calls: calls.clone(),
+            epoch: Rc::new(Cell::new(None)),
+        },
+        CacheBudget::new(3),
+    );
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-lru-comp01"));
+    let mut edit = document.edit();
+    let mut texts = Vec::new();
+    for text in ["target", "sibling"] {
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("test paragraph appends");
+        texts.push(
+            edit.append_text(paragraph, InlineRole::TEXT, text)
+                .expect("test text appends"),
+        );
+    }
+    edit.commit().expect("test document commits");
+    let snapshot = document.snapshot();
+    let styles = StyleMap::new(ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    ));
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
+    let committed = layout
+        .prepare(&snapshot, &request)
+        .expect("committed document prepares");
+    let caret = committed
+        .scene()
+        .position_at(texts[0], 0)
+        .expect("target start is represented");
+    let selection = committed
+        .scene()
+        .collapsed_selection(&caret)
+        .expect("composition selection validates");
+    let selections = committed
+        .scene()
+        .selection_set([selection])
+        .expect("composition selection set validates");
+    let mut composition = committed
+        .scene()
+        .begin_composition(&selections, CompositionId::from_bytes(*b"scene-lru-comp02"))
+        .expect("composition begins")
+        .into_session();
+    composition
+        .update(composition.epoch(), CompositionUpdate::new("generated"))
+        .expect("composition updates");
+    let projected = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition scene prepares");
+    let repeated = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition root is reused");
+    assert!(Arc::ptr_eq(&projected.scene().core, &repeated.scene().core));
+
+    let (second, second_styles, second_paint) =
+        one_leaf_document(*b"scene-lru-comp03", "pressure one");
+    let (third, third_styles, third_paint) =
+        one_leaf_document(*b"scene-lru-comp04", "pressure two");
+    layout
+        .prepare(
+            &second.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint),
+        )
+        .expect("first pressure document prepares");
+    layout
+        .prepare(
+            &third.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &third_styles, &third_paint),
+        )
+        .expect("second pressure document prepares");
+
+    let retained = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition survives eviction of its superseded committed target");
+    assert!(
+        Arc::ptr_eq(&projected.scene().core, &retained.scene().core),
+        "composition root must retain its transient target and committed sibling"
+    );
+    assert_eq!(
+        calls.get(),
+        5,
+        "the exact composition reuse must not return to the adapter"
     );
 }
 
@@ -1661,6 +2600,345 @@ fn composition_projection_rejects_a_missing_semantic_target() {
             .kind(),
         SceneErrorKind::InvalidComposition,
         "a matching paragraph index is insufficient without the semantic text leaf"
+    );
+}
+
+#[test]
+fn display_scene_excludes_interaction_and_reports_requested_resident_capabilities() {
+    let (document, styles, paint) = one_leaf_document(*b"scene-features01", "display only");
+    let paragraph = document.snapshot().paragraphs()[0].id;
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    let output = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint),
+        )
+        .expect("display-only scene must prepare");
+    let scene = output.scene();
+    assert_eq!(scene.display().line_count(), 1);
+    assert_eq!(scene.display().fragment_count(), 1);
+
+    for error in [
+        scene.sources().expect_err("display excludes sources"),
+        scene
+            .interaction()
+            .expect_err("display excludes hit testing"),
+        scene.selection().expect_err("display excludes selection"),
+        scene.editing().expect_err("display excludes editing"),
+    ] {
+        assert_eq!(error.paragraph(), Some(paragraph));
+        assert_eq!(error.requested(), crate::SceneFeatures::DISPLAY);
+        assert_eq!(error.resident(), crate::SceneFeatures::DISPLAY);
+        assert!(
+            !crate::SceneFeatures::DISPLAY.contains(error.required()),
+            "the diagnostic must name a genuinely absent closure"
+        );
+    }
+
+    let geometry = layout
+        .cached_geometry_for_test(paragraph)
+        .expect("display geometry remains resident");
+    assert!(geometry.hit_geometry.is_empty());
+    assert_eq!(geometry.movement_count(), 0);
+    assert!(geometry.source_map.is_none());
+    assert!(geometry.semantics.is_empty());
+
+    let accessible = layout
+        .prepare(
+            &document.snapshot(),
+            &SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+                .with_features(crate::SceneFeatures::ACCESSIBLE),
+        )
+        .expect("accessibility-only scene must prepare");
+    assert!(
+        accessible.scene().semantics().is_ok(),
+        "the accessible profile must expose semantics"
+    );
+    assert!(
+        accessible.scene().interaction().is_err(),
+        "semantic bounds must not imply retained hit testing"
+    );
+    let paragraph = accessible
+        .scene()
+        .paragraph_residencies()
+        .next()
+        .expect("fixture has one paragraph");
+    assert!(paragraph.bytes().sources() > 0);
+    assert!(paragraph.bytes().semantics() > 0);
+    assert_eq!(paragraph.bytes().hit_testing(), 0);
+    let geometry = layout
+        .cached_geometry_for_test(paragraph.paragraph())
+        .expect("accessible geometry remains resident");
+    assert!(
+        geometry.hit_geometry.is_empty(),
+        "transient semantic-bound construction must not retain hit clusters"
+    );
+}
+
+#[test]
+fn source_facade_rejects_views_from_another_scene_without_panicking() {
+    let (first_document, first_styles, first_paint) =
+        one_leaf_document(*b"source-facade-01", "first");
+    let (second_document, second_styles, second_paint) =
+        one_leaf_document(*b"source-facade-02", "second");
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let first_request = SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint)
+        .with_features(crate::SceneFeatures::DISPLAY.with_sources());
+    let first = layout
+        .prepare(&first_document.snapshot(), &first_request)
+        .expect("source-capable scene must prepare");
+    let second_request =
+        SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint);
+    let second = layout
+        .prepare(&second_document.snapshot(), &second_request)
+        .expect("display-only scene must prepare");
+    let sources = first
+        .scene()
+        .sources()
+        .expect("the first scene retains complete sources");
+    let foreign = second.scene().line(0).expect("the second scene has a line");
+
+    let error = sources
+        .for_line(foreign)
+        .expect_err("a foreign public line view must be rejected");
+    assert_eq!(
+        error.paragraph(),
+        second_document.snapshot().paragraphs()[0].id
+    );
+
+    let foreign_fragment = second
+        .scene()
+        .fragment(0)
+        .expect("the second scene has a fragment");
+    assert!(
+        sources.for_fragment(foreign_fragment).is_err(),
+        "a foreign fragment traversal must be rejected"
+    );
+    assert!(
+        sources.first_for_fragment(foreign_fragment).is_err(),
+        "a foreign fragment lookup must be rejected"
+    );
+    let foreign_glyph = foreign_fragment
+        .glyphs()
+        .next()
+        .expect("the second scene has a glyph");
+    assert!(
+        sources.for_glyph(foreign_glyph).is_err(),
+        "a foreign glyph traversal must be rejected"
+    );
+    assert!(
+        sources.first_for_glyph(foreign_glyph).is_err(),
+        "a foreign glyph lookup must be rejected"
+    );
+}
+
+#[test]
+fn sparse_editable_override_does_not_promote_a_display_sibling() {
+    let mut document = Document::new(DocumentId::from_bytes(*b"scene-features02"));
+    let mut edit = document.edit();
+    let display = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("display paragraph must append");
+    let display_text = edit
+        .append_text(display, InlineRole::TEXT, "display")
+        .expect("display text must append");
+    let editor = edit
+        .append_paragraph(ParagraphRole::BODY)
+        .expect("editor paragraph must append");
+    let editor_text = edit
+        .append_text(editor, InlineRole::TEXT, "editor")
+        .expect("editor text must append");
+    edit.commit().expect("fixture must publish");
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Test"), 16.).expect("test style must be valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let styles = StyleMap::new(style);
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let policy = crate::SceneFeaturePolicy::uniform(crate::SceneFeatures::DISPLAY)
+        .with_paragraph(editor, crate::SceneFeatures::EDITABLE);
+    let request =
+        SceneRequest::new(TextConstraint::MaxContent, &styles, &paint).with_feature_policy(policy);
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    let snapshot = document.snapshot();
+    let output = layout
+        .prepare(&snapshot, &request)
+        .expect("mixed-capability scene must prepare");
+    let scene = output.scene();
+
+    let editing = scene
+        .editing()
+        .expect("scene editing must expose the sparse editable paragraph");
+    assert!(
+        editing.position_at(editor_text, 0).is_some(),
+        "the editable paragraph must be queryable"
+    );
+    assert!(
+        editing.position_at(display_text, 0).is_none(),
+        "the display sibling must not acquire editing facts"
+    );
+    assert!(
+        scene.selection().is_ok(),
+        "selection access must expose the sparse selectable paragraph"
+    );
+    assert!(
+        scene.interaction().is_ok(),
+        "point interaction must expose the sparse hit-testable paragraph"
+    );
+    assert!(
+        scene.sources().is_err(),
+        "whole-scene source traversal must reject the display sibling"
+    );
+    assert!(
+        scene.semantics().is_err(),
+        "editing does not imply semantic structure"
+    );
+    let display_geometry = layout
+        .cached_geometry_for_test(display)
+        .expect("display sibling remains resident");
+    let editor_geometry = layout
+        .cached_geometry_for_test(editor)
+        .expect("editor paragraph remains resident");
+    assert_eq!(display_geometry.features, crate::SceneFeatures::DISPLAY);
+    assert_eq!(display_geometry.movement_count(), 0);
+    assert_eq!(editor_geometry.features, crate::SceneFeatures::EDITABLE);
+    assert_ne!(editor_geometry.movement_count(), 0);
+
+    let residency = scene.residency();
+    assert_eq!(residency.paragraphs(), 2);
+    assert!(residency.bytes().structure() > 0);
+    assert!(residency.bytes().layout() > 0);
+    assert!(residency.bytes().paint() > 0);
+    let paragraphs: Vec<_> = scene.paragraph_residencies().collect();
+    assert_eq!(paragraphs.len(), 2);
+    let display_residency = paragraphs
+        .iter()
+        .copied()
+        .find(|entry| entry.paragraph() == display)
+        .expect("display residency is reported");
+    assert_eq!(display_residency.requested(), crate::SceneFeatures::DISPLAY);
+    assert_eq!(display_residency.resident(), crate::SceneFeatures::DISPLAY);
+    assert_eq!(display_residency.bytes().sources(), 0);
+    assert_eq!(display_residency.bytes().hit_testing(), 0);
+    assert_eq!(display_residency.bytes().selection(), 0);
+    assert_eq!(display_residency.bytes().navigation(), 0);
+
+    let editor_residency = paragraphs
+        .iter()
+        .copied()
+        .find(|entry| entry.paragraph() == editor)
+        .expect("editor residency is reported");
+    assert_eq!(editor_residency.requested(), crate::SceneFeatures::EDITABLE);
+    assert_eq!(editor_residency.resident(), crate::SceneFeatures::EDITABLE);
+    assert!(editor_residency.bytes().sources() > 0);
+    assert!(editor_residency.bytes().hit_testing() > 0);
+    assert_eq!(editor_residency.bytes().selection(), 0);
+    assert_eq!(editor_residency.bytes().navigation(), 0);
+    assert_eq!(editor_residency.bytes().semantics(), 0);
+    assert_eq!(editor_residency.bytes().native_text_input(), 0);
+
+    let cache_residency = layout.cache_diagnostics().scene_cache_residency();
+    assert_eq!(
+        cache_residency.layout(),
+        display_residency
+            .bytes()
+            .layout()
+            .saturating_add(editor_residency.bytes().layout())
+    );
+    assert_eq!(
+        cache_residency.sources(),
+        editor_residency.bytes().sources()
+    );
+
+    let mut complete_layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    let complete_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
+    let complete = complete_layout
+        .prepare(&snapshot, &complete_request)
+        .expect("complete scene must prepare");
+    let complete_editing = complete
+        .scene()
+        .editing()
+        .expect("complete editing must exist");
+    let complete_selection = complete_editing
+        .selection_between(
+            &complete_editing
+                .position_at(display_text, 0)
+                .expect("display start exists in the complete scene"),
+            &complete_editing
+                .position_at(editor_text, 6)
+                .expect("editor end exists in the complete scene"),
+            TextSelectionMode::Logical,
+        )
+        .expect("complete cross-paragraph selection must form");
+    let complete_selections = complete_editing
+        .selection_set([complete_selection])
+        .expect("complete selection set must validate");
+    scene
+        .selection()
+        .expect("the sparse scene exposes its selectable paragraph")
+        .geometry(&complete_selections)
+        .expect_err("sparse geometry must reject an omitted selected paragraph");
+
+    let position = editing
+        .position_at(editor_text, 0)
+        .expect("editor start remains represented");
+    let selection = editing
+        .collapsed_selection(&position)
+        .expect("editor caret forms a selection");
+    let selections = editing
+        .selection_set([selection])
+        .expect("editor selection set is valid");
+    let mut composition = editing
+        .begin_composition(&selections, CompositionId::from_bytes(*b"sparse-compose01"))
+        .expect("sparse editor begins composition")
+        .into_session();
+    composition
+        .update(composition.epoch(), CompositionUpdate::new("preedit"))
+        .expect("sparse composition updates");
+    let projected = layout
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("sparse composition prepares");
+    assert!(
+        projected.scene().editing().is_ok(),
+        "projected editing must expose the sparse composition target"
     );
 }
 

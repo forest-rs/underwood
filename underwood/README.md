@@ -21,10 +21,10 @@ The first draft public slice is deliberately complete end to end:
   paragraph shaping for unchanged siblings, paint-value changes, and
   constraint-only changes; wrapped constraint changes expose their separate
   line-final shaping work;
-  an explicit [`CacheBudget`] bounds retained geometry and coordinated backend
-  state and can separately bound exact identity-free preparation shared by
-  equivalent labels, while release operations and [`CacheDiagnostics`] expose
-  lifecycle facts to hosts;
+  an explicit [`CacheBudget`] independently bounds committed and transient
+  composition geometry, reusable adapter facts, and exact identity-free
+  preparation shared by equivalent labels, while release operations and
+  [`CacheDiagnostics`] expose lifecycle facts to hosts;
 - [`adapter::ParagraphFormation`] keeps legal line breaking, visual ordering,
   and font-derived metrics behind the paragraph-engine boundary instead of
   hiding text preparation in scene construction; formed lines retain complete
@@ -61,14 +61,22 @@ units separately from painted glyphs. Each unit retains every shaping slice,
 including zero-advance marks and controls, while exposing only its two endpoint
 carets. Exact hits therefore cover ligature components and whitespace without
 pretending that ink bounds are cursor geometry. A committed hit returns a
-[`SnapshotTextUnit`] whose ordered source ranges can cross semantic leaves;
-`semantic_id()` still identifies the exact visual slice under the pointer.
-Closest hits also clamp to an empty editable leaf:
+borrowed [`SnapshotTextUnitView`] whose allocation-free source iterator can
+cross semantic leaves; `semantic_id()` still identifies the exact visual slice
+under the pointer. Call `to_owned()` only when the source-complete unit must
+outlive the borrowed scene. Closest hits also clamp to an empty editable leaf:
 
 ```rust,ignore
-let hit = scene.hit_test(point).or_else(|| scene.hit_test_closest(point));
+let interaction = scene.interaction()?;
+let selection = scene.selection()?;
+let hit = interaction
+    .hit_test(point)
+    .or_else(|| interaction.hit_test_closest(point));
 if let Some(hit) = hit {
-    let caret = scene
+    for source in hit.source().sources() {
+        inspect(source);
+    }
+    let caret = selection
         .caret(hit.position())
         .expect("a hit from this scene has a matching caret stop");
     assert_eq!(caret.position(), hit.position());
@@ -77,8 +85,8 @@ if let Some(hit) = hit {
 
 `SnapshotTextPosition` includes the exact document revision, semantic text
 leaf, UTF-8 byte boundary, and upstream/downstream affinity. Passing a position
-from another revision or scene to [`TextScene::caret`] returns `None` rather
-than silently relocating it.
+from another revision or scene to [`SceneSelection::caret`] returns `None`
+rather than silently relocating it.
 
 ## Selection sets and replacement
 
@@ -91,15 +99,16 @@ flattened together.
 ```rust,ignore
 use underwood::{TextMovement, TextSelectionMode};
 
-let anchor = scene.hit_test_closest(drag_start).unwrap();
-let extent = scene.hit_test_closest(drag_end).unwrap();
-let visual = scene.selection(
+let editing = scene.editing()?;
+let anchor = editing.hit_test_closest(drag_start).unwrap();
+let extent = editing.hit_test_closest(drag_end).unwrap();
+let visual = editing.selection_between(
     anchor.position(),
     extent.position(),
     TextSelectionMode::Visual,
 )?;
-let selections = scene.selection_set([visual])?;
-let selections = scene.move_selections(
+let selections = editing.selection_set([visual])?;
+let selections = editing.move_selections(
     &selections,
     TextMovement::NextVisual,
     true,
@@ -132,7 +141,9 @@ use underwood_parley::ParleyParagraphEngine;
 
 let mut layout = LayoutEngine::new(
     ParleyParagraphEngine::new(fonts),
-    CacheBudget::new(4_096).with_shared_preparation_bytes(8 * 1024 * 1024),
+    CacheBudget::new(4_096)
+        .with_shared_preparation_bytes(8 * 1024 * 1024)
+        .with_adapter_facts_bytes(32 * 1024 * 1024),
 );
 let mut label =
     TextBlock::plain(DocumentId::from_bytes(*b"save-label-00001"), "Save")?;
@@ -157,14 +168,16 @@ use underwood::TextSelectionMode;
 let snapshot = label.snapshot();
 let output = layout.prepare_block(
     &snapshot,
-    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint),
+    &BlockRequest::new(TextConstraint::MaxContent, &shared_style, &shared_paint)
+        .with_features(underwood::SceneFeatures::EDITABLE),
 )?;
 let scene = output.scene();
+let editing = scene.editing()?;
 let text = snapshot.text_id();
-let start = scene.position_at(text, 0).unwrap();
-let end = scene.position_at(text, 4).unwrap();
-let selected = scene.selection(&start, &end, TextSelectionMode::Logical)?;
-let selected = scene.selection_set([selected])?;
+let start = editing.position_at(text, 0).unwrap();
+let end = editing.position_at(text, 4).unwrap();
+let selected = editing.selection_between(&start, &end, TextSelectionMode::Logical)?;
+let selected = editing.selection_set([selected])?;
 
 let rebound = label.replace_selections(&selected, "Open")?;
 assert_eq!(label.text(), "Open");
@@ -182,6 +195,34 @@ semantic, interaction, paint, and geometry identity. `release_document`
 releases identity-bound entries but preserves useful shared facts;
 `clear_cache` releases both. The byte diagnostics are deterministic retention
 charges, not allocator-exact heap measurements.
+
+Reusable adapter facts have a third, independent byte budget. Its default is
+zero: stable display labels retain their published scene segments without
+silently retaining analysis, shaping, and formed-line state. Hosts that value
+warm edits or capability upgrades opt in with
+`CacheBudget::with_adapter_facts_bytes`. `LayoutEngine::trim_adapter_facts`
+drops that state without invalidating caller-held scenes. A later upgrade is
+then allowed to re-form only its target and reports a cold capability upgrade;
+with resident facts it reports a warm upgrade and repeats no formation work.
+`CacheDiagnostics::adapter_facts` exposes deterministic resident/peak bytes,
+known scratch, hits, misses, evictions, and releases. Shared font blobs and
+caller-held scenes are outside that charge.
+
+Prepared-scene capabilities are explicit and cumulative. `DISPLAY` retains
+only layout and paint. `ACCESSIBLE` adds source provenance and semantic
+structure without pointer-hit data. `SELECTABLE` adds exact point hits and
+selection geometry. `EDITABLE` is a strict superset that also retains logical
+and visual navigation plus the prerequisites for native text-input queries.
+Documents can apply one default with sparse paragraph overrides, so one editor
+does not promote thousands of display-only siblings.
+
+`TextScene::residency` reports deterministic bytes by structure, layout,
+paint, source, semantic, hit-testing, selection, navigation, and native-input
+category. `TextScene::paragraph_residencies` is an allocation-free traversal
+that exposes both the requested and actually resident capabilities for every
+paragraph. These values account for Underwood-owned immutable records; they do
+not include allocator metadata, fonts, renderer resources, or caller-held
+objects.
 
 [`TextConstraint::MaxContent`] suppresses soft wrapping while preserving
 mandatory breaks. [`TextConstraint::MinContent`] commits every legal soft
@@ -225,7 +266,7 @@ line adjustment and scene geometry. `Start` and `End` consume the paragraph
 direction already resolved by Unicode analysis. `Justify` expands explicit
 Western inter-word spaces on eligible soft-wrapped lines; final and mandatory
 lines remain start-aligned, and CJK and Arabic strategies remain separate.
-[`SceneLine::adjustment`] exposes the exact offset, hanging trailing
+[`SceneLineView::adjustment`] exposes the exact offset, hanging trailing
 whitespace, and per-opportunity expansion. Changing only line height reuses
 accepted line glyphs and recomputes metrics.
 
@@ -300,7 +341,7 @@ contributing leaf-local range.
 
 ## Composition epochs and editable surfaces
 
-[`TextScene::begin_composition`] creates a transient [`CompositionSession`]
+[`SceneEditing::begin_composition`] creates a transient [`CompositionSession`]
 without editing its immutable snapshot. Each accepted [`CompositionUpdate`]
 advances a checked epoch, carries generated UTF-8 text, selection, and optional
 IME-authored clauses, and projects that text through the same paragraph engine

@@ -5,6 +5,113 @@ use super::*;
 use underwood::{FlowRegion, RegionFlow, ResolvedDirection, TextAlignment};
 
 #[test]
+fn alignment_only_change_reuses_adapter_prepared_facts() {
+    let (document, paragraph, mut styles, paint) = alignment_fixture("retained output");
+    let outputs = Rc::new(RefCell::new(Vec::new()));
+    let probe = PreparedFactsProbe {
+        inner: fixture_paragraph_engine(),
+        outputs: Rc::clone(&outputs),
+    };
+    let mut engine = LayoutEngine::new(
+        probe,
+        CacheBudget::new(8).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
+    let width = FiniteWidth::new(300.0).expect("fixture width is valid");
+    engine
+        .prepare(
+            &document.snapshot(),
+            &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
+        )
+        .expect("initial scene prepares");
+
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::new(BaseDirection::Auto).with_alignment(TextAlignment::Center),
+    );
+    let adjusted = engine
+        .prepare(
+            &document.snapshot(),
+            &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
+        )
+        .expect("alignment-only scene prepares");
+    assert_eq!(adjusted.work().flow().paragraphs(), 0);
+
+    assert_eq!(
+        outputs.borrow().len(),
+        1,
+        "alignment-only adjustment must use the published paragraph artifact without another adapter call"
+    );
+}
+
+#[test]
+fn composition_preparation_does_not_displace_committed_adapter_facts() {
+    let (document, paragraph, mut styles, paint) = alignment_fixture("committed text");
+    let snapshot = document.snapshot();
+    let outputs = Rc::new(RefCell::new(Vec::new()));
+    let probe = PreparedFactsProbe {
+        inner: fixture_paragraph_engine(),
+        outputs: Rc::clone(&outputs),
+    };
+    let mut engine = LayoutEngine::new(
+        probe,
+        CacheBudget::new(8).with_adapter_facts_bytes(64 * 1024 * 1024),
+    );
+    let width = FiniteWidth::new(300.0).expect("fixture width is valid");
+    let request = editable_scene_request(TextConstraint::Wrap(width), &styles, &paint);
+    let committed = engine
+        .prepare(&snapshot, &request)
+        .expect("initial committed scene prepares");
+    let editing = committed
+        .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let line = committed.scene().line(0).expect("line exists");
+    let end = *editing
+        .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
+        .expect("line end resolves")
+        .position();
+    let selections = editing
+        .selection_set([editing
+            .collapsed_selection(&end)
+            .expect("composition insertion point is valid")])
+        .expect("composition selection set is valid");
+    let mut composition = editing
+        .begin_composition(&selections, CompositionId::from_bytes(*b"retained-compose"))
+        .expect("composition starts")
+        .into_session();
+    composition
+        .update(
+            composition.epoch(),
+            CompositionUpdate::new("generated").with_selection(9..9),
+        )
+        .expect("composition updates");
+    engine
+        .prepare_composition(&snapshot, &request, &composition)
+        .expect("composition scene prepares");
+
+    styles.set_paragraph_style(
+        paragraph,
+        ParagraphStyle::new(BaseDirection::Auto).with_alignment(TextAlignment::Center),
+    );
+    let adjusted = engine
+        .prepare(
+            &snapshot,
+            &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
+        )
+        .expect("adjusted committed scene prepares");
+    assert_eq!(adjusted.work().flow().paragraphs(), 0);
+
+    let outputs = outputs.borrow();
+    let [initial, composition] = outputs.as_slice() else {
+        panic!("only the initial committed and transient composition facts must be observed");
+    };
+    assert!(
+        !initial.shares_facts_with(composition),
+        "composition must own distinct prepared facts"
+    );
+}
+
+#[test]
 fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
     let text = "مرحبا بالعالم";
     let (document, paragraph, mut styles, paint) = alignment_fixture(text);
@@ -20,7 +127,7 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
     let start = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(300.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -28,7 +135,7 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
             .with_region_flow(&flow),
         )
         .expect("logical start alignment prepares");
-    let start_line = &start.scene().lines()[0];
+    let start_line = &start.scene().line(0).expect("line exists");
     assert_eq!(start_line.adjustment().direction(), ResolvedDirection::Rtl);
     assert_eq!(start_line.adjustment().alignment(), TextAlignment::Start);
     assert!((start_line.bounds().x1 - 340.0).abs() <= 1.0e-6);
@@ -40,7 +147,7 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
     let end = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(300.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -48,7 +155,7 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
             .with_region_flow(&flow),
         )
         .expect("logical end alignment prepares");
-    let end_line = &end.scene().lines()[0];
+    let end_line = &end.scene().line(0).expect("line exists");
     assert_eq!(end_line.adjustment().direction(), ResolvedDirection::Rtl);
     assert!((end_line.bounds().x0 - 40.0).abs() <= 1.0e-6);
     assert_eq!(end.work().analysis().paragraphs(), 0);
@@ -75,7 +182,7 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
     let left = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(300.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -84,10 +191,14 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
         )
         .expect("physical left alignment prepares");
     assert_eq!(
-        left.scene().lines()[0].adjustment().direction(),
+        left.scene()
+            .line(0)
+            .expect("line exists")
+            .adjustment()
+            .direction(),
         ResolvedDirection::Rtl
     );
-    assert!((left.scene().lines()[0].bounds().x0 - 40.0).abs() <= 1.0e-6);
+    assert!((left.scene().line(0).expect("line exists").bounds().x0 - 40.0).abs() <= 1.0e-6);
 
     styles.set_paragraph_style(
         paragraph,
@@ -96,7 +207,7 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
     let right = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(300.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -104,7 +215,7 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
             .with_region_flow(&flow),
         )
         .expect("physical right alignment prepares");
-    assert!((right.scene().lines()[0].bounds().x1 - 340.0).abs() <= 1.0e-6);
+    assert!((right.scene().line(0).expect("line exists").bounds().x1 - 340.0).abs() <= 1.0e-6);
     assert_eq!(right.work().analysis().paragraphs(), 0);
     assert_eq!(right.work().shape().paragraphs(), 0);
     assert_eq!(right.work().flow().paragraphs(), 0);
@@ -121,7 +232,7 @@ fn empty_explicit_rtl_paragraph_keeps_its_caret_on_logical_start() {
     let output = fixture_engine()
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(200.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -130,13 +241,15 @@ fn empty_explicit_rtl_paragraph_keeps_its_caret_on_logical_start() {
         )
         .expect("empty RTL paragraph prepares");
     assert!(output.scene().lines().is_empty());
-    let hit = output
+    let editing = output
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let hit = editing
         .hit_test_closest(Point::new(280.0, 30.0))
         .expect("empty RTL paragraph retains a represented position");
     assert_eq!(
-        output
-            .scene()
+        editing
             .caret(hit.position())
             .expect("empty RTL caret resolves")
             .bounds()
@@ -154,24 +267,24 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
     let committed = engine
         .prepare(
             &snapshot,
-            &SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint),
+            &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
         )
         .expect("committed scene prepares");
-    let line = &committed.scene().lines()[0];
-    let end = *committed
+    let editing = committed
         .scene()
+        .editing()
+        .expect("fixture retains editable scene data");
+    let line = &committed.scene().line(0).expect("line exists");
+    let end = *editing
         .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
         .expect("line end resolves")
         .position();
-    let selections = committed
-        .scene()
-        .selection_set([committed
-            .scene()
+    let selections = editing
+        .selection_set([editing
             .collapsed_selection(&end)
             .expect("composition insertion point is valid")])
         .expect("composition selection set is valid");
-    let mut session = committed
-        .scene()
+    let mut session = editing
         .begin_composition(&selections, CompositionId::from_bytes(*b"aligned-compose1"))
         .expect("composition starts")
         .into_session();
@@ -185,7 +298,7 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
     let start = engine
         .prepare_composition(
             &snapshot,
-            &SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint),
+            &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
             &session,
         )
         .expect("start-aligned composition prepares");
@@ -196,11 +309,16 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
     let centered = engine
         .prepare_composition(
             &snapshot,
-            &SceneRequest::new(TextConstraint::Wrap(width), &styles, &paint),
+            &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
             &session,
         )
         .expect("centered composition prepares");
-    let delta = centered.scene().lines()[0].adjustment().inline_offset();
+    let delta = centered
+        .scene()
+        .line(0)
+        .expect("line exists")
+        .adjustment()
+        .inline_offset();
     assert!(delta > 0.0);
     assert_eq!(centered.work().analysis().paragraphs(), 0);
     assert_eq!(centered.work().font_selection().paragraphs(), 0);
@@ -226,10 +344,14 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
     }
     let plain_marked = start
         .scene()
+        .editing()
+        .expect("composition retains native-input data")
         .composition_geometry(&session)
         .expect("start-aligned marked geometry resolves");
     let shifted_marked = centered
         .scene()
+        .editing()
+        .expect("composition retains native-input data")
         .composition_geometry(&session)
         .expect("centered marked geometry resolves");
     assert_eq!(plain_marked.len(), shifted_marked.len());
@@ -249,7 +371,7 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
     let start = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(400.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -264,7 +386,7 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
     let centered = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(400.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -274,10 +396,15 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
         .expect("centered scene prepares");
     let start_scene = start.scene();
     let centered_scene = centered.scene();
-    let delta = centered_scene.lines()[0].adjustment().inline_offset();
+    let delta = centered_scene
+        .line(0)
+        .expect("line exists")
+        .adjustment()
+        .inline_offset();
     assert!(delta > 0.0);
     assert_eq!(
-        centered_scene.lines()[0].bounds().x0 - start_scene.lines()[0].bounds().x0,
+        centered_scene.line(0).expect("line exists").bounds().x0
+            - start_scene.line(0).expect("line exists").bounds().x0,
         delta
     );
     for (plain, shifted) in start_scene
@@ -312,41 +439,58 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
         assert!((shifted.max_x - plain.max_x - delta).abs() <= 0.06);
     }
 
-    let y = start_scene.lines()[0].bounds().center().y;
-    let anchor = *start_scene
-        .hit_test_closest(Point::new(start_scene.lines()[0].bounds().x0, y))
+    let y = start_scene
+        .line(0)
+        .expect("line exists")
+        .bounds()
+        .center()
+        .y;
+    let start_editing = start_scene
+        .editing()
+        .expect("fixture retains editable scene data");
+    let centered_editing = centered_scene
+        .editing()
+        .expect("fixture retains editable scene data");
+    let anchor = *start_editing
+        .hit_test_closest(Point::new(
+            start_scene.line(0).expect("line exists").bounds().x0,
+            y,
+        ))
         .expect("line start resolves")
         .position();
-    let extent = *start_scene
-        .hit_test_closest(Point::new(start_scene.lines()[0].bounds().x1, y))
+    let extent = *start_editing
+        .hit_test_closest(Point::new(
+            start_scene.line(0).expect("line exists").bounds().x1,
+            y,
+        ))
         .expect("line end resolves")
         .position();
     assert_eq!(
-        centered_scene
+        centered_editing
             .caret(&anchor)
             .expect("centered anchor caret exists")
             .bounds()
             .x0
-            - start_scene
+            - start_editing
                 .caret(&anchor)
                 .expect("start anchor caret exists")
                 .bounds()
                 .x0,
         delta
     );
-    let selection = start_scene
-        .selection(&anchor, &extent, TextSelectionMode::Visual)
+    let selection = start_editing
+        .selection_between(&anchor, &extent, TextSelectionMode::Visual)
         .expect("mixed-bidi visual selection is valid");
-    let plain_selection = start_scene
+    let plain_selection = start_editing
         .selection_geometry(
-            &start_scene
+            &start_editing
                 .selection_set([selection.clone()])
                 .expect("plain selection set is valid"),
         )
         .expect("plain selection geometry resolves");
-    let shifted_selection = centered_scene
+    let shifted_selection = centered_editing
         .selection_geometry(
-            &centered_scene
+            &centered_editing
                 .selection_set([selection])
                 .expect("centered selection set is valid"),
         )
@@ -356,7 +500,17 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
         assert_eq!(shifted.bounds().x0 - plain.bounds().x0, delta);
         assert_eq!(shifted.bounds().x1 - plain.bounds().x1, delta);
     }
-    for (plain, shifted) in start_scene.semantics().zip(centered_scene.semantics()) {
+    for (plain, shifted) in start_scene
+        .semantics()
+        .expect("test scene requested semantics")
+        .iter()
+        .zip(
+            centered_scene
+                .semantics()
+                .expect("test scene requested semantics")
+                .iter(),
+        )
+    {
         assert_eq!(shifted.bounds().x0 - plain.bounds().x0, delta);
         assert_eq!(shifted.bounds().x1 - plain.bounds().x1, delta);
     }
@@ -375,7 +529,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
     let justified = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(130.0).expect("width is valid")),
                 &styles,
                 &paint,
@@ -385,20 +539,47 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         .expect("justified scene prepares");
     let lines = justified.scene().lines();
     assert!(lines.len() >= 2);
-    assert_eq!(lines[0].break_reason(), TestLineBreakReason::Regular);
-    assert!(lines[0].adjustment().opportunity_expansion() > 0.0);
-    assert!(lines[0].adjustment().expanded_opportunities() > 0);
+    assert_eq!(
+        lines.get(0).expect("line exists").break_reason(),
+        TestLineBreakReason::Regular
+    );
     assert!(
-        (lines[0].bounds().x1 - lines[0].adjustment().trailing_whitespace_advance() - 150.0).abs()
+        lines
+            .get(0)
+            .expect("line exists")
+            .adjustment()
+            .opportunity_expansion()
+            > 0.0
+    );
+    assert!(
+        lines
+            .get(0)
+            .expect("line exists")
+            .adjustment()
+            .expanded_opportunities()
+            > 0
+    );
+    assert!(
+        (lines.get(0).expect("line exists").bounds().x1
+            - lines
+                .get(0)
+                .expect("line exists")
+                .adjustment()
+                .trailing_whitespace_advance()
+            - 150.0)
+            .abs()
             <= 1.0e-6
     );
     assert_eq!(
-        lines.last().expect("final line exists").break_reason(),
+        lines
+            .get(lines.len() - 1)
+            .expect("final line exists")
+            .break_reason(),
         TestLineBreakReason::End
     );
     assert_eq!(
         lines
-            .last()
+            .get(lines.len() - 1)
             .expect("final line exists")
             .adjustment()
             .opportunity_expansion(),
@@ -414,7 +595,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
     let mandatory = fixture_engine()
         .prepare(
             &mandatory_document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(300.0).expect("width is valid")),
                 &mandatory_styles,
                 &mandatory_paint,
@@ -422,11 +603,18 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         )
         .expect("mandatory line prepares");
     assert_eq!(
-        mandatory.scene().lines()[0].break_reason(),
+        mandatory
+            .scene()
+            .line(0)
+            .expect("line exists")
+            .break_reason(),
         TestLineBreakReason::Mandatory
     );
     assert_eq!(
-        mandatory.scene().lines()[0]
+        mandatory
+            .scene()
+            .line(0)
+            .expect("line exists")
             .adjustment()
             .opportunity_expansion(),
         0.0
@@ -441,7 +629,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
     let arabic = fixture_engine()
         .prepare(
             &arabic_document.snapshot(),
-            &SceneRequest::new(
+            &editable_scene_request(
                 TextConstraint::Wrap(FiniteWidth::new(120.0).expect("width is valid")),
                 &arabic_styles,
                 &arabic_paint,
@@ -453,11 +641,14 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         "fixture must expose a soft-wrapped Arabic line"
     );
     assert_eq!(
-        arabic.scene().lines()[0].break_reason(),
+        arabic.scene().line(0).expect("line exists").break_reason(),
         TestLineBreakReason::Regular
     );
     assert_eq!(
-        arabic.scene().lines()[0]
+        arabic
+            .scene()
+            .line(0)
+            .expect("line exists")
             .adjustment()
             .expanded_opportunities(),
         0,

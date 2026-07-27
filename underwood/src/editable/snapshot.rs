@@ -117,7 +117,7 @@ impl EditableSurfaceSnapshot<'_> {
     /// snapshot. Generated marked text and read-only separators are rejected.
     /// This is the mutation-side counterpart of [`Self::snapshot_range`]: a
     /// host-driven protocol can convert its offset encoding, request this set,
-    /// and pass it to [`TextScene::begin_composition`] without constructing a
+    /// and pass it to [`crate::SceneEditing::begin_composition`] without constructing a
     /// snapshot position from a raw byte offset.
     pub fn replacement_selection(
         &self,
@@ -150,7 +150,7 @@ impl EditableSurfaceSnapshot<'_> {
                 TextAffinity::Upstream,
             )
             .ok_or_else(|| SurfaceError::new(SurfaceErrorKind::UnsupportedSelection))?;
-            scene.selection(&start, &end, TextSelectionMode::Logical)
+            scene.selection_between(&start, &end, TextSelectionMode::Logical)
         }
         .map_err(|_| SurfaceError::new(SurfaceErrorKind::UnsupportedSelection))?;
         scene

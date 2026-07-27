@@ -55,7 +55,7 @@ fn paragraph_style_direction_invalidates_analysis_and_reaches_the_scene() {
     let auto = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &auto_styles, &paint),
+            &editable_scene_request(constraint, &auto_styles, &paint),
         )
         .expect("automatic direction prepares");
     assert!(
@@ -68,7 +68,7 @@ fn paragraph_style_direction_invalidates_analysis_and_reaches_the_scene() {
     let rtl = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &rtl_styles, &paint),
+            &editable_scene_request(constraint, &rtl_styles, &paint),
         )
         .expect("explicit RTL direction prepares");
     assert_eq!(rtl.work().analysis().paragraphs(), 1);
@@ -113,7 +113,7 @@ fn word_break_is_range_projected_and_invalidates_from_analysis() {
     let normal = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &normal_styles, &paint),
+            &editable_scene_request(constraint, &normal_styles, &paint),
         )
         .expect("normal word breaking prepares");
     assert_eq!(
@@ -125,7 +125,7 @@ fn word_break_is_range_projected_and_invalidates_from_analysis() {
     let broken = engine
         .prepare(
             &document.snapshot(),
-            &SceneRequest::new(constraint, &break_all_styles, &paint),
+            &editable_scene_request(constraint, &break_all_styles, &paint),
         )
         .expect("break-all word breaking prepares");
     assert_eq!(broken.work().analysis().paragraphs(), 1);
@@ -219,7 +219,7 @@ fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
         );
         let styles = StyleMap::new(style);
         let paints = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-        let request = SceneRequest::new(
+        let request = editable_scene_request(
             TextConstraint::Wrap(FiniteWidth::new(100.0).expect("the proof width is valid")),
             &styles,
             &paints,
@@ -228,29 +228,32 @@ fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
             .prepare(&document.snapshot(), &request)
             .expect("Parley analysis boundaries must prepare through the public scene path");
         let scene = output.scene();
-        let y = scene.lines()[0].bounds().center().y;
-        let start = *scene
+        let editing = scene
+            .editing()
+            .expect("fixture retains editable scene data");
+        let y = scene.line(0).expect("line exists").bounds().center().y;
+        let start = *editing
             .hit_test_closest(Point::new(-100.0, y))
             .expect("the unit start must resolve")
             .position();
-        let end = *scene
+        let end = *editing
             .hit_test_closest(Point::new(100.0, y))
             .expect("the unit end must resolve")
             .position();
-        let forward = scene
-            .selection_set([scene
+        let forward = editing
+            .selection_set([editing
                 .collapsed_selection(&start)
                 .expect("the unit start must be a caret")])
             .and_then(|selection| {
-                scene.move_selections(&selection, TextMovement::NextLogical, true)
+                editing.move_selections(&selection, TextMovement::NextLogical, true)
             })
             .expect("the unit must expose one forward logical selection");
-        let backward = scene
-            .selection_set([scene
+        let backward = editing
+            .selection_set([editing
                 .collapsed_selection(&end)
                 .expect("the unit end must be a caret")])
             .and_then(|selection| {
-                scene.move_selections(&selection, TextMovement::PreviousLogical, true)
+                editing.move_selections(&selection, TextMovement::PreviousLogical, true)
             })
             .expect("the unit must expose one backward logical selection");
         for selection in [&forward, &backward] {
@@ -428,7 +431,7 @@ fn control_only_paragraph_emits_no_phantom_glyph() {
     .expect("fixture catalog is valid");
     let paragraphs = ParleyParagraphEngine::new(fonts);
     let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(32));
-    let request = SceneRequest::new(
+    let request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(100.0).expect("test width is finite")),
         &styles,
         &paint,

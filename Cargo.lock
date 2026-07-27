@@ -2106,6 +2106,17 @@ name = "underwood_position_experiment"
 version = "0.0.1"
 
 [[package]]
+name = "underwood_residency_compare"
+version = "0.0.1"
+dependencies = [
+ "allocation-counter",
+ "fontique",
+ "parley",
+ "underwood",
+ "underwood_parley",
+]
+
+[[package]]
 name = "underwood_semantic_scene_benchmark"
 version = "0.0.1"
 dependencies = [

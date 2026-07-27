@@ -9,9 +9,9 @@
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use core::fmt;
 use core::ops::Range;
 use core::slice;
+use core::{fmt, mem};
 
 use crate::TextAffinity;
 
@@ -231,6 +231,111 @@ impl ProjectedText {
             }
         }
         builder.finish()
+    }
+
+    pub(crate) fn from_whitespace_reusing(
+        source: String,
+        policy: WhitespaceCollapse,
+        projected_scratch: &mut String,
+        segment_scratch: &mut Vec<ProjectionSegment>,
+    ) -> Result<Self, ProjectionError> {
+        text_len(&source)?;
+        projected_scratch.clear();
+        segment_scratch.clear();
+        if policy == WhitespaceCollapse::Preserve || source.is_empty() {
+            return Ok(Self {
+                source,
+                projected: None,
+                segments: Vec::new(),
+            });
+        }
+
+        let mut projected: Option<String> = None;
+        let mut source_start = 0_usize;
+        while source_start < source.len() {
+            let whitespace = is_document_whitespace(source.as_bytes()[source_start]);
+            let mut source_end = source_start + 1;
+            while source_end < source.len()
+                && is_document_whitespace(source.as_bytes()[source_end]) == whitespace
+            {
+                source_end += 1;
+            }
+            let collapses = whitespace
+                && !(source_end - source_start == 1 && source.as_bytes()[source_start] == b' ');
+            if collapses && projected.is_none() {
+                let mut output = mem::take(projected_scratch);
+                output.clear();
+                output.push_str(&source[..source_start]);
+                if source_start != 0 {
+                    let end = u32::try_from(source_start)
+                        .map_err(|_| ProjectionError::new(ProjectionErrorKind::TextTooLong))?;
+                    append_projection_segment(
+                        segment_scratch,
+                        ProjectionSegment {
+                            kind: ProjectionKind::Identity,
+                            source: 0..end,
+                            projected: 0..end,
+                        },
+                    );
+                }
+                projected = Some(output);
+            }
+            if let Some(output) = &mut projected {
+                let projected_start = u32::try_from(output.len())
+                    .map_err(|_| ProjectionError::new(ProjectionErrorKind::TextTooLong))?;
+                if collapses {
+                    output.push(' ');
+                } else {
+                    output.push_str(&source[source_start..source_end]);
+                }
+                let projected_end = u32::try_from(output.len())
+                    .map_err(|_| ProjectionError::new(ProjectionErrorKind::TextTooLong))?;
+                append_projection_segment(
+                    segment_scratch,
+                    ProjectionSegment {
+                        kind: if collapses {
+                            ProjectionKind::Collapsed
+                        } else {
+                            ProjectionKind::Identity
+                        },
+                        source: u32::try_from(source_start)
+                            .map_err(|_| ProjectionError::new(ProjectionErrorKind::TextTooLong))?
+                            ..u32::try_from(source_end).map_err(|_| {
+                                ProjectionError::new(ProjectionErrorKind::TextTooLong)
+                            })?,
+                        projected: projected_start..projected_end,
+                    },
+                );
+            }
+            source_start = source_end;
+        }
+        let materialized = projected.is_some();
+        Ok(Self {
+            source,
+            projected,
+            segments: if materialized {
+                mem::take(segment_scratch)
+            } else {
+                Vec::new()
+            },
+        })
+    }
+
+    pub(crate) fn recycle_into(
+        self,
+        source: &mut String,
+        projected: &mut String,
+        segments: &mut Vec<ProjectionSegment>,
+    ) {
+        *source = self.source;
+        if let Some(recycled) = self.projected {
+            *projected = recycled;
+        }
+        if self.segments.is_empty() {
+            segments.clear();
+        } else {
+            *segments = self.segments;
+        }
     }
 
     /// Returns the immutable authored UTF-8.
@@ -646,20 +751,7 @@ impl ProjectionBuilder {
     }
 
     fn append_segment(&mut self, segment: ProjectionSegment) {
-        if let Some(previous) = self.segments.last_mut()
-            && previous.kind == segment.kind
-            && matches!(
-                segment.kind,
-                ProjectionKind::Identity | ProjectionKind::Inserted | ProjectionKind::Omitted
-            )
-            && previous.source.end == segment.source.start
-            && previous.projected.end == segment.projected.start
-        {
-            previous.source.end = segment.source.end;
-            previous.projected.end = segment.projected.end;
-            return;
-        }
-        self.segments.push(segment);
+        append_projection_segment(&mut self.segments, segment);
     }
 
     fn validate_source_end(&self, source_end: u32) -> Result<(), ProjectionError> {
@@ -700,6 +792,23 @@ impl ProjectionBuilder {
     fn source_len(&self) -> u32 {
         u32::try_from(self.source.len()).expect("validated projection length fits u32")
     }
+}
+
+fn append_projection_segment(segments: &mut Vec<ProjectionSegment>, segment: ProjectionSegment) {
+    if let Some(previous) = segments.last_mut()
+        && previous.kind == segment.kind
+        && matches!(
+            segment.kind,
+            ProjectionKind::Identity | ProjectionKind::Inserted | ProjectionKind::Omitted
+        )
+        && previous.source.end == segment.source.start
+        && previous.projected.end == segment.projected.start
+    {
+        previous.source.end = segment.source.end;
+        previous.projected.end = segment.projected.end;
+        return;
+    }
+    segments.push(segment);
 }
 
 fn text_len(text: &str) -> Result<u32, ProjectionError> {
@@ -760,6 +869,38 @@ mod tests {
             projection.source_range(1..2).expect("space maps back"),
             1..7
         );
+    }
+
+    #[test]
+    fn reusable_whitespace_projection_matches_the_public_constructor() {
+        let cases = [
+            "",
+            "plain text",
+            "one space",
+            "two  spaces",
+            "\tleading and trailing\n",
+            "漢字 \t مرحبا",
+        ];
+        let mut source = String::new();
+        let mut projected = String::with_capacity(128);
+        let mut segments = Vec::with_capacity(16);
+
+        for policy in [WhitespaceCollapse::Preserve, WhitespaceCollapse::Collapse] {
+            for text in cases {
+                let expected = ProjectedText::from_whitespace(text, policy)
+                    .expect("reference whitespace projection is valid");
+                let actual = ProjectedText::from_whitespace_reusing(
+                    text.to_string(),
+                    policy,
+                    &mut projected,
+                    &mut segments,
+                )
+                .expect("reusable whitespace projection is valid");
+                assert_eq!(actual, expected);
+                actual.recycle_into(&mut source, &mut projected, &mut segments);
+                assert_eq!(source, text);
+            }
+        }
     }
 
     #[test]

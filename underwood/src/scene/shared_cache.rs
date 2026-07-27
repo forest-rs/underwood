@@ -57,7 +57,7 @@ impl SharedPreparationCache {
 
     pub(super) fn lookup(
         &mut self,
-        query: &SharedPreparationQuery<'_, '_>,
+        query: &SharedPreparationQuery<'_>,
         current_use: u64,
     ) -> Option<SharedPreparationHit> {
         debug_assert_eq!(
@@ -66,10 +66,11 @@ impl SharedPreparationCache {
             "shared lookup must use the synchronized backend epoch"
         );
         let fingerprint = text_fingerprint(query.projection.mapping.text());
-        let hit = self
-            .buckets
-            .get_mut(&fingerprint)
-            .and_then(|bucket| bucket.iter_mut().find(|entry| entry.key.matches(query)));
+        let hit = self.buckets.get_mut(&fingerprint).and_then(|bucket| {
+            bucket.iter_mut().find(|entry| {
+                entry.key.matches(query) && entry.facts.features().contains(query.features)
+            })
+        });
         match hit {
             Some(entry) => {
                 entry.last_used = current_use;
@@ -88,7 +89,7 @@ impl SharedPreparationCache {
 
     pub(super) fn insert(
         &mut self,
-        query: &SharedPreparationQuery<'_, '_>,
+        query: &SharedPreparationQuery<'_>,
         facts: Arc<PreparedParagraphFacts>,
         region_transcript: Option<&RegionTranscript>,
         current_use: u64,
@@ -208,12 +209,13 @@ impl SharedPreparationCache {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct SharedPreparationQuery<'query, 'source> {
+pub(super) struct SharedPreparationQuery<'query> {
     pub(super) epoch: u64,
-    pub(super) projection: &'query Projection<'source>,
+    pub(super) projection: &'query Projection,
     pub(super) constraint: TextConstraint,
     pub(super) region_flow: Option<&'query RegionFlow>,
     pub(super) region_cursor: Option<RegionCursor>,
+    pub(super) features: SceneFeatures,
 }
 
 #[derive(Clone, Debug)]
@@ -274,18 +276,14 @@ struct SharedPreparationKey {
 }
 
 impl SharedPreparationKey {
-    fn from_query(query: &SharedPreparationQuery<'_, '_>) -> Self {
+    fn from_query(query: &SharedPreparationQuery<'_>) -> Self {
         let projection = query.projection;
         Self {
             epoch: query.epoch,
             text: alloc::string::String::from(projection.mapping.text()),
             analysis_styles: projection.analysis_styles.clone(),
             analysis_runs: projection.analysis_runs.clone(),
-            shaping_styles: projection
-                .shaping_styles
-                .iter()
-                .map(|style| (*style).clone())
-                .collect(),
+            shaping_styles: projection.shaping_styles.clone(),
             shaping_runs: projection.shaping_runs.clone(),
             inline_flow_styles: projection.inline_flow_styles.clone(),
             inline_flow_runs: projection.inline_flow_runs.clone(),
@@ -299,18 +297,13 @@ impl SharedPreparationKey {
         }
     }
 
-    fn matches(&self, query: &SharedPreparationQuery<'_, '_>) -> bool {
+    fn matches(&self, query: &SharedPreparationQuery<'_>) -> bool {
         let projection = query.projection;
         self.epoch == query.epoch
             && self.text == projection.mapping.text()
             && self.analysis_styles == projection.analysis_styles
             && self.analysis_runs == projection.analysis_runs
-            && self.shaping_styles.len() == projection.shaping_styles.len()
-            && self
-                .shaping_styles
-                .iter()
-                .zip(&projection.shaping_styles)
-                .all(|(cached, projected)| cached == *projected)
+            && self.shaping_styles == projection.shaping_styles
             && self.shaping_runs == projection.shaping_runs
             && self.inline_flow_styles == projection.inline_flow_styles
             && self.inline_flow_runs == projection.inline_flow_runs
@@ -414,7 +407,7 @@ struct RegionAttemptTemplate {
     outcome: RegionAttemptOutcome,
 }
 
-fn empty_line_height_key(projection: &Projection<'_>) -> u64 {
+fn empty_line_height_key(projection: &Projection) -> u64 {
     if projection.mapping.text().is_empty() {
         projection.empty_line_height_key()
     } else {

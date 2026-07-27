@@ -211,7 +211,7 @@ impl HostApplication for ShowcaseApp {
                         prepared.trace,
                         prepared.line_count,
                         prepared.axis_weight,
-                        layout.lines_are_clipped(prepared.scene.lines()),
+                        layout.composition_lines_are_clipped(prepared.scene.lines()),
                         ime_cursor.map(|rect| layout.window_rect(rect)),
                         format!("IME {}", composition.epoch().get()),
                     )

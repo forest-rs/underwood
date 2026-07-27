@@ -10,8 +10,9 @@ use underwood::{
     ComputedInlineStyle, Document, DocumentId, DocumentSnapshot, FiniteWidth, FontFeature,
     FontVariation, FontWeight, InlineFlowStyle, InlineRole, Language, LayoutEngine, LineHeight,
     PaintSlot, PaintTable, ParagraphId, ParagraphRole, ParagraphStyle, PreparationTrace,
-    RegionTranscript, SceneRequest, Script, ShapingStyle, SnapshotTextSelectionSet, StyleMap, Tag,
-    TextAlignment, TextConstraint, TextId, TextScene, WhitespaceCollapse, WordBreak, WorkReport,
+    SceneFeatures, SceneRegionTranscript, SceneRequest, Script, ShapingStyle,
+    SnapshotTextSelectionSet, StyleMap, Tag, TextAlignment, TextConstraint, TextId, TextScene,
+    WhitespaceCollapse, WordBreak, WorkReport,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 
@@ -54,7 +55,7 @@ pub(crate) struct PreparedDocumentFrame {
     pub(crate) work: WorkReport,
     pub(crate) trace: PreparationTrace,
     pub(crate) page: LivingPagePlan,
-    pub(crate) region_transcript: RegionTranscript,
+    pub(crate) region_transcript: SceneRegionTranscript,
     pub(crate) line_count: usize,
     pub(crate) axis_weight: f32,
 }
@@ -66,7 +67,7 @@ pub(crate) struct PreparedCompositionFrame {
     pub(crate) work: WorkReport,
     pub(crate) trace: PreparationTrace,
     pub(crate) page: LivingPagePlan,
-    pub(crate) region_transcript: RegionTranscript,
+    pub(crate) region_transcript: SceneRegionTranscript,
     pub(crate) line_count: usize,
     pub(crate) axis_weight: f32,
 }
@@ -326,7 +327,10 @@ impl ShowcaseContent {
 
         Ok(Self {
             document,
-            layout: LayoutEngine::new(paragraphs, CacheBudget::new(4_096)),
+            layout: LayoutEngine::new(
+                paragraphs,
+                CacheBudget::new(4_096).with_adapter_facts_bytes(128 * 1024 * 1024),
+            ),
             paragraphs: Paragraphs {
                 title: title_paragraph,
                 deck: deck_paragraph,
@@ -384,6 +388,7 @@ impl ShowcaseContent {
             &styles,
             &paints,
         )
+        .with_features(SceneFeatures::EDITABLE.with_semantics())
         .with_region_flow(page.flow())
         .with_preparation_trace();
         let output = self.layout.prepare(&self.document.snapshot(), &request)?;
@@ -397,8 +402,7 @@ impl ShowcaseContent {
                 .clone(),
             region_transcript: output
                 .region_transcript()
-                .expect("the living page always prepares through regions")
-                .clone(),
+                .expect("the living page always prepares through regions"),
             page,
             axis_weight,
         })
@@ -420,6 +424,7 @@ impl ShowcaseContent {
             &styles,
             &paints,
         )
+        .with_features(SceneFeatures::EDITABLE.with_semantics())
         .with_region_flow(page.flow())
         .with_preparation_trace();
         let output =
@@ -435,8 +440,7 @@ impl ShowcaseContent {
                 .clone(),
             region_transcript: output
                 .region_transcript()
-                .expect("the living page always prepares through regions")
-                .clone(),
+                .expect("the living page always prepares through regions"),
             page,
             axis_weight,
         })
@@ -796,7 +800,16 @@ mod tests {
         LATIN_FONT_BYTES, ORIGINAL_EDIT_TEXT, ShowcaseContent, TITLE, TextId,
     };
     use crate::page::PageDecorationKind;
-    use underwood::{Brush, ParagraphRole, Point, RegionAttemptOutcome, TextAlignment, TextScene};
+    use underwood::{
+        Brush, ParagraphRole, Point, RegionAttemptOutcome, SceneSourceAccess, TextAlignment,
+        TextScene,
+    };
+
+    fn sources(scene: &TextScene) -> SceneSourceAccess<'_> {
+        scene
+            .sources()
+            .expect("the showcase requests source provenance")
+    }
 
     #[test]
     fn document_exposes_real_heading_and_body_semantics() {
@@ -805,6 +818,8 @@ mod tests {
         let roles: Vec<_> = frame
             .scene
             .semantics()
+            .expect("scene request includes semantics")
+            .iter()
             .filter_map(|semantic| semantic.paragraph_role())
             .collect();
         assert!(roles.contains(&ParagraphRole::HEADING_1));
@@ -816,13 +831,16 @@ mod tests {
     fn showcase_exercises_centering_and_western_justification() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
+        let sources = sources(&frame.scene);
 
         let title = frame
             .scene
             .lines()
             .iter()
             .find(|line| {
-                line.sources()
+                sources
+                    .for_line(*line)
+                    .expect("line belongs to source scene")
                     .iter()
                     .any(|source| source.text() == content.leaves.title)
             })
@@ -843,11 +861,11 @@ mod tests {
     fn living_page_consumes_retry_float_exclusion_and_all_wide_columns() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(900.0, 0.5).expect("document must prepare");
-        let attempts = frame.region_transcript.attempts();
+        let attempts: Vec<_> = frame.region_transcript.attempts().collect();
         let regions: Vec<_> = frame.page.flow().regions().collect();
 
         assert_eq!(
-            attempts.first().map(underwood::RegionAttempt::outcome),
+            attempts.first().map(|attempt| attempt.outcome()),
             Some(RegionAttemptOutcome::HeightRejected)
         );
         let continuation = frame
@@ -913,7 +931,6 @@ mod tests {
             frame
                 .region_transcript
                 .attempts()
-                .iter()
                 .any(|attempt| attempt.slot().region() == continuation)
         );
     }
@@ -922,6 +939,7 @@ mod tests {
     fn collapsed_whitespace_keeps_all_source_bytes_without_forcing_a_line() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(900.0, 0.5).expect("document must prepare");
+        let sources = sources(&frame.scene);
         let text = content.leaves.whitespace_collapsed;
         let authored = content
             .snapshot()
@@ -932,19 +950,26 @@ mod tests {
             .scene
             .lines()
             .iter()
-            .filter(|line| line.sources().iter().any(|source| source.text() == text))
+            .filter(|line| {
+                sources
+                    .for_line(*line)
+                    .expect("line belongs to source scene")
+                    .iter()
+                    .any(|source| source.text() == text)
+            })
             .collect();
 
         assert_eq!(lines.len(), 1, "authored newline must collapse, not break");
-        let sources: Vec<_> = lines[0]
-            .sources()
+        let represented: Vec<_> = sources
+            .for_line(lines[0])
+            .expect("line belongs to source scene")
             .iter()
             .filter(|source| source.text() == text)
-            .map(underwood::SnapshotTextRange::bytes)
+            .map(|source| source.bytes())
             .collect();
-        assert_eq!(sources.len(), 1);
+        assert_eq!(represented.len(), 1);
         assert_eq!(
-            sources[0],
+            represented[0],
             0..u32::try_from(authored.len()).expect("proof text fits in u32")
         );
         assert!(authored.contains("\t \n    "));
@@ -954,6 +979,7 @@ mod tests {
     fn cjk_policy_specimens_use_the_bundled_font_without_notdef() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(900.0, 0.5).expect("document must prepare");
+        let sources = sources(&frame.scene);
 
         for (text, font) in [
             (content.leaves.japanese, CJK_JP_FONT_BYTES),
@@ -965,9 +991,10 @@ mod tests {
                 .fragments()
                 .iter()
                 .filter(|fragment| {
-                    fragment
-                        .source()
-                        .is_some_and(|source| source.text() == text)
+                    sources
+                        .for_fragment(*fragment)
+                        .expect("fragment belongs to source scene")
+                        .any(|source| source.text() == text)
                 })
                 .collect();
             assert!(!fragments.is_empty());
@@ -1008,6 +1035,7 @@ mod tests {
     fn local_edit_reshapes_only_its_paragraph() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let initial = content.prepare(760.0, 0.5).expect("initial must prepare");
+        let initial_sources = sources(&initial.scene);
         let paragraph_count = initial.trace.reuse().paragraphs();
         let editable = [
             content.leaves.editable,
@@ -1019,14 +1047,16 @@ mod tests {
             .fragments()
             .iter()
             .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_none_or(|source| !editable.contains(&source.text()))
+                !initial_sources
+                    .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
+                    .any(|source| editable.contains(&source.text()))
             })
-            .map(underwood::SceneFragment::id)
+            .map(|fragment| fragment.id())
             .collect();
         content.toggle_edit();
         let edited = content.prepare(760.0, 0.5).expect("edit must prepare");
+        let edited_sources = sources(&edited.scene);
         assert_eq!(edited.work.shape().paragraphs(), 1);
         assert_eq!(edited.work.reused_paragraphs(), paragraph_count - 1);
         let edited_sibling_ids: Vec<_> = edited
@@ -1034,11 +1064,12 @@ mod tests {
             .fragments()
             .iter()
             .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_none_or(|source| !editable.contains(&source.text()))
+                !edited_sources
+                    .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
+                    .any(|source| editable.contains(&source.text()))
             })
-            .map(underwood::SceneFragment::id)
+            .map(|fragment| fragment.id())
             .collect();
         assert_eq!(edited_sibling_ids, sibling_ids);
     }
@@ -1064,15 +1095,17 @@ mod tests {
     fn heading_uses_a_real_gradient_brush() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
+        let sources = sources(&frame.scene);
         assert!(matches!(
             frame.scene.paint().brush(TITLE),
             Some(Brush::Gradient(_))
         ));
         let mut title_fragments = 0;
         for fragment in frame.scene.fragments() {
-            if fragment
-                .source()
-                .is_some_and(|source| source.text() == content.leaves.title)
+            if sources
+                .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == content.leaves.title)
             {
                 assert_eq!(fragment.paint(), TITLE);
                 title_fragments += 1;
@@ -1128,14 +1161,16 @@ mod tests {
     fn arabic_specimen_uses_real_rtl_fallback_with_unclipped_mark_glyph() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let frame = content.prepare(760.0, 0.5).expect("document must prepare");
+        let sources = sources(&frame.scene);
         let arabic: Vec<_> = frame
             .scene
             .fragments()
             .iter()
             .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_some_and(|source| source.text() == content.leaves.arabic)
+                sources
+                    .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
+                    .any(|source| source.text() == content.leaves.arabic)
             })
             .collect();
         assert!(!arabic.is_empty());
@@ -1153,7 +1188,13 @@ mod tests {
         }));
         let visual_sources: Vec<_> = arabic
             .iter()
-            .filter_map(|fragment| fragment.source().map(|source| source.bytes()))
+            .flat_map(|fragment| fragment.glyphs())
+            .filter_map(|glyph| {
+                let source = sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")?;
+                (source.text() == content.leaves.arabic).then(|| source.bytes())
+            })
             .collect();
         assert!(
             visual_sources.len() > 1
@@ -1168,17 +1209,18 @@ mod tests {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let initial = content.prepare(760.0, 0.5).expect("document must prepare");
         let point = point_in_text(&initial.scene, content.leaves.arabic);
-        let position = *initial
+        let editing = initial
             .scene
+            .editing()
+            .expect("showcase scene retains editable data");
+        let position = *editing
             .hit_test_closest(point)
             .expect("Arabic glyph must expose a caret")
             .position();
-        let caret = initial
-            .scene
+        let caret = editing
             .collapsed_selection(&position)
             .expect("Arabic caret must validate");
-        let selections = initial
-            .scene
+        let selections = editing
             .selection_set([caret])
             .expect("Arabic selection must validate");
         content
@@ -1187,23 +1229,27 @@ mod tests {
         let mixed = content
             .prepare(760.0, 0.5)
             .expect("the Arabic-styled leaf must accept inserted Latin");
+        let sources = sources(&mixed.scene);
         assert!(mixed.scene.fragments().iter().any(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == content.leaves.arabic)
+            sources
+                .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == content.leaves.arabic)
                 && fragment.script() == *b"Latn"
                 && fragment.font().data.as_ref() == LATIN_FONT_BYTES
         }));
     }
 
     fn title_fragment_coords(scene: &TextScene, title: TextId) -> Vec<i16> {
+        let sources = sources(scene);
         scene
             .fragments()
             .iter()
             .find(|fragment| {
-                fragment
-                    .source()
-                    .is_some_and(|source| source.text() == title)
+                sources
+                    .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
+                    .any(|source| source.text() == title)
             })
             .expect("title must produce a fragment")
             .normalized_coords()
@@ -1211,24 +1257,29 @@ mod tests {
     }
 
     fn glyph_count(scene: &TextScene, text: TextId) -> usize {
+        let sources = sources(scene);
         scene
             .fragments()
             .iter()
-            .filter(|fragment| {
-                fragment
-                    .source()
-                    .is_some_and(|source| source.text() == text)
+            .flat_map(|fragment| fragment.glyphs())
+            .filter(|glyph| {
+                sources
+                    .for_glyph(*glyph)
+                    .expect("glyph belongs to source scene")
+                    .any(|source| source.text() == text)
             })
-            .map(|fragment| fragment.glyphs().len())
-            .sum()
+            .count()
     }
 
     fn line_count_for_any(scene: &TextScene, texts: &[TextId]) -> usize {
+        let sources = sources(scene);
         scene
             .lines()
             .iter()
             .filter(|line| {
-                line.sources()
+                sources
+                    .for_line(*line)
+                    .expect("line belongs to source scene")
                     .iter()
                     .any(|source| texts.contains(&source.text()))
             })
@@ -1238,6 +1289,8 @@ mod tests {
     fn point_in_text(scene: &TextScene, text: TextId) -> Point {
         let semantic = scene
             .semantics()
+            .expect("scene request includes semantics")
+            .iter()
             .find(|semantic| {
                 semantic
                     .source()
@@ -1249,6 +1302,9 @@ mod tests {
             .expect("the requested semantic node must be authored text")
             .bytes();
         let bounds = semantic.bounds();
+        let interaction = scene
+            .interaction()
+            .expect("showcase scene retains hit-testing data");
         for line in scene.lines() {
             if line.bounds().y1 <= bounds.y0 || line.bounds().y0 >= bounds.y1 {
                 continue;
@@ -1257,7 +1313,7 @@ mod tests {
             let mut x = bounds.x0;
             while x <= bounds.x1 {
                 let point = Point::new(x, y);
-                if scene.hit_test(point).is_some_and(|hit| {
+                if interaction.hit_test(point).is_some_and(|hit| {
                     hit.position().text() == text
                         && hit.position().byte() > source.start
                         && hit.position().byte() < source.end

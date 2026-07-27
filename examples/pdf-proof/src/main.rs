@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use underwood::{
     Brush, CacheBudget, Color, ComputedInlineStyle, Document, DocumentId, DocumentSnapshot,
     FiniteWidth, FontFeature, GenericFamily, InlineFlowStyle, InlineRole, Language, LayoutEngine,
-    LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneRequest, Script, ShapingStyle, StyleMap,
-    Tag, TextAlignment, TextConstraint, TextScene,
+    LineHeight, PaintSlot, PaintTable, ParagraphRole, SceneFeatures, SceneRequest, Script,
+    ShapingStyle, StyleMap, Tag, TextAlignment, TextConstraint, TextScene,
 };
 use underwood_parley::{Font, FontSet, ParleyParagraphEngine};
 use underwood_pdf::{PdfPage, to_pdf};
@@ -208,9 +208,13 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         TextConstraint::Wrap(FiniteWidth::new(576.0)?),
         &styles,
         &paints,
-    );
+    )
+    .with_features(SceneFeatures::DISPLAY.with_sources());
     let output = layout.prepare(&snapshot, &request)?;
     let scene = output.scene().clone();
+    let sources = scene
+        .sources()
+        .expect("the PDF proof requests source provenance");
 
     assert!(
         scene
@@ -221,10 +225,13 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     );
     assert!(
         scene.fragments().iter().any(|fragment| {
-            fragment
-                .glyphs()
-                .iter()
-                .any(|glyph| glyph.sources().count() > 1)
+            fragment.glyphs().iter().any(|glyph| {
+                sources
+                    .for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .count()
+                    > 1
+            })
         }),
         "the decomposed accent must retain cross-leaf glyph provenance"
     );
@@ -233,10 +240,13 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter(|glyph| {
-            glyph.sources().any(|source| {
-                let bytes = source.bytes();
-                source.text() == ligature_text && bytes.start < 6 && bytes.end > 0
-            })
+            sources
+                .for_glyph(*glyph)
+                .expect("glyph belongs to source scene")
+                .any(|source| {
+                    let bytes = source.bytes();
+                    source.text() == ligature_text && bytes.start < 6 && bytes.end > 0
+                })
         })
         .count();
     assert_eq!(

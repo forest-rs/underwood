@@ -14,6 +14,24 @@ use underwood::{
 use crate::content::{ActionVisual, ShowcaseContent};
 use crate::presentation::{EditorOverlay, SelectionOverlay};
 
+fn editing(scene: &TextScene) -> underwood::SceneEditing<'_> {
+    scene
+        .editing()
+        .expect("the showcase requests editable scene data")
+}
+
+fn interaction(scene: &TextScene) -> underwood::SceneInteraction<'_> {
+    scene
+        .interaction()
+        .expect("the showcase requests hit-testing data")
+}
+
+fn projected_editing(scene: &CompositionScene) -> underwood::ProjectedSceneEditing<'_> {
+    scene
+        .editing()
+        .expect("the showcase requests native composition data")
+}
+
 /// Example-owned action associated with one semantic document node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ShowcaseAction {
@@ -67,12 +85,14 @@ impl ActionRegistry {
         for (text, action) in bindings {
             let semantic = scene
                 .semantics()
+                .expect("scene request includes semantics")
+                .iter()
                 .find(|semantic| {
                     semantic
                         .source()
                         .is_some_and(|source| source.text() == text)
                 })
-                .map(underwood::SemanticFragment::semantic_id)
+                .map(|semantic| semantic.semantic_id())
                 .ok_or_else(|| String::from("action text is absent from the prepared scene"))?;
             if entries
                 .iter()
@@ -369,7 +389,7 @@ fn exact_action(
     point: Point,
 ) -> Option<ActionHit> {
     let scene = scene?;
-    let hit = scene.hit_test(point)?;
+    let hit = interaction(scene).hit_test(point)?;
     registry
         .action(scene.revision(), hit.semantic_id())
         .map(|action| ActionHit {
@@ -387,7 +407,7 @@ fn pointer_affordance(
     let Some(scene) = scene else {
         return PointerAffordance::Arrow;
     };
-    let Some(hit) = scene.hit_test(point) else {
+    let Some(hit) = interaction(scene).hit_test(point) else {
         return PointerAffordance::Arrow;
     };
     if registry
@@ -545,11 +565,12 @@ impl EditorState {
         else {
             return EditorOverlay::default();
         };
-        let selection_geometry = scene.selection_geometry(selections).unwrap_or_default();
+        let editing = editing(scene);
+        let selection_geometry = editing.selection_geometry(selections).unwrap_or_default();
         let carets = selections
             .selections()
             .iter()
-            .filter_map(|selection| scene.caret(selection.extent()))
+            .filter_map(|selection| editing.caret(selection.extent()))
             .map(|caret| caret.bounds())
             .collect();
         EditorOverlay {
@@ -576,13 +597,14 @@ impl EditorState {
         let Some(composition) = self.composition.as_ref() else {
             return EditorOverlay::default();
         };
-        let marked_text = scene
+        let editing = projected_editing(scene);
+        let marked_text = editing
             .composition_geometry(composition)
             .unwrap_or_default()
             .into_iter()
             .map(|rect| rect.bounds())
             .collect();
-        let preedit_selection = scene
+        let preedit_selection = editing
             .composition_selection_geometry(composition)
             .unwrap_or_default()
             .into_iter()
@@ -612,7 +634,9 @@ impl EditorState {
         }
         let scene = committed?;
         let primary = self.selections.as_ref()?.primary()?;
-        scene.caret(primary.extent()).map(|caret| caret.bounds())
+        editing(scene)
+            .caret(primary.extent())
+            .map(|caret| caret.bounds())
     }
 
     fn pointer_pressed(
@@ -622,7 +646,10 @@ impl EditorState {
         modifiers: InputModifiers,
     ) -> Result<(), String> {
         self.cancel_composition();
-        let hit = scene
+        let editing = scene
+            .editing()
+            .map_err(|error| format!("scene is not editable: {error}"))?;
+        let hit = editing
             .hit_test_closest(point)
             .ok_or_else(|| String::from("no selectable text at pointer"))?;
         let position = *hit.position();
@@ -635,8 +662,8 @@ impl EditorState {
             let anchor = siblings
                 .first()
                 .map_or(position, |selection| *selection.anchor());
-            let selection = scene
-                .selection(&anchor, &position, TextSelectionMode::Visual)
+            let selection = editing
+                .selection_between(&anchor, &position, TextSelectionMode::Visual)
                 .map_err(|error| format!("visual extension rejected: {error}"))?;
             if siblings.is_empty() {
                 siblings.push(selection.clone());
@@ -645,7 +672,7 @@ impl EditorState {
             }
             selection
         } else {
-            scene
+            editing
                 .collapsed_selection(&position)
                 .map_err(|error| format!("caret placement rejected: {error}"))?
         };
@@ -659,7 +686,7 @@ impl EditorState {
             }
         }
         self.selections = Some(
-            scene
+            editing
                 .selection_set(siblings)
                 .map_err(|error| format!("independent caret rejected: {error}"))?,
         );
@@ -676,11 +703,14 @@ impl EditorState {
         anchor: SnapshotTextPosition,
     ) -> Result<(), String> {
         self.cancel_composition();
-        let selection = scene
+        let editing = scene
+            .editing()
+            .map_err(|error| format!("scene is not editable: {error}"))?;
+        let selection = editing
             .collapsed_selection(&anchor)
             .map_err(|error| format!("action drag anchor rejected: {error}"))?;
         self.selections = Some(
-            scene
+            editing
                 .selection_set([selection])
                 .map_err(|error| format!("action drag selection rejected: {error}"))?,
         );
@@ -708,11 +738,14 @@ impl EditorState {
         point: Point,
         anchor: SnapshotTextPosition,
     ) -> Result<(), String> {
-        let hit = scene
+        let editing = scene
+            .editing()
+            .map_err(|error| format!("scene is not editable: {error}"))?;
+        let hit = editing
             .hit_test_closest(point)
             .ok_or_else(|| String::from("drag left selectable text"))?;
-        let primary = scene
-            .selection(&anchor, hit.position(), TextSelectionMode::Visual)
+        let primary = editing
+            .selection_between(&anchor, hit.position(), TextSelectionMode::Visual)
             .map_err(|error| format!("visual drag rejected: {error}"))?;
         let mut selections = self
             .current_selections(scene)
@@ -724,7 +757,7 @@ impl EditorState {
             selections[0] = primary;
         }
         self.selections = Some(
-            scene
+            editing
                 .selection_set(selections)
                 .map_err(|error| format!("visual drag overlaps another caret: {error}"))?,
         );
@@ -753,7 +786,7 @@ impl EditorState {
                     .current_selections(scene)
                     .ok_or_else(|| String::from("click text before moving the caret"))?;
                 self.selections = Some(
-                    scene
+                    editing(scene)
                         .move_selections(selections, movement, extend)
                         .map_err(|error| format!("caret movement rejected: {error}"))?,
                 );
@@ -804,12 +837,13 @@ impl EditorState {
             .current_selections(scene)
             .ok_or_else(|| String::from("click text before deleting"))?;
         let mut deletion = Vec::with_capacity(selections.selections().len());
+        let editing = editing(scene);
         for selection in selections.selections() {
             if selection.is_collapsed() {
-                let single = scene
+                let single = editing
                     .selection_set([selection.clone()])
                     .map_err(|error| format!("deletion source rejected: {error}"))?;
-                let extended = scene
+                let extended = editing
                     .move_selections(&single, movement, true)
                     .map_err(|error| format!("logical deletion movement rejected: {error}"))?;
                 deletion.extend_from_slice(extended.selections());
@@ -817,7 +851,7 @@ impl EditorState {
                 deletion.push(selection.clone());
             }
         }
-        let deletion = scene
+        let deletion = editing
             .selection_set(deletion)
             .map_err(|error| format!("combined deletion rejected: {error}"))?;
         let applied = content
@@ -907,7 +941,7 @@ impl EditorState {
             .clone();
         let id = CompositionId::from_bytes(self.next_composition.to_be_bytes());
         self.next_composition = self.next_composition.wrapping_add(1).max(1);
-        let start = scene
+        let start = editing(scene)
             .begin_composition(&selections, id)
             .map_err(|error| format!("composition start rejected: {error}"))?;
         let normalized = start.selections().clone();
@@ -1118,6 +1152,8 @@ mod tests {
                 position.byte() == 0
                     && initial
                         .scene
+                        .interaction()
+                        .expect("showcase scene retains hit-testing data")
                         .hit_test(*point)
                         .is_some_and(|hit| hit.bidi_level() & 1 == 0)
             })
@@ -1128,6 +1164,8 @@ mod tests {
             .find(|(point, position)| {
                 if initial
                     .scene
+                    .interaction()
+                    .expect("showcase scene retains hit-testing data")
                     .hit_test(*point)
                     .is_none_or(|hit| hit.bidi_level() & 1 != 1)
                 {
@@ -1135,13 +1173,27 @@ mod tests {
                 }
                 initial
                     .scene
-                    .selection(
+                    .editing()
+                    .expect("showcase scene retains editable data")
+                    .selection_between(
                         position,
                         &start_position,
                         underwood::TextSelectionMode::Visual,
                     )
-                    .and_then(|selection| initial.scene.selection_set([selection]))
-                    .and_then(|selections| initial.scene.selection_geometry(&selections))
+                    .and_then(|selection| {
+                        initial
+                            .scene
+                            .editing()
+                            .expect("showcase scene retains editable data")
+                            .selection_set([selection])
+                    })
+                    .and_then(|selections| {
+                        initial
+                            .scene
+                            .editing()
+                            .expect("showcase scene retains editable data")
+                            .selection_geometry(&selections)
+                    })
                     .is_ok_and(|geometry| geometry.iter().any(|rect| rect.bidi_level() & 1 == 1))
             })
             .map(|(point, _)| *point)
@@ -1181,6 +1233,8 @@ mod tests {
             .expect("dragging from a link must become a text selection");
         let geometry = initial
             .scene
+            .editing()
+            .expect("showcase scene retains editable data")
             .selection_geometry(selections)
             .expect("selection geometry must resolve");
         assert!(
@@ -1550,11 +1604,16 @@ mod tests {
         let prepared = content
             .prepare(760.0, 0.5)
             .expect("committed Han text must resolve through the bundled font catalog");
+        let sources = prepared
+            .scene
+            .sources()
+            .expect("the showcase requests source provenance");
         assert_ne!(prepared.scene.revision(), revision);
         assert!(prepared.scene.fragments().iter().any(|fragment| {
-            fragment
-                .source()
-                .is_some_and(|source| source.text() == content.editable_text())
+            sources
+                .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| source.text() == content.editable_text())
                 && fragment.script() == *b"Hani"
         }));
         assert!(editor.status().contains("committed once"));
@@ -1605,13 +1664,16 @@ mod tests {
         scene: &underwood::TextScene,
         text: underwood::TextId,
     ) -> Vec<(usize, u8, Point)> {
+        let interaction = scene
+            .interaction()
+            .expect("showcase scene retains hit-testing data");
         let mut hits = Vec::new();
         for (line_index, line) in scene.lines().iter().enumerate() {
             let y = line.bounds().center().y;
             let mut x = line.bounds().x0;
             while x <= line.bounds().x1 {
                 let point = Point::new(x, y);
-                if let Some(hit) = scene.hit_test(point)
+                if let Some(hit) = interaction.hit_test(point)
                     && hit.position().text() == text
                     && !hits.iter().any(|(existing_line, level, _)| {
                         *existing_line == line_index && *level == hit.bidi_level()
@@ -1633,7 +1695,9 @@ mod tests {
         for (first_point, first_position) in &candidates {
             for (second_point, second_position) in &candidates {
                 if scene
-                    .selection(
+                    .editing()
+                    .expect("showcase scene retains editable data")
+                    .selection_between(
                         first_position,
                         second_position,
                         underwood::TextSelectionMode::Visual,
@@ -1652,6 +1716,9 @@ mod tests {
         base: underwood::TextId,
         mark: underwood::TextId,
     ) -> (Point, Point) {
+        let interaction = scene
+            .interaction()
+            .expect("showcase scene retains hit-testing data");
         let mut leading = None;
         let mut trailing = None;
         for line in scene.lines() {
@@ -1659,11 +1726,15 @@ mod tests {
             let mut x = bounds.x0;
             while x <= bounds.x1 {
                 let point = Point::new(x, bounds.center().y);
-                if let Some(hit) = scene.hit_test(point)
-                    && hit.source().sources().len() == 2
-                    && hit.source().sources()[0].text() == base
-                    && hit.source().sources()[1].text() == mark
-                {
+                if let Some(hit) = interaction.hit_test(point) {
+                    let sources = hit.source().sources();
+                    if sources.len() != 2
+                        || sources.get(0).is_none_or(|source| source.text() != base)
+                        || sources.get(1).is_none_or(|source| source.text() != mark)
+                    {
+                        x += 0.25;
+                        continue;
+                    }
                     if hit.position().text() == base {
                         leading = Some(point);
                     } else if hit.position().text() == mark && hit.position().byte() == 2 {
@@ -1695,9 +1766,14 @@ mod tests {
         scene: &underwood::TextScene,
         text: underwood::TextId,
     ) -> Vec<(Point, underwood::SnapshotTextPosition)> {
+        let interaction = scene
+            .interaction()
+            .expect("showcase scene retains hit-testing data");
         let mut points = Vec::new();
         let semantic = scene
             .semantics()
+            .expect("scene request includes semantics")
+            .iter()
             .find(|semantic| {
                 semantic
                     .source()
@@ -1716,7 +1792,7 @@ mod tests {
             let end = line.x1.min(bounds.x1);
             while x <= end {
                 let point = Point::new(x, y);
-                if let Some(hit) = scene.hit_test(point)
+                if let Some(hit) = interaction.hit_test(point)
                     && hit.semantic_id() == semantic_id
                 {
                     let position = *hit.position();
@@ -1728,7 +1804,7 @@ mod tests {
             }
             if let Some(point) = points.last().map(|(point, _)| *point) {
                 let point = Point::new((point.x + 0.25).min(end), y);
-                let Some(position) = scene
+                let Some(position) = interaction
                     .hit_test_closest(point)
                     .filter(|hit| hit.semantic_id() == semantic_id)
                     .map(|hit| *hit.position())

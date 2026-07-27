@@ -25,7 +25,7 @@ use underwood::{
 };
 
 use crate::font::FontSet;
-use crate::line_break::LineShapeOutput;
+use crate::line_break::LineShapeWork;
 
 #[cfg(test)]
 pub(crate) fn analyze_text(
@@ -33,10 +33,13 @@ pub(crate) fn analyze_text(
     text: &str,
     base_direction: BaseDirection,
 ) -> Analysis {
-    analyze_text_with_styles(analyzer, text, base_direction, &[], &[])
-        .expect("empty analysis-style runs are valid")
+    let mut analysis = Analysis::new();
+    analyze_text_with_styles_into(analyzer, text, base_direction, &[], &[], &mut analysis)
+        .expect("empty analysis-style runs are valid");
+    analysis
 }
 
+#[cfg(test)]
 pub(crate) fn analyze_text_with_styles(
     analyzer: &mut Analyzer,
     text: &str,
@@ -44,6 +47,19 @@ pub(crate) fn analyze_text_with_styles(
     styles: &[AnalysisStyle],
     runs: &[AnalysisRun],
 ) -> Result<Analysis, PreparationError> {
+    let mut analysis = Analysis::new();
+    analyze_text_with_styles_into(analyzer, text, base_direction, styles, runs, &mut analysis)?;
+    Ok(analysis)
+}
+
+pub(crate) fn analyze_text_with_styles_into(
+    analyzer: &mut Analyzer,
+    text: &str,
+    base_direction: BaseDirection,
+    styles: &[AnalysisStyle],
+    runs: &[AnalysisRun],
+    analysis: &mut Analysis,
+) -> Result<(), PreparationError> {
     let mut word_break: Vec<(Range<usize>, WordBreak)> = Vec::new();
     for run in runs {
         let style = styles
@@ -63,7 +79,6 @@ pub(crate) fn analyze_text_with_styles(
             word_break.push((range, style.word_break()));
         }
     }
-    let mut analysis = Analysis::new();
     analyzer.analyze(
         text,
         &AnalysisOptions {
@@ -71,9 +86,9 @@ pub(crate) fn analyze_text_with_styles(
             word_break: &word_break,
             ..AnalysisOptions::default()
         },
-        &mut analysis,
+        analysis,
     );
-    Ok(analysis)
+    Ok(())
 }
 
 pub(crate) fn shape_paragraph(
@@ -166,9 +181,11 @@ pub(crate) fn shape_line(
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_indices: &[u16],
     source: Range<usize>,
-) -> Result<LineShapeOutput, PreparationError> {
-    let mut shaped_text = ShapedText::new();
-    let mut scripts = Vec::new();
+    shaped_text: &mut ShapedText,
+    scripts: &mut Vec<[u8; 4]>,
+) -> Result<LineShapeWork, PreparationError> {
+    shaped_text.clear();
+    scripts.clear();
     let selected_clusters = shape_range(
         shaper,
         analysis,
@@ -179,13 +196,11 @@ pub(crate) fn shape_line(
         inline_flow_styles,
         inline_flow_indices,
         source,
-        &mut shaped_text,
-        &mut scripts,
-    )?;
-    let shaped_glyphs = shaped_glyph_count(&shaped_text);
-    Ok(LineShapeOutput {
         shaped_text,
         scripts,
+    )?;
+    let shaped_glyphs = shaped_glyph_count(shaped_text);
+    Ok(LineShapeWork {
         resolved_clusters: selected_clusters,
         shaped_glyphs,
     })
@@ -434,14 +449,13 @@ pub(crate) fn split_item_after(range: &TextRange, style_indices: &[u16]) -> bool
         || range.byte_range.len() > usize::from(u16::MAX)
 }
 
-fn query_families<'a>(names: &'a [FontFamilyName<'static>]) -> Vec<QueryFamily<'a>> {
-    names
-        .iter()
-        .map(|name| match name {
-            FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
-            FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
-        })
-        .collect()
+fn query_families<'a>(
+    names: &'a [FontFamilyName<'static>],
+) -> impl Iterator<Item = QueryFamily<'a>> {
+    names.iter().map(|name| match name {
+        FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
+        FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
+    })
 }
 
 fn select_font(

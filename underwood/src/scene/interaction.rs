@@ -16,21 +16,16 @@ pub struct CompositionScene {
     pub(super) revision: DocumentRevision,
     pub(super) composition: CompositionId,
     pub(super) epoch: crate::CompositionEpoch,
-    pub(super) metrics: TextMetrics,
-    pub(super) lines: Vec<SceneLine<ProjectedTextRange>>,
-    pub(super) fragments: Vec<SceneFragment<ProjectedTextRange>>,
-    pub(super) clusters: Vec<SceneCluster<ProjectedTextRange, ProjectedTextPosition>>,
-    pub(super) carets: Vec<SceneCaretStop<ProjectedTextPosition>>,
-    pub(super) movements: Vec<SceneCursorMovement<ProjectedTextRange, ProjectedTextPosition>>,
     pub(super) paint: PaintTable,
-    pub(super) semantics: Vec<SemanticFragment>,
+    pub(super) requested: SceneFeaturePolicy,
+    pub(super) core: Arc<SceneCore>,
 }
 
 impl CompositionScene {
     /// Returns exact intrinsic metrics for this projected scene.
     #[must_use]
-    pub const fn metrics(&self) -> TextMetrics {
-        self.metrics
+    pub fn metrics(&self) -> TextMetrics {
+        self.core.metrics
     }
 
     /// Returns the immutable document identity below the transient projection.
@@ -57,16 +52,107 @@ impl CompositionScene {
         self.epoch
     }
 
+    /// Returns the effective capability policy represented by this projection.
+    #[must_use]
+    pub const fn requested_features(&self) -> &SceneFeaturePolicy {
+        &self.requested
+    }
+
+    /// Returns the capability policy physically resident in this projection.
+    #[must_use]
+    pub fn resident_features(&self) -> &SceneFeaturePolicy {
+        &self.core.resident
+    }
+
+    /// Returns aggregate deterministic prepared-scene residency.
+    #[must_use]
+    pub fn residency(&self) -> SceneResidency {
+        SceneResidency::from_spine(&self.core.spine)
+    }
+
+    /// Iterates requested capabilities, resident capabilities, and byte
+    /// charges for every paragraph segment.
+    #[must_use]
+    pub fn paragraph_residencies(&self) -> SceneParagraphResidencies<'_> {
+        SceneParagraphResidencies::new(&self.requested, &self.core.spine)
+    }
+
+    /// Returns unconditional renderer-facing display access.
+    #[must_use]
+    pub const fn display(&self) -> ProjectedSceneDisplay<'_> {
+        ProjectedSceneDisplay::new(self)
+    }
+
+    /// Returns source-aware traversal when every paragraph retained provenance.
+    pub fn sources(&self) -> Result<ProjectedSceneSourceAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_sources(),
+        )?;
+        Ok(ProjectedSceneSourceAccess::new(self))
+    }
+
+    /// Returns exact point interaction over paragraphs that retained it.
+    pub fn interaction(&self) -> Result<ProjectedSceneInteraction<'_>, MissingSceneCapability> {
+        require_any_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_hit_testing(),
+        )?;
+        Ok(ProjectedSceneInteraction::new(self))
+    }
+
+    /// Returns complete native composition interaction and geometry access.
+    pub fn editing(&self) -> Result<ProjectedSceneEditing<'_>, MissingSceneCapability> {
+        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        Ok(ProjectedSceneEditing::new(self))
+    }
+
+    /// Returns semantic structure when every represented paragraph retained it.
+    pub fn semantics(&self) -> Result<ProjectedSceneSemanticAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_semantics(),
+        )?;
+        Ok(ProjectedSceneSemanticAccess::new(self))
+    }
+
     /// Returns visual lines in flow order.
     #[must_use]
-    pub fn lines(&self) -> &[SceneLine<ProjectedTextRange>] {
-        &self.lines
+    pub fn lines(&self) -> ProjectedSceneLines<'_> {
+        ProjectedSceneLines::new(self.revision, &self.core)
+    }
+
+    /// Returns one visual line by its global flow-order index.
+    #[must_use]
+    pub fn line(&self, index: usize) -> Option<ProjectedSceneLineView<'_>> {
+        self.lines().get(index)
+    }
+
+    /// Returns the number of visual lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.core.spine.summary().lines
     }
 
     /// Returns paint-homogeneous projected glyph fragments.
     #[must_use]
-    pub fn fragments(&self) -> &[SceneFragment<ProjectedTextRange>] {
-        &self.fragments
+    pub fn fragments(&self) -> ProjectedSceneFragments<'_> {
+        ProjectedSceneFragments::new(self.revision, &self.core)
+    }
+
+    /// Returns one projected glyph fragment by its global visual index.
+    #[must_use]
+    pub fn fragment(&self, index: usize) -> Option<ProjectedSceneFragmentView<'_>> {
+        self.fragments().get(index)
+    }
+
+    /// Returns the number of projected paint fragments.
+    #[must_use]
+    pub fn fragment_count(&self) -> usize {
+        self.core.spine.summary().fragments
     }
 
     /// Returns immutable paint values referenced by fragment slots.
@@ -76,82 +162,84 @@ impl CompositionScene {
     }
 
     /// Iterates semantic fragments in document order.
-    pub fn semantics(&self) -> impl Iterator<Item = &SemanticFragment> {
-        self.semantics.iter()
+    pub(crate) fn semantic_records(&self) -> SceneSemantics<'_> {
+        SceneSemantics::new(self.revision, &self.core.spine)
     }
 
     /// Returns the exact projected interaction unit under a point.
     #[must_use]
-    pub fn hit_test(
+    pub(crate) fn hit_test(
         &self,
         point: Point,
-    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
-        self.clusters
-            .iter()
-            .find(|cluster| cluster.bounds.contains(point))
-            .map(|cluster| cluster.hit(point))
+    ) -> Option<TextHit<ProjectedTextUnitView<'_>, ProjectedTextPosition>> {
+        let (positioned, cluster) =
+            positioned_hit_cluster(&self.core.spine, point, HitMode::Exact)?;
+        Some(cached_projected_hit(
+            cluster,
+            positioned,
+            self.revision,
+            point,
+        ))
     }
 
     /// Returns the closest projected interaction-unit side for native point queries.
     #[must_use]
-    pub fn hit_test_closest(
+    pub(crate) fn hit_test_closest(
         &self,
         point: Point,
-    ) -> Option<TextHit<ProjectedTextRange, ProjectedTextPosition>> {
-        let mut closest: Option<(
-            &SceneCluster<ProjectedTextRange, ProjectedTextPosition>,
-            f64,
-            f64,
-        )> = None;
-        for cluster in &self.clusters {
-            let (block_distance, inline_distance) = distance_to_rect_axes(point, cluster.bounds);
-            if closest.is_none_or(|(_, current_block, current_inline)| {
-                block_distance < current_block
-                    || (block_distance == current_block && inline_distance < current_inline)
-            }) {
-                closest = Some((cluster, block_distance, inline_distance));
-            }
-        }
-        closest.map(|(cluster, _, _)| cluster.hit(point))
+    ) -> Option<TextHit<ProjectedTextUnitView<'_>, ProjectedTextPosition>> {
+        let (positioned, cluster) =
+            positioned_hit_cluster(&self.core.spine, point, HitMode::Closest)?;
+        Some(cached_projected_hit(
+            cluster,
+            positioned,
+            self.revision,
+            point,
+        ))
     }
 
     /// Resolves exact scene geometry for one projected caret position.
     #[must_use]
-    pub fn caret(
+    pub(crate) fn caret(
         &self,
         position: &ProjectedTextPosition,
     ) -> Option<SceneCaret<ProjectedTextPosition>> {
-        self.carets
-            .iter()
-            .find(|caret| caret.position == *position)
-            .map(|caret| SceneCaret {
-                position: caret.position,
-                bounds: caret.bounds,
-            })
+        let (positioned, source_map, source) =
+            positioned_projected_source(&self.core.spine, self.revision, position)?;
+        let movement = cursor_movement_at(&positioned.segment.geometry, source)?;
+        let bounds = positioned.segment.geometry.caret_bounds(movement)?;
+        Some(SceneCaret {
+            position: projected_position(source_map, source, self.revision),
+            bounds: bounds + Vec2::new(0.0, positioned.position.block_origin),
+        })
     }
 
     /// Moves one position through the adapter-produced interaction map.
     #[must_use]
-    pub fn move_position(
+    pub(crate) fn move_position(
         &self,
         position: &ProjectedTextPosition,
         movement: TextMovement,
     ) -> Option<ProjectedTextPosition> {
-        let record = self
-            .movements
-            .iter()
-            .find(|record| record.position == *position)?;
+        let (positioned, source_map, source) =
+            positioned_projected_source(&self.core.spine, self.revision, position)?;
+        let record = cursor_movement_at(&positioned.segment.geometry, source)?;
         let step = match movement {
-            TextMovement::PreviousVisual => record.previous_visual.as_ref(),
-            TextMovement::NextVisual => record.next_visual.as_ref(),
-            TextMovement::PreviousLogical => record.previous_logical.as_ref(),
-            TextMovement::NextLogical => record.next_logical.as_ref(),
+            TextMovement::PreviousVisual => record.previous_visual(),
+            TextMovement::NextVisual => record.next_visual(),
+            TextMovement::PreviousLogical => record.previous_logical(),
+            TextMovement::NextLogical => record.next_logical(),
         }?;
-        Some(step.target)
+        let target = step.target;
+        Some(projected_position(
+            source_map,
+            SourcePosition::new(target.offset(), target.affinity()),
+            self.revision,
+        ))
     }
 
     /// Resolves highlight rectangles for the selected range inside preedit.
-    pub fn composition_selection_geometry(
+    pub(crate) fn composition_selection_geometry(
         &self,
         session: &CompositionSession,
     ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
@@ -167,7 +255,7 @@ impl CompositionScene {
     /// This is the renderer-neutral marked-text geometry. Native hosts can use
     /// it for underlines or backgrounds without approximating the preedit from
     /// glyph ink. The supplied session must name this exact composition epoch.
-    pub fn composition_geometry(
+    pub(crate) fn composition_geometry(
         &self,
         session: &CompositionSession,
     ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
@@ -193,26 +281,31 @@ impl CompositionScene {
 
     fn composition_range_geometry(&self, bytes: Range<u32>) -> Vec<SceneCompositionRect> {
         let mut geometry: Vec<SceneCompositionRect> = Vec::new();
-        for cluster in &self.clusters {
-            if !cluster.source.sources().iter().any(|source| {
-                matches!(source, ProjectedTextSource::Composition(source_range)
-                    if source_range.id() == self.composition
-                        && source_range.epoch() == self.epoch
-                        && source_range.bytes().start < bytes.end
-                        && bytes.start < source_range.bytes().end)
+        for (positioned, cluster) in self.positioned_clusters() {
+            let Some(source_map) = positioned.segment.geometry.source_map.as_ref() else {
+                continue;
+            };
+            if !source_map.ranges_for_span(cluster.source).any(|source| {
+                matches!(source, LocalRange::Composition { id, epoch, bytes: source }
+                    if id == self.composition
+                        && epoch == self.epoch
+                        && source.start < bytes.end
+                        && bytes.start < source.end)
             }) {
                 continue;
             }
+            let line = positioned.position.line_base + cluster.line;
+            let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
             if let Some(previous) = geometry.last_mut()
-                && previous.line == cluster.line
+                && previous.line == line
                 && previous.bidi_level == cluster.bidi_level
-                && nearly_equal(previous.bounds.x1, cluster.bounds.x0)
+                && nearly_equal(previous.bounds.x1, bounds.x0)
             {
-                previous.bounds.x1 = cluster.bounds.x1;
+                previous.bounds.x1 = bounds.x1;
             } else {
                 geometry.push(SceneCompositionRect {
-                    line: cluster.line,
-                    bounds: cluster.bounds,
+                    line,
+                    bounds,
                     bidi_level: cluster.bidi_level,
                 });
             }
@@ -221,11 +314,38 @@ impl CompositionScene {
     }
 
     pub(crate) fn range_geometry(&self, range: &ProjectedTextRange) -> Vec<(usize, Rect)> {
-        self.clusters
-            .iter()
-            .filter(|cluster| projected_ranges_overlap(&cluster.source, range))
-            .map(|cluster| (cluster.line, cluster.bounds))
+        self.positioned_clusters()
+            .filter(|(positioned, cluster)| {
+                positioned
+                    .segment
+                    .geometry
+                    .source_map
+                    .as_ref()
+                    .is_some_and(|source_map| {
+                        source_map.ranges_for_span(cluster.source).any(|source| {
+                            local_range_overlaps_projected(&source, range, self.revision)
+                        })
+                    })
+            })
+            .map(|(positioned, cluster)| {
+                (
+                    positioned.position.line_base + cluster.line,
+                    cluster.bounds + Vec2::new(0.0, positioned.position.block_origin),
+                )
+            })
             .collect()
+    }
+
+    fn positioned_clusters(
+        &self,
+    ) -> impl Iterator<Item = (PositionedSegment<'_>, CachedCluster<'_>)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .hit_clusters()
+                .map(move |cluster| (positioned, cluster))
+        })
     }
 }
 
@@ -234,22 +354,25 @@ impl CompositionScene {
 pub struct TextScene {
     pub(super) document: crate::DocumentId,
     pub(super) revision: DocumentRevision,
-    pub(super) metrics: TextMetrics,
-    pub(super) lines: Vec<SceneLine>,
-    pub(super) fragments: Vec<SceneFragment>,
-    pub(super) clusters: Vec<SceneCluster>,
-    pub(super) carets: Vec<SceneCaretStop>,
-    pub(super) movements: Vec<SceneCursorMovement>,
-    pub(super) texts: Vec<SnapshotTextRange>,
     pub(super) paint: PaintTable,
-    pub(super) semantics: Vec<SemanticFragment>,
+    pub(super) requested: SceneFeaturePolicy,
+    pub(super) core: Arc<SceneCore>,
+}
+
+#[derive(Debug)]
+pub(super) struct SceneCore {
+    pub(super) paragraph_count: usize,
+    pub(super) spine: SceneSpine,
+    pub(super) metrics: TextMetrics,
+    pub(super) region: Option<SceneRegionBinding>,
+    pub(super) resident: SceneFeaturePolicy,
 }
 
 impl TextScene {
     /// Returns exact intrinsic metrics for this scene.
     #[must_use]
-    pub const fn metrics(&self) -> TextMetrics {
-        self.metrics
+    pub fn metrics(&self) -> TextMetrics {
+        self.core.metrics
     }
 
     /// Returns the document identity represented by this scene.
@@ -264,6 +387,79 @@ impl TextScene {
         self.revision
     }
 
+    /// Returns the exact capability policy requested for this scene handle.
+    #[must_use]
+    pub const fn requested_features(&self) -> &SceneFeaturePolicy {
+        &self.requested
+    }
+
+    /// Returns the capability policy physically resident in this scene.
+    #[must_use]
+    pub fn resident_features(&self) -> &SceneFeaturePolicy {
+        &self.core.resident
+    }
+
+    /// Returns aggregate deterministic prepared-scene residency.
+    #[must_use]
+    pub fn residency(&self) -> SceneResidency {
+        SceneResidency::from_spine(&self.core.spine)
+    }
+
+    /// Iterates requested capabilities, resident capabilities, and byte
+    /// charges for every paragraph segment.
+    #[must_use]
+    pub fn paragraph_residencies(&self) -> SceneParagraphResidencies<'_> {
+        SceneParagraphResidencies::new(&self.requested, &self.core.spine)
+    }
+
+    /// Returns unconditional renderer-facing display access.
+    #[must_use]
+    pub const fn display(&self) -> SceneDisplay<'_> {
+        SceneDisplay::new(self)
+    }
+
+    /// Returns source-aware access when every represented paragraph retained provenance.
+    pub fn sources(&self) -> Result<SceneSourceAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_sources(),
+        )?;
+        Ok(SceneSourceAccess::new(self))
+    }
+
+    /// Returns exact point interaction over paragraphs that retained it.
+    pub fn interaction(&self) -> Result<SceneInteraction<'_>, MissingSceneCapability> {
+        require_any_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_hit_testing(),
+        )?;
+        Ok(SceneInteraction::new(self))
+    }
+
+    /// Returns complete selection, navigation, and native-input access.
+    pub fn editing(&self) -> Result<SceneEditing<'_>, MissingSceneCapability> {
+        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::EDITABLE)?;
+        Ok(SceneEditing::new(self))
+    }
+
+    /// Returns selection construction and geometry access.
+    pub fn selection(&self) -> Result<SceneSelection<'_>, MissingSceneCapability> {
+        require_any_scene_features(&self.core.spine, &self.requested, SceneFeatures::SELECTABLE)?;
+        Ok(SceneSelection::new(self))
+    }
+
+    /// Returns semantic structure when every represented paragraph retained it.
+    pub fn semantics(&self) -> Result<SceneSemanticAccess<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core.spine,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_semantics(),
+        )?;
+        Ok(SceneSemanticAccess::new(self))
+    }
+
     /// Starts one native composition over the current primary insertion point.
     ///
     /// Native composition protocols expose one marked region. A sole logical
@@ -272,7 +468,7 @@ impl TextScene {
     /// disjoint logical ranges, the host-visible set is explicitly normalized
     /// to one collapsed primary extent before composition starts. Callers can
     /// observe that normalization through [`CompositionStart::selection_changed`].
-    pub fn begin_composition(
+    pub(crate) fn begin_composition(
         &self,
         selections: &SnapshotTextSelectionSet,
         id: CompositionId,
@@ -302,12 +498,12 @@ impl TextScene {
 
     /// Returns an empty selection set bound to this scene revision.
     #[must_use]
-    pub fn empty_selection_set(&self) -> SnapshotTextSelectionSet {
+    pub(crate) fn empty_selection_set(&self) -> SnapshotTextSelectionSet {
         SnapshotTextSelectionSet::new(self.document, self.revision, Vec::new())
     }
 
     /// Creates one collapsed selection at an exact scene position.
-    pub fn collapsed_selection(
+    pub(crate) fn collapsed_selection(
         &self,
         position: &SnapshotTextPosition,
     ) -> Result<SnapshotTextSelection, SelectionError> {
@@ -328,7 +524,7 @@ impl TextScene {
     ///
     /// A visual selection follows adapter-owned caret transitions and can
     /// expose several noncontiguous logical ranges across bidi boundaries.
-    pub fn selection(
+    pub(crate) fn selection_between(
         &self,
         anchor: &SnapshotTextPosition,
         extent: &SnapshotTextPosition,
@@ -344,19 +540,12 @@ impl TextScene {
     }
 
     /// Validates and collects independent selections for this scene.
-    pub fn selection_set(
+    pub(crate) fn selection_set(
         &self,
         selections: impl IntoIterator<Item = SnapshotTextSelection>,
     ) -> Result<SnapshotTextSelectionSet, SelectionError> {
         let selections: Vec<_> = selections.into_iter().collect();
-        for selection in &selections {
-            let expected =
-                self.selection(selection.anchor(), selection.extent(), selection.mode())?;
-            if expected.ranges() != selection.ranges() {
-                return Err(SelectionError::new(SelectionErrorKind::UnknownPosition));
-            }
-        }
-        validate_independent_selections(&selections)?;
+        self.validate_selections(&selections)?;
         Ok(SnapshotTextSelectionSet::new(
             self.document,
             self.revision,
@@ -364,12 +553,26 @@ impl TextScene {
         ))
     }
 
+    fn validate_selections(
+        &self,
+        selections: &[SnapshotTextSelection],
+    ) -> Result<(), SelectionError> {
+        for selection in selections {
+            let expected =
+                self.selection_between(selection.anchor(), selection.extent(), selection.mode())?;
+            if expected.ranges() != selection.ranges() {
+                return Err(SelectionError::new(SelectionErrorKind::UnknownPosition));
+            }
+        }
+        validate_independent_selections(selections)
+    }
+
     /// Moves every independent selection through the exact scene cursor map.
     ///
     /// When `extend` is true, each anchor is retained and the extent is moved.
     /// Otherwise a noncollapsed selection first collapses toward the requested
     /// direction and a collapsed selection advances by one interaction unit.
-    pub fn move_selections(
+    pub(crate) fn move_selections(
         &self,
         selections: &SnapshotTextSelectionSet,
         movement: TextMovement,
@@ -388,7 +591,7 @@ impl TextScene {
                     .cursor_step(selection.extent(), movement)?
                     .map_or(*selection.extent(), |step| step.target);
                 if extend {
-                    self.selection(selection.anchor(), &extent, mode)?
+                    self.selection_between(selection.anchor(), &extent, mode)?
                 } else {
                     self.collapsed_selection(&extent)?
                 }
@@ -399,41 +602,48 @@ impl TextScene {
     }
 
     /// Resolves visual highlight rectangles for a complete selection set.
-    pub fn selection_geometry(
+    pub(crate) fn selection_geometry(
         &self,
         selections: &SnapshotTextSelectionSet,
     ) -> Result<Vec<SceneSelectionRect>, SelectionError> {
         if selections.document() != self.document || selections.revision() != self.revision {
             return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
         }
+        self.validate_selections(selections.selections())?;
         let mut geometry: Vec<SceneSelectionRect> = Vec::new();
         for (selection_index, selection) in selections.selections().iter().enumerate() {
-            for cluster in &self.clusters {
+            for (positioned, cluster) in self.positioned_clusters() {
+                let source_map = positioned
+                    .segment
+                    .geometry
+                    .source_map
+                    .as_ref()
+                    .expect("selection capability retains a paragraph source map");
                 let Some((range_index, _)) =
                     selection.ranges().iter().enumerate().find(|(_, range)| {
-                        cluster
-                            .source
-                            .sources()
-                            .iter()
-                            .any(|source| ranges_overlap(range, source))
+                        source_map.ranges_for_span(cluster.source).any(|source| {
+                            ranges_overlap(range, &materialize_range(source, self.revision))
+                        })
                     })
                 else {
                     continue;
                 };
+                let line = positioned.position.line_base + cluster.line;
+                let bounds = cluster.bounds + Vec2::new(0.0, positioned.position.block_origin);
                 if let Some(previous) = geometry.last_mut()
                     && previous.selection == selection_index
                     && previous.range == range_index
-                    && previous.line == cluster.line
+                    && previous.line == line
                     && previous.bidi_level == cluster.bidi_level
-                    && nearly_equal(previous.bounds.x1, cluster.bounds.x0)
+                    && nearly_equal(previous.bounds.x1, bounds.x0)
                 {
-                    previous.bounds.x1 = cluster.bounds.x1;
+                    previous.bounds.x1 = bounds.x1;
                 } else {
                     geometry.push(SceneSelectionRect {
                         selection: selection_index,
                         range: range_index,
-                        line: cluster.line,
-                        bounds: cluster.bounds,
+                        line,
+                        bounds,
                         bidi_level: cluster.bidi_level,
                     });
                 }
@@ -444,14 +654,38 @@ impl TextScene {
 
     /// Returns visual lines in flow order.
     #[must_use]
-    pub fn lines(&self) -> &[SceneLine] {
-        &self.lines
+    pub fn lines(&self) -> SceneLines<'_> {
+        SceneLines::new(self.revision, &self.core)
+    }
+
+    /// Returns one visual line by global index.
+    #[must_use]
+    pub fn line(&self, index: usize) -> Option<SceneLineView<'_>> {
+        self.lines().get(index)
+    }
+
+    /// Returns the number of visual lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.core.spine.summary().lines
     }
 
     /// Returns paint-homogeneous glyph fragments in visual order.
     #[must_use]
-    pub fn fragments(&self) -> &[SceneFragment] {
-        &self.fragments
+    pub fn fragments(&self) -> SceneFragments<'_> {
+        SceneFragments::new(self.revision, &self.core)
+    }
+
+    /// Returns one paint-homogeneous fragment by global visual index.
+    #[must_use]
+    pub fn fragment(&self, index: usize) -> Option<SceneFragmentView<'_>> {
+        self.fragments().get(index)
+    }
+
+    /// Returns the number of paint fragments.
+    #[must_use]
+    pub fn fragment_count(&self) -> usize {
+        self.core.spine.summary().fragments
     }
 
     /// Returns immutable paint values referenced by fragment slots.
@@ -461,8 +695,8 @@ impl TextScene {
     }
 
     /// Iterates semantic fragments in document order.
-    pub fn semantics(&self) -> impl Iterator<Item = &SemanticFragment> {
-        self.semantics.iter()
+    pub(crate) fn semantic_records(&self) -> SceneSemantics<'_> {
+        SceneSemantics::new(self.revision, &self.core.spine)
     }
 
     /// Returns an exact interaction-unit hit under a scene-space point.
@@ -470,11 +704,15 @@ impl TextScene {
     /// Unlike selection hit testing, this does not clamp points outside unit
     /// geometry to the nearest line edge.
     #[must_use]
-    pub fn hit_test(&self, point: Point) -> Option<TextHit> {
-        self.clusters
-            .iter()
-            .find(|cluster| cluster.bounds.contains(point))
-            .map(|cluster| cluster.hit(point))
+    pub(crate) fn hit_test(&self, point: Point) -> Option<TextHit<SnapshotTextUnitView<'_>>> {
+        let (positioned, cluster) =
+            positioned_hit_cluster(&self.core.spine, point, HitMode::Exact)?;
+        Some(cached_snapshot_hit(
+            cluster,
+            positioned,
+            self.revision,
+            point,
+        ))
     }
 
     /// Returns the closest interaction-unit side for pointer selection.
@@ -482,18 +720,18 @@ impl TextScene {
     /// This includes whitespace and empty editable text which may have no
     /// painted glyph fragment.
     #[must_use]
-    pub fn hit_test_closest(&self, point: Point) -> Option<TextHit> {
-        let mut closest: Option<(&SceneCluster, f64, f64)> = None;
-        for cluster in &self.clusters {
-            let (block_distance, inline_distance) = distance_to_rect_axes(point, cluster.bounds);
-            if closest.is_none_or(|(_, current_block, current_inline)| {
-                block_distance < current_block
-                    || (block_distance == current_block && inline_distance < current_inline)
-            }) {
-                closest = Some((cluster, block_distance, inline_distance));
-            }
-        }
-        closest.map(|(cluster, _, _)| cluster.hit(point))
+    pub(crate) fn hit_test_closest(
+        &self,
+        point: Point,
+    ) -> Option<TextHit<SnapshotTextUnitView<'_>>> {
+        let (positioned, cluster) =
+            positioned_hit_cluster(&self.core.spine, point, HitMode::Closest)?;
+        Some(cached_snapshot_hit(
+            cluster,
+            positioned,
+            self.revision,
+            point,
+        ))
     }
 
     /// Resolves exact scene-space caret geometry for a snapshot position.
@@ -501,40 +739,63 @@ impl TextScene {
     /// Returns `None` for a stale revision, foreign text leaf, invalid
     /// affinity, or a valid snapshot position not represented by this scene.
     #[must_use]
-    pub fn caret(&self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
-        self.carets
-            .iter()
-            .find(|caret| caret.position == *position)
-            .map(|caret| SceneCaret {
-                position: caret.position,
-                bounds: caret.bounds,
-            })
+    pub(crate) fn caret(&self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
+        if position.revision() != self.revision {
+            return None;
+        }
+        let positioned = positioned_snapshot_segment(&self.core.spine, position.text())?;
+        let source_map = positioned.segment.geometry.source_map.as_ref()?;
+        let source = source_map.source_position_for_local(LocalPosition::Snapshot {
+            text: position.text(),
+            byte: position.byte(),
+            affinity: position.affinity(),
+        })?;
+        let movement = cursor_movement_at(&positioned.segment.geometry, source)?;
+        let bounds = positioned.segment.geometry.caret_bounds(movement)?;
+        Some(SceneCaret {
+            position: materialize_position(source_map, source, self.revision),
+            bounds: bounds + Vec2::new(0.0, positioned.position.block_origin),
+        })
     }
 
-    /// Returns the first logical caret position in the complete scene.
+    /// Returns the first logical caret retained by this scene's feature policy.
     ///
-    /// This follows Underwood's cross-paragraph movement graph rather than
-    /// treating every paragraph-local start as a document start.
+    /// This traverses retained paragraphs in scene order. A sparse policy can
+    /// therefore return a position after the document's authored start.
     #[must_use]
-    pub fn start_position(&self) -> Option<SnapshotTextPosition> {
-        self.movements
-            .iter()
-            .filter(|movement| movement.previous_logical.is_none())
-            .min_by_key(|movement| logical_position_key(&movement.position))
-            .map(|movement| movement.position)
+    pub(crate) fn start_position(&self) -> Option<SnapshotTextPosition> {
+        let first = self.core.spine.positioned_movement(0)?;
+        let source_map = first.position.segment.geometry.source_map.as_ref()?;
+        let movement = first.position.segment.geometry.cursor()?.start()?;
+        let position = movement.position();
+        Some(materialize_position(
+            source_map,
+            SourcePosition::new(position.offset(), position.affinity()),
+            self.revision,
+        ))
     }
 
-    /// Returns the final logical caret position in the complete scene.
+    /// Returns the final logical caret retained by this scene's feature policy.
     ///
-    /// This follows Underwood's cross-paragraph movement graph rather than
-    /// treating every paragraph-local end as a document end.
+    /// This traverses retained paragraphs in scene order. A sparse policy can
+    /// therefore return a position before the document's authored end.
     #[must_use]
-    pub fn end_position(&self) -> Option<SnapshotTextPosition> {
-        self.movements
-            .iter()
-            .filter(|movement| movement.next_logical.is_none())
-            .max_by_key(|movement| logical_position_key(&movement.position))
-            .map(|movement| movement.position)
+    pub(crate) fn end_position(&self) -> Option<SnapshotTextPosition> {
+        let last = self
+            .core
+            .spine
+            .summary()
+            .movements
+            .checked_sub(1)
+            .and_then(|index| self.core.spine.positioned_movement(index))?;
+        let source_map = last.position.segment.geometry.source_map.as_ref()?;
+        let movement = last.position.segment.geometry.cursor()?.end()?;
+        let position = movement.position();
+        Some(materialize_position(
+            source_map,
+            SourcePosition::new(position.offset(), position.affinity()),
+            self.revision,
+        ))
     }
 
     /// Resolves a represented caret at one leaf-local UTF-8 boundary.
@@ -545,28 +806,41 @@ impl TextScene {
     /// leaf start prefers downstream affinity and every other boundary
     /// prefers upstream affinity, then falls back to either represented stop.
     #[must_use]
-    pub fn position_at(&self, text: TextId, byte: u32) -> Option<SnapshotTextPosition> {
+    pub(crate) fn position_at(&self, text: TextId, byte: u32) -> Option<SnapshotTextPosition> {
         if text.document != self.document {
             return None;
         }
+        let positioned = positioned_snapshot_segment(&self.core.spine, text)?;
         let preferred = if byte == 0 {
             TextAffinity::Downstream
         } else {
             TextAffinity::Upstream
         };
-        self.movements
-            .iter()
-            .find(|movement| {
-                movement.position.text() == text
-                    && movement.position.byte() == byte
-                    && movement.position.affinity() == preferred
-            })
-            .or_else(|| {
-                self.movements.iter().find(|movement| {
-                    movement.position.text() == text && movement.position.byte() == byte
-                })
-            })
-            .map(|movement| movement.position)
+        let source_map = positioned.segment.geometry.source_map.as_ref()?;
+        for affinity in [
+            preferred,
+            match preferred {
+                TextAffinity::Upstream => TextAffinity::Downstream,
+                TextAffinity::Downstream => TextAffinity::Upstream,
+            },
+        ] {
+            let Some(source) = source_map.source_position_for_local(LocalPosition::Snapshot {
+                text,
+                byte,
+                affinity,
+            }) else {
+                continue;
+            };
+            if let Some(movement) = cursor_movement_at(&positioned.segment.geometry, source) {
+                let position = movement.position();
+                return Some(materialize_position(
+                    source_map,
+                    SourcePosition::new(position.offset(), position.affinity()),
+                    self.revision,
+                ));
+            }
+        }
+        None
     }
 
     /// Returns the preceding logical word start, or the scene start.
@@ -574,7 +848,7 @@ impl TextScene {
     /// Word starts come from the paragraph adapter's retained Unicode
     /// analysis. A stale, foreign, or unrepresented position returns `None`.
     #[must_use]
-    pub fn previous_word_position(
+    pub(crate) fn previous_word_position(
         &self,
         position: &SnapshotTextPosition,
     ) -> Option<SnapshotTextPosition> {
@@ -586,7 +860,7 @@ impl TextScene {
     /// Word starts come from the paragraph adapter's retained Unicode
     /// analysis. A stale, foreign, or unrepresented position returns `None`.
     #[must_use]
-    pub fn next_word_position(
+    pub(crate) fn next_word_position(
         &self,
         position: &SnapshotTextPosition,
     ) -> Option<SnapshotTextPosition> {
@@ -594,18 +868,43 @@ impl TextScene {
     }
 
     fn validate_position(&self, position: &SnapshotTextPosition) -> Result<(), SelectionError> {
+        self.movement_record(position).map(|_| ())
+    }
+
+    fn movement_record<'a>(
+        &'a self,
+        position: &SnapshotTextPosition,
+    ) -> Result<
+        (
+            PositionedSegment<'a>,
+            &'a ParagraphSourceMap,
+            CursorMovement<'a>,
+        ),
+        SelectionError,
+    > {
         if position.revision() != self.revision || position.text().document != self.document {
             return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
         }
-        if self
-            .movements
-            .iter()
-            .any(|movement| movement.position == *position)
-        {
-            Ok(())
-        } else {
-            Err(SelectionError::new(SelectionErrorKind::UnknownPosition))
-        }
+        let Some(positioned) = positioned_snapshot_segment(&self.core.spine, position.text())
+        else {
+            return Err(SelectionError::new(SelectionErrorKind::UnknownPosition));
+        };
+        let source_map = positioned
+            .segment
+            .geometry
+            .source_map
+            .as_ref()
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        let source = source_map
+            .source_position_for_local(LocalPosition::Snapshot {
+                text: position.text(),
+                byte: position.byte(),
+                affinity: position.affinity(),
+            })
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        let movement = cursor_movement_at(&positioned.segment.geometry, source)
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        Ok((positioned, source_map, movement))
     }
 
     fn word_position(
@@ -616,14 +915,15 @@ impl TextScene {
         self.validate_position(position).ok()?;
         let current = logical_position_key(position);
         let candidates = self
-            .clusters
-            .iter()
+            .positioned_clusters()
             .filter(|cluster| {
-                cluster.boundary != ClusterBoundary::None
-                    && cluster.whitespace == ClusterWhitespace::None
+                cluster.1.boundary != ClusterBoundary::None
+                    && cluster.1.whitespace == ClusterWhitespace::None
             })
-            .filter_map(|cluster| {
-                let source = cluster.source.sources().first()?;
+            .filter_map(|(positioned, cluster)| {
+                let source_map = positioned.segment.geometry.source_map.as_ref()?;
+                let source = source_map.ranges_for_span(cluster.source).next()?;
+                let source = materialize_range(source, self.revision);
                 let key = logical_text_key(source.text(), source.bytes().start);
                 Some((key, source.text(), source.bytes().start))
             })
@@ -669,7 +969,24 @@ impl TextScene {
         }
         let mut ranges = Vec::new();
         for index in start_text..=end_text {
-            let text = &self.texts[index];
+            let positioned = self
+                .core
+                .spine
+                .positioned_text(index)
+                .expect("validated text rank remains represented");
+            let source_map = positioned
+                .position
+                .segment
+                .geometry
+                .source_map
+                .as_ref()
+                .expect("source capability retains a paragraph source map");
+            let text = materialize_range(
+                source_map
+                    .leaf_range(positioned.local)
+                    .expect("positioned text indexes a retained source leaf"),
+                self.revision,
+            );
             let bytes = if start_text == end_text {
                 start.byte()..end.byte()
             } else if index == start_text {
@@ -722,7 +1039,7 @@ impl TextScene {
                 SelectionErrorKind::DisconnectedMovement,
             ));
         };
-        canonicalize_ranges(&mut ranges, &self.texts);
+        canonicalize_ranges(&mut ranges);
         if ranges.is_empty() {
             ranges.push(SnapshotTextRange::new(
                 self.revision,
@@ -741,7 +1058,7 @@ impl TextScene {
     ) -> Result<Option<Vec<SnapshotTextRange>>, SelectionError> {
         let mut position = *start;
         let mut ranges = Vec::new();
-        for _ in 0..=self.movements.len() {
+        for _ in 0..=self.core.spine.summary().movements {
             if position == *end {
                 return Ok(Some(ranges));
             }
@@ -761,18 +1078,14 @@ impl TextScene {
         position: &SnapshotTextPosition,
         movement: TextMovement,
     ) -> Result<Option<SceneCursorStep>, SelectionError> {
-        self.validate_position(position)?;
-        let record = self
-            .movements
-            .iter()
-            .find(|record| record.position == *position)
-            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        let (_, source_map, record) = self.movement_record(position)?;
         let step = match movement {
-            TextMovement::PreviousVisual => record.previous_visual.clone(),
-            TextMovement::NextVisual => record.next_visual.clone(),
-            TextMovement::PreviousLogical => record.previous_logical.clone(),
-            TextMovement::NextLogical => record.next_logical.clone(),
+            TextMovement::PreviousVisual => record.previous_visual(),
+            TextMovement::NextVisual => record.next_visual(),
+            TextMovement::PreviousLogical => record.previous_logical(),
+            TextMovement::NextLogical => record.next_logical(),
         };
+        let step = materialize_cursor_step(source_map, step, self.revision);
         Ok(step.or_else(|| self.adjacent_paragraph_step(position, movement)))
     }
 
@@ -781,42 +1094,34 @@ impl TextScene {
         position: &SnapshotTextPosition,
         movement: TextMovement,
     ) -> Option<SceneCursorStep> {
-        let current = position.text().paragraph;
         let previous = matches!(
             movement,
             TextMovement::PreviousVisual | TextMovement::PreviousLogical
         );
-        let paragraph = self
-            .movements
-            .iter()
-            .map(|movement| movement.position.text().paragraph)
-            .filter(|paragraph| {
-                if previous {
-                    *paragraph < current
-                } else {
-                    *paragraph > current
-                }
-            })
-            .reduce(|candidate, paragraph| {
-                if previous {
-                    candidate.max(paragraph)
-                } else {
-                    candidate.min(paragraph)
-                }
-            })?;
-        let mut candidates = self.movements.iter().filter(|record| {
-            record.position.text().paragraph == paragraph
-                && match movement {
-                    TextMovement::PreviousVisual => record.next_visual.is_none(),
-                    TextMovement::NextVisual => record.previous_visual.is_none(),
-                    TextMovement::PreviousLogical => record.next_logical.is_none(),
-                    TextMovement::NextLogical => record.previous_logical.is_none(),
-                }
-        });
-        let target = candidates.next()?.position;
-        if candidates.next().is_some() {
-            return None;
-        }
+        let current = positioned_snapshot_segment(&self.core.spine, position.text())?;
+        let global = if previous {
+            current.position.movement_base.checked_sub(1)?
+        } else {
+            current
+                .position
+                .movement_base
+                .saturating_add(current.segment.geometry.movement_count())
+        };
+        let adjacent = self.core.spine.positioned_movement(global)?;
+        let source_map = adjacent.position.segment.geometry.source_map.as_ref()?;
+        let cursor = adjacent.position.segment.geometry.cursor()?;
+        let target = match movement {
+            TextMovement::PreviousVisual => cursor.last_visual(),
+            TextMovement::NextVisual => cursor.first_visual(),
+            TextMovement::PreviousLogical => cursor.end(),
+            TextMovement::NextLogical => cursor.start(),
+        }?
+        .position();
+        let target = materialize_position(
+            source_map,
+            SourcePosition::new(target.offset(), target.affinity()),
+            self.revision,
+        );
         Some(SceneCursorStep {
             target,
             source: None,
@@ -875,7 +1180,7 @@ impl TextScene {
         movement: TextMovement,
     ) -> Result<bool, SelectionError> {
         let mut position = *start;
-        for _ in 0..=self.movements.len() {
+        for _ in 0..=self.core.spine.summary().movements {
             if position == *end {
                 return Ok(true);
             }
@@ -897,25 +1202,106 @@ impl TextScene {
     }
 
     fn text_rank(&self, text: TextId) -> Result<usize, SelectionError> {
-        self.texts
-            .iter()
-            .position(|range| range.text() == text)
+        let positioned = positioned_snapshot_segment(&self.core.spine, text)
+            .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
+        positioned
+            .segment
+            .geometry
+            .source_map
+            .as_ref()
+            .and_then(|source_map| source_map.leaf_index_for_text(text))
+            .map(|local| positioned.position.text_base.saturating_add(local))
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))
     }
 
     pub(crate) fn range_geometry(&self, range: &SnapshotTextRange) -> Vec<(usize, Rect)> {
-        self.clusters
-            .iter()
-            .filter(|cluster| {
-                cluster
-                    .source
-                    .sources()
-                    .iter()
-                    .any(|source| ranges_overlap(range, source))
+        self.positioned_clusters()
+            .filter(|(positioned, cluster)| {
+                positioned
+                    .segment
+                    .geometry
+                    .source_map
+                    .as_ref()
+                    .is_some_and(|source_map| {
+                        source_map.ranges_for_span(cluster.source).any(|source| {
+                            ranges_overlap(range, &materialize_range(source, self.revision))
+                        })
+                    })
             })
-            .map(|cluster| (cluster.line, cluster.bounds))
+            .map(|(positioned, cluster)| {
+                (
+                    positioned.position.line_base + cluster.line,
+                    cluster.bounds + Vec2::new(0.0, positioned.position.block_origin),
+                )
+            })
             .collect()
     }
+
+    fn positioned_clusters(
+        &self,
+    ) -> impl Iterator<Item = (PositionedSegment<'_>, CachedCluster<'_>)> {
+        self.core.spine.segments().flat_map(|positioned| {
+            positioned
+                .segment
+                .geometry
+                .hit_clusters()
+                .map(move |cluster| (positioned, cluster))
+        })
+    }
+}
+
+fn require_any_scene_features(
+    spine: &SceneSpine,
+    requested: &SceneFeaturePolicy,
+    required: SceneFeatures,
+) -> Result<(), MissingSceneCapability> {
+    let mut missing = None;
+    for positioned in spine.segments() {
+        let paragraph = positioned.segment.paragraph;
+        let resident = positioned.segment.geometry.features;
+        if resident.contains(required) {
+            return Ok(());
+        }
+        if missing.is_none() {
+            missing = Some(MissingSceneCapability::new(
+                Some(paragraph),
+                required,
+                requested.features_for(paragraph),
+                resident,
+            ));
+        }
+    }
+    if spine.summary().paragraphs == 0 && requested.default_features().contains(required) {
+        return Ok(());
+    }
+    Err(missing.unwrap_or_else(|| {
+        MissingSceneCapability::new(
+            None,
+            required,
+            requested.default_features(),
+            requested.default_features(),
+        )
+    }))
+}
+
+fn require_scene_features(
+    spine: &SceneSpine,
+    requested: &SceneFeaturePolicy,
+    required: SceneFeatures,
+) -> Result<(), MissingSceneCapability> {
+    for positioned in spine.segments() {
+        let paragraph = positioned.segment.paragraph;
+        let resident = positioned.segment.geometry.features;
+        if !resident.contains(required) {
+            return Err(MissingSceneCapability::new(
+                Some(paragraph),
+                required,
+                requested.features_for(paragraph),
+                resident,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn logical_position_key(position: &SnapshotTextPosition) -> (u32, u32, u32) {
@@ -926,22 +1312,32 @@ fn logical_text_key(text: TextId, byte: u32) -> (u32, u32, u32) {
     (text.paragraph, text.index, byte)
 }
 
-fn projected_ranges_overlap(first: &ProjectedTextRange, second: &ProjectedTextRange) -> bool {
-    first.sources().iter().any(|first| {
-        second.sources().iter().any(|second| match (first, second) {
-            (ProjectedTextSource::Snapshot(first), ProjectedTextSource::Snapshot(second)) => {
-                ranges_overlap(first, second)
+fn local_range_overlaps_projected(
+    local: &LocalRange,
+    projected: &ProjectedTextRange,
+    revision: DocumentRevision,
+) -> bool {
+    projected
+        .sources()
+        .iter()
+        .any(|source| match (local, source) {
+            (LocalRange::Snapshot { text, bytes }, ProjectedTextSource::Snapshot(projected)) => {
+                projected.revision() == revision
+                    && projected.text() == *text
+                    && bytes.start < projected.bytes().end
+                    && projected.bytes().start < bytes.end
             }
-            (ProjectedTextSource::Composition(first), ProjectedTextSource::Composition(second))
-                if first.id() == second.id() && first.epoch() == second.epoch() =>
-            {
-                let first = first.bytes();
-                let second = second.bytes();
-                first.start < second.end && second.start < first.end
+            (
+                LocalRange::Composition { id, epoch, bytes },
+                ProjectedTextSource::Composition(projected),
+            ) => {
+                projected.id() == *id
+                    && projected.epoch() == *epoch
+                    && bytes.start < projected.bytes().end
+                    && projected.bytes().start < bytes.end
             }
             _ => false,
         })
-    })
 }
 
 fn movement_mode(movement: TextMovement) -> TextSelectionMode {
@@ -951,13 +1347,11 @@ fn movement_mode(movement: TextMovement) -> TextSelectionMode {
     }
 }
 
-fn canonicalize_ranges(ranges: &mut Vec<SnapshotTextRange>, texts: &[SnapshotTextRange]) {
+fn canonicalize_ranges(ranges: &mut Vec<SnapshotTextRange>) {
     ranges.sort_by_key(|range| {
         (
-            texts
-                .iter()
-                .position(|text| text.text() == range.text())
-                .unwrap_or(usize::MAX),
+            range.text().paragraph,
+            range.text().index,
             range.bytes().start,
         )
     });
@@ -1026,65 +1420,351 @@ fn nearly_equal(first: f64, second: f64) -> bool {
     (first - second).abs() <= f64::max(1.0, first.abs().max(second.abs())) * 1.0e-9
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct SceneCluster<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
-    pub(super) source: Source,
-    pub(super) semantic_id: SemanticId,
-    pub(super) boundary: ClusterBoundary,
-    pub(super) whitespace: ClusterWhitespace,
-    pub(super) hit_slices: Vec<SceneHitSlice>,
-    pub(super) bounds: Rect,
-    pub(super) line: usize,
-    pub(super) left: Position,
-    pub(super) right: Position,
-    pub(super) bidi_level: u8,
+fn positioned_snapshot_segment(spine: &SceneSpine, text: TextId) -> Option<PositionedSegment<'_>> {
+    let positioned = spine.positioned_segment(usize::try_from(text.paragraph).ok()?)?;
+    (positioned.segment.paragraph.document == text.document
+        && positioned.segment.paragraph.index == text.paragraph)
+        .then_some(positioned)
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SceneHitSlice {
-    pub(super) semantic_id: SemanticId,
-    pub(super) x0: f64,
-    pub(super) x1: f64,
+/// Physical-to-logical axes for Underwood's currently supported writing mode.
+///
+/// Interaction indexing consumes only this mapping. The logical-axis
+/// readiness design reserves a paragraph writing mode to select another
+/// mapping when vertical formation is real; until then the engine accepts only
+/// horizontal top-to-bottom text.
+const HORIZONTAL_AXES: TextAxes = TextAxes;
+
+#[derive(Clone, Copy)]
+struct TextAxes;
+
+#[derive(Clone, Copy)]
+struct LogicalPoint {
+    inline: f64,
+    block: f64,
 }
 
-impl<Source: Clone, Position: Copy> SceneCluster<Source, Position> {
-    fn hit(&self, point: Point) -> TextHit<Source, Position> {
-        let midpoint = self.bounds.x0 + self.bounds.width() * 0.5;
-        let semantic_id = self
-            .hit_slices
-            .iter()
-            .filter(|slice| slice.x0 < slice.x1)
-            .min_by(|first, second| {
-                distance_to_interval(point.x, first.x0, first.x1)
-                    .total_cmp(&distance_to_interval(point.x, second.x0, second.x1))
-            })
-            .map_or(self.semantic_id, |slice| slice.semantic_id);
-        TextHit {
-            source: self.source.clone(),
-            position: if point.x <= midpoint {
-                self.left
-            } else {
-                self.right
-            },
-            semantic_id,
-            bidi_level: self.bidi_level,
+#[derive(Clone, Copy)]
+struct LogicalRect {
+    inline_start: f64,
+    inline_end: f64,
+    block_start: f64,
+    block_end: f64,
+}
+
+impl TextAxes {
+    const fn scene_point(self, point: Point) -> LogicalPoint {
+        LogicalPoint {
+            inline: point.x,
+            block: point.y,
+        }
+    }
+
+    fn local_point(self, positioned: PositionedSegment<'_>, point: Point) -> LogicalPoint {
+        let mut logical = self.scene_point(point);
+        logical.block -= positioned.position.block_origin;
+        logical
+    }
+
+    const fn rect(self, bounds: Rect) -> LogicalRect {
+        LogicalRect {
+            inline_start: bounds.x0,
+            inline_end: bounds.x1,
+            block_start: bounds.y0,
+            block_end: bounds.y1,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SceneCaretStop<Position = SnapshotTextPosition> {
-    pub(super) position: Position,
-    pub(super) bounds: Rect,
+impl LogicalRect {
+    const fn contains(self, point: LogicalPoint) -> bool {
+        self.inline_start <= point.inline
+            && point.inline <= self.inline_end
+            && self.block_start <= point.block
+            && point.block <= self.block_end
+    }
 }
 
-#[derive(Clone, Debug)]
-pub(super) struct SceneCursorMovement<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {
-    pub(super) position: Position,
-    pub(super) previous_visual: Option<SceneCursorStep<Source, Position>>,
-    pub(super) next_visual: Option<SceneCursorStep<Source, Position>>,
-    pub(super) previous_logical: Option<SceneCursorStep<Source, Position>>,
-    pub(super) next_logical: Option<SceneCursorStep<Source, Position>>,
+#[derive(Clone, Copy)]
+enum HitMode {
+    Exact,
+    Closest,
+}
+
+fn positioned_hit_cluster(
+    spine: &SceneSpine,
+    point: Point,
+    mode: HitMode,
+) -> Option<(PositionedSegment<'_>, CachedCluster<'_>)> {
+    if spine.is_normal_flow() {
+        let positioned =
+            spine.positioned_segment_at_block(HORIZONTAL_AXES.scene_point(point).block)?;
+        let cluster = match mode {
+            HitMode::Exact => hit_cluster(positioned, point, true),
+            HitMode::Closest => closest_cluster(positioned, point, true),
+        }?;
+        return Some((positioned, cluster));
+    }
+    match mode {
+        HitMode::Exact => spine.segments().find_map(|positioned| {
+            hit_cluster(positioned, point, false).map(|cluster| (positioned, cluster))
+        }),
+        HitMode::Closest => {
+            let mut closest: Option<(PositionedSegment<'_>, CachedCluster<'_>, f64, f64)> = None;
+            for positioned in spine.segments() {
+                let Some(cluster) = closest_cluster(positioned, point, false) else {
+                    continue;
+                };
+                let local = HORIZONTAL_AXES.local_point(positioned, point);
+                let bounds = HORIZONTAL_AXES.rect(cluster.bounds);
+                let (block_distance, inline_distance) = distance_to_rect_axes(local, bounds);
+                if closest.is_none_or(|(_, _, current_block, current_inline)| {
+                    block_distance < current_block
+                        || block_distance == current_block && inline_distance < current_inline
+                }) {
+                    closest = Some((positioned, cluster, block_distance, inline_distance));
+                }
+            }
+            closest.map(|(positioned, cluster, _, _)| (positioned, cluster))
+        }
+    }
+}
+
+fn positioned_projected_source<'a>(
+    spine: &'a SceneSpine,
+    revision: DocumentRevision,
+    position: &ProjectedTextPosition,
+) -> Option<(
+    PositionedSegment<'a>,
+    &'a ParagraphSourceMap,
+    SourcePosition,
+)> {
+    if let ProjectedTextPosition::Snapshot(position) = position {
+        if position.revision() != revision {
+            return None;
+        }
+        let positioned = positioned_snapshot_segment(spine, position.text())?;
+        let source_map = positioned.segment.geometry.source_map.as_ref()?;
+        let source = source_map.source_position_for_local(LocalPosition::Snapshot {
+            text: position.text(),
+            byte: position.byte(),
+            affinity: position.affinity(),
+        })?;
+        return Some((positioned, source_map, source));
+    }
+    let ProjectedTextPosition::Composition(position) = position else {
+        unreachable!("snapshot positions return above")
+    };
+    spine.segments().find_map(|positioned| {
+        let source_map = positioned.segment.geometry.source_map.as_ref()?;
+        let source = source_map.source_position_for_local(LocalPosition::Composition {
+            id: position.id(),
+            epoch: position.epoch(),
+            byte: position.byte(),
+            affinity: position.affinity(),
+        })?;
+        Some((positioned, source_map, source))
+    })
+}
+
+fn hit_cluster(
+    positioned: PositionedSegment<'_>,
+    point: Point,
+    normal_flow: bool,
+) -> Option<CachedCluster<'_>> {
+    let geometry = &positioned.segment.geometry;
+    let local = HORIZONTAL_AXES.local_point(positioned, point);
+    if geometry.lines.is_empty() {
+        if !HORIZONTAL_AXES.rect(geometry.empty_bounds).contains(local) {
+            return None;
+        }
+        return geometry.exact_hit_cluster(0, local.inline);
+    }
+    if normal_flow {
+        let line = geometry
+            .lines
+            .partition_point(|line| HORIZONTAL_AXES.rect(line.bounds).block_end < local.block);
+        let bounds = HORIZONTAL_AXES.rect(geometry.lines.get(line)?.bounds);
+        if local.block < bounds.block_start || local.block > bounds.block_end {
+            return None;
+        }
+        return geometry.exact_hit_cluster(line, local.inline);
+    }
+    geometry
+        .lines
+        .iter()
+        .enumerate()
+        .find_map(|(line, bounds)| {
+            let bounds = HORIZONTAL_AXES.rect(bounds.bounds);
+            (bounds.block_start <= local.block && local.block <= bounds.block_end)
+                .then(|| geometry.exact_hit_cluster(line, local.inline))
+                .flatten()
+        })
+}
+
+fn closest_cluster<'a>(
+    positioned: PositionedSegment<'a>,
+    point: Point,
+    normal_flow: bool,
+) -> Option<CachedCluster<'a>> {
+    let geometry = &positioned.segment.geometry;
+    let local = HORIZONTAL_AXES.local_point(positioned, point);
+    if geometry.lines.is_empty() {
+        return geometry.closest_hit_cluster(0, local.inline);
+    }
+    if normal_flow {
+        let next = geometry
+            .lines
+            .partition_point(|line| HORIZONTAL_AXES.rect(line.bounds).block_end < local.block);
+        let mut lines = [
+            next.checked_sub(1),
+            (next < geometry.lines.len()).then_some(next),
+        ]
+        .into_iter()
+        .flatten();
+        let first = lines.next()?;
+        let line = lines.fold(first, |closest, candidate| {
+            let closest_bounds = HORIZONTAL_AXES.rect(geometry.lines[closest].bounds);
+            let closest_distance = distance_to_interval(
+                local.block,
+                closest_bounds.block_start,
+                closest_bounds.block_end,
+            );
+            let candidate_bounds = HORIZONTAL_AXES.rect(geometry.lines[candidate].bounds);
+            let candidate_distance = distance_to_interval(
+                local.block,
+                candidate_bounds.block_start,
+                candidate_bounds.block_end,
+            );
+            if candidate_distance < closest_distance {
+                candidate
+            } else {
+                closest
+            }
+        });
+        return geometry.closest_hit_cluster(line, local.inline);
+    }
+    let mut closest: Option<(CachedCluster<'_>, f64, f64)> = None;
+    for (line, bounds) in geometry.lines.iter().enumerate() {
+        let bounds = HORIZONTAL_AXES.rect(bounds.bounds);
+        let block_distance =
+            distance_to_interval(local.block, bounds.block_start, bounds.block_end);
+        if closest.is_some_and(|(_, current, _)| block_distance > current) {
+            continue;
+        }
+        let Some(cluster) = geometry.closest_hit_cluster(line, local.inline) else {
+            continue;
+        };
+        let cluster_bounds = HORIZONTAL_AXES.rect(cluster.bounds);
+        let inline_distance = distance_to_interval(
+            local.inline,
+            cluster_bounds.inline_start,
+            cluster_bounds.inline_end,
+        );
+        if closest.is_none_or(|(_, current_block, current_inline)| {
+            block_distance < current_block
+                || block_distance == current_block && inline_distance < current_inline
+        }) {
+            closest = Some((cluster, block_distance, inline_distance));
+        }
+    }
+    closest.map(|(cluster, _, _)| cluster)
+}
+
+fn cursor_movement_at<'a>(
+    geometry: &'a CachedGeometry,
+    position: SourcePosition,
+) -> Option<CursorMovement<'a>> {
+    geometry
+        .cursor()?
+        .get(PreparedClusterSide::new(position.offset, position.affinity))
+}
+
+fn cached_snapshot_hit<'a>(
+    cluster: CachedCluster<'a>,
+    positioned: PositionedSegment<'a>,
+    revision: DocumentRevision,
+    point: Point,
+) -> TextHit<SnapshotTextUnitView<'a>> {
+    let source_map = positioned
+        .segment
+        .geometry
+        .source_map
+        .as_ref()
+        .expect("hit-testing capability retains a paragraph source map");
+    let (position, semantic_id) = cached_hit_facts(cluster, positioned, point);
+    TextHit {
+        source: SnapshotTextUnitView::new(revision, source_map, cluster.source),
+        position: materialize_position(source_map, position, revision),
+        semantic_id,
+        bidi_level: cluster.bidi_level,
+    }
+}
+
+fn cached_projected_hit<'a>(
+    cluster: CachedCluster<'a>,
+    positioned: PositionedSegment<'a>,
+    revision: DocumentRevision,
+    point: Point,
+) -> TextHit<ProjectedTextUnitView<'a>, ProjectedTextPosition> {
+    let source_map = positioned
+        .segment
+        .geometry
+        .source_map
+        .as_ref()
+        .expect("hit-testing capability retains a paragraph source map");
+    let (position, semantic_id) = cached_hit_facts(cluster, positioned, point);
+    TextHit {
+        source: ProjectedTextUnitView::new(revision, source_map, cluster.source),
+        position: projected_position(source_map, position, revision),
+        semantic_id,
+        bidi_level: cluster.bidi_level,
+    }
+}
+
+fn cached_hit_facts(
+    cluster: CachedCluster<'_>,
+    positioned: PositionedSegment<'_>,
+    point: Point,
+) -> (SourcePosition, SemanticId) {
+    let point = HORIZONTAL_AXES.local_point(positioned, point);
+    let bounds = HORIZONTAL_AXES.rect(cluster.bounds);
+    let midpoint = bounds.inline_start + (bounds.inline_end - bounds.inline_start) * 0.5;
+    let source_map = positioned
+        .segment
+        .geometry
+        .source_map
+        .as_ref()
+        .expect("hit-testing capability retains source provenance");
+    let semantic = cluster.prepared.map_or(cluster.semantic_id, |unit| {
+        let mut inline = bounds.inline_start;
+        unit.slices()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slice)| {
+                let mut end = inline + slice.advance();
+                if index + 1 == unit.slices().len() {
+                    end = bounds.inline_end;
+                }
+                let start = inline;
+                inline = end;
+                (start < end).then(|| {
+                    let source = SourceSpan::from(slice.source());
+                    let semantic = source_map
+                        .semantic_for_span(source)
+                        .expect("validated hit slices retain semantic ownership");
+                    (semantic, distance_to_interval(point.inline, start, end))
+                })
+            })
+            .min_by(|(_, first), (_, second)| first.total_cmp(second))
+            .map_or(cluster.semantic_id, |(semantic, _)| semantic)
+    });
+    let position = if point.inline <= midpoint {
+        cluster.left
+    } else {
+        cluster.right
+    };
+    (position, semantic)
 }
 
 #[derive(Clone, Debug)]
@@ -1093,18 +1773,18 @@ pub(super) struct SceneCursorStep<Source = SnapshotTextUnit, Position = Snapshot
     pub(super) source: Option<Source>,
 }
 
-fn distance_to_rect_axes(point: Point, bounds: Rect) -> (f64, f64) {
-    let inline = if point.x < bounds.x0 {
-        bounds.x0 - point.x
-    } else if point.x > bounds.x1 {
-        point.x - bounds.x1
+fn distance_to_rect_axes(point: LogicalPoint, bounds: LogicalRect) -> (f64, f64) {
+    let inline = if point.inline < bounds.inline_start {
+        bounds.inline_start - point.inline
+    } else if point.inline > bounds.inline_end {
+        point.inline - bounds.inline_end
     } else {
         0.0
     };
-    let block = if point.y < bounds.y0 {
-        bounds.y0 - point.y
-    } else if point.y > bounds.y1 {
-        point.y - bounds.y1
+    let block = if point.block < bounds.block_start {
+        bounds.block_start - point.block
+    } else if point.block > bounds.block_end {
+        point.block - bounds.block_end
     } else {
         0.0
     };

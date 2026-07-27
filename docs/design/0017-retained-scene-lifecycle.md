@@ -1,6 +1,6 @@
 # Design-0017: Retained scene lifecycle
 
-- **Status:** Proposed — architecture gate
+- **Status:** Approved — 2026-07-25
 - **Date:** 2026-07-25
 - **Bead:** `und-oh0.13.17`
 - **Extends:** Design-0012, Design-0014, and Design-0016
@@ -436,7 +436,10 @@ The coordinated cache will account for:
 - scratch capacities, separately from immutable residency.
 
 One latest committed root and relevant composition roots may be retained per
-document only while their complete segment set fits the coordinated budget.
+document only while their complete segment set fits its coordinated lane
+budget. Committed and transient-composition limits are independent so
+transient work cannot evict the committed scene needed when composition is
+cancelled.
 Paragraph cache entries and retained roots share the same `Arc` segments; the
 engine registry charges each unique segment once and charges persistent root
 metadata separately. Before evicting a segment, the engine drops every
@@ -451,7 +454,11 @@ retention is unmeasured. They never present engine-controlled residency as
 whole-process memory.
 
 Exact scene hits update scene-level recency in O(1). They do not walk every
-paragraph merely to refresh individual LRU timestamps.
+paragraph merely to refresh individual LRU timestamps. Paragraph eviction
+lazily folds a newer root timestamp into stale candidate entries while it is
+already enforcing a budget. A composition root refresh protects its transient
+target and the committed sibling segments that root actually names, but not
+the superseded committed target segment.
 
 The present entry-count budget is retained during migration, then supplemented
 or replaced by explicit byte categories only with measured accounting. Cache
@@ -523,6 +530,28 @@ capability.
   Cloning becomes cheap and mutations become copy-on-write.
 - `LayoutEngine::prepare` and `prepare_block` retain their result-oriented
   call shape.
+- `CacheBudget::new(entries)` applies `entries` independently to committed and
+  transient-composition geometry so composition cannot evict committed work.
+  `with_composition_entries` selects a different transient limit, including
+  zero for caller-owned composition output without engine retention.
+  Consequently `CacheDiagnostics::current_entries()` may be the sum of two
+  full lanes; `budget()` reports the committed limit and
+  `composition_budget()` reports the transient limit.
+- `ParagraphFormation::release(ParagraphId)` becomes
+  `release(ParagraphPreparationId)`. Backends key retained work by
+  `ParagraphInput::preparation()` so committed and transient composition lanes
+  cannot displace one another.
+- `ParagraphInput::change()` reports the validated formation facets changed
+  since that exact preparation lane last ran. A backend may skip
+  deep-comparison only when it still owns the matching cache entry; a missing
+  entry remains cold regardless of the change record.
+- `ParagraphInput::reusable_preparation()` is an optional exact-output reuse
+  opportunity across lanes. Backends may ignore it, but must not infer broader
+  semantic identity from the shared `ParagraphId`.
+- Paint fragments are run-sized in the common case. Consumers that previously
+  assumed one fragment per glyph must iterate `fragment.glyphs()`. A fragment
+  may span several authored owners, so glyph-specific provenance comes from
+  the glyph view while `fragment.sources()` describes the whole fragment.
 
 All repository examples, PDF export, showcase rendering, tests, and benchmarks
 will migrate in the same coherent change. There will be no compatibility
@@ -574,7 +603,7 @@ or state its candidate-dependent complexity; the proof matrix will not infer a
 
 ## Human gate
 
-Approval of this design authorizes:
+Approved by Bruce on 2026-07-25. The approval authorizes:
 
 - the public scene traversal migration above;
 - internal copy-on-write `StyleMap` and `Document` representations;

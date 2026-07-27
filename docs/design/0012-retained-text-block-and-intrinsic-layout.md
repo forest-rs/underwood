@@ -257,9 +257,12 @@ This campaign deliberately breaks the pre-release API:
 | `SceneRequest::new(width, styles, paint)` | `SceneRequest::new(TextConstraint::Wrap(width), styles, paint)` |
 | `ParagraphConstraints::max_inline_advance()` | `ParagraphConstraints::text()` and match `TextConstraint` |
 
-Retained `ParagraphFormation` implementations should also override the new
-`release`, `clear`, and `retained_entries` lifecycle methods. Stateless
-implementations remain source-compatible through the default no-op hooks.
+Retained `ParagraphFormation` implementations override `release`, `clear`,
+`set_retained_facts_budget`, `commit_preparation`, `trim_retained_facts`, and
+`retained_facts`. Stateless implementations remain source-compatible through
+the default no-op hooks. The adapter-fact byte budget is independent of
+published scene residency; zero budget is the supported static-label
+configuration.
 
 Future text-data provisioning must implement ADR-0003's real immutable resource
 identity. It will not revive the empty placeholder for compatibility.

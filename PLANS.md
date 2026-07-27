@@ -220,7 +220,8 @@ work, and all local and protected remote gates are green.
 
 ## Retained O(change) preparation and scene lifecycle
 
-**Status:** Proposed — sibling campaign; Design-0017 awaits architecture approval
+**Status:** Active — Designs 0017, 0018, and 0021 approved; compact-artifact
+residency gates green, changed-paragraph CPU/allocation gates in progress
 
 **Beads:** `und-oh0.13.17` and its dependency-ordered children
 
@@ -235,9 +236,13 @@ paragraph facts plus a sublinear scene-spine update.
 ### Fence
 
 This campaign is informed by the preparation trace but is not part of the
-reusable text-tools completion gate. It must not begin foundational
-implementation until Design-0017 and its public traversal migration are
-approved.
+reusable text-tools completion gate. Design-0017 and its public traversal
+migration were approved on 2026-07-25; implementation remains bound by its
+dependency, `unsafe`, serialization, and renderer-policy gates.
+The matched Parley comparison subsequently falsified the final editable
+retained shape. Design-0021 and its breaking public adapter migration were
+approved on 2026-07-27; the replacement preserves the O(change),
+immutable-publication, capability, source-completeness, and `no_std` laws.
 
 ### Measured baseline
 
@@ -291,9 +296,194 @@ staging.
 5. Make document staging copy-on-write and mutate each touched leaf once.
 6. Compact common-case source, paint, and interaction records with matched
    before/after allocation and query evidence.
+7. Collapse the remaining prepared/scene duplication into one flat paragraph
+   artifact, make scene capabilities borrowed indexed views, remove the
+   adapter final-output cache and miniature-document block path, and delete
+   every superseded representation.
 
-The proposed representation and public migration are recorded in
-`docs/design/0017-retained-scene-lifecycle.md`.
+Step 5 is implemented and measured in
+`docs/proof/retained-document-cow-2026-07-26.md`: one-byte staging performs 20
+allocation calls at both 64 and 1,000 paragraphs, with only one bounded
+32-way sequence path distinguishing their retained bytes. Full campaign gates
+remain before the epic closes.
+
+The localized normal-flow preparation scan is also removed:
+`docs/proof/retained-localized-preparation-2026-07-26.md` records 612 versus
+615 allocation calls at 64 versus 1,000 paragraphs. Shared document and scene
+subtrees are skipped by identity; region-flow suffix convergence remains an
+explicit separate law.
+
+Before steps 4 and 6 are considered complete, implement the approved
+capability-scaled scene retention. Display-only labels must not retain maximal
+editable facts, and authored provenance should live in one paragraph-local
+source map rather than being repeated in every record. The approved request,
+sidecar, upgrade, and typed-table design is recorded in
+`docs/design/0018-capability-scaled-scenes.md`.
+
+### Design-0017 completion audit — 2026-07-26
+
+The first measured O(change) proof is real for same-structure normal-flow text
+edits, but it is not the complete approved design. A requirement-by-requirement
+audit found four remaining lifecycle laws that broad test counts did not prove:
+
+- region scenes still flatten every paragraph transcript and localized region
+  edits still visit the whole document instead of stopping at cursor
+  convergence;
+- a local `StyleMap` mutation copy-on-writes one flat override vector and
+  forces whole-document preparation rather than exposing a changed paragraph
+  bucket;
+- point, caret, and exact text lookup still scan every paragraph-local
+  interaction record despite the persistent spine;
+- paragraph append falls back to complete scene preparation rather than
+  extending the persistent document and scene paths.
+
+**Fence:** `SceneSpine` owns persistent paragraph order, prefix summaries,
+region-chain summaries, and logarithmic paragraph/record routing; it explicitly
+does not own projection, shaping, or host interaction policy. `StyleMap` owns
+immutable computed-style provenance and paragraph-local change discovery; it
+explicitly does not own layout cache lifetime. `LayoutEngine` owns combining
+those structural facts into localized preparation and cursor convergence; it
+explicitly does not own adapter internals.
+
+Options considered:
+
+1. Add isolated special cases while retaining a flat document transcript and
+   scan-based interaction. This would improve selected benchmarks while leaving
+   the normative work laws false.
+2. Extend the existing typed persistent document/scene structures with the
+   summaries and traversal seams already required by Design-0017. This keeps
+   paragraph segments as the reclamation unit and makes the proof paths share
+   the product representation.
+3. Introduce a general arena or mutable scene index. This adds lifetime and
+   reclamation policy without solving the immutable-publication laws.
+
+Choose option 2. Execute in independently green slices:
+
+1. make document-level region transcripts cheap scene-spine views over
+   paragraph attempt blocks and remove flatten/replay work from publication;
+2. prepare localized region ranges from the first changed paragraph through
+   cursor convergence, with O(log P + A) paragraph traversal and spine
+   replacement;
+3. route normal-flow point, caret, and exact text lookup through spine and
+   paragraph-local sorted facts rather than complete-scene scans;
+4. give style overrides paragraph-local persistent provenance and feed their
+   structural changes into the same localized preparation mechanism;
+5. extend persistent publication for append, then rerun every work law and
+   matched 64/1,000 proof before closure.
+
+Design-0018 was approved on 2026-07-26. Its feature masks, sidecars, adapter
+split, and public facades now execute after the Design-0017 structural laws are
+real; they remain dependency-free and do not authorize `unsafe`, renderer
+policy, serialization, or a global arena.
+
+The first four Design-0018 implementation checkpoints are green. Requests carry
+a normalized uniform-plus-sparse capability policy; display-only paragraphs
+physically omit nonrequested scene sidecars; the Parley adapter omits cursor
+movement lowering below selection; warm upgrades share immutable formation and
+layout facts; and repository consumers use capability-checked source,
+semantic, interaction, selection, and editing facades. Reusable adapter facts
+now have a separate deterministic byte budget and LRU, a supported zero-budget
+static-label mode, explicit trim, and warm/cold degradation diagnostics. The
+third checkpoint stores provenance once in a paragraph-local source map,
+coalesces ordinary paint into run-sized fragments over flat glyph tables, and
+returns borrowed source-complete hit views. Matched release allocation traces
+show cold editable preparation falling from 316 calls / 112,090 bytes to 186
+calls / 75,634 bytes and repeated source-aware hit queries falling from two
+allocations to zero. The fourth checkpoint adds requested-versus-resident
+category byte diagnostics and a checked 64/1,000/2,048 mixed-document tunnel:
+exact repeats remain 63–72 ns and allocation-free within profiler noise, one
+editable paragraph alone retains source and interaction sidecars, and one
+keystroke costs 176–184 allocations rather than scaling with its 63–2,047
+display siblings. Migration, executable evidence, and the remaining churn,
+corpus, Parley-comparison, and table-compaction work are recorded in
+`docs/proof/capability-scaled-scenes-progress-2026-07-26.md`.
+
+The five Design-0017 completion-audit slices are implemented and measured.
+Region transcripts are persistent scene views, region edits stop at cursor
+convergence, normal-flow interaction and exact text lookup descend the spine,
+style overrides use paragraph-local persistent provenance, and append extends
+the document and scene paths. Matched 64/1,000 allocation counts differ by
+only three calls for localized text, region, and style, and four calls for
+append. Exact results, the `SceneRegionTranscript` migration, and remaining
+non-claims are recorded in
+`docs/proof/retained-structural-laws-2026-07-26.md`.
+
+The final matched high-level Parley gate is now checked in as
+`benches/residency-compare` and
+`docs/proof/retained-parley-comparison-2026-07-27.md`. It proves:
+
+- exact repeats are allocation-free and faster than Parley in the matched
+  fixture;
+- localized edit work is flat from 64 to 1,000 siblings;
+- indexed 1,000-unit exact/closest/byte hit queries are faster than Parley;
+- the default editable label path nevertheless retains 20.3 MB above its font
+  baseline at 1,000 labels versus Parley's 3.38 MB, while one edit is about
+  7.4× slower and performs roughly 130–136 allocations versus 3;
+- optional warm adapter retention raises the live delta to 42.0 MB without
+  improving matched typing.
+
+Those failures block campaign closure. Approved Design-0021 changes the
+canonical story to one source snapshot prepared into one immutable
+paragraph-local artifact, with display, source, hit, selection, movement,
+native, and export behavior exposed as borrowed indexed views. It explicitly
+targets deletion of the prepared/cached cursor graphs, adapter final-output
+cache, clone-based repaint path, nested flattening pipeline, and plain
+`TextBlock` miniature `Document`. Its blocking numeric gates are at most 1.5×
+Parley display residency, 2× Parley default editable residency and edit
+latency, 16 allocations / 8 KiB per edit, zero exact-repeat allocations, and
+no query regression.
+
+The representation and public migration are recorded in
+`docs/design/0021-compact-paragraph-artifacts.md`. The deletion campaign has
+removed both cursor graphs, copied scene glyph/layout owners, ordinary
+per-glyph paint evidence, the adapter final-output cache, clone-based repaint,
+the nested final lowering path, and deep formation keys. Exact matched
+live-heap deltas are now 1.07× Parley for display and 1.19× for editable
+labels. Direct canonical construction plus recycled projection, whitespace,
+and line work has reduced one changed paragraph from 63 calls / 12,584
+requested bytes to 29 calls / 4,516 bytes. The subsequent borrowed-paragraph
+slice removes the temporary `Document` from block preparation, recycles
+line-lowering work, and shares equivalent internal block style maps. Changed
+preparation is now **16 calls / 3,200 bytes**, stable repeat and repaint remain
+allocation-free, and cold preparation falls from 28,377 to 16,884 calls at
+1,000 blocks. Whitespace-separated lines borrow canonical shaping while
+Arabic joining-sensitive boundaries still reshape; none of this requires a
+new `ShapedText` API or Parley fork. Seven paired release samples measure
+localized edit at 5.91–6.04 µs versus Parley's 3.04–3.10 µs, or
+**1.91–1.99×**. Residency, requested-byte, call-count, and edit-latency gates
+are green on this host. The final multi-selection replacement use of the
+miniature `Document` is also deleted: block and document owners now share
+validation, operation ordering, and caret rebasing through a private source
+contract, while `TextBlock` mutates one exactly sized string directly. The
+running ledger and raw checkpoints are in
+`docs/proof/compact-artifact-deletion-ledger-2026-07-27.md`.
+
+The final three-sample live-heap rerun improves those ordinary-tier ratios
+again: 1,000 display labels retain 3,220,368 bytes above the Underwood font
+baseline versus Parley's 3,378,240-byte delta (**0.95×**), while editable
+labels retain 3,564,368 bytes (**1.06×**). The bounded 64-entry churn window is
+1.07× Parley's live delta and requests fewer bytes over 1,000 creations.
+Seven-sample medians keep localized edits at 1.95× Parley and make all
+1,000-unit exact/closest/position queries faster than the matched Parley
+queries.
+
+The final capability audit also corrected a facade mirage: sparse policies
+previously retained one editor without permitting the scene-wide checked
+editing facade. Interaction, selection, and editing facades now open when at
+least one represented paragraph retains the required closure and traverse only
+resident observations; display siblings remain absent and unqueryable.
+Whole-scene source and semantic facades retain their stricter all-paragraph
+gate. The complete upgrade, churn, source-heavy, bidi, native-composition,
+portability, and repository proof is recorded in
+`docs/proof/capability-scaled-scenes-progress-2026-07-26.md`.
+
+Design-0021 is a runtime-representation compaction, not yet a source-code
+compaction. Its Rook audit records 19,756 affected production lines after
+excluding inline test modules, up from 18,380 before the design. All duplicate
+retained owners are genuinely deleted, but the streaming builder and facade
+vocabulary remains large. Follow-up `und-0re` has no compatibility promise and
+must materially delete that construction/forwarding complexity without a new
+`ShapedText` API or private Parley fork.
 
 ### Risks and controls
 
@@ -314,7 +504,10 @@ localized-edit work laws; unchanged records are shared rather than copied;
 adapter hits do not re-lower; one-byte edits do not clone untouched paragraph
 or leaf storage; common records avoid per-glyph allocation; and the full Rust
 1.88, `no_std`, formatting, lint, test, documentation, repository, and
-protected-remote gates pass.
+protected-remote gates pass. The final representation passes the Design-0021
+residency, edit, allocation, query, churn, and named-owner deletion gates. The
+larger construction source surface is explicitly carried by `und-0re` rather
+than being mislabeled as complete conceptual simplification.
 
 ## Module boundaries and Parley Engine convergence
 

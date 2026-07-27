@@ -15,6 +15,7 @@ mod composition;
 mod document;
 mod editable;
 mod error;
+mod features;
 mod projection;
 mod region;
 mod scene;
@@ -38,6 +39,7 @@ pub use error::{
     CompositionError, CompositionErrorKind, EditError, EditErrorKind, SceneError, SceneErrorKind,
     SelectionError, SelectionErrorKind, StyleError, StyleErrorKind, SurfaceError, SurfaceErrorKind,
 };
+pub use features::{MissingSceneCapability, SceneFeaturePolicy, SceneFeatures};
 pub use kurbo::{Affine, Point, Rect, Size, Vec2};
 pub use parlance::{
     BaseDirection, FontFamily, FontFamilyName, FontFeature, FontStyle, FontVariation, FontWeight,
@@ -53,11 +55,20 @@ pub use region::{
     RegionFloat, RegionFlow, RegionTranscript,
 };
 pub use scene::{
-    CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
-    LineAdjustment, PreparationMemory, PreparationReuse, PreparationTrace, ProjectedTextPosition,
-    ProjectedTextRange, ProjectedTextSource, SceneCaret, SceneCompositionRect, SceneFragment,
-    SceneFragmentId, SceneGlyph, SceneGlyphInstanceId, SceneLine, SceneOutput, SceneSelectionRect,
-    SemanticFragment, StageWork, TextHit, TextMetrics, TextScene, WorkReport,
+    CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, ForeignSceneView,
+    LayoutEngine, LineAdjustment, ParagraphSceneResidency, PreparationMemory, PreparationReuse,
+    PreparationTrace, ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneFragmentView,
+    ProjectedSceneFragments, ProjectedSceneGlyphView, ProjectedSceneGlyphs,
+    ProjectedSceneInteraction, ProjectedSceneLineView, ProjectedSceneLines,
+    ProjectedSceneSemanticAccess, ProjectedSceneSourceAccess, ProjectedSources,
+    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, ProjectedTextUnitView,
+    SceneCaret, SceneCompositionRect, SceneDisplay, SceneEditing, SceneFragmentId,
+    SceneFragmentView, SceneFragments, SceneGlyphInstanceId, SceneGlyphView, SceneGlyphs,
+    SceneInteraction, SceneLineView, SceneLines, SceneOutput, SceneParagraphResidencies,
+    SceneRegionAttempts, SceneRegionTranscript, SceneResidency, SceneResidencyBytes,
+    SceneSelection, SceneSelectionRect, SceneSemanticAccess, SceneSemantics, SceneSourceAccess,
+    SemanticFragmentView, SnapshotSources, SnapshotTextUnitView, StageWork, TextHit, TextMetrics,
+    TextScene, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

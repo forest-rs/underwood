@@ -14,6 +14,7 @@ use crate::{
 };
 
 mod model;
+mod sequence;
 mod transaction;
 
 pub use model::{
@@ -23,7 +24,10 @@ pub use model::{
 pub use transaction::Edit;
 
 pub(crate) use model::{DocumentState, Paragraph, TextLeaf};
-use transaction::{ReplacementOperation, validate_replacement_plans};
+pub(crate) use transaction::{
+    ReplacementSource, rebind_replacement_selections, replacement_operations,
+    validate_replacement_plans,
+};
 
 #[cfg(test)]
 mod tests;

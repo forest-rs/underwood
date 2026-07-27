@@ -1,6 +1,7 @@
 // Copyright 2026 the Underwood Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -632,10 +633,38 @@ impl Default for ParagraphStyle {
 /// Complete per-paragraph and per-leaf computed styles over default values.
 #[derive(Clone, Debug)]
 pub struct StyleMap {
-    pub(crate) default: ComputedInlineStyle,
-    styles: Vec<(TextId, ComputedInlineStyle)>,
+    state: Arc<StyleMapState>,
+}
+
+#[derive(Clone, Debug)]
+struct StyleMapState {
+    default: ComputedInlineStyle,
     default_paragraph: ParagraphStyle,
-    paragraph_styles: Vec<(ParagraphId, ParagraphStyle)>,
+    documents: BTreeMap<crate::DocumentId, StyleBucketTree>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct StyleBucketTree {
+    root: Option<Arc<StyleBucketBranch>>,
+    inline_overrides: usize,
+    paragraph_overrides: usize,
+}
+
+#[derive(Clone, Debug)]
+struct StyleBucketBranch {
+    children: [Option<StyleBucketChild>; 32],
+}
+
+#[derive(Clone, Debug)]
+enum StyleBucketChild {
+    Branch(Arc<StyleBucketBranch>),
+    Bucket(Arc<ParagraphStyleBucket>),
+}
+
+#[derive(Clone, Debug, Default)]
+struct ParagraphStyleBucket {
+    inline: Vec<(u32, ComputedInlineStyle)>,
+    paragraph: Option<ParagraphStyle>,
 }
 
 impl StyleMap {
@@ -643,78 +672,301 @@ impl StyleMap {
     #[must_use]
     pub fn new(default: ComputedInlineStyle) -> Self {
         Self {
-            default,
-            styles: Vec::new(),
-            default_paragraph: ParagraphStyle::default(),
-            paragraph_styles: Vec::new(),
+            state: Arc::new(StyleMapState {
+                default,
+                default_paragraph: ParagraphStyle::default(),
+                documents: BTreeMap::new(),
+            }),
         }
     }
 
     /// Returns a style map whose unassigned paragraphs use `style`.
     #[must_use]
     pub fn with_default_paragraph_style(mut self, style: ParagraphStyle) -> Self {
-        self.default_paragraph = style;
+        if self.state.default_paragraph != style {
+            Arc::make_mut(&mut self.state).default_paragraph = style;
+        }
         self
     }
 
     /// Assigns one complete style to a text identity.
     pub fn set(&mut self, text: TextId, style: ComputedInlineStyle) {
-        if let Some((_, current)) = self.styles.iter_mut().find(|(id, _)| *id == text) {
+        if self.style_for(text) == &style {
+            return;
+        }
+        let state = Arc::make_mut(&mut self.state);
+        let tree = state.documents.entry(text.document).or_default();
+        let mut bucket = tree
+            .bucket(text.paragraph)
+            .map_or_else(ParagraphStyleBucket::default, |bucket| (**bucket).clone());
+        if let Some((_, current)) = bucket
+            .inline
+            .iter_mut()
+            .find(|(index, _)| *index == text.index)
+        {
             *current = style;
         } else {
-            self.styles.push((text, style));
+            bucket.inline.push((text.index, style));
+            bucket.inline.sort_by_key(|(index, _)| *index);
+            tree.inline_overrides = tree.inline_overrides.saturating_add(1);
         }
+        tree.set_bucket(text.paragraph, Arc::new(bucket));
     }
 
     /// Assigns complete paragraph-level values to one paragraph identity.
     pub fn set_paragraph_style(&mut self, paragraph: ParagraphId, style: ParagraphStyle) {
-        if let Some((_, current)) = self
-            .paragraph_styles
-            .iter_mut()
-            .find(|(id, _)| *id == paragraph)
-        {
-            *current = style;
-        } else {
-            self.paragraph_styles.push((paragraph, style));
+        if self.paragraph_style_for(paragraph) == style {
+            return;
         }
+        let state = Arc::make_mut(&mut self.state);
+        let tree = state.documents.entry(paragraph.document).or_default();
+        let mut bucket = tree
+            .bucket(paragraph.index)
+            .map_or_else(ParagraphStyleBucket::default, |bucket| (**bucket).clone());
+        if bucket.paragraph.is_none() {
+            tree.paragraph_overrides = tree.paragraph_overrides.saturating_add(1);
+        }
+        bucket.paragraph = Some(style);
+        tree.set_bucket(paragraph.index, Arc::new(bucket));
     }
 
     /// Returns the assigned style or the default when no override exists.
     #[must_use]
     pub fn style_for(&self, text: TextId) -> &ComputedInlineStyle {
-        self.styles
-            .iter()
-            .find_map(|(id, style)| (*id == text).then_some(style))
-            .unwrap_or(&self.default)
+        self.style_override(text).unwrap_or(&self.state.default)
     }
 
     /// Returns the default style.
     #[must_use]
-    pub const fn default_style(&self) -> &ComputedInlineStyle {
-        &self.default
+    pub fn default_style(&self) -> &ComputedInlineStyle {
+        &self.state.default
     }
 
     /// Returns the assigned paragraph style or the paragraph default.
     #[must_use]
     pub fn paragraph_style_for(&self, paragraph: ParagraphId) -> ParagraphStyle {
-        self.paragraph_styles
-            .iter()
-            .find_map(|(id, style)| (*id == paragraph).then_some(*style))
-            .unwrap_or(self.default_paragraph)
+        self.paragraph_style_override(paragraph)
+            .unwrap_or(self.state.default_paragraph)
     }
 
     /// Returns the paragraph-level default.
     #[must_use]
-    pub const fn default_paragraph_style(&self) -> ParagraphStyle {
-        self.default_paragraph
+    pub fn default_paragraph_style(&self) -> ParagraphStyle {
+        self.state.default_paragraph
     }
 
-    pub(crate) fn overrides(&self) -> &[(TextId, ComputedInlineStyle)] {
-        &self.styles
+    pub(crate) fn inline_override_count(&self) -> usize {
+        self.state
+            .documents
+            .values()
+            .map(|tree| tree.inline_overrides)
+            .sum()
     }
 
-    pub(crate) fn paragraph_overrides(&self) -> &[(ParagraphId, ParagraphStyle)] {
-        &self.paragraph_styles
+    pub(crate) fn paragraph_override_count(&self) -> usize {
+        self.state
+            .documents
+            .values()
+            .map(|tree| tree.paragraph_overrides)
+            .sum()
+    }
+
+    pub(crate) fn inline_override_count_for(&self, paragraph: ParagraphId) -> usize {
+        self.state
+            .documents
+            .get(&paragraph.document)
+            .and_then(|tree| tree.bucket(paragraph.index))
+            .map_or(0, |bucket| bucket.inline.len())
+    }
+
+    pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.state, &other.state)
+    }
+
+    pub(crate) fn changed_paragraphs_from(
+        &self,
+        previous: &Self,
+        document: crate::DocumentId,
+    ) -> Option<Vec<usize>> {
+        if self.state.default != previous.state.default
+            || self.state.default_paragraph != previous.state.default_paragraph
+        {
+            return None;
+        }
+        for (identity, tree) in &self.state.documents {
+            if *identity != document
+                && !previous
+                    .state
+                    .documents
+                    .get(identity)
+                    .is_some_and(|previous| tree.shares_root_with(previous))
+            {
+                return None;
+            }
+        }
+        for (identity, tree) in &previous.state.documents {
+            if *identity != document
+                && !self
+                    .state
+                    .documents
+                    .get(identity)
+                    .is_some_and(|current| tree.shares_root_with(current))
+            {
+                return None;
+            }
+        }
+        let mut changed = Vec::new();
+        diff_style_buckets(
+            previous
+                .state
+                .documents
+                .get(&document)
+                .and_then(|tree| tree.root.as_ref()),
+            self.state
+                .documents
+                .get(&document)
+                .and_then(|tree| tree.root.as_ref()),
+            6,
+            0,
+            &mut changed,
+        );
+        Some(changed)
+    }
+
+    pub(crate) fn style_override(&self, text: TextId) -> Option<&ComputedInlineStyle> {
+        let bucket = self
+            .state
+            .documents
+            .get(&text.document)?
+            .bucket(text.paragraph)?;
+        let index = bucket
+            .inline
+            .binary_search_by_key(&text.index, |(index, _)| *index)
+            .ok()?;
+        Some(&bucket.inline[index].1)
+    }
+
+    pub(crate) fn paragraph_style_override(
+        &self,
+        paragraph: ParagraphId,
+    ) -> Option<ParagraphStyle> {
+        self.state
+            .documents
+            .get(&paragraph.document)?
+            .bucket(paragraph.index)?
+            .paragraph
+    }
+}
+
+impl StyleBucketTree {
+    fn bucket(&self, paragraph: u32) -> Option<&Arc<ParagraphStyleBucket>> {
+        style_bucket(self.root.as_ref()?, 6, paragraph)
+    }
+
+    fn set_bucket(&mut self, paragraph: u32, bucket: Arc<ParagraphStyleBucket>) {
+        self.root = Some(replace_style_bucket(
+            self.root.as_ref(),
+            6,
+            paragraph,
+            bucket,
+        ));
+    }
+
+    fn shares_root_with(&self, other: &Self) -> bool {
+        match (&self.root, &other.root) {
+            (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+fn style_bucket(
+    node: &Arc<StyleBucketBranch>,
+    level: u8,
+    paragraph: u32,
+) -> Option<&Arc<ParagraphStyleBucket>> {
+    let slot = style_bucket_slot(level, paragraph);
+    let child = node.children[slot].as_ref()?;
+    if level == 0 {
+        let StyleBucketChild::Bucket(bucket) = child else {
+            return None;
+        };
+        Some(bucket)
+    } else {
+        let StyleBucketChild::Branch(branch) = child else {
+            return None;
+        };
+        style_bucket(branch, level - 1, paragraph)
+    }
+}
+
+fn replace_style_bucket(
+    node: Option<&Arc<StyleBucketBranch>>,
+    level: u8,
+    paragraph: u32,
+    bucket: Arc<ParagraphStyleBucket>,
+) -> Arc<StyleBucketBranch> {
+    let mut children = node.map_or_else(
+        || core::array::from_fn(|_| None),
+        |branch| branch.children.clone(),
+    );
+    let slot = style_bucket_slot(level, paragraph);
+    children[slot] = Some(if level == 0 {
+        StyleBucketChild::Bucket(bucket)
+    } else {
+        let child = match children[slot].as_ref() {
+            Some(StyleBucketChild::Branch(branch)) => Some(branch),
+            Some(StyleBucketChild::Bucket(_)) | None => None,
+        };
+        StyleBucketChild::Branch(replace_style_bucket(child, level - 1, paragraph, bucket))
+    });
+    Arc::new(StyleBucketBranch { children })
+}
+
+const fn style_bucket_slot(level: u8, paragraph: u32) -> usize {
+    ((paragraph >> ((level as u32) * 5)) & 31) as usize
+}
+
+fn diff_style_buckets(
+    previous: Option<&Arc<StyleBucketBranch>>,
+    current: Option<&Arc<StyleBucketBranch>>,
+    level: u8,
+    prefix: u32,
+    changed: &mut Vec<usize>,
+) {
+    if matches!((previous, current), (Some(previous), Some(current)) if Arc::ptr_eq(previous, current))
+        || previous.is_none() && current.is_none()
+    {
+        return;
+    }
+    for slot in 0..32 {
+        let previous = previous.and_then(|branch| branch.children[slot].as_ref());
+        let current = current.and_then(|branch| branch.children[slot].as_ref());
+        let key = prefix
+            | (u32::try_from(slot).expect("a 32-way slot fits u32") << (u32::from(level) * 5));
+        if level == 0 {
+            let shared = matches!(
+                (previous, current),
+                (
+                    Some(StyleBucketChild::Bucket(previous)),
+                    Some(StyleBucketChild::Bucket(current))
+                ) if Arc::ptr_eq(previous, current)
+            );
+            if !shared && (previous.is_some() || current.is_some()) {
+                changed.push(usize::try_from(key).expect("paragraph identity fits this target"));
+            }
+        } else {
+            let previous = match previous {
+                Some(StyleBucketChild::Branch(branch)) => Some(branch),
+                Some(StyleBucketChild::Bucket(_)) | None => None,
+            };
+            let current = match current {
+                Some(StyleBucketChild::Branch(branch)) => Some(branch),
+                Some(StyleBucketChild::Bucket(_)) | None => None,
+            };
+            diff_style_buckets(previous, current, level - 1, key, changed);
+        }
     }
 }
 
@@ -776,6 +1028,37 @@ mod tests {
             styles.paragraph_style_for(paragraph).alignment(),
             TextAlignment::Center
         );
+    }
+
+    #[test]
+    fn style_map_clones_share_state_until_a_real_change() {
+        let mut document = Document::new(DocumentId::from_bytes(*b"style-provenance"));
+        let mut edit = document.edit();
+        let paragraph = edit
+            .append_paragraph(ParagraphRole::BODY)
+            .expect("fixture paragraph is valid");
+        let text = edit
+            .append_text(paragraph, crate::InlineRole::TEXT, "shared")
+            .expect("fixture text is valid");
+        edit.commit().expect("fixture document is valid");
+        let inline = ComputedInlineStyle::new(
+            ShapingStyle::new(FontFamily::named("Test"), 16.0).expect("fixture style is valid"),
+            InlineFlowStyle::default(),
+            PaintSlot::new(0),
+        );
+        let original = StyleMap::new(inline.clone());
+        let mut branch = original.clone();
+
+        assert!(original.shares_state_with(&branch));
+        branch.set(text, inline.clone());
+        assert!(original.shares_state_with(&branch));
+        branch.set_paragraph_style(paragraph, ParagraphStyle::DEFAULT);
+        assert!(original.shares_state_with(&branch));
+
+        branch.set(text, inline.with_paint(PaintSlot::new(1)));
+        assert!(!original.shares_state_with(&branch));
+        assert_eq!(original.style_for(text).paint(), PaintSlot::new(0));
+        assert_eq!(branch.style_for(text).paint(), PaintSlot::new(1));
     }
 
     #[test]
@@ -1011,12 +1294,13 @@ impl From<FiniteWidth> for TextConstraint {
 }
 
 /// Borrowed inputs for one scene preparation.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SceneRequest<'a> {
     pub(crate) constraint: TextConstraint,
     pub(crate) styles: &'a StyleMap,
     pub(crate) paint: &'a PaintTable,
     pub(crate) region_flow: Option<&'a crate::RegionFlow>,
+    pub(crate) features: crate::SceneFeaturePolicy,
     pub(crate) trace: bool,
 }
 
@@ -1029,8 +1313,29 @@ impl<'a> SceneRequest<'a> {
             styles,
             paint,
             region_flow: None,
+            features: crate::SceneFeaturePolicy::default(),
             trace: false,
         }
+    }
+
+    /// Returns a request with one uniform prepared-scene capability profile.
+    #[must_use]
+    pub fn with_features(mut self, features: crate::SceneFeatures) -> Self {
+        self.features = crate::SceneFeaturePolicy::uniform(features);
+        self
+    }
+
+    /// Returns a request with uniform defaults and sparse paragraph overrides.
+    #[must_use]
+    pub fn with_feature_policy(mut self, policy: crate::SceneFeaturePolicy) -> Self {
+        self.features = policy;
+        self
+    }
+
+    /// Returns the requested scene capability policy.
+    #[must_use]
+    pub const fn feature_policy(&self) -> &crate::SceneFeaturePolicy {
+        &self.features
     }
 
     /// Returns a request that fills exact slots from an immutable region flow.
@@ -1046,7 +1351,7 @@ impl<'a> SceneRequest<'a> {
 
     /// Returns the exact region policy, when one was requested.
     #[must_use]
-    pub const fn region_flow(self) -> Option<&'a crate::RegionFlow> {
+    pub const fn region_flow(&self) -> Option<&'a crate::RegionFlow> {
         self.region_flow
     }
 
@@ -1063,7 +1368,7 @@ impl<'a> SceneRequest<'a> {
 
     /// Returns whether detailed preparation tracing was requested.
     #[must_use]
-    pub const fn preparation_trace(self) -> bool {
+    pub const fn preparation_trace(&self) -> bool {
         self.trace
     }
 }
