@@ -7,19 +7,63 @@
 //! does not own retained cache policy or scene-space geometry.
 
 use super::*;
+use alloc::string::String;
+use core::mem::{self, size_of};
 
 mod styles;
 
 use styles::project_style_runs;
 
+#[derive(Debug, Default)]
+pub(super) struct ProjectionScratch {
+    mapping_source: String,
+    mapping_projected: String,
+    mapping_segments: Vec<ProjectionSegment>,
+    spans: Vec<LeafSpan>,
+    analysis_styles: Vec<AnalysisStyle>,
+    analysis_runs: Vec<AnalysisRun>,
+    shaping_styles: Vec<ShapingStyle>,
+    shaping_runs: Vec<ShapingRun>,
+    inline_flow_styles: Vec<InlineFlowStyle>,
+    inline_flow_runs: Vec<InlineFlowRun>,
+    paint_runs: Vec<PaintRun>,
+}
+
+impl ProjectionScratch {
+    pub(super) fn accounted_capacity_bytes(&self) -> usize {
+        self.mapping_source
+            .capacity()
+            .saturating_add(self.mapping_projected.capacity())
+            .saturating_add(
+                size_of::<ProjectionSegment>().saturating_mul(self.mapping_segments.capacity()),
+            )
+            .saturating_add(size_of::<LeafSpan>().saturating_mul(self.spans.capacity()))
+            .saturating_add(
+                size_of::<AnalysisStyle>().saturating_mul(self.analysis_styles.capacity()),
+            )
+            .saturating_add(size_of::<AnalysisRun>().saturating_mul(self.analysis_runs.capacity()))
+            .saturating_add(
+                size_of::<ShapingStyle>().saturating_mul(self.shaping_styles.capacity()),
+            )
+            .saturating_add(size_of::<ShapingRun>().saturating_mul(self.shaping_runs.capacity()))
+            .saturating_add(
+                size_of::<InlineFlowStyle>().saturating_mul(self.inline_flow_styles.capacity()),
+            )
+            .saturating_add(
+                size_of::<InlineFlowRun>().saturating_mul(self.inline_flow_runs.capacity()),
+            )
+            .saturating_add(size_of::<PaintRun>().saturating_mul(self.paint_runs.capacity()))
+    }
+}
+
 #[derive(Clone, Debug)]
-pub(super) struct Projection<'a> {
+pub(super) struct Projection {
     pub(super) paragraph: ParagraphId,
     pub(super) mapping: TextProjection,
     pub(super) spans: Vec<LeafSpan>,
     pub(super) analysis_styles: Vec<AnalysisStyle>,
     pub(super) analysis_runs: Vec<AnalysisRun>,
-    pub(super) shaping_styles: Vec<&'a ShapingStyle>,
+    pub(super) shaping_styles: Vec<ShapingStyle>,
     pub(super) shaping_runs: Vec<ShapingRun>,
     pub(super) inline_flow_styles: Vec<InlineFlowStyle>,
     pub(super) inline_flow_runs: Vec<InlineFlowRun>,
@@ -31,20 +75,34 @@ pub(super) struct Projection<'a> {
     pub(super) paragraph_role: ParagraphRole,
 }
 
-impl<'a> Projection<'a> {
-    pub(super) fn new(
+impl Projection {
+    pub(super) fn new_in(
         paragraph: &Paragraph,
-        request: &'a SceneRequest<'_>,
+        request: &SceneRequest<'_>,
+        scratch: &mut ProjectionScratch,
     ) -> Result<Self, SceneError> {
-        let text = paragraph.projected_text();
-        let mut spans = Vec::with_capacity(paragraph.leaves.len());
-        let mut analysis_styles = Vec::new();
-        let mut analysis_runs = Vec::with_capacity(paragraph.leaves.len());
-        let mut shaping_styles = Vec::new();
-        let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len());
-        let mut inline_flow_styles = Vec::new();
-        let mut inline_flow_runs = Vec::with_capacity(paragraph.leaves.len());
-        let mut paint_runs = Vec::with_capacity(paragraph.leaves.len());
+        paragraph.project_text_into(&mut scratch.mapping_source);
+        let mut spans = mem::take(&mut scratch.spans);
+        let mut analysis_styles = mem::take(&mut scratch.analysis_styles);
+        let mut analysis_runs = mem::take(&mut scratch.analysis_runs);
+        let mut shaping_styles = mem::take(&mut scratch.shaping_styles);
+        let mut shaping_runs = mem::take(&mut scratch.shaping_runs);
+        let mut inline_flow_styles = mem::take(&mut scratch.inline_flow_styles);
+        let mut inline_flow_runs = mem::take(&mut scratch.inline_flow_runs);
+        let mut paint_runs = mem::take(&mut scratch.paint_runs);
+        spans.clear();
+        analysis_styles.clear();
+        analysis_runs.clear();
+        shaping_styles.clear();
+        shaping_runs.clear();
+        inline_flow_styles.clear();
+        inline_flow_runs.clear();
+        paint_runs.clear();
+        spans.reserve(paragraph.leaves.len());
+        analysis_runs.reserve(paragraph.leaves.len());
+        shaping_runs.reserve(paragraph.leaves.len());
+        inline_flow_runs.reserve(paragraph.leaves.len());
+        paint_runs.reserve(paragraph.leaves.len());
         let mut start = 0_u32;
         for leaf in &paragraph.leaves {
             let len = u32::try_from(leaf.text().len()).map_err(|_| {
@@ -89,8 +147,13 @@ impl<'a> Projection<'a> {
             start = end;
         }
         let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
-        let mapping = TextProjection::from_whitespace(text, paragraph_style.whitespace_collapse())
-            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        let mapping = TextProjection::from_whitespace_reusing(
+            mem::take(&mut scratch.mapping_source),
+            paragraph_style.whitespace_collapse(),
+            &mut scratch.mapping_projected,
+            &mut scratch.mapping_segments,
+        )
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
         project_style_runs(
             paragraph.id,
             &mapping,
@@ -118,10 +181,11 @@ impl<'a> Projection<'a> {
         })
     }
 
-    pub(super) fn with_composition(
+    pub(super) fn with_composition_in(
         paragraph: &Paragraph,
-        request: &'a SceneRequest<'_>,
+        request: &SceneRequest<'_>,
         composition: &CompositionSession,
+        scratch: &mut ProjectionScratch,
     ) -> Result<Self, SceneError> {
         let target = composition.target_text().ok_or_else(|| {
             SceneError::for_paragraph(SceneErrorKind::InvalidComposition, paragraph.id)
@@ -144,15 +208,30 @@ impl<'a> Projection<'a> {
             ));
         }
 
-        let mut text = alloc::string::String::new();
-        let mut spans = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
-        let mut analysis_styles = Vec::new();
-        let mut analysis_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
-        let mut shaping_styles = Vec::new();
-        let mut shaping_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
-        let mut inline_flow_styles = Vec::new();
-        let mut inline_flow_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
-        let mut paint_runs = Vec::with_capacity(paragraph.leaves.len() + ranges.len() + 1);
+        let mut text = mem::take(&mut scratch.mapping_source);
+        text.clear();
+        let capacity = paragraph.leaves.len() + ranges.len() + 1;
+        let mut spans = mem::take(&mut scratch.spans);
+        let mut analysis_styles = mem::take(&mut scratch.analysis_styles);
+        let mut analysis_runs = mem::take(&mut scratch.analysis_runs);
+        let mut shaping_styles = mem::take(&mut scratch.shaping_styles);
+        let mut shaping_runs = mem::take(&mut scratch.shaping_runs);
+        let mut inline_flow_styles = mem::take(&mut scratch.inline_flow_styles);
+        let mut inline_flow_runs = mem::take(&mut scratch.inline_flow_runs);
+        let mut paint_runs = mem::take(&mut scratch.paint_runs);
+        spans.clear();
+        analysis_styles.clear();
+        analysis_runs.clear();
+        shaping_styles.clear();
+        shaping_runs.clear();
+        inline_flow_styles.clear();
+        inline_flow_runs.clear();
+        paint_runs.clear();
+        spans.reserve(capacity);
+        analysis_runs.reserve(capacity);
+        shaping_runs.reserve(capacity);
+        inline_flow_runs.reserve(capacity);
+        paint_runs.reserve(capacity);
         let mut target_found = false;
 
         for leaf in &paragraph.leaves {
@@ -282,8 +361,13 @@ impl<'a> Projection<'a> {
         }
 
         let paragraph_style = request.styles.paragraph_style_for(paragraph.id);
-        let mapping = TextProjection::from_whitespace(text, paragraph_style.whitespace_collapse())
-            .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
+        let mapping = TextProjection::from_whitespace_reusing(
+            text,
+            paragraph_style.whitespace_collapse(),
+            &mut scratch.mapping_projected,
+            &mut scratch.mapping_segments,
+        )
+        .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
         project_style_runs(
             paragraph.id,
             &mapping,
@@ -309,6 +393,34 @@ impl<'a> Projection<'a> {
             paragraph_semantic: paragraph.semantic_id(),
             paragraph_role: paragraph.role,
         })
+    }
+
+    pub(super) fn recycle_into(self, scratch: &mut ProjectionScratch) {
+        let Self {
+            mapping,
+            spans,
+            analysis_styles,
+            analysis_runs,
+            shaping_styles,
+            shaping_runs,
+            inline_flow_styles,
+            inline_flow_runs,
+            paint_runs,
+            ..
+        } = self;
+        mapping.recycle_into(
+            &mut scratch.mapping_source,
+            &mut scratch.mapping_projected,
+            &mut scratch.mapping_segments,
+        );
+        scratch.spans = spans;
+        scratch.analysis_styles = analysis_styles;
+        scratch.analysis_runs = analysis_runs;
+        scratch.shaping_styles = shaping_styles;
+        scratch.shaping_runs = shaping_runs;
+        scratch.inline_flow_styles = inline_flow_styles;
+        scratch.inline_flow_runs = inline_flow_runs;
+        scratch.paint_runs = paint_runs;
     }
 
     pub(super) fn whole_paint_slot(&self, source: Range<u32>) -> Option<PaintSlot> {
@@ -423,13 +535,13 @@ impl<'a> Projection<'a> {
     }
 }
 
-pub(super) fn append_projection_span<'a>(
+pub(super) fn append_projection_span(
     paragraph: ParagraphId,
-    text: &mut alloc::string::String,
+    text: &mut String,
     spans: &mut Vec<LeafSpan>,
     analysis_styles: &mut Vec<AnalysisStyle>,
     analysis_runs: &mut Vec<AnalysisRun>,
-    shaping_styles: &mut Vec<&'a ShapingStyle>,
+    shaping_styles: &mut Vec<ShapingStyle>,
     shaping_runs: &mut Vec<ShapingRun>,
     inline_flow_styles: &mut Vec<InlineFlowStyle>,
     inline_flow_runs: &mut Vec<InlineFlowRun>,
@@ -437,7 +549,7 @@ pub(super) fn append_projection_span<'a>(
     leaf: &crate::document::TextLeaf,
     value: &str,
     source: LeafSpanSource,
-    style: &'a ComputedInlineStyle,
+    style: &ComputedInlineStyle,
 ) -> Result<(), SceneError> {
     let start = u32::try_from(text.len())
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph))?;
@@ -554,14 +666,14 @@ pub(super) fn append_analysis_run(
     Ok(())
 }
 
-pub(super) fn append_shaping_run<'a>(
-    styles: &mut Vec<&'a ShapingStyle>,
+pub(super) fn append_shaping_run(
+    styles: &mut Vec<ShapingStyle>,
     runs: &mut Vec<ShapingRun>,
     bytes: Range<u32>,
-    style: &'a ShapingStyle,
+    style: &ShapingStyle,
     paragraph: ParagraphId,
 ) -> Result<(), SceneError> {
-    let style = if let Some(index) = styles.iter().position(|candidate| *candidate == style) {
+    let style = if let Some(index) = styles.iter().position(|candidate| candidate == style) {
         ShapingStyleId::new(
             u16::try_from(index)
                 .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?,
@@ -569,7 +681,7 @@ pub(super) fn append_shaping_run<'a>(
     } else {
         let index = u16::try_from(styles.len())
             .map_err(|_| SceneError::for_paragraph(SceneErrorKind::InvalidStyle, paragraph))?;
-        styles.push(style);
+        styles.push(style.clone());
         ShapingStyleId::new(index)
     };
     if let Some(last) = runs.last_mut()
@@ -679,9 +791,9 @@ pub(super) fn validate_styles(
     Ok(required_paint_slots)
 }
 
-pub(super) fn validate_prepared(
+pub(super) fn validate_resolved_direction(
     prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
+    projection: &Projection,
 ) -> Result<(), SceneError> {
     if matches!(
         (
@@ -694,139 +806,6 @@ pub(super) fn validate_prepared(
             prepared.paragraph(),
             PreparationErrorKind::InvalidOutput,
         ));
-    }
-    for line in prepared.lines() {
-        let line_source = line.source();
-        if projection
-            .mapping
-            .text()
-            .get(line_source.start as usize..line_source.end as usize)
-            .is_none()
-        {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                prepared.paragraph(),
-                line_source,
-            ));
-        }
-        for unit in line.units() {
-            if unit.is_western_justification_opportunity() {
-                let source = unit.source();
-                if projection
-                    .mapping
-                    .text()
-                    .get(source.start as usize..source.end as usize)
-                    != Some(" ")
-                {
-                    return Err(SceneError::from_preparation_source(
-                        prepared.paragraph(),
-                        source,
-                        PreparationErrorKind::InvalidOutput,
-                    ));
-                }
-            }
-        }
-        for run in line.runs() {
-            let source = run.source();
-            let Some(source_text) = projection
-                .mapping
-                .text()
-                .get(source.start as usize..source.end as usize)
-            else {
-                return Err(SceneError::for_source(
-                    SceneErrorKind::SourceCoverage,
-                    prepared.paragraph(),
-                    source,
-                ));
-            };
-            for glyph in run.glyphs() {
-                let source = glyph.source();
-                if projection
-                    .mapping
-                    .text()
-                    .get(source.start as usize..source.end as usize)
-                    .is_none()
-                {
-                    return Err(SceneError::for_source(
-                        SceneErrorKind::SourceCoverage,
-                        prepared.paragraph(),
-                        source,
-                    ));
-                }
-                if let Some(segments) = glyph.paint().split_segments() {
-                    for segment in segments {
-                        let source = segment.source();
-                        if projection
-                            .mapping
-                            .text()
-                            .get(source.start as usize..source.end as usize)
-                            .is_none()
-                            || projection.whole_paint_slot(source.clone()) != Some(segment.slot())
-                        {
-                            return Err(SceneError::from_preparation_source(
-                                prepared.paragraph(),
-                                source,
-                                PreparationErrorKind::InvalidOutput,
-                            ));
-                        }
-                        projection.validate_source_range(source)?;
-                    }
-                } else if projection.whole_paint_slot(source.clone()).is_none() {
-                    return Err(SceneError::from_preparation_source(
-                        prepared.paragraph(),
-                        source,
-                        PreparationErrorKind::UnsupportedPaintCoverage,
-                    ));
-                }
-            }
-            for range in run.unrendered_source() {
-                if projection
-                    .mapping
-                    .text()
-                    .get(range.start as usize..range.end as usize)
-                    .is_none()
-                {
-                    return Err(SceneError::for_source(
-                        SceneErrorKind::SourceCoverage,
-                        prepared.paragraph(),
-                        range.clone(),
-                    ));
-                }
-            }
-            for (offset, character) in source_text.char_indices() {
-                let scalar_start = source.start
-                    + u32::try_from(offset).map_err(|_| {
-                        SceneError::for_source(
-                            SceneErrorKind::SourceCoverage,
-                            prepared.paragraph(),
-                            source.clone(),
-                        )
-                    })?;
-                let scalar_end = scalar_start
-                    .checked_add(u32::try_from(character.len_utf8()).unwrap_or(u32::MAX))
-                    .ok_or_else(|| {
-                        SceneError::for_source(
-                            SceneErrorKind::SourceCoverage,
-                            prepared.paragraph(),
-                            source.clone(),
-                        )
-                    })?;
-                if !run.glyphs().iter().any(|glyph| {
-                    let glyph_source = glyph.source();
-                    glyph_source.start <= scalar_start && glyph_source.end >= scalar_end
-                }) && !run
-                    .unrendered_source()
-                    .iter()
-                    .any(|range| range.start <= scalar_start && range.end >= scalar_end)
-                {
-                    return Err(SceneError::for_source(
-                        SceneErrorKind::SourceCoverage,
-                        prepared.paragraph(),
-                        scalar_start..scalar_end,
-                    ));
-                }
-            }
-        }
     }
     Ok(())
 }

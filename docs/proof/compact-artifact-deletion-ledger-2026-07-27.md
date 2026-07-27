@@ -667,3 +667,53 @@ line shaping together account for roughly half the Underwood edit. The next
 slice therefore fuses redundant scene validation with consumption and attacks
 whole-paragraph-plus-line reshaping; it does not spend the campaign on
 micro-optimizing checked constructors.
+
+## Recycle changed-paragraph work without an upstream fork
+
+The next slice stays entirely on the accepted Parley revision. It does not add
+the proposed break/concat methods to `ShapedText`, carry a private Parley
+patch, or substitute high-level Parley. Underwood instead removes work it
+already owns:
+
+- prepared-output validation is fused into the geometry and paint traversals
+  that consume the same records;
+- paragraph projection, whitespace mapping, line-shaping, and style/run
+  buffers are recycled as engine scratch;
+- canonical single-line output borrows canonical shaping instead of cloning
+  it;
+- lines separated from their neighbors by whitespace borrow ranges of the
+  canonical shaped paragraph, while joining- or ligature-sensitive boundaries
+  still execute and report real line-final reshaping;
+- nested `Arc` owners around geometry facts and the paragraph source map are
+  deleted where the outer immutable geometry owner already supplies the
+  lifetime.
+
+The Arabic U+200B joining fixture still reshapes both sides of its legal break
+and produces different glyph output. The fit-changing retry fixture now
+reports only its genuinely joining-sensitive rejected candidate: the accepted
+whitespace boundary and remaining line borrow canonical shaping. Region
+formation uses the same distinction.
+
+The matched 1,000-label allocation-counter checkpoint is:
+
+| Phase | Direct artifact checkpoint | Recycled local work |
+|---|---:|---:|
+| cold preparation calls | 48,868 | **28,377** |
+| changed preparation calls | 52 | **29** |
+| changed requested bytes | 7,960 | **4,516** |
+| changed retained net bytes | 2,328 | **920** |
+| stable repeat calls | 0 | **0** |
+| paint-only calls | 0 | **0** |
+
+Scene-cache accounting falls from approximately 2.32 MB to 2.16 MB for the
+edited corpus. Seven matched 5,000-round release samples measure Underwood at
+6.30–6.57 µs per localized edit and Parley at 3.08–3.15 µs. This is a material
+improvement from 8.1–8.6 µs, but the observed 2.00–2.13× range does not yet
+make the 2× latency gate robustly green, and 29 calls remains above the
+16-call gate.
+
+`malloc_history` identifies the next large local deletion target rather than
+an upstream shaping API: `TextBlock::prepare_block` still materializes a
+one-paragraph `Document` on every changed revision. That contradicts the
+compact-block design claim and accounts for eight changed-path allocations
+before paragraph preparation begins.

@@ -601,7 +601,10 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
         0,
         "one paragraph uses the direct spine form rather than allocating a tree node"
     );
-    assert_eq!(cold_trace.memory().scratch_growth_bytes(), 0);
+    assert!(
+        cold_trace.memory().scratch_growth_bytes() > 0,
+        "cold preparation retains reusable projection capacity"
+    );
 
     let retained = layout
         .prepare(&document.snapshot(), &request)
@@ -1264,7 +1267,7 @@ fn paragraph_projection_interns_repeated_style_partitions() {
         paragraph,
     )
     .expect("repeated style must intern");
-    assert_eq!(shaping_styles, [&first, &second]);
+    assert_eq!(shaping_styles, [first, second]);
     assert_eq!(shaping_runs[0].style().index(), 0);
     assert_eq!(shaping_runs[1].style().index(), 1);
     assert_eq!(shaping_runs[2].style().index(), 0);

@@ -449,14 +449,13 @@ pub(crate) fn split_item_after(range: &TextRange, style_indices: &[u16]) -> bool
         || range.byte_range.len() > usize::from(u16::MAX)
 }
 
-fn query_families<'a>(names: &'a [FontFamilyName<'static>]) -> Vec<QueryFamily<'a>> {
-    names
-        .iter()
-        .map(|name| match name {
-            FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
-            FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
-        })
-        .collect()
+fn query_families<'a>(
+    names: &'a [FontFamilyName<'static>],
+) -> impl Iterator<Item = QueryFamily<'a>> {
+    names.iter().map(|name| match name {
+        FontFamilyName::Named(name) => QueryFamily::Named(name.as_ref()),
+        FontFamilyName::Generic(generic) => QueryFamily::Generic(*generic),
+    })
 }
 
 fn select_font(

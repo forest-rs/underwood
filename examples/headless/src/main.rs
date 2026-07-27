@@ -518,9 +518,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
         "width must retain canonical shaping"
     );
-    assert!(
-        narrow_scene.work().line_shape().paragraphs() > 0,
-        "new wrapped ranges must expose line-final shaping"
+    assert_eq!(
+        narrow_scene.work().line_shape().paragraphs(),
+        0,
+        "whitespace-separated wrapped ranges must borrow canonical shaping"
     );
     assert_eq!(
         narrow_scene.work().flow().paragraphs(),

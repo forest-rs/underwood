@@ -285,7 +285,7 @@ fn non_breaking_space_and_unbreakable_words_overflow_honestly() {
 }
 
 #[test]
-fn width_reshapes_committed_lines_while_line_height_reuses_them() {
+fn width_reuses_whitespace_separated_shaping_and_line_height_reuses_lines() {
     let text = "alpha beta gamma";
     let (document, compact_styles, paint) = fixture_document(text, 1.2);
     let (_, spacious_styles, _) = fixture_document(text, 1.8);
@@ -311,9 +311,9 @@ fn width_reshapes_committed_lines_while_line_height_reuses_them() {
     assert_eq!(narrowed.work().itemization().paragraphs(), 0);
     assert_eq!(narrowed.work().font_selection().paragraphs(), 0);
     assert_eq!(narrowed.work().shape().paragraphs(), 0);
-    assert_eq!(narrowed.work().line_font_resolution().paragraphs(), 1);
-    assert_eq!(narrowed.work().line_shape().paragraphs(), 1);
-    assert!(narrowed.work().line_reshapes() > 0);
+    assert_eq!(narrowed.work().line_font_resolution().paragraphs(), 0);
+    assert_eq!(narrowed.work().line_shape().paragraphs(), 0);
+    assert_eq!(narrowed.work().line_reshapes(), 0);
     assert_eq!(narrowed.work().flow().paragraphs(), 1);
 
     let spacious = editable_scene_request(
@@ -816,9 +816,10 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
             .end,
         prior_source
     );
-    assert!(
-        output.work().line_reshapes() >= 3,
-        "rejected candidate, accepted candidate, and remainder must be visible work"
+    assert_eq!(
+        output.work().line_reshapes(),
+        1,
+        "only the rejected joining-sensitive candidate requires reshaping"
     );
     assert_eq!(
         output.work().rejected_line_candidates(),

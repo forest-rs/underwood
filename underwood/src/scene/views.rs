@@ -289,7 +289,7 @@ impl<'a> SceneLineView<'a> {
             self.revision,
             geometry
                 .source_map
-                .as_deref()
+                .as_ref()
                 .expect("source-capable lines retain a paragraph source map"),
             SourceReference::Projected(self.prepared().source().into()),
         )
@@ -349,7 +349,7 @@ impl<'a> SceneLineView<'a> {
             self.revision,
             geometry
                 .source_map
-                .as_deref()
+                .as_ref()
                 .expect("source-capable lines retain a paragraph source map"),
             SourceReference::Projected(self.prepared().source().into()),
         )
@@ -571,7 +571,7 @@ impl<'a> ProjectedSceneFragmentView<'a> {
             self.inner.revision,
             geometry
                 .source_map
-                .as_deref()
+                .as_ref()
                 .expect("source-capable fragments retain a paragraph source map"),
             self.inner,
         )
@@ -779,7 +779,7 @@ impl<'a> SceneFragmentView<'a> {
             self.revision,
             geometry
                 .source_map
-                .as_deref()
+                .as_ref()
                 .expect("source-capable fragments retain a paragraph source map"),
             self,
         )
@@ -1029,7 +1029,7 @@ impl<'a> ProjectedSceneGlyphView<'a> {
             self.inner.revision,
             geometry
                 .source_map
-                .as_deref()
+                .as_ref()
                 .expect("source-capable glyphs retain a paragraph source map"),
             self.inner.fragment.source_reference(self.inner.local),
         )
@@ -1091,7 +1091,7 @@ impl<'a> SceneGlyphView<'a> {
             self.revision,
             geometry
                 .source_map
-                .as_deref()
+                .as_ref()
                 .expect("source-capable glyphs retain a paragraph source map"),
             self.fragment.source_reference(self.local),
         )
@@ -1564,7 +1564,7 @@ impl<'a> SemanticFragmentView<'a> {
             .segment
             .geometry
             .source_map
-            .as_deref()
+            .as_ref()
             .expect("semantic capability retains a paragraph source map");
         materialize_optional_snapshot_range(source_map, source, self.revision)
     }

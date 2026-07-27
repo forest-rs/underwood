@@ -143,7 +143,7 @@ impl SceneSummary {
             movements: geometry.movement_count(),
             texts: geometry
                 .source_map
-                .as_deref()
+                .as_ref()
                 .map_or(0, ParagraphSourceMap::leaf_count),
             semantics: geometry.semantics.len(),
             min_x,
@@ -930,11 +930,9 @@ mod tests {
             Arc::new(CachedGeometry {
                 features: SceneFeatures::DISPLAY,
                 artifact,
-                facts: Arc::new(CachedGeometryFacts {
-                    height,
-                    empty_bounds: Rect::ZERO,
-                    lines: Vec::new(),
-                }),
+                height,
+                empty_bounds: Rect::ZERO,
+                lines: Vec::new(),
                 source_map: None,
                 hit_geometry: CachedHitSidecar::new(false, Vec::new(), 0),
                 semantics: CachedSidecar::new(false, Vec::new()),

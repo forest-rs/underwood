@@ -67,10 +67,9 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
     let trace = output.trace().expect("trace was requested");
     assert_eq!(trace.region_attempts(), transcript.attempts().len());
     assert_eq!(trace.region_height_rejections(), 1);
-    assert_eq!(
-        trace.memory().scratch_growth_bytes(),
-        0,
-        "region publication retains paragraph attempt blocks instead of flattening scratch"
+    assert!(
+        trace.memory().scratch_growth_bytes() > 0,
+        "cold region preparation retains reusable projection capacity"
     );
 
     let retained = engine

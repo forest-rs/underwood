@@ -93,7 +93,7 @@ enum SourceLeafKind {
 }
 
 impl ParagraphSourceMap {
-    pub(super) fn from_projection(projection: &Projection<'_>) -> Result<Self, SceneError> {
+    pub(super) fn from_projection(projection: &Projection) -> Result<Self, SceneError> {
         let source_len = u32::try_from(projection.mapping.source_text().len()).map_err(|_| {
             SceneError::for_paragraph(SceneErrorKind::SourceCoverage, projection.paragraph)
         })?;

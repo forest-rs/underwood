@@ -14,17 +14,12 @@ use core::{mem::size_of, ops::Deref};
 pub(super) struct CachedGeometry {
     pub(super) features: SceneFeatures,
     pub(super) artifact: Arc<PreparedParagraphFacts>,
-    pub(super) facts: Arc<CachedGeometryFacts>,
-    pub(super) source_map: Option<Arc<ParagraphSourceMap>>,
-    pub(super) hit_geometry: CachedHitSidecar,
-    pub(super) semantics: CachedSidecar<CachedSemantic>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct CachedGeometryFacts {
     pub(super) height: f64,
     pub(super) empty_bounds: Rect,
     pub(super) lines: Vec<CachedLine>,
+    pub(super) source_map: Option<ParagraphSourceMap>,
+    pub(super) hit_geometry: CachedHitSidecar,
+    pub(super) semantics: CachedSidecar<CachedSemantic>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,14 +115,6 @@ impl CachedHitSidecar {
             return &[];
         };
         &inline_ends[range]
-    }
-}
-
-impl Deref for CachedGeometry {
-    type Target = CachedGeometryFacts;
-
-    fn deref(&self) -> &Self::Target {
-        &self.facts
     }
 }
 
@@ -362,7 +349,7 @@ impl CachedGeometry {
         );
         let source_map = self
             .source_map
-            .as_deref()
+            .as_ref()
             .expect("hit-testing capability retains source provenance");
         let semantic_source = prepared
             .and_then(|unit| unit.slices().first())
@@ -535,13 +522,13 @@ pub(super) fn rebind_composition_geometry(
     epoch: crate::CompositionEpoch,
 ) {
     if let Some(source_map) = &mut geometry.source_map {
-        Arc::make_mut(source_map).rebind_composition(id, epoch);
+        source_map.rebind_composition(id, epoch);
     }
 }
 
 pub(super) fn build_geometry(
     prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
+    projection: &Projection,
     features: SceneFeatures,
     constraint: TextConstraint,
     region_transcript: Option<&RegionTranscript>,
@@ -549,33 +536,8 @@ pub(super) fn build_geometry(
     let source_map = features
         .has_sources()
         .then(|| ParagraphSourceMap::from_projection(projection))
-        .transpose()?
-        .map(Arc::new);
-    if features.has_selection() {
-        for position in prepared
-            .lines()
-            .iter()
-            .flat_map(|line| line.units())
-            .flat_map(|unit| [unit.left(), unit.right()])
-        {
-            let offset = position.offset();
-            let offset_usize = usize::try_from(offset).map_err(|_| {
-                SceneError::for_source(
-                    SceneErrorKind::SourceCoverage,
-                    prepared.paragraph(),
-                    offset..offset,
-                )
-            })?;
-            if !projection.mapping.text().is_char_boundary(offset_usize) {
-                return Err(SceneError::for_source(
-                    SceneErrorKind::SourceCoverage,
-                    prepared.paragraph(),
-                    offset..offset,
-                ));
-            }
-        }
-    }
-    let map = source_map.as_deref();
+        .transpose()?;
+    let map = source_map.as_ref();
     let empty_line_height = projection.empty_line_height();
     let empty_slot = region_transcript.and_then(|transcript| {
         transcript.attempts().iter().rev().find_map(|attempt| {
@@ -607,7 +569,7 @@ pub(super) fn build_geometry(
         empty_block_start + empty_line_height,
     );
     let mut line_top = 0.0;
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(prepared.lines().len());
     let retains_clusters = features.has_hit_testing() || features.has_selection();
     let builds_semantics = features.has_semantics();
     let hit_capacity = if !retains_clusters {
@@ -627,6 +589,19 @@ pub(super) fn build_geometry(
     }
 
     for line in prepared.lines() {
+        let line_source = line.source();
+        if projection
+            .mapping
+            .text()
+            .get(line_source.start as usize..line_source.end as usize)
+            .is_none()
+        {
+            return Err(SceneError::for_source(
+                SceneErrorKind::SourceCoverage,
+                prepared.paragraph(),
+                line_source,
+            ));
+        }
         let slot_start = line.slot().map_or(0.0, crate::LineSlot::inline_start);
         let slot_size = line
             .slot()
@@ -664,6 +639,38 @@ pub(super) fn build_geometry(
         let mut unit_x = inline_start;
         for unit in line.units() {
             let paragraph_source = unit.source();
+            if unit.is_western_justification_opportunity()
+                && projection
+                    .mapping
+                    .text()
+                    .get(paragraph_source.start as usize..paragraph_source.end as usize)
+                    != Some(" ")
+            {
+                return Err(SceneError::from_preparation_source(
+                    prepared.paragraph(),
+                    paragraph_source,
+                    PreparationErrorKind::InvalidOutput,
+                ));
+            }
+            if features.has_selection() {
+                for position in [unit.left(), unit.right()] {
+                    let offset = position.offset();
+                    let offset_usize = usize::try_from(offset).map_err(|_| {
+                        SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            offset..offset,
+                        )
+                    })?;
+                    if !projection.mapping.text().is_char_boundary(offset_usize) {
+                        return Err(SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            offset..offset,
+                        ));
+                    }
+                }
+            }
             let unit_expansion = if opportunity_sources.contains(&paragraph_source) {
                 expansion
             } else {
@@ -867,15 +874,13 @@ pub(super) fn build_geometry(
     Ok(CachedGeometry {
         features,
         artifact: prepared.shared_facts(),
-        facts: Arc::new(CachedGeometryFacts {
-            height: if prepared.lines().is_empty() {
-                empty_bounds.y1
-            } else {
-                line_top
-            },
-            empty_bounds,
-            lines,
-        }),
+        height: if prepared.lines().is_empty() {
+            empty_bounds.y1
+        } else {
+            line_top
+        },
+        empty_bounds,
+        lines,
         source_map,
         hit_geometry: CachedHitSidecar::new(retains_clusters, hit_inline_ends, synthetic_hits),
         semantics: CachedSidecar::new(features.has_semantics(), semantics),
@@ -884,7 +889,7 @@ pub(super) fn build_geometry(
 
 pub(super) fn build_paint_topology(
     prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
+    projection: &Projection,
     retained: &CachedGeometry,
 ) -> Result<PaintTopology, SceneError> {
     build_paint_fragments(prepared, projection, &retained.lines)
@@ -892,7 +897,7 @@ pub(super) fn build_paint_topology(
 
 fn build_paint_fragments(
     prepared: &PreparedParagraph,
-    projection: &Projection<'_>,
+    projection: &Projection,
     lines: &[CachedLine],
 ) -> Result<PaintTopology, SceneError> {
     if prepared.lines().len() != lines.len() {
@@ -912,8 +917,33 @@ fn build_paint_fragments(
         };
         let mut inline_origin = cached_line.bounds.x0;
         for (run_index, run) in line.runs().iter().enumerate() {
+            let run_source = run.source();
+            let Some(source_text) = projection
+                .mapping
+                .text()
+                .get(run_source.start as usize..run_source.end as usize)
+            else {
+                return Err(SceneError::for_source(
+                    SceneErrorKind::SourceCoverage,
+                    prepared.paragraph(),
+                    run_source,
+                ));
+            };
             let run_fragment_start = fragments.len();
             for (glyph_index, glyph) in run.glyphs().iter().enumerate() {
+                let glyph_source = glyph.source();
+                if projection
+                    .mapping
+                    .text()
+                    .get(glyph_source.start as usize..glyph_source.end as usize)
+                    .is_none()
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                        glyph_source,
+                    ));
+                }
                 let inline_advance_adjustment = if opportunity_sources
                     .iter()
                     .any(|source| glyph.source() == *source)
@@ -929,6 +959,21 @@ fn build_paint_fragments(
                 );
                 if let Some(segments) = glyph.paint().split_segments() {
                     for (segment_index, segment) in segments.iter().enumerate() {
+                        let source = segment.source();
+                        if projection
+                            .mapping
+                            .text()
+                            .get(source.start as usize..source.end as usize)
+                            .is_none()
+                            || projection.whole_paint_slot(source.clone()) != Some(segment.slot())
+                        {
+                            return Err(SceneError::from_preparation_source(
+                                prepared.paragraph(),
+                                source,
+                                PreparationErrorKind::InvalidOutput,
+                            ));
+                        }
+                        projection.validate_source_range(source)?;
                         let clip = segment
                             .clip()
                             .expect("validated split-paint segments retain explicit clips");
@@ -981,6 +1026,53 @@ fn build_paint_fragments(
                 }
                 inline_origin += glyph.advance().x + inline_advance_adjustment;
                 instance += 1;
+            }
+            for source in run.unrendered_source() {
+                if projection
+                    .mapping
+                    .text()
+                    .get(source.start as usize..source.end as usize)
+                    .is_none()
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                        source.clone(),
+                    ));
+                }
+            }
+            for (offset, character) in source_text.char_indices() {
+                let scalar_start = run_source.start
+                    + u32::try_from(offset).map_err(|_| {
+                        SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            run_source.clone(),
+                        )
+                    })?;
+                let scalar_end = scalar_start
+                    .checked_add(u32::try_from(character.len_utf8()).unwrap_or(u32::MAX))
+                    .ok_or_else(|| {
+                        SceneError::for_source(
+                            SceneErrorKind::SourceCoverage,
+                            prepared.paragraph(),
+                            run_source.clone(),
+                        )
+                    })?;
+                if !run.glyphs().iter().any(|glyph| {
+                    let source = glyph.source();
+                    source.start <= scalar_start && source.end >= scalar_end
+                }) && !run
+                    .unrendered_source()
+                    .iter()
+                    .any(|source| source.start <= scalar_start && source.end >= scalar_end)
+                {
+                    return Err(SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        prepared.paragraph(),
+                        scalar_start..scalar_end,
+                    ));
+                }
             }
         }
     }

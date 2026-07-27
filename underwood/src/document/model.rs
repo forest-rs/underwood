@@ -423,15 +423,15 @@ impl ChangeSet {
 }
 
 impl Paragraph {
-    pub(crate) fn projected_text(&self) -> String {
+    pub(crate) fn project_text_into(&self, text: &mut String) {
         let capacity = self.leaves.iter().fold(0_usize, |total, leaf| {
             total.saturating_add(leaf.text().len())
         });
-        let mut text = String::with_capacity(capacity);
+        text.clear();
+        text.reserve(capacity);
         for leaf in &self.leaves {
             text.push_str(leaf.text());
         }
-        text
     }
 
     pub(crate) fn semantic_id(&self) -> SemanticId {

@@ -437,13 +437,18 @@ The representation and public migration are recorded in
 `docs/design/0021-compact-paragraph-artifacts.md`. The deletion campaign has
 removed both cursor graphs, copied scene glyph/layout owners, ordinary
 per-glyph paint evidence, the adapter final-output cache, clone-based repaint,
-the nested final lowering path, deep formation keys, and the plain-block
-miniature document. Exact matched live-heap deltas are now 1.07× Parley for
-display and 1.19× for editable labels. Direct canonical artifact construction
-has reduced one changed paragraph from 63 calls / 12,584 requested bytes to
-52 calls / 7,960 bytes. Residency and requested-byte gates are green; the
-16-call and ≤2× edit-latency gates remain open. The running ledger and raw
-checkpoints are in
+the nested final lowering path, and deep formation keys. Exact matched
+live-heap deltas are now 1.07× Parley for display and 1.19× for editable
+labels. Direct canonical construction plus recycled projection, whitespace,
+and line work has reduced one changed paragraph from 63 calls / 12,584
+requested bytes to 29 calls / 4,516 bytes. Whitespace-separated lines borrow
+canonical shaping while Arabic joining-sensitive boundaries still reshape;
+this requires no new `ShapedText` API or Parley fork. Localized edit is now
+6.30–6.57 µs versus Parley's 3.08–3.15 µs. Residency and requested-byte gates
+are green; the 16-call gate and a robust ≤2× edit-latency result remain open.
+Allocator stacks expose that the supposedly deleted plain-block miniature
+`Document` still exists on changed preparation; removing that mirage is the
+next deletion slice. The running ledger and raw checkpoints are in
 `docs/proof/compact-artifact-deletion-ledger-2026-07-27.md`.
 
 ### Risks and controls

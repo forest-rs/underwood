@@ -268,11 +268,13 @@ struct CacheWork {
 #[derive(Debug, Default)]
 struct PrepareScratch {
     region_segments: Vec<Arc<ParagraphSceneSegment>>,
+    projection: ProjectionScratch,
 }
 
 impl PrepareScratch {
     fn accounted_capacity_bytes(&self) -> usize {
         vec_bytes::<Arc<ParagraphSceneSegment>>(self.region_segments.capacity())
+            .saturating_add(self.projection.accounted_capacity_bytes())
     }
 }
 
@@ -432,10 +434,11 @@ impl LayoutEngine {
             ) {
                 access
             } else {
-                let projection = Projection::new(paragraph, request)?;
+                let projection =
+                    Projection::new_in(paragraph, request, &mut self.scratch.projection)?;
                 let preflight_key =
                     ParagraphPreflightKey::new(paragraph, None, request, region_cursor);
-                prepare_paragraph_geometry(
+                let result = prepare_paragraph_geometry(
                     self.paragraphs.as_mut(),
                     &mut self.cache,
                     self.composition_cache.get(&paragraph.id),
@@ -451,7 +454,9 @@ impl LayoutEngine {
                     &mut self.shared_preparation,
                     &mut work,
                     &mut reuse,
-                )?
+                );
+                projection.recycle_into(&mut self.scratch.projection);
+                result?
             };
             self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
@@ -671,9 +676,14 @@ impl LayoutEngine {
                 (CacheKind::Committed, access)
             } else {
                 let projection = if transient {
-                    Projection::with_composition(paragraph, request, composition)?
+                    Projection::with_composition_in(
+                        paragraph,
+                        request,
+                        composition,
+                        &mut self.scratch.projection,
+                    )?
                 } else {
-                    Projection::new(paragraph, request)?
+                    Projection::new_in(paragraph, request, &mut self.scratch.projection)?
                 };
                 let preflight_key = ParagraphPreflightKey::new(
                     paragraph,
@@ -686,7 +696,7 @@ impl LayoutEngine {
                     request,
                     region_cursor,
                 );
-                if transient {
+                let result = if transient {
                     (
                         CacheKind::Composition,
                         prepare_paragraph_geometry(
@@ -708,7 +718,7 @@ impl LayoutEngine {
                             &mut self.shared_preparation,
                             &mut work,
                             &mut reuse,
-                        )?,
+                        ),
                     )
                 } else {
                     (
@@ -729,9 +739,11 @@ impl LayoutEngine {
                             &mut self.shared_preparation,
                             &mut work,
                             &mut reuse,
-                        )?,
+                        ),
                     )
-                }
+                };
+                projection.recycle_into(&mut self.scratch.projection);
+                (result.0, result.1?)
             };
             self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
@@ -1174,7 +1186,7 @@ impl LayoutEngine {
                 request.paint,
             )?);
             self.clock = self.clock.saturating_add(1);
-            let projection = Projection::new(paragraph, request)?;
+            let projection = Projection::new_in(paragraph, request, &mut self.scratch.projection)?;
             let preflight_key = ParagraphPreflightKey::new(paragraph, None, request, None);
             let access = prepare_paragraph_geometry(
                 self.paragraphs.as_mut(),
@@ -1192,7 +1204,9 @@ impl LayoutEngine {
                 &mut self.shared_preparation,
                 &mut work,
                 &mut reuse,
-            )?;
+            );
+            projection.recycle_into(&mut self.scratch.projection);
+            let access = access?;
             self.record_access(&access);
             let segment = Arc::clone(
                 &self
@@ -1349,7 +1363,7 @@ impl LayoutEngine {
                 request.paint,
             )?);
             self.clock = self.clock.saturating_add(1);
-            let projection = Projection::new(paragraph, request)?;
+            let projection = Projection::new_in(paragraph, request, &mut self.scratch.projection)?;
             let preflight_key = ParagraphPreflightKey::new(paragraph, None, request, region_cursor);
             let access = prepare_paragraph_geometry(
                 self.paragraphs.as_mut(),
@@ -1367,7 +1381,9 @@ impl LayoutEngine {
                 &mut self.shared_preparation,
                 &mut work,
                 &mut reuse,
-            )?;
+            );
+            projection.recycle_into(&mut self.scratch.projection);
+            let access = access?;
             self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
                 region_cursor = Some(transcript.end());
@@ -1561,7 +1577,8 @@ impl LayoutEngine {
                 }
 
                 self.clock = self.clock.saturating_add(1);
-                let projection = Projection::new(paragraph, request)?;
+                let projection =
+                    Projection::new_in(paragraph, request, &mut self.scratch.projection)?;
                 let preflight_key =
                     ParagraphPreflightKey::new(paragraph, None, request, Some(region_cursor));
                 let access = prepare_paragraph_geometry(
@@ -1580,7 +1597,9 @@ impl LayoutEngine {
                     &mut self.shared_preparation,
                     &mut work,
                     &mut reuse,
-                )?;
+                );
+                projection.recycle_into(&mut self.scratch.projection);
+                let access = access?;
                 self.record_access(&access);
                 region_cursor = access
                     .region_transcript
@@ -2006,7 +2025,7 @@ fn prepare_paragraph_geometry(
     alternate: Option<&ParagraphCache>,
     cache_kind: CacheKind,
     paragraph: &Paragraph,
-    projection: &Projection<'_>,
+    projection: &Projection,
     features: SceneFeatures,
     preflight_key: ParagraphPreflightKey,
     constraint: TextConstraint,
@@ -2114,11 +2133,6 @@ fn prepare_paragraph_geometry(
         });
     }
 
-    let shaping_styles: Vec<_> = projection
-        .shaping_styles
-        .iter()
-        .map(|style| (*style).clone())
-        .collect();
     let text_len = u32::try_from(projection.mapping.text().len())
         .map_err(|_| SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph.id))?;
     let preparation_epoch = paragraphs.shared_preparation_epoch();
@@ -2226,7 +2240,7 @@ fn prepare_paragraph_geometry(
                 projection.mapping.text(),
                 &projection.analysis_styles,
                 &projection.analysis_runs,
-                &shaping_styles,
+                &projection.shaping_styles,
                 &projection.shaping_runs,
                 &projection.inline_flow_styles,
                 &projection.inline_flow_runs,
@@ -2280,7 +2294,7 @@ fn prepare_paragraph_geometry(
             paragraph.id,
         ));
     }
-    if let Err(error) = validate_prepared(&prepared, projection) {
+    if let Err(error) = validate_resolved_direction(&prepared, projection) {
         if backend_called {
             paragraphs.release(preparation);
         }
@@ -2340,7 +2354,6 @@ fn prepare_paragraph_geometry(
                 }
             };
             if let Some(retained) = retained_layout {
-                geometry.facts = Arc::clone(&retained.facts);
                 geometry.retain_sidecars_from(&retained);
             }
             Arc::new(geometry)
@@ -2805,7 +2818,7 @@ fn scene_region_binding(
 fn region_output_matches(
     paragraph: &PreparedParagraph,
     transcript: &RegionTranscript,
-    projection: &Projection<'_>,
+    projection: &Projection,
 ) -> bool {
     if transcript.attempts().iter().any(|attempt| {
         attempt.paragraph() != paragraph.paragraph()

@@ -216,7 +216,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             cache.base_glyph_advances.clear();
             cache.logical_clusters.clear();
             cache.shaped_glyphs = 0;
-            cache.formed_lines.clear();
             cache.region_transcript = None;
         }
 
@@ -308,7 +307,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 &cache.shaped_text,
                 &mut cache.logical_clusters,
             )?;
-            cache.formed_lines.clear();
             cache.region_transcript = None;
         }
         if shaped || spacing_changed || break_policy_changed {
@@ -343,6 +341,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
             {
                 update_line_metrics(
                     input.text(),
+                    &cache.shaped_text,
+                    &cache.scripts,
                     &mut cache.formed_lines,
                     input.inline_flow_styles(),
                     input.inline_flow_runs(),
@@ -446,8 +446,9 @@ impl ParagraphFormation for ParleyParagraphEngine {
         paragraph.reserve_exact(prepared_capacity(input.text(), preparation)?);
         for formed in &preparation.formed_lines {
             let plan = &formed.plan;
-            let shaped_text = &formed.shaped_text;
-            if shaped_text.runs().len() != formed.scripts.len() {
+            let (shaped_text, scripts) =
+                formed.shaping(&preparation.shaped_text, &preparation.scripts);
+            if shaped_text.runs().len() != scripts.len() {
                 return Err(PreparationError::invalid_output());
             }
             let mut pieces = line_run_pieces(shaped_text, plan.clusters.clone())?;
@@ -465,7 +466,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             lower_visual_units(
                 input.text(),
                 shaped_text,
-                &formed.scripts,
+                scripts,
                 &pieces,
                 &preparation.interaction_units,
                 &plan.source,
@@ -477,8 +478,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     .runs()
                     .get(piece.run)
                     .ok_or_else(PreparationError::invalid_output)?;
-                let script = formed
-                    .scripts
+                let script = scripts
                     .get(piece.run)
                     .ok_or_else(PreparationError::invalid_output)?;
                 let font = shaped_text
@@ -637,7 +637,8 @@ fn prepared_capacity(
     let mut glyphs = 0_usize;
     let mut normalized_coords = 0_usize;
     for formed in &preparation.formed_lines {
-        for run in formed.shaped_text.runs() {
+        let (shaped_text, _) = formed.shaping(&preparation.shaped_text, &preparation.scripts);
+        for run in shaped_text.runs() {
             let start = run.clusters_range.start.max(formed.plan.clusters.start);
             let end = run.clusters_range.end.min(formed.plan.clusters.end);
             if start < end {
@@ -648,7 +649,7 @@ fn prepared_capacity(
                     text,
                     &preparation.analysis,
                     &preparation.char_starts,
-                    &formed.shaped_text,
+                    shaped_text,
                     run,
                     start..end,
                 )?);

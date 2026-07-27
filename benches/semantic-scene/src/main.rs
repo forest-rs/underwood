@@ -188,9 +188,10 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             "an alternating width must reflow every paragraph"
         );
         if narrow_iteration {
-            assert!(
-                output.work().line_shape().paragraphs() > 0,
-                "wrapped paragraphs must expose line-final shaping"
+            assert_eq!(
+                output.work().line_shape().paragraphs(),
+                0,
+                "whitespace-separated wraps must borrow canonical shaping"
             );
         }
         width_line_reshapes = width_line_reshapes.saturating_add(output.work().line_reshapes());
@@ -240,6 +241,10 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let (visible_space_churn, visible_space_reshapes) =
         measure_line_churn(&fonts, &visible_space, 1_000.0, 88.0)?;
+    assert_eq!(
+        visible_space_reshapes, 0,
+        "whitespace-separated wraps must borrow canonical shaping"
+    );
     let cursive_zwsp = line_fixture(
         *b"bench-cursive-01",
         "سل\u{200b}ام سل\u{200b}ام سل\u{200b}ام",
@@ -247,6 +252,10 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let (cursive_zwsp_churn, cursive_zwsp_reshapes) =
         measure_line_churn(&fonts, &cursive_zwsp, 1_000.0, 72.0)?;
+    assert!(
+        cursive_zwsp_reshapes > 0,
+        "joining-sensitive zero-width breaks must retain line shaping"
+    );
 
     report("cold_scene", COLD_ITERATIONS, cold);
     report("retained_unchanged", RETAINED_ITERATIONS, retained);
@@ -706,17 +715,6 @@ fn measure_line_churn(
             PARAGRAPHS,
             "width churn must reform every paragraph"
         );
-        if narrow_iteration {
-            assert_eq!(
-                output.work().line_shape().paragraphs(),
-                PARAGRAPHS,
-                "wrapped paragraphs must expose their line-final shaping"
-            );
-            assert!(
-                output.work().line_reshapes() >= PARAGRAPHS,
-                "each wrapped paragraph must attempt at least one line shape"
-            );
-        }
         line_reshapes = line_reshapes.saturating_add(output.work().line_reshapes());
         black_box(output.scene().lines().len());
     });

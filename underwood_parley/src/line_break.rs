@@ -13,7 +13,7 @@ use core::{
     ops::Range,
 };
 
-use parley_engine::ShapedText;
+use parley_engine::{ShapedText, shape::Whitespace};
 use underwood::adapter::{InlineFlowRun, LineBreakReason, ParagraphConstraints, PreparationError};
 use underwood::{
     InlineFlowStyle, LineSlot, OverflowWrap, ParagraphId, RegionAttempt, RegionAttemptOutcome,
@@ -43,14 +43,69 @@ pub(crate) struct LinePlan {
 #[derive(Clone, Debug)]
 pub(crate) struct FormedLine {
     pub(crate) plan: LinePlan,
-    pub(crate) shaped_text: ShapedText,
-    pub(crate) scripts: Vec<[u8; 4]>,
+    shaping: FormedLineShaping,
+}
+
+#[derive(Clone, Debug)]
+enum FormedLineShaping {
+    Canonical,
+    Reshaped {
+        shaped_text: ShapedText,
+        scripts: Vec<[u8; 4]>,
+    },
 }
 
 impl FormedLine {
+    fn canonical(plan: LinePlan) -> Self {
+        Self {
+            plan,
+            shaping: FormedLineShaping::Canonical,
+        }
+    }
+
+    fn reshaped(plan: LinePlan, shaped_text: ShapedText, scripts: Vec<[u8; 4]>) -> Self {
+        Self {
+            plan,
+            shaping: FormedLineShaping::Reshaped {
+                shaped_text,
+                scripts,
+            },
+        }
+    }
+
+    pub(crate) fn shaping<'a>(
+        &'a self,
+        canonical_text: &'a ShapedText,
+        canonical_scripts: &'a [[u8; 4]],
+    ) -> (&'a ShapedText, &'a [[u8; 4]]) {
+        match &self.shaping {
+            FormedLineShaping::Canonical => (canonical_text, canonical_scripts),
+            FormedLineShaping::Reshaped {
+                shaped_text,
+                scripts,
+            } => (shaped_text, scripts),
+        }
+    }
+
+    fn into_reshaped(self) -> Option<(ShapedText, Vec<[u8; 4]>)> {
+        match self.shaping {
+            FormedLineShaping::Canonical => None,
+            FormedLineShaping::Reshaped {
+                shaped_text,
+                scripts,
+            } => Some((shaped_text, scripts)),
+        }
+    }
+
     pub(crate) fn accounted_owned_bytes(&self) -> usize {
-        shaped_text_accounted_bytes(&self.shaped_text)
-            .saturating_add(vec_bytes::<[u8; 4]>(self.scripts.capacity()))
+        match &self.shaping {
+            FormedLineShaping::Canonical => 0,
+            FormedLineShaping::Reshaped {
+                shaped_text,
+                scripts,
+            } => shaped_text_accounted_bytes(shaped_text)
+                .saturating_add(vec_bytes::<[u8; 4]>(scripts.capacity())),
+        }
     }
 }
 
@@ -65,13 +120,46 @@ pub(crate) struct LineFormationScratch {
     shaped_text: ShapedText,
     scripts: Vec<[u8; 4]>,
     clusters: Vec<LogicalCluster>,
+    recycled_shaping: Vec<(ShapedText, Vec<[u8; 4]>)>,
 }
 
 impl LineFormationScratch {
     pub(crate) fn accounted_owned_bytes(&self) -> usize {
-        shaped_text_accounted_bytes(&self.shaped_text)
+        let mut bytes = shaped_text_accounted_bytes(&self.shaped_text)
             .saturating_add(vec_bytes::<[u8; 4]>(self.scripts.capacity()))
             .saturating_add(vec_bytes::<LogicalCluster>(self.clusters.capacity()))
+            .saturating_add(
+                size_of::<(ShapedText, Vec<[u8; 4]>)>()
+                    .saturating_mul(self.recycled_shaping.capacity()),
+            );
+        for (shaped_text, scripts) in &self.recycled_shaping {
+            bytes = bytes
+                .saturating_add(shaped_text_accounted_bytes(shaped_text))
+                .saturating_add(vec_bytes::<[u8; 4]>(scripts.capacity()));
+        }
+        bytes
+    }
+
+    fn recycle_lines(&mut self, lines: &mut Vec<FormedLine>) {
+        for line in lines.drain(..) {
+            if let Some(shaping) = line.into_reshaped() {
+                self.recycled_shaping.push(shaping);
+            }
+        }
+    }
+
+    fn begin_shape(&mut self) {
+        self.shaped_text.clear();
+        self.scripts.clear();
+        if shaped_text_accounted_bytes(&self.shaped_text) == 0
+            && self.scripts.capacity() == 0
+            && let Some((shaped_text, scripts)) = self.recycled_shaping.pop()
+        {
+            self.shaped_text = shaped_text;
+            self.scripts = scripts;
+            self.shaped_text.clear();
+            self.scripts.clear();
+        }
     }
 }
 
@@ -121,7 +209,7 @@ pub(crate) fn form_lines(
         &mut Vec<[u8; 4]>,
     ) -> Result<LineShapeWork, PreparationError>,
 ) -> Result<(LineFormationWork, Option<RegionTranscript>), PreparationError> {
-    lines.clear();
+    scratch.recycle_lines(lines);
     if text.is_empty() {
         let transcript = match (constraints.region_flow(), constraints.region_cursor()) {
             (Some(flow), Some(start)) => {
@@ -229,11 +317,7 @@ pub(crate) fn form_lines(
                 return Err(PreparationError::invalid_output());
             }
         }
-        lines.push(FormedLine {
-            plan,
-            shaped_text: canonical_text.clone(),
-            scripts: canonical_scripts.to_vec(),
-        });
+        lines.push(FormedLine::canonical(plan));
         let mut work = LineFormationWork::default();
         record_former_work(&mut work, former.work());
         return Ok((work, None));
@@ -246,43 +330,59 @@ pub(crate) fn form_lines(
         loop {
             validate_candidate(candidate)?;
             let source = candidate.source();
-            scratch.shaped_text.clear();
-            scratch.scripts.clear();
-            let LineShapeWork {
-                resolved_clusters,
-                shaped_glyphs,
-            } = shape_line(
-                source.clone(),
-                &mut scratch.shaped_text,
-                &mut scratch.scripts,
-            )?;
-            work.reshapes = work.reshapes.saturating_add(1);
-            work.resolved_clusters = work.resolved_clusters.saturating_add(resolved_clusters);
-            work.shaped_runs = work.shaped_runs.saturating_add(
-                u32::try_from(scratch.shaped_text.runs().len()).unwrap_or(u32::MAX),
-            );
-            work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
-            collect_logical_clusters_into(text, &scratch.shaped_text, &mut scratch.clusters)?;
-            if scratch.clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
-                || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
-            {
-                return Err(PreparationError::invalid_output());
-            }
-            let advance = scratch.clusters.iter().map(|cluster| cluster.advance).sum();
-            let plan = make_line_plan(
-                &scratch.shaped_text,
-                &scratch.clusters,
-                inline_flow_styles,
-                inline_flow_runs,
-                0..scratch.clusters.len(),
-                line_break_reason(candidate.reason()),
-                advance,
-                None,
-                None,
-            )?;
-            if scratch.scripts.len() != scratch.shaped_text.runs().len() {
-                return Err(PreparationError::invalid_output());
-            }
+            let uses_canonical = candidate_uses_canonical(candidate, clusters);
+            let plan = if uses_canonical {
+                make_line_plan(
+                    canonical_text,
+                    clusters,
+                    inline_flow_styles,
+                    inline_flow_runs,
+                    candidate.clusters(),
+                    line_break_reason(candidate.reason()),
+                    candidate.canonical_advance(),
+                    None,
+                    None,
+                )?
+            } else {
+                scratch.begin_shape();
+                let LineShapeWork {
+                    resolved_clusters,
+                    shaped_glyphs,
+                } = shape_line(
+                    source.clone(),
+                    &mut scratch.shaped_text,
+                    &mut scratch.scripts,
+                )?;
+                work.reshapes = work.reshapes.saturating_add(1);
+                work.resolved_clusters = work.resolved_clusters.saturating_add(resolved_clusters);
+                work.shaped_runs = work.shaped_runs.saturating_add(
+                    u32::try_from(scratch.shaped_text.runs().len()).unwrap_or(u32::MAX),
+                );
+                work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
+                collect_logical_clusters_into(text, &scratch.shaped_text, &mut scratch.clusters)?;
+                if scratch.clusters.first().map(|cluster| cluster.source.start)
+                    != Some(source.start)
+                    || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
+                {
+                    return Err(PreparationError::invalid_output());
+                }
+                let advance = scratch.clusters.iter().map(|cluster| cluster.advance).sum();
+                let plan = make_line_plan(
+                    &scratch.shaped_text,
+                    &scratch.clusters,
+                    inline_flow_styles,
+                    inline_flow_runs,
+                    0..scratch.clusters.len(),
+                    line_break_reason(candidate.reason()),
+                    advance,
+                    None,
+                    None,
+                )?;
+                if scratch.scripts.len() != scratch.shaped_text.runs().len() {
+                    return Err(PreparationError::invalid_output());
+                }
+                plan
+            };
             match former
                 .commit(
                     candidate,
@@ -295,11 +395,15 @@ pub(crate) fn form_lines(
                 .map_err(map_former_error)?
             {
                 CommitOutcome::Accepted(_) => {
-                    lines.push(FormedLine {
-                        plan,
-                        shaped_text: core::mem::take(&mut scratch.shaped_text),
-                        scripts: core::mem::take(&mut scratch.scripts),
-                    });
+                    if uses_canonical {
+                        lines.push(FormedLine::canonical(plan));
+                    } else {
+                        lines.push(FormedLine::reshaped(
+                            plan,
+                            core::mem::take(&mut scratch.shaped_text),
+                            core::mem::take(&mut scratch.scripts),
+                        ));
+                    }
                     break;
                 }
                 CommitOutcome::Retry(retry) => candidate = retry,
@@ -322,8 +426,8 @@ pub(crate) fn form_lines(
             .last()
             .map(|line| line.plan.clone())
             .ok_or_else(PreparationError::invalid_output)?;
-        lines.push(FormedLine {
-            plan: make_line_plan(
+        lines.push(FormedLine::reshaped(
+            make_line_plan(
                 canonical_text,
                 clusters,
                 inline_flow_styles,
@@ -334,12 +438,25 @@ pub(crate) fn form_lines(
                 Some(&previous),
                 None,
             )?,
-            shaped_text: ShapedText::new(),
-            scripts: Vec::new(),
-        });
+            ShapedText::new(),
+            Vec::new(),
+        ));
     }
     record_former_work(&mut work, former.work());
     Ok((work, None))
+}
+
+fn candidate_uses_canonical(candidate: LineCandidate, clusters: &[LogicalCluster]) -> bool {
+    let range = candidate.clusters();
+    break_preserves_shaping(range.start, clusters) && break_preserves_shaping(range.end, clusters)
+}
+
+fn break_preserves_shaping(boundary: usize, clusters: &[LogicalCluster]) -> bool {
+    boundary == 0
+        || boundary == clusters.len()
+        || clusters
+            .get(boundary - 1)
+            .is_some_and(|cluster| cluster.whitespace != Whitespace::None)
 }
 
 #[expect(
@@ -396,46 +513,62 @@ fn form_region_lines(
         loop {
             validate_candidate(candidate)?;
             let source = candidate.source();
-            let uses_canonical = candidate.clusters() == (0..clusters.len())
-                && candidate.reason() == CandidateBreak::End;
-            let (shaped_text, scripts, resolved_clusters, shaped_glyphs) = if uses_canonical {
-                (canonical_text.clone(), canonical_scripts.to_vec(), 0, 0)
+            let uses_canonical = candidate_uses_canonical(candidate, clusters);
+            let line_shape_work = if uses_canonical {
+                None
             } else {
-                scratch.shaped_text.clear();
-                scratch.scripts.clear();
+                scratch.begin_shape();
                 let output = shape_line(
                     source.clone(),
                     &mut scratch.shaped_text,
                     &mut scratch.scripts,
                 )?;
+                Some(output)
+            };
+            if let Some(line_shape_work) = line_shape_work {
+                work.reshapes = work.reshapes.saturating_add(1);
+                work.resolved_clusters = work
+                    .resolved_clusters
+                    .saturating_add(line_shape_work.resolved_clusters);
+                work.shaped_runs = work.shaped_runs.saturating_add(
+                    u32::try_from(scratch.shaped_text.runs().len()).unwrap_or(u32::MAX),
+                );
+                work.shaped_glyphs = work
+                    .shaped_glyphs
+                    .saturating_add(line_shape_work.shaped_glyphs);
+            }
+            if !uses_canonical {
+                collect_logical_clusters_into(text, &scratch.shaped_text, &mut scratch.clusters)?;
+                if scratch.clusters.first().map(|cluster| cluster.source.start)
+                    != Some(source.start)
+                    || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
+                {
+                    return Err(PreparationError::invalid_output());
+                }
+            }
+            let (shaped_text, scripts, line_clusters, logical_range, advance) = if uses_canonical {
                 (
-                    core::mem::take(&mut scratch.shaped_text),
-                    core::mem::take(&mut scratch.scripts),
-                    output.resolved_clusters,
-                    output.shaped_glyphs,
+                    canonical_text,
+                    canonical_scripts,
+                    clusters,
+                    candidate.clusters(),
+                    candidate.canonical_advance(),
+                )
+            } else {
+                (
+                    &scratch.shaped_text,
+                    scratch.scripts.as_slice(),
+                    scratch.clusters.as_slice(),
+                    0..scratch.clusters.len(),
+                    scratch.clusters.iter().map(|cluster| cluster.advance).sum(),
                 )
             };
-            if !uses_canonical {
-                work.reshapes = work.reshapes.saturating_add(1);
-                work.resolved_clusters = work.resolved_clusters.saturating_add(resolved_clusters);
-                work.shaped_runs = work
-                    .shaped_runs
-                    .saturating_add(u32::try_from(shaped_text.runs().len()).unwrap_or(u32::MAX));
-                work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
-            }
-            collect_logical_clusters_into(text, &shaped_text, &mut scratch.clusters)?;
-            if scratch.clusters.first().map(|cluster| cluster.source.start) != Some(source.start)
-                || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
-            {
-                return Err(PreparationError::invalid_output());
-            }
-            let advance = scratch.clusters.iter().map(|cluster| cluster.advance).sum();
             let plan = make_line_plan(
-                &shaped_text,
-                &scratch.clusters,
+                shaped_text,
+                line_clusters,
                 inline_flow_styles,
                 inline_flow_runs,
-                0..scratch.clusters.len(),
+                logical_range,
                 line_break_reason(candidate.reason()),
                 advance,
                 None,
@@ -472,25 +605,21 @@ fn form_region_lines(
                     cursor = flow
                         .accept(cursor, slot, plan.height)
                         .map_err(|_| PreparationError::invalid_output())?;
-                    lines.push(FormedLine {
-                        plan,
-                        shaped_text,
-                        scripts,
-                    });
+                    if uses_canonical {
+                        lines.push(FormedLine::canonical(plan));
+                    } else {
+                        lines.push(FormedLine::reshaped(
+                            plan,
+                            core::mem::take(&mut scratch.shaped_text),
+                            core::mem::take(&mut scratch.scripts),
+                        ));
+                    }
                     continue 'slots;
                 }
                 CommitOutcome::Retry(retry) => {
-                    if !uses_canonical {
-                        scratch.shaped_text = shaped_text;
-                        scratch.scripts = scripts;
-                    }
                     candidate = retry;
                 }
                 CommitOutcome::SlotRejected => {
-                    if !uses_canonical {
-                        scratch.shaped_text = shaped_text;
-                        scratch.scripts = scripts;
-                    }
                     attempts.push(
                         RegionAttempt::try_new(
                             paragraph,
@@ -553,11 +682,7 @@ fn form_region_lines(
                     cursor = flow
                         .accept(cursor, slot, plan.height)
                         .map_err(|_| PreparationError::invalid_output())?;
-                    lines.push(FormedLine {
-                        plan,
-                        shaped_text: ShapedText::new(),
-                        scripts: Vec::new(),
-                    });
+                    lines.push(FormedLine::reshaped(plan, ShapedText::new(), Vec::new()));
                     break;
                 }
                 RegionAttemptOutcome::HeightRejected => {
@@ -656,6 +781,8 @@ pub(crate) fn choose_line(
 
 pub(crate) fn update_line_metrics(
     text: &str,
+    canonical_text: &ShapedText,
+    canonical_scripts: &[[u8; 4]],
     lines: &mut [FormedLine],
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
@@ -664,13 +791,17 @@ pub(crate) fn update_line_metrics(
     for line in lines {
         let reason = line.plan.reason;
         let advance = line.plan.advance;
-        let clusters = collect_logical_clusters(text, &line.shaped_text)?;
+        let cluster_range = line.plan.clusters.clone();
+        let (shaped_text, _) = line.shaping(canonical_text, canonical_scripts);
+        let clusters = collect_logical_clusters(text, shaped_text)?;
+        let logical_start = clusters.partition_point(|cluster| cluster.index < cluster_range.start);
+        let logical_end = clusters.partition_point(|cluster| cluster.index < cluster_range.end);
         line.plan = make_line_plan(
-            &line.shaped_text,
+            shaped_text,
             &clusters,
             inline_flow_styles,
             inline_flow_runs,
-            0..clusters.len(),
+            logical_start..logical_end,
             reason,
             advance,
             previous.as_ref(),
