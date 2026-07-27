@@ -156,53 +156,6 @@ impl Document {
         }
     }
 
-    pub(crate) fn from_plain_block(
-        id: DocumentId,
-        revision: DocumentRevision,
-        text: Arc<str>,
-    ) -> Self {
-        let paragraph_id = ParagraphId {
-            document: id,
-            index: 0,
-        };
-        let text_id = TextId {
-            document: id,
-            paragraph: 0,
-            index: 0,
-        };
-        let mut paragraphs = ParagraphSequence::default();
-        paragraphs.push(Paragraph {
-            id: paragraph_id,
-            role: ParagraphRole::BODY,
-            version: revision.0,
-            leaves: alloc::vec![TextLeaf {
-                id: text_id,
-                role: InlineRole::TEXT,
-                text: StagedText::Shared(text),
-            }],
-        });
-        Self {
-            state: Arc::new(DocumentState {
-                id,
-                revision,
-                paragraphs,
-            }),
-        }
-    }
-
-    pub(crate) fn text(&self, id: TextId) -> Option<&str> {
-        if id.document != self.state.id {
-            return None;
-        }
-        self.state
-            .paragraphs
-            .get(id.paragraph as usize)?
-            .leaves
-            .get(id.index as usize)
-            .filter(|leaf| leaf.id == id)
-            .map(TextLeaf::text)
-    }
-
     /// Starts an atomic staged edit.
     pub fn edit(&mut self) -> Edit<'_> {
         Edit {
@@ -226,32 +179,8 @@ impl Document {
     ) -> Result<SelectionReplacement, EditError> {
         let replacement_len = u32::try_from(replacement.len())
             .map_err(|_| EditError::for_document(EditErrorKind::OversizedText, self.state.id))?;
-        let plans = validate_replacement_plans(&self.state, selections, replacement_len)?;
-        let mut operations = Vec::new();
-        for plan in &plans {
-            for (range_index, range) in plan.ranges.iter().enumerate() {
-                operations.push(ReplacementOperation {
-                    selection: plan.selection,
-                    text: range.text,
-                    bytes: range.bytes.clone(),
-                    inserts: range_index == 0,
-                });
-            }
-        }
-        operations.sort_unstable_by(|first, second| {
-            (
-                second.text.paragraph,
-                second.text.index,
-                second.bytes.start,
-                second.bytes.end,
-            )
-                .cmp(&(
-                    first.text.paragraph,
-                    first.text.index,
-                    first.bytes.start,
-                    first.bytes.end,
-                ))
-        });
+        let plans = validate_replacement_plans(self.state.as_ref(), selections, replacement_len)?;
+        let operations = replacement_operations(&plans);
 
         let mut edit = self.edit();
         for operation in &operations {
@@ -263,50 +192,16 @@ impl Document {
         }
         let publication = edit.commit()?;
         let revision = publication.snapshot().revision();
-        let mut resulting = Vec::with_capacity(plans.len());
-        for plan in &plans {
-            let mut byte = i64::from(plan.insertion.byte);
-            for operation in &operations {
-                if operation.text != plan.insertion.text {
-                    continue;
-                }
-                if !operation.bytes.is_empty() && operation.bytes.end <= plan.insertion.byte {
-                    byte -= i64::from(operation.bytes.end - operation.bytes.start);
-                }
-                if operation.inserts
-                    && (operation.bytes.start < plan.insertion.byte
-                        || operation.selection == plan.selection)
-                {
-                    byte += i64::from(replacement_len);
-                }
-            }
-            let byte = u32::try_from(byte).map_err(|_| {
-                EditError::for_text(EditErrorKind::OversizedText, plan.insertion.text)
-            })?;
-            let position = SnapshotTextPosition::new(
-                revision,
-                plan.insertion.text,
-                byte,
-                if byte == 0 {
-                    TextAffinity::Downstream
-                } else {
-                    TextAffinity::Upstream
-                },
-            );
-            resulting.push(SnapshotTextSelection::new(
-                position,
-                position,
-                TextSelectionMode::Logical,
-                alloc::vec![SnapshotTextRange::new(
-                    revision,
-                    plan.insertion.text,
-                    byte..byte,
-                )],
-            ));
-        }
+        let selections = rebind_replacement_selections(
+            self.state.id,
+            revision,
+            &plans,
+            &operations,
+            replacement_len,
+        )?;
         Ok(SelectionReplacement {
             publication,
-            selections: SnapshotTextSelectionSet::new(self.state.id, revision, resulting),
+            selections,
         })
     }
 }

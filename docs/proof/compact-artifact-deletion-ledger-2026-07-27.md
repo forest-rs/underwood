@@ -764,7 +764,14 @@ The result stays on Parley Engine
 `97b874719f810c375025f3fa727b245530a87f9f`; no `ShapedText` method, dependency
 revision, local Parley patch, or private fork is part of the result.
 
-The remaining `TextBlockSnapshot::materialize_document` helper is no longer on
-preparation. It is confined to multi-selection replacement and remains an
-explicit deletion target before the compact-block representation is declared
-fully complete.
+The final miniature-document path is now deleted as well.
+`TextBlock::replace_selections` shares the document validator, canonical
+reverse operation ordering, and revision-rebinding kernel through a private
+source-observation contract, then applies those already-proven operations
+directly to one exactly sized string. It does not restage the block as a
+document, recopy a paragraph sequence, or revalidate each operation while
+applying it. A direct regression covers multiple insertion points,
+discontiguous visual ranges, old-snapshot preservation, rebased carets, and
+atomic stale-revision failure. `Document::from_plain_block`,
+`TextBlockSnapshot::materialize_document`, and their private text-copy bridge
+are gone.

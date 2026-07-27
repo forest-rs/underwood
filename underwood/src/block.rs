@@ -3,10 +3,15 @@
 
 //! Compact retained single-paragraph text over the shared scene foundation.
 
-use crate::{
-    ComputedInlineStyle, Document, DocumentId, DocumentRevision, EditError, EditErrorKind,
-    PaintTable, ParagraphId, ParagraphStyle, SnapshotTextSelectionSet, TextConstraint, TextId,
+use crate::document::{
+    ReplacementSource, rebind_replacement_selections, replacement_operations,
+    validate_replacement_plans,
 };
+use crate::{
+    ComputedInlineStyle, DocumentId, DocumentRevision, EditError, EditErrorKind, PaintTable,
+    ParagraphId, ParagraphStyle, SnapshotTextSelectionSet, TextConstraint, TextId,
+};
+use alloc::string::String;
 use alloc::sync::Arc;
 
 #[derive(Debug)]
@@ -97,24 +102,92 @@ impl TextBlock {
         selections: &SnapshotTextSelectionSet,
         replacement: &str,
     ) -> Result<SnapshotTextSelectionSet, EditError> {
-        let mut document = self.snapshot().materialize_document();
-        let replacement = document.replace_selections(selections, replacement)?;
-        let selections = replacement.into_parts().1;
-        let text = Arc::from(
-            document
-                .text(self.text_id())
-                .expect("a materialized block retains its plain text leaf"),
+        let replacement_len = u32::try_from(replacement.len())
+            .map_err(|_| EditError::for_document(EditErrorKind::OversizedText, self.state.id))?;
+        let plans = validate_replacement_plans(self.state.as_ref(), selections, replacement_len)?;
+        let operations = replacement_operations(&plans);
+        let removed = operations
+            .iter()
+            .map(|operation| operation.bytes.end - operation.bytes.start)
+            .try_fold(0_usize, |total, removed| {
+                total.checked_add(removed as usize)
+            })
+            .ok_or_else(|| EditError::for_text(EditErrorKind::OversizedText, self.text_id()))?;
+        let insertions = operations
+            .iter()
+            .filter(|operation| operation.inserts)
+            .count();
+        let resulting_len = self
+            .state
+            .text
+            .len()
+            .checked_sub(removed)
+            .and_then(|length| {
+                replacement
+                    .len()
+                    .checked_mul(insertions)
+                    .and_then(|inserted| length.checked_add(inserted))
+            })
+            .ok_or_else(|| EditError::for_text(EditErrorKind::OversizedText, self.text_id()))?;
+        let revision = DocumentRevision(self.state.revision.0.checked_add(1).ok_or_else(|| {
+            EditError::for_document(EditErrorKind::RevisionConflict, self.state.id)
+        })?);
+        let mut text = String::with_capacity(resulting_len);
+        text.push_str(&self.state.text);
+        for operation in &operations {
+            debug_assert_eq!(
+                operation.text,
+                self.text_id(),
+                "validated block operations must target its one text leaf"
+            );
+            text.replace_range(
+                operation.bytes.start as usize..operation.bytes.end as usize,
+                if operation.inserts { replacement } else { "" },
+            );
+        }
+        debug_assert_eq!(
+            text.len(),
+            resulting_len,
+            "validated replacement arithmetic must match the produced text"
         );
+        let selections = rebind_replacement_selections(
+            self.state.id,
+            revision,
+            &plans,
+            &operations,
+            replacement_len,
+        )?;
         self.state = Arc::new(BlockState {
             id: self.state.id,
-            revision: selections.revision(),
-            text,
+            revision,
+            text: Arc::from(text),
         });
         Ok(selections)
     }
 
     fn text_id(&self) -> TextId {
         text_id(self.state.id)
+    }
+}
+
+impl ReplacementSource for BlockState {
+    fn document(&self) -> DocumentId {
+        self.id
+    }
+
+    fn revision(&self) -> DocumentRevision {
+        self.revision
+    }
+
+    fn paragraph(&self, text: TextId) -> Option<ParagraphId> {
+        (text == text_id(self.id)).then_some(ParagraphId {
+            document: self.id,
+            index: 0,
+        })
+    }
+
+    fn text(&self, text: TextId) -> Option<&str> {
+        (text == text_id(self.id)).then_some(&self.text)
     }
 }
 
@@ -158,14 +231,6 @@ impl TextBlockSnapshot {
 
     pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.state, &other.state)
-    }
-
-    pub(crate) fn materialize_document(&self) -> Document {
-        Document::from_plain_block(
-            self.state.id,
-            self.state.revision,
-            Arc::clone(&self.state.text),
-        )
     }
 }
 
@@ -262,7 +327,10 @@ impl<'a> BlockRequest<'a> {
 #[cfg(test)]
 mod tests {
     use super::TextBlock;
-    use crate::DocumentId;
+    use crate::{
+        DocumentId, EditErrorKind, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
+        SnapshotTextSelectionSet, TextAffinity, TextSelectionMode,
+    };
 
     #[test]
     fn repeated_value_is_not_published_again() {
@@ -273,5 +341,76 @@ mod tests {
         let after = block.snapshot();
         assert_eq!(before.revision(), after.revision());
         assert_eq!(after.text(), "Save");
+    }
+
+    #[test]
+    fn multi_selection_replacement_is_direct_atomic_and_rebound() {
+        let mut block =
+            TextBlock::plain(DocumentId::from_bytes(*b"block-multiedit1"), "abcdefghij")
+                .expect("block must initialize");
+        let before = block.snapshot();
+        let revision = before.revision();
+        let text = before.text_id();
+        let visual = selection(revision, text, 1, TextSelectionMode::Visual, [1..2, 5..6]);
+        let middle = selection(
+            revision,
+            text,
+            3,
+            TextSelectionMode::Logical,
+            core::iter::once(3..4),
+        );
+        let selections =
+            SnapshotTextSelectionSet::new(block.id(), revision, alloc::vec![middle, visual]);
+
+        let rebound = block
+            .replace_selections(&selections, "X")
+            .expect("all replacements must publish once");
+        assert_eq!(before.text(), "abcdefghij");
+        assert_eq!(block.text(), "aXcXeghij");
+        assert_eq!(
+            rebound
+                .selections()
+                .iter()
+                .map(|selection| selection.extent().byte())
+                .collect::<alloc::vec::Vec<_>>(),
+            [4, 2]
+        );
+        assert!(
+            rebound
+                .selections()
+                .iter()
+                .all(SnapshotTextSelection::is_collapsed)
+        );
+
+        let published = block.snapshot();
+        assert_eq!(published.revision(), rebound.revision());
+        assert_eq!(
+            block
+                .replace_selections(&selections, "stale")
+                .expect_err("stale selections must not publish")
+                .kind(),
+            EditErrorKind::RevisionConflict
+        );
+        assert_eq!(block.snapshot().revision(), published.revision());
+        assert_eq!(block.text(), "aXcXeghij");
+    }
+
+    fn selection(
+        revision: crate::DocumentRevision,
+        text: crate::TextId,
+        byte: u32,
+        mode: TextSelectionMode,
+        ranges: impl IntoIterator<Item = core::ops::Range<u32>>,
+    ) -> SnapshotTextSelection {
+        let position = SnapshotTextPosition::new(revision, text, byte, TextAffinity::Downstream);
+        SnapshotTextSelection::new(
+            position,
+            position,
+            mode,
+            ranges
+                .into_iter()
+                .map(|range| SnapshotTextRange::new(revision, text, range))
+                .collect(),
+        )
     }
 }

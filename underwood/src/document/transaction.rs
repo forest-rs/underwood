@@ -9,75 +9,122 @@
 use super::*;
 
 #[derive(Clone, Debug)]
-pub(super) struct ReplacementPlan {
-    pub(super) selection: usize,
-    pub(super) insertion: ReplacementPosition,
-    pub(super) ranges: Vec<ReplacementRange>,
+pub(crate) struct ReplacementPlan {
+    pub(crate) selection: usize,
+    pub(crate) insertion: ReplacementPosition,
+    pub(crate) ranges: Vec<ReplacementRange>,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ReplacementPosition {
-    pub(super) text: TextId,
-    pub(super) byte: u32,
+pub(crate) struct ReplacementPosition {
+    pub(crate) text: TextId,
+    pub(crate) byte: u32,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ReplacementRange {
-    pub(super) text: TextId,
-    pub(super) bytes: Range<u32>,
+pub(crate) struct ReplacementRange {
+    pub(crate) text: TextId,
+    pub(crate) bytes: Range<u32>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct ReplacementOperation {
-    pub(super) selection: usize,
-    pub(super) text: TextId,
-    pub(super) bytes: Range<u32>,
-    pub(super) inserts: bool,
+pub(crate) struct ReplacementOperation {
+    pub(crate) selection: usize,
+    pub(crate) text: TextId,
+    pub(crate) bytes: Range<u32>,
+    pub(crate) inserts: bool,
 }
 
-pub(super) fn validate_replacement_plans(
-    state: &DocumentState,
+pub(crate) trait ReplacementSource {
+    fn document(&self) -> DocumentId;
+
+    fn revision(&self) -> DocumentRevision;
+
+    fn paragraph(&self, text: TextId) -> Option<ParagraphId>;
+
+    fn text(&self, text: TextId) -> Option<&str>;
+}
+
+impl ReplacementSource for DocumentState {
+    fn document(&self) -> DocumentId {
+        self.id
+    }
+
+    fn revision(&self) -> DocumentRevision {
+        self.revision
+    }
+
+    fn paragraph(&self, text: TextId) -> Option<ParagraphId> {
+        if text.document != self.id {
+            return None;
+        }
+        let paragraph = self
+            .paragraphs
+            .get(text.paragraph as usize)
+            .filter(|paragraph| paragraph.id.index == text.paragraph)?;
+        paragraph
+            .leaves
+            .get(text.index as usize)
+            .filter(|leaf| leaf.id == text)
+            .map(|_| paragraph.id)
+    }
+
+    fn text(&self, text: TextId) -> Option<&str> {
+        if text.document != self.id {
+            return None;
+        }
+        self.paragraphs
+            .get(text.paragraph as usize)?
+            .leaves
+            .get(text.index as usize)
+            .filter(|leaf| leaf.id == text)
+            .map(TextLeaf::text)
+    }
+}
+
+pub(crate) fn validate_replacement_plans(
+    source: &impl ReplacementSource,
     selections: &SnapshotTextSelectionSet,
     replacement_len: u32,
 ) -> Result<Vec<ReplacementPlan>, EditError> {
-    if selections.document() != state.id {
+    let document = source.document();
+    let revision = source.revision();
+    if selections.document() != document {
         return Err(EditError::for_document(
             EditErrorKind::WrongDocument,
-            state.id,
+            document,
         ));
     }
-    if selections.revision() != state.revision {
+    if selections.revision() != revision {
         return Err(EditError::for_document(
             EditErrorKind::RevisionConflict,
-            state.id,
+            document,
         ));
     }
     if selections.is_empty() {
         return Err(EditError::for_document(
             EditErrorKind::EmptySelectionSet,
-            state.id,
+            document,
         ));
     }
     let mut plans = Vec::with_capacity(selections.selections().len());
     for (selection_index, selection) in selections.selections().iter().enumerate() {
-        if selection.anchor().revision() != state.revision
-            || selection.extent().revision() != state.revision
-        {
+        if selection.anchor().revision() != revision || selection.extent().revision() != revision {
             return Err(EditError::for_document(
                 EditErrorKind::RevisionConflict,
-                state.id,
+                document,
             ));
         }
-        if selection.anchor().text().document != state.id
-            || selection.extent().text().document != state.id
+        if selection.anchor().text().document != document
+            || selection.extent().text().document != document
         {
             return Err(EditError::for_document(
                 EditErrorKind::WrongDocument,
-                state.id,
+                document,
             ));
         }
-        let anchor = validate_selection_position(state, selection.anchor())?;
-        let extent = validate_selection_position(state, selection.extent())?;
+        let anchor = validate_selection_position(source, selection.anchor())?;
+        let extent = validate_selection_position(source, selection.extent())?;
         if anchor != extent {
             return Err(EditError::for_paragraph(
                 EditErrorKind::CrossParagraphSelection,
@@ -87,7 +134,7 @@ pub(super) fn validate_replacement_plans(
         let Some(first) = selection.ranges().first() else {
             return Err(EditError::for_document(
                 EditErrorKind::InvalidTextRange,
-                state.id,
+                document,
             ));
         };
         let insertion = ReplacementPosition {
@@ -97,17 +144,17 @@ pub(super) fn validate_replacement_plans(
         let mut previous: Option<(TextId, Range<u32>)> = None;
         let mut ranges = Vec::with_capacity(selection.ranges().len());
         for range in selection.ranges() {
-            if range.revision() != state.revision {
+            if range.revision() != revision {
                 return Err(EditError::for_text(
                     EditErrorKind::RevisionConflict,
                     range.text(),
                 ));
             }
             let text = range.text();
-            if text.document != state.id {
+            if text.document != document {
                 return Err(EditError::for_document(
                     EditErrorKind::WrongDocument,
-                    state.id,
+                    document,
                 ));
             }
             if text.paragraph != anchor.index {
@@ -116,11 +163,8 @@ pub(super) fn validate_replacement_plans(
                     anchor,
                 ));
             }
-            let leaf = state
-                .paragraphs
-                .get(text.paragraph as usize)
-                .and_then(|paragraph| paragraph.leaves.get(text.index as usize))
-                .filter(|leaf| leaf.id == text)
+            let value = source
+                .text(text)
                 .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
             let bytes = range.bytes();
             let out_of_order = previous
@@ -133,8 +177,7 @@ pub(super) fn validate_replacement_plans(
                 });
             if bytes.start > bytes.end
                 || out_of_order
-                || leaf
-                    .text()
+                || value
                     .get(bytes.start as usize..bytes.end as usize)
                     .is_none()
             {
@@ -174,12 +217,9 @@ pub(super) fn validate_replacement_plans(
         }
     }
     for text in affected {
-        let original = state
-            .paragraphs
-            .get(text.paragraph as usize)
-            .and_then(|paragraph| paragraph.leaves.get(text.index as usize))
-            .filter(|leaf| leaf.id == text)
-            .map(|leaf| leaf.text().len() as u64)
+        let original = source
+            .text(text)
+            .map(|text| text.len() as u64)
             .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
         let removed = plans
             .iter()
@@ -210,25 +250,100 @@ pub(super) fn validate_replacement_plans(
     Ok(plans)
 }
 
+pub(crate) fn replacement_operations(plans: &[ReplacementPlan]) -> Vec<ReplacementOperation> {
+    let mut operations = Vec::new();
+    for plan in plans {
+        for (range_index, range) in plan.ranges.iter().enumerate() {
+            operations.push(ReplacementOperation {
+                selection: plan.selection,
+                text: range.text,
+                bytes: range.bytes.clone(),
+                inserts: range_index == 0,
+            });
+        }
+    }
+    operations.sort_unstable_by(|first, second| {
+        (
+            second.text.paragraph,
+            second.text.index,
+            second.bytes.start,
+            second.bytes.end,
+        )
+            .cmp(&(
+                first.text.paragraph,
+                first.text.index,
+                first.bytes.start,
+                first.bytes.end,
+            ))
+    });
+    operations
+}
+
+pub(crate) fn rebind_replacement_selections(
+    document: DocumentId,
+    revision: DocumentRevision,
+    plans: &[ReplacementPlan],
+    operations: &[ReplacementOperation],
+    replacement_len: u32,
+) -> Result<SnapshotTextSelectionSet, EditError> {
+    let mut resulting = Vec::with_capacity(plans.len());
+    for plan in plans {
+        let mut byte = i64::from(plan.insertion.byte);
+        for operation in operations {
+            if operation.text != plan.insertion.text {
+                continue;
+            }
+            if !operation.bytes.is_empty() && operation.bytes.end <= plan.insertion.byte {
+                byte -= i64::from(operation.bytes.end - operation.bytes.start);
+            }
+            if operation.inserts
+                && (operation.bytes.start < plan.insertion.byte
+                    || operation.selection == plan.selection)
+            {
+                byte += i64::from(replacement_len);
+            }
+        }
+        let byte = u32::try_from(byte)
+            .map_err(|_| EditError::for_text(EditErrorKind::OversizedText, plan.insertion.text))?;
+        let position = SnapshotTextPosition::new(
+            revision,
+            plan.insertion.text,
+            byte,
+            if byte == 0 {
+                TextAffinity::Downstream
+            } else {
+                TextAffinity::Upstream
+            },
+        );
+        resulting.push(SnapshotTextSelection::new(
+            position,
+            position,
+            TextSelectionMode::Logical,
+            alloc::vec![SnapshotTextRange::new(
+                revision,
+                plan.insertion.text,
+                byte..byte,
+            )],
+        ));
+    }
+    Ok(SnapshotTextSelectionSet::new(document, revision, resulting))
+}
+
 fn validate_selection_position(
-    state: &DocumentState,
+    source: &impl ReplacementSource,
     position: &SnapshotTextPosition,
 ) -> Result<ParagraphId, EditError> {
     let text = position.text();
-    let paragraph = state
-        .paragraphs
-        .get(text.paragraph as usize)
-        .filter(|paragraph| paragraph.id.index == text.paragraph)
+    let paragraph = source
+        .paragraph(text)
         .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
-    let leaf = paragraph
-        .leaves
-        .get(text.index as usize)
-        .filter(|leaf| leaf.id == text)
+    let value = source
+        .text(text)
         .ok_or_else(|| EditError::for_text(EditErrorKind::InvalidStructure, text))?;
-    if !leaf.text().is_char_boundary(position.byte() as usize) {
+    if !value.is_char_boundary(position.byte() as usize) {
         return Err(EditError::for_text(EditErrorKind::InvalidTextRange, text));
     }
-    Ok(paragraph.id)
+    Ok(paragraph)
 }
 
 fn edit_ranges_conflict(first: &Range<u32>, second: &Range<u32>) -> bool {

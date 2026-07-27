@@ -451,10 +451,11 @@ Arabic joining-sensitive boundaries still reshape; none of this requires a
 new `ShapedText` API or Parley fork. Seven paired release samples measure
 localized edit at 5.91–6.04 µs versus Parley's 3.04–3.10 µs, or
 **1.91–1.99×**. Residency, requested-byte, call-count, and edit-latency gates
-are green on this host. The miniature `Document` helper is now confined to
-multi-selection replacement and must be deleted before the compact-block
-representation is declared complete. The running ledger and raw checkpoints
-are in
+are green on this host. The final multi-selection replacement use of the
+miniature `Document` is also deleted: block and document owners now share
+validation, operation ordering, and caret rebasing through a private source
+contract, while `TextBlock` mutates one exactly sized string directly. The
+running ledger and raw checkpoints are in
 `docs/proof/compact-artifact-deletion-ledger-2026-07-27.md`.
 
 ### Risks and controls
