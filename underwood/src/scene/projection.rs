@@ -524,49 +524,6 @@ pub(super) enum LeafSpanSource {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ProjectionSourceKind {
-    Snapshot { start: u32 },
-    Composition { start: u32 },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum ProjectionSourceKey {
-    Relation(ProjectionSegment),
-    Text {
-        paragraph: Range<u32>,
-        text: TextId,
-        source: ProjectionSourceKind,
-    },
-}
-
-impl ProjectionSourceKey {
-    pub(super) fn from_projection(projection: &Projection<'_>) -> Vec<Self> {
-        let mut keys = Vec::with_capacity(
-            projection.spans.len()
-                + if projection.mapping.is_identity() {
-                    0
-                } else {
-                    projection.mapping.segments().len()
-                },
-        );
-        if !projection.mapping.is_identity() {
-            keys.extend(projection.mapping.segments().map(Self::Relation));
-        }
-        keys.extend(projection.spans.iter().map(|span| Self::Text {
-            paragraph: span.paragraph.clone(),
-            text: span.text,
-            source: match span.source {
-                LeafSpanSource::Snapshot { start } => ProjectionSourceKind::Snapshot { start },
-                LeafSpanSource::Composition { start, .. } => {
-                    ProjectionSourceKind::Composition { start }
-                }
-            },
-        }));
-        keys
-    }
-}
-
 pub(super) fn append_analysis_run(
     styles: &mut Vec<AnalysisStyle>,
     runs: &mut Vec<AnalysisRun>,

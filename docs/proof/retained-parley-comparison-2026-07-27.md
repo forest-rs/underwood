@@ -201,6 +201,25 @@ Design-0021 sets blocking targets of at most 1.5× Parley display residency,
 and 8 KiB requested bytes per edit. The current epic is not complete until
 those gates pass or a separately approved design replaces them.
 
+## Design-0021 progress checkpoint
+
+The baseline above records the problem that selected Design-0021. The compact
+artifact work subsequently removed duplicate movement forms, per-glyph paint
+owners, deep scene publication, inline diagnostic payloads, and the deep
+formation key.
+
+The current exact 1,000-label live-heap deltas are 3,611,328 bytes for
+display-only Underwood and 4,035,328 bytes for editable Underwood, against
+3,378,240 bytes for Parley: 1.07× and 1.19× respectively. The ordinary
+residency gates now pass with room to spare. Optional warm adapter retention
+is still 4.07× and remains disabled by default.
+
+The epic is not complete: localized edit is still about 3.2× Parley and makes
+88 allocation calls, so it misses both the 2× latency gate and the 16-call
+gate. This checkpoint supersedes the baseline ratios for current-state
+decisions without rewriting the historical measurements that motivated the
+design.
+
 ## Non-claims
 
 - Parley's private vector capacities are unavailable; the harness does not

@@ -433,7 +433,8 @@ impl LayoutEngine {
                 access
             } else {
                 let projection = Projection::new(paragraph, request)?;
-                let preflight_key = ParagraphPreflightKey::new(paragraph, request, region_cursor);
+                let preflight_key =
+                    ParagraphPreflightKey::new(paragraph, None, request, region_cursor);
                 prepare_paragraph_geometry(
                     self.paragraphs.as_mut(),
                     &mut self.cache,
@@ -674,7 +675,17 @@ impl LayoutEngine {
                 } else {
                     Projection::new(paragraph, request)?
                 };
-                let preflight_key = ParagraphPreflightKey::new(paragraph, request, region_cursor);
+                let preflight_key = ParagraphPreflightKey::new(
+                    paragraph,
+                    transient.then(|| {
+                        Arc::new(CompositionPreparationKey::new(
+                            composition.id(),
+                            projection.mapping.text(),
+                        ))
+                    }),
+                    request,
+                    region_cursor,
+                );
                 if transient {
                     (
                         CacheKind::Composition,
@@ -1164,7 +1175,7 @@ impl LayoutEngine {
             )?);
             self.clock = self.clock.saturating_add(1);
             let projection = Projection::new(paragraph, request)?;
-            let preflight_key = ParagraphPreflightKey::new(paragraph, request, None);
+            let preflight_key = ParagraphPreflightKey::new(paragraph, None, request, None);
             let access = prepare_paragraph_geometry(
                 self.paragraphs.as_mut(),
                 &mut self.cache,
@@ -1339,7 +1350,7 @@ impl LayoutEngine {
             )?);
             self.clock = self.clock.saturating_add(1);
             let projection = Projection::new(paragraph, request)?;
-            let preflight_key = ParagraphPreflightKey::new(paragraph, request, region_cursor);
+            let preflight_key = ParagraphPreflightKey::new(paragraph, None, request, region_cursor);
             let access = prepare_paragraph_geometry(
                 self.paragraphs.as_mut(),
                 &mut self.cache,
@@ -1552,7 +1563,7 @@ impl LayoutEngine {
                 self.clock = self.clock.saturating_add(1);
                 let projection = Projection::new(paragraph, request)?;
                 let preflight_key =
-                    ParagraphPreflightKey::new(paragraph, request, Some(region_cursor));
+                    ParagraphPreflightKey::new(paragraph, None, request, Some(region_cursor));
                 let access = prepare_paragraph_geometry(
                     self.paragraphs.as_mut(),
                     &mut self.cache,
@@ -2015,29 +2026,23 @@ fn prepare_paragraph_geometry(
         cache
             .get(&paragraph.id)
             .map_or_else(ParagraphFormationChange::all, |entry| {
-                entry.formation_key.adapter_change(
-                    projection,
-                    constraint,
-                    region_flow,
-                    region_cursor,
-                    entry.paint_runs != projection.paint_runs,
-                )
+                entry
+                    .preflight_key
+                    .adapter_change(&preflight_key, paragraph)
             });
     let cached = cache.contains_key(&paragraph.id);
     let formation_matches = cache.get(&paragraph.id).is_some_and(|entry| {
-        entry.formation_key.matches(
-            paragraph.version,
-            projection,
-            constraint,
-            region_flow,
-            region_cursor,
-        )
+        entry
+            .preflight_key
+            .formation_matches(&preflight_key, paragraph)
     });
     let paint_matches = cache
         .get(&paragraph.id)
-        .is_some_and(|entry| entry.paint_runs == projection.paint_runs);
+        .is_some_and(|entry| entry.preflight_key.paint_matches(&preflight_key, paragraph));
     let adjustment_matches = cache.get(&paragraph.id).is_some_and(|entry| {
-        entry.formation_key.paragraph_style.alignment() == projection.paragraph_style.alignment()
+        entry
+            .preflight_key
+            .adjustment_matches(&preflight_key, paragraph.id)
     });
     let retained_layout = (formation_matches && adjustment_matches).then(|| {
         Arc::clone(
@@ -2152,13 +2157,11 @@ fn prepare_paragraph_geometry(
             alternate
                 .filter(|entry| {
                     entry
-                        .formation_key
-                        .adapter_change(
-                            projection,
-                            constraint,
-                            region_flow,
-                            region_cursor,
-                            entry.paint_runs != projection.paint_runs,
+                        .preflight_key
+                        .alternate_adapter_change(
+                            &preflight_key,
+                            paragraph,
+                            projection.mapping.text(),
                         )
                         .is_unchanged()
                         && entry
@@ -2366,30 +2369,12 @@ fn prepare_paragraph_geometry(
         geometry.lines.len()
     });
     work.geometry.add_paragraph(paint.fragments.len());
-    let formation_key = FormationKey::new(
-        paragraph.version,
-        alloc::string::String::from(projection.mapping.text()),
-        projection.analysis_styles.clone(),
-        projection.analysis_runs.clone(),
-        shaping_styles,
-        projection.shaping_runs.clone(),
-        projection.inline_flow_styles.clone(),
-        projection.inline_flow_runs.clone(),
-        projection.paragraph_style,
-        constraint,
-        region_flow.cloned(),
-        region_cursor,
-        projection.empty_line_height_key(),
-        projection,
-    );
     let (previous_use, previous_accounted_bytes, current_accounted_bytes) =
         if let Some(entry) = cache.get_mut(&paragraph.id) {
             let previous_use = Some(entry.last_used);
             let previous_accounted_bytes = entry.accounted_bytes;
             entry.last_used = current_use;
             entry.preflight_key = preflight_key;
-            entry.formation_key = formation_key;
-            entry.paint_runs = projection.paint_runs.clone();
             entry.segment = Arc::new(ParagraphSceneSegment::new(
                 paragraph.id,
                 geometry,
@@ -2407,8 +2392,6 @@ fn prepare_paragraph_geometry(
                 last_used: current_use,
                 preparation,
                 preflight_key,
-                formation_key,
-                paint_runs: projection.paint_runs.clone(),
                 segment: Arc::new(ParagraphSceneSegment::new(
                     paragraph.id,
                     geometry,
@@ -2436,6 +2419,7 @@ fn prepare_paragraph_geometry(
 #[derive(Clone, Debug)]
 struct ParagraphPreflightKey {
     version: u64,
+    composition: Option<Arc<CompositionPreparationKey>>,
     styles: StyleMap,
     constraint: ConstraintKey,
     region_flow: Option<RegionFlow>,
@@ -2445,11 +2429,13 @@ struct ParagraphPreflightKey {
 impl ParagraphPreflightKey {
     fn new(
         paragraph: &Paragraph,
+        composition: Option<Arc<CompositionPreparationKey>>,
         request: &SceneRequest<'_>,
         region_cursor: Option<RegionCursor>,
     ) -> Self {
         Self {
             version: paragraph.version,
+            composition,
             styles: request.styles.clone(),
             constraint: ConstraintKey::from(request.constraint),
             region_flow: request.region_flow.cloned(),
@@ -2464,6 +2450,7 @@ impl ParagraphPreflightKey {
         region_cursor: Option<RegionCursor>,
     ) -> bool {
         self.version == paragraph.version
+            && self.composition.is_none()
             && self.constraint == ConstraintKey::from(request.constraint)
             && self.region_cursor == region_cursor
             && region_provenance_matches(self.region_flow.as_ref(), request.region_flow)
@@ -2475,145 +2462,76 @@ impl ParagraphPreflightKey {
                         self.styles.style_for(leaf.id) == request.styles.style_for(leaf.id)
                     })))
     }
-}
 
-#[derive(Clone, Debug, PartialEq)]
-struct FormationKey {
-    version: u64,
-    text: alloc::string::String,
-    source_map: Vec<ProjectionSourceKey>,
-    analysis_styles: Vec<AnalysisStyle>,
-    analysis_runs: Vec<AnalysisRun>,
-    shaping_styles: Vec<ShapingStyle>,
-    shaping_runs: Vec<ShapingRun>,
-    inline_flow_styles: Vec<InlineFlowStyle>,
-    inline_flow_runs: Vec<InlineFlowRun>,
-    paragraph_style: ParagraphStyle,
-    constraint: ConstraintKey,
-    region_flow: Option<RegionFlow>,
-    region_cursor: Option<RegionCursor>,
-    empty_line_height: u64,
-}
-
-impl FormationKey {
-    fn new(
-        version: u64,
-        text: alloc::string::String,
-        analysis_styles: Vec<AnalysisStyle>,
-        analysis_runs: Vec<AnalysisRun>,
-        shaping_styles: Vec<ShapingStyle>,
-        shaping_runs: Vec<ShapingRun>,
-        inline_flow_styles: Vec<InlineFlowStyle>,
-        inline_flow_runs: Vec<InlineFlowRun>,
-        paragraph_style: ParagraphStyle,
-        constraint: TextConstraint,
-        region_flow: Option<RegionFlow>,
-        region_cursor: Option<RegionCursor>,
-        empty_line_height: u64,
-        projection: &Projection<'_>,
-    ) -> Self {
-        Self {
-            version,
-            text,
-            source_map: ProjectionSourceKey::from_projection(projection),
-            analysis_styles,
-            analysis_runs,
-            shaping_styles,
-            shaping_runs,
-            inline_flow_styles,
-            inline_flow_runs,
-            paragraph_style,
-            constraint: ConstraintKey::from(constraint),
-            region_flow,
-            region_cursor,
-            empty_line_height,
-        }
+    fn adapter_change(&self, current: &Self, paragraph: &Paragraph) -> ParagraphFormationChange {
+        self.adapter_change_with_text_identity(
+            current,
+            paragraph,
+            self.version == current.version && self.composition == current.composition,
+        )
     }
 
-    fn matches(
+    fn alternate_adapter_change(
         &self,
-        version: u64,
-        projection: &Projection<'_>,
-        constraint: TextConstraint,
-        region_flow: Option<&RegionFlow>,
-        region_cursor: Option<RegionCursor>,
-    ) -> bool {
-        self.version == version
-            && self.text == projection.mapping.text()
-            && self.source_map == ProjectionSourceKey::from_projection(projection)
-            && self.analysis_styles == projection.analysis_styles
-            && self.analysis_runs == projection.analysis_runs
-            && self.shaping_styles.len() == projection.shaping_styles.len()
-            && self
-                .shaping_styles
-                .iter()
-                .zip(&projection.shaping_styles)
-                .all(|(cached, projected)| cached == *projected)
-            && self.shaping_runs == projection.shaping_runs
-            && self.inline_flow_styles == projection.inline_flow_styles
-            && self.inline_flow_runs == projection.inline_flow_runs
-            && self.paragraph_style.base_direction() == projection.paragraph_style.base_direction()
-            && self.paragraph_style.whitespace_collapse()
-                == projection.paragraph_style.whitespace_collapse()
-            && self.constraint == ConstraintKey::from(constraint)
-            && option_ref_eq(self.region_flow.as_ref(), region_flow)
-            && self.region_cursor == region_cursor
-            && self.empty_line_height == projection.empty_line_height_key()
-    }
-
-    fn adapter_change(
-        &self,
-        projection: &Projection<'_>,
-        constraint: TextConstraint,
-        region_flow: Option<&RegionFlow>,
-        region_cursor: Option<RegionCursor>,
-        paint: bool,
+        current: &Self,
+        paragraph: &Paragraph,
+        current_projected_text: &str,
     ) -> ParagraphFormationChange {
-        let analysis = self.text != projection.mapping.text()
-            || self.analysis_styles != projection.analysis_styles
-            || self.analysis_runs != projection.analysis_runs
-            || self.paragraph_style.base_direction() != projection.paragraph_style.base_direction();
-        let font_selection =
-            !shaping_styles_match(&self.shaping_styles, &projection.shaping_styles)
-                || self.shaping_runs != projection.shaping_runs;
-        let ligature_policy = !inline_flow_values_match(
-            &self.inline_flow_styles,
-            &self.inline_flow_runs,
-            &projection.inline_flow_styles,
-            &projection.inline_flow_runs,
-            |left, right| (left.spacing().letter() == 0.0) == (right.spacing().letter() == 0.0),
-        );
-        let inline_flow_projection = self.inline_flow_styles != projection.inline_flow_styles
-            || self.inline_flow_runs != projection.inline_flow_runs;
-        let spacing = !inline_flow_values_match(
-            &self.inline_flow_styles,
-            &self.inline_flow_runs,
-            &projection.inline_flow_styles,
-            &projection.inline_flow_runs,
-            |left, right| left.spacing() == right.spacing(),
-        );
-        let line_metrics = !inline_flow_values_match(
-            &self.inline_flow_styles,
-            &self.inline_flow_runs,
-            &projection.inline_flow_styles,
-            &projection.inline_flow_runs,
-            |left, right| left.line_height() == right.line_height(),
-        );
-        let break_policy = !inline_flow_values_match(
-            &self.inline_flow_styles,
-            &self.inline_flow_runs,
-            &projection.inline_flow_styles,
-            &projection.inline_flow_runs,
-            |left, right| {
-                left.overflow_wrap() == right.overflow_wrap()
-                    && left.text_wrap_mode() == right.text_wrap_mode()
+        let same_text = self.composition.as_ref().is_some_and(|composition| {
+            composition.projected_text.as_ref() == current_projected_text
+        });
+        self.adapter_change_with_text_identity(current, paragraph, same_text)
+    }
+
+    fn adapter_change_with_text_identity(
+        &self,
+        current: &Self,
+        paragraph: &Paragraph,
+        same_text: bool,
+    ) -> ParagraphFormationChange {
+        if !same_text {
+            return ParagraphFormationChange::all();
+        }
+        let previous_paragraph = self.styles.paragraph_style_for(paragraph.id);
+        let current_paragraph = current.styles.paragraph_style_for(paragraph.id);
+        if previous_paragraph.whitespace_collapse() != current_paragraph.whitespace_collapse() {
+            return ParagraphFormationChange::all();
+        }
+
+        let mut analysis =
+            previous_paragraph.base_direction() != current_paragraph.base_direction();
+        let mut font_selection = false;
+        let mut ligature_policy = false;
+        let mut inline_flow_projection = false;
+        let mut spacing = false;
+        let mut line_metrics = false;
+        let mut break_policy = false;
+        let mut paint = false;
+        paragraph_inline_styles_match(
+            paragraph,
+            &self.styles,
+            &current.styles,
+            |previous, current| {
+                analysis |= previous.analysis() != current.analysis();
+                font_selection |= previous.shaping() != current.shaping();
+                let previous_flow = previous.inline_flow();
+                let current_flow = current.inline_flow();
+                ligature_policy |= (previous_flow.spacing().letter() == 0.0)
+                    != (current_flow.spacing().letter() == 0.0);
+                inline_flow_projection |= previous_flow != current_flow;
+                spacing |= previous_flow.spacing() != current_flow.spacing();
+                line_metrics |= previous_flow.line_height() != current_flow.line_height();
+                break_policy |= previous_flow.overflow_wrap() != current_flow.overflow_wrap()
+                    || previous_flow.text_wrap_mode() != current_flow.text_wrap_mode();
+                paint |= previous.paint() != current.paint();
+                true
             },
         );
-        let constraints = self.constraint != ConstraintKey::from(constraint)
-            || !option_ref_eq(self.region_flow.as_ref(), region_flow)
-            || self.region_cursor != region_cursor
-            || (projection.mapping.text().is_empty()
-                && self.empty_line_height != projection.empty_line_height_key());
+        let empty = paragraph.leaves.iter().all(|leaf| leaf.text().is_empty());
+        let constraints = self.constraint != current.constraint
+            || !option_ref_eq(self.region_flow.as_ref(), current.region_flow.as_ref())
+            || self.region_cursor != current.region_cursor
+            || (empty && line_metrics);
         ParagraphFormationChange::new(
             analysis,
             font_selection,
@@ -2626,57 +2544,64 @@ impl FormationKey {
             paint,
         )
     }
+
+    fn formation_matches(&self, current: &Self, paragraph: &Paragraph) -> bool {
+        let change = self.adapter_change(current, paragraph);
+        !change.analysis_changed()
+            && !change.font_selection_changed()
+            && !change.ligature_policy_changed()
+            && !change.inline_flow_projection_changed()
+            && !change.spacing_changed()
+            && !change.line_metrics_changed()
+            && !change.break_policy_changed()
+            && !change.constraints_changed()
+    }
+
+    fn adjustment_matches(&self, current: &Self, paragraph: ParagraphId) -> bool {
+        self.styles.paragraph_style_for(paragraph).alignment()
+            == current.styles.paragraph_style_for(paragraph).alignment()
+    }
+
+    fn paint_matches(&self, current: &Self, paragraph: &Paragraph) -> bool {
+        self.version == current.version
+            && self.composition == current.composition
+            && paragraph_inline_styles_match(
+                paragraph,
+                &self.styles,
+                &current.styles,
+                |previous, current| previous.paint() == current.paint(),
+            )
+    }
 }
 
-fn shaping_styles_match(left: &[ShapingStyle], right: &[&ShapingStyle]) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(cached, projected)| cached == *projected)
+#[derive(Debug, PartialEq, Eq)]
+struct CompositionPreparationKey {
+    id: CompositionId,
+    projected_text: Arc<str>,
 }
 
-fn inline_flow_values_match(
-    left_styles: &[InlineFlowStyle],
-    left_runs: &[InlineFlowRun],
-    right_styles: &[InlineFlowStyle],
-    right_runs: &[InlineFlowRun],
-    values_match: impl Fn(InlineFlowStyle, InlineFlowStyle) -> bool,
+impl CompositionPreparationKey {
+    fn new(id: CompositionId, projected_text: &str) -> Self {
+        Self {
+            id,
+            projected_text: Arc::from(projected_text),
+        }
+    }
+}
+
+fn paragraph_inline_styles_match(
+    paragraph: &Paragraph,
+    previous: &StyleMap,
+    current: &StyleMap,
+    mut matches: impl FnMut(&ComputedInlineStyle, &ComputedInlineStyle) -> bool,
 ) -> bool {
-    if left_runs.is_empty() || right_runs.is_empty() {
-        return left_runs.is_empty() && right_runs.is_empty();
+    if paragraph.leaves.is_empty() {
+        return matches(previous.default_style(), current.default_style());
     }
-    let mut left = 0_usize;
-    let mut right = 0_usize;
-    let mut source = 0_u32;
-    while let (Some(left_run), Some(right_run)) = (left_runs.get(left), right_runs.get(right)) {
-        let left_range = left_run.bytes();
-        let right_range = right_run.bytes();
-        if left_range.start > source
-            || source >= left_range.end
-            || right_range.start > source
-            || source >= right_range.end
-        {
-            return false;
-        }
-        let Some(left_style) = left_styles.get(left_run.style().index()).copied() else {
-            return false;
-        };
-        let Some(right_style) = right_styles.get(right_run.style().index()).copied() else {
-            return false;
-        };
-        if !values_match(left_style, right_style) {
-            return false;
-        }
-        source = left_range.end.min(right_range.end);
-        if source == left_range.end {
-            left += 1;
-        }
-        if source == right_range.end {
-            right += 1;
-        }
-    }
-    left == left_runs.len() && right == right_runs.len()
+    paragraph
+        .leaves
+        .iter()
+        .all(|leaf| matches(previous.style_for(leaf.id), current.style_for(leaf.id)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2701,8 +2626,6 @@ struct ParagraphCache {
     last_used: u64,
     preparation: ParagraphPreparationId,
     preflight_key: ParagraphPreflightKey,
-    formation_key: FormationKey,
-    paint_runs: Vec<PaintRun>,
     segment: Arc<ParagraphSceneSegment>,
     accounted_bytes: usize,
 }
@@ -2785,8 +2708,6 @@ impl ParagraphCacheStore {
 impl ParagraphCache {
     fn calculate_accounted_owned_bytes(&self) -> usize {
         size_of::<Self>()
-            .saturating_add(self.formation_key.accounted_owned_bytes())
-            .saturating_add(vec_bytes::<PaintRun>(self.paint_runs.capacity()))
             .saturating_add(
                 self.segment
                     .region_transcript
@@ -2797,22 +2718,6 @@ impl ParagraphCache {
             )
             .saturating_add(self.segment.geometry.accounted_owned_bytes())
             .saturating_add(self.segment.paint.residency_bytes())
-    }
-}
-
-impl FormationKey {
-    fn accounted_owned_bytes(&self) -> usize {
-        self.text
-            .capacity()
-            .saturating_add(vec_bytes::<ProjectionSourceKey>(self.source_map.capacity()))
-            .saturating_add(vec_bytes::<AnalysisStyle>(self.analysis_styles.capacity()))
-            .saturating_add(vec_bytes::<AnalysisRun>(self.analysis_runs.capacity()))
-            .saturating_add(vec_bytes::<ShapingStyle>(self.shaping_styles.capacity()))
-            .saturating_add(vec_bytes::<ShapingRun>(self.shaping_runs.capacity()))
-            .saturating_add(vec_bytes::<InlineFlowStyle>(
-                self.inline_flow_styles.capacity(),
-            ))
-            .saturating_add(vec_bytes::<InlineFlowRun>(self.inline_flow_runs.capacity()))
     }
 }
 

@@ -565,3 +565,39 @@ original 2× ceiling and the lower 1.5× target.
 Migration note: `SceneOutput::trace` and `CompositionSceneOutput::trace` are
 no longer `const fn`; dereferencing the out-of-line shared trace is a runtime
 operation. Their argument and return types are unchanged.
+
+## Delete the deep formation key
+
+The paragraph cache no longer retains a second projected-text string, source
+map, or eight analysis/shaping/flow style and run vectors in order to infer
+invalidation. Paragraph revision, the immutable `StyleMap` snapshot, exact
+scalar constraints, and optional composition text are the authoritative input
+identity. On a changed paragraph, the engine compares the old and new computed
+values directly and constructs the same facet-specific
+`ParagraphFormationChange`; it does not hash them and cannot falsely reuse
+through a collision.
+
+This deletes `FormationKey`, `ProjectionSourceKey`, the cached paint-run copy,
+and their comparison helpers. The 1,000-label cold tunnel removes 8,000
+allocation calls and another 535,546 net retained bytes. Scene-cache
+accounting falls from 2,842,210 to 2,313,944 bytes. Stable repeat and repaint
+remain allocation-free; edited preparation falls from 96 calls / 872 net
+bytes to 88 calls / 856 net bytes.
+
+The matched live heap now measures:
+
+| 1,000-label tier | Underwood delta | Parley delta | Ratio |
+|---|---:|---:|---:|
+| display | 3,611,328 B | 3,378,240 B | **1.07×** |
+| editable | 4,035,328 B | 3,378,240 B | **1.19×** |
+
+The residency correction has therefore passed not only Design-0021's 1.5×
+display and 2× editable gates, but the later 1.25× target for both ordinary
+tiers. Optional warm adapter retention remains a separately visible 4.07×
+and has not earned default residency.
+
+The timing gates are not complete. Three matched samples at scale 1,000
+measured zero-change repeat at 119–125 ns per label versus Parley's 193–196
+ns, but localized edit at 9.54–9.86 µs versus 3.02–3.07 µs. The remaining
+campaign must attack changed-paragraph allocation and formation work rather
+than retain memory to hide it.
