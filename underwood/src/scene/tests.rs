@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use alloc::{rc::Rc, sync::Arc, vec, vec::Vec};
-use core::{cell::Cell, iter::once};
+use core::cell::Cell;
 
 use peniko::Blob;
 
@@ -13,8 +13,7 @@ use crate::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
     GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphInput,
-    ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedCaret,
-    PreparedClusterSide, PreparedCursorMovement, PreparedCursorStep, PreparedCursorTopology,
+    ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedClusterSide,
     PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
     PreparedParagraph, PreparedRun, TextAffinity,
 };
@@ -27,7 +26,7 @@ use crate::{
     RegionAttemptOutcome, RegionFlow, RegionTranscript, ResolvedDirection, SceneErrorKind,
     SceneRequest, ShapingStyle, SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection,
     SnapshotTextSelectionSet, StyleMap, SurfaceErrorKind, SurfaceTextEncoding, TextAlignment,
-    TextConstraint, TextId, TextMovement, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
+    TextConstraint, TextId, TextSelectionMode, Vec2, WhitespaceCollapse, WordBreak,
 };
 
 #[derive(Debug)]
@@ -48,24 +47,12 @@ impl ParagraphFormation for EchoAdapter {
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         if text_len == 0 {
-            let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
-            let movements = input.features().has_selection().then(|| {
-                PreparedCursorMovement::new(
-                    position,
-                    PreparedCaret::try_new(0, 0.0).expect("fixture caret is valid"),
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-            });
             let paragraph = PreparedParagraph::try_new_with_features(
                 input.paragraph(),
                 text_len,
                 ResolvedDirection::Ltr,
                 input.features(),
                 [],
-                movements,
             )?;
             return Ok(ParagraphFormationOutput::new(
                 paragraph,
@@ -141,7 +128,36 @@ impl ParagraphFormation for EchoAdapter {
         );
         let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
         let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
-        let (slices, units) = if self.split_paint {
+        let (slices, units) = if self.interior_cursor {
+            (
+                vec![
+                    PreparedInteractionSlice::try_new(0..1, 5.0)?,
+                    PreparedInteractionSlice::try_new(1..text_len, 5.0)?,
+                ],
+                vec![
+                    PreparedInteractionUnit::try_new(
+                        0..1,
+                        0..1,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        start,
+                        PreparedClusterSide::new(1, TextAffinity::Upstream),
+                    )?,
+                    PreparedInteractionUnit::try_new(
+                        1..text_len,
+                        1..2,
+                        5.0,
+                        0,
+                        ClusterBoundary::None,
+                        ClusterWhitespace::None,
+                        PreparedClusterSide::new(1, TextAffinity::Downstream),
+                        end,
+                    )?,
+                ],
+            )
+        } else if self.split_paint {
             let middle = input.paint_runs()[0].bytes().end;
             (
                 vec![
@@ -157,7 +173,7 @@ impl ParagraphFormation for EchoAdapter {
                         ClusterBoundary::None,
                         ClusterWhitespace::None,
                         start,
-                        PreparedClusterSide::new(middle, TextAffinity::Upstream),
+                        PreparedClusterSide::new(middle, TextAffinity::Downstream),
                     )?,
                     PreparedInteractionUnit::try_new(
                         middle..text_len,
@@ -198,83 +214,12 @@ impl ParagraphFormation for EchoAdapter {
             units,
             [run],
         )?;
-        let mut movements = if self.split_paint {
-            let middle_offset = input.paint_runs()[0].bytes().end;
-            let middle = PreparedClusterSide::new(middle_offset, TextAffinity::Upstream);
-            vec![
-                PreparedCursorMovement::new(
-                    start,
-                    PreparedCaret::try_new(0, 0.0)?,
-                    None,
-                    Some(PreparedCursorStep::new(middle, Some(0..middle_offset))),
-                    None,
-                    Some(PreparedCursorStep::new(middle, Some(0..middle_offset))),
-                ),
-                PreparedCursorMovement::new(
-                    middle,
-                    PreparedCaret::try_new(0, 5.0)?,
-                    Some(PreparedCursorStep::new(start, Some(0..middle_offset))),
-                    Some(PreparedCursorStep::new(end, Some(middle_offset..text_len))),
-                    Some(PreparedCursorStep::new(start, Some(0..middle_offset))),
-                    Some(PreparedCursorStep::new(end, Some(middle_offset..text_len))),
-                ),
-                PreparedCursorMovement::new(
-                    end,
-                    PreparedCaret::try_new(0, 10.0)?,
-                    Some(PreparedCursorStep::new(
-                        middle,
-                        Some(middle_offset..text_len),
-                    )),
-                    None,
-                    Some(PreparedCursorStep::new(
-                        middle,
-                        Some(middle_offset..text_len),
-                    )),
-                    None,
-                ),
-            ]
-        } else {
-            vec![
-                PreparedCursorMovement::new(
-                    start,
-                    PreparedCaret::try_new(0, 0.0)?,
-                    None,
-                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
-                    None,
-                    Some(PreparedCursorStep::new(end, Some(0..text_len))),
-                ),
-                PreparedCursorMovement::new(
-                    end,
-                    PreparedCaret::try_new(0, 10.0)?,
-                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
-                    None,
-                    Some(PreparedCursorStep::new(start, Some(0..text_len))),
-                    None,
-                ),
-            ]
-        };
-        if self.interior_cursor {
-            movements.push(PreparedCursorMovement::new(
-                PreparedClusterSide::new(1, TextAffinity::Downstream),
-                PreparedCaret::try_new(0, 5.0)?,
-                None,
-                None,
-                None,
-                None,
-            ));
-        }
         let paragraph = PreparedParagraph::try_new_with_features(
             input.paragraph(),
             text_len,
             ResolvedDirection::Ltr,
             input.features(),
             [line],
-            input
-                .features()
-                .has_selection()
-                .then_some(movements)
-                .into_iter()
-                .flatten(),
         )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
@@ -348,22 +293,8 @@ impl ParagraphFormation for MismatchedEmptyRegionAdapter {
         if !input.text().is_empty() {
             return Err(PreparationError::invalid_output());
         }
-        let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
-        let movements = [PreparedCursorMovement::new(
-            position,
-            PreparedCaret::try_new(0, 0.0)?,
-            None,
-            None,
-            None,
-            None,
-        )];
-        let paragraph = PreparedParagraph::try_new(
-            input.paragraph(),
-            0,
-            ResolvedDirection::Ltr,
-            [],
-            movements,
-        )?;
+        let paragraph =
+            PreparedParagraph::try_new(input.paragraph(), 0, ResolvedDirection::Ltr, [])?;
         let flow = constraints
             .region_flow()
             .ok_or_else(PreparationError::invalid_output)?;
@@ -522,20 +453,11 @@ fn shared_hit_is_revalidated_against_the_current_projection() {
         )
         .expect("seed preparation succeeds");
 
-    let position = PreparedClusterSide::new(0, TextAffinity::Downstream);
     let poisoned = PreparedParagraph::try_new(
         first.snapshot().paragraphs()[0].id,
         0,
         ResolvedDirection::Ltr,
         [],
-        [PreparedCursorMovement::new(
-            position,
-            PreparedCaret::try_new(0, 0.0).expect("empty caret is valid"),
-            None,
-            None,
-            None,
-            None,
-        )],
     )
     .expect("empty prepared facts are internally valid");
     layout.replace_first_shared_facts_for_test(poisoned.shared_facts());
@@ -2554,108 +2476,6 @@ fn composition_root_recency_protects_only_segments_it_names() {
 }
 
 #[test]
-fn visual_selection_uses_the_reciprocal_caret_path() {
-    let mut document = Document::new(DocumentId::from_bytes(*b"scene-visual-dir"));
-    let mut edit = document.edit();
-    let paragraph = edit
-        .append_paragraph(ParagraphRole::BODY)
-        .expect("test paragraph must append");
-    let text = edit
-        .append_text(paragraph, InlineRole::TEXT, "ab")
-        .expect("test text must append");
-    edit.commit().expect("test document must commit");
-    let snapshot = document.snapshot();
-    let semantic = snapshot.paragraphs()[0].leaves[0].semantic_id();
-    let start = SnapshotTextPosition::new(snapshot.revision(), text, 0, TextAffinity::Downstream);
-    let end = SnapshotTextPosition::new(snapshot.revision(), text, 2, TextAffinity::Upstream);
-    let source = SnapshotTextRange::new(snapshot.revision(), text, 0..2);
-    let local_start = PreparedClusterSide::new(0, TextAffinity::Downstream);
-    let local_end = PreparedClusterSide::new(2, TextAffinity::Upstream);
-    let segment = Arc::new(super::ParagraphSceneSegment::new(
-        paragraph,
-        Arc::new(super::CachedGeometry {
-            features: crate::SceneFeatures::EDITABLE,
-            artifact: super::PreparedParagraphFacts::for_test(
-                2,
-                crate::SceneFeatures::EDITABLE,
-                PreparedCursorTopology::from_movements(
-                    vec![
-                        PreparedCursorMovement::new(
-                            local_start,
-                            PreparedCaret::try_new(0, 0.0).expect("test caret"),
-                            None,
-                            None,
-                            None,
-                            None,
-                        ),
-                        PreparedCursorMovement::new(
-                            local_end,
-                            PreparedCaret::try_new(0, 0.0).expect("test caret"),
-                            Some(PreparedCursorStep::new(local_start, Some(0..2))),
-                            None,
-                            None,
-                            None,
-                        ),
-                    ],
-                    once(0..2),
-                    2,
-                ),
-            ),
-            facts: Arc::new(super::CachedGeometryFacts {
-                height: 0.0,
-                empty_bounds: Rect::ZERO,
-                lines: Vec::new(),
-                glyphs: Vec::new(),
-            }),
-            line_fragments: Vec::new(),
-            fragments: Vec::new(),
-            paint_glyphs: Vec::new(),
-            source_map: Some(Arc::new(super::ParagraphSourceMap::snapshot_leaf(
-                text, semantic, 2,
-            ))),
-            line_sources: super::CachedSidecar::from_records(Vec::new()),
-            paint_sources: super::CachedSidecar::from_records(Vec::new()),
-            hit_geometry: super::CachedHitSidecar::from_records(Vec::new()),
-            semantics: super::CachedSidecar::from_records(Vec::new()),
-        }),
-        None,
-    ));
-    let scene = super::TextScene {
-        document: snapshot.id(),
-        revision: snapshot.revision(),
-        paint: PaintTable::from_brushes([Brush::Solid(Color::BLACK)]),
-        requested: crate::SceneFeaturePolicy::uniform(crate::SceneFeatures::EDITABLE),
-        core: Arc::new(super::SceneCore {
-            paragraph_count: 1,
-            spine: super::SceneSpine::from_segments(&[segment], true),
-            metrics: super::TextMetrics::default(),
-            region: None,
-            resident: crate::SceneFeaturePolicy::uniform(crate::SceneFeatures::EDITABLE),
-        }),
-    };
-
-    let forward = scene
-        .selection_between(&start, &end, TextSelectionMode::Visual)
-        .expect("selection must use the equivalent reverse traversal");
-    let reverse = scene
-        .selection_between(&end, &start, TextSelectionMode::Visual)
-        .expect("the represented traversal must select");
-    assert_eq!(forward.ranges(), reverse.ranges());
-    assert_eq!(forward.ranges(), [source]);
-
-    let selections = scene
-        .selection_set([forward])
-        .expect("direction-independent selection must validate");
-    let collapsed = scene
-        .move_selections(&selections, TextMovement::PreviousVisual, false)
-        .expect("visual ordering must use the reciprocal traversal");
-    assert_eq!(
-        collapsed.primary().expect("caret must survive").extent(),
-        &start
-    );
-}
-
-#[test]
 fn composition_projection_rejects_a_missing_semantic_target() {
     let (document, styles, paint) = one_leaf_document(*b"scene-test-doc10", "office");
     let snapshot = document.snapshot();
@@ -2869,8 +2689,8 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     assert_eq!(editor_residency.resident(), crate::SceneFeatures::EDITABLE);
     assert!(editor_residency.bytes().sources() > 0);
     assert!(editor_residency.bytes().hit_testing() > 0);
-    assert!(editor_residency.bytes().selection() > 0);
-    assert!(editor_residency.bytes().navigation() > 0);
+    assert_eq!(editor_residency.bytes().selection(), 0);
+    assert_eq!(editor_residency.bytes().navigation(), 0);
     assert_eq!(editor_residency.bytes().semantics(), 0);
     assert_eq!(editor_residency.bytes().native_text_input(), 0);
 

@@ -817,7 +817,6 @@ impl ExactSizeIterator for SpineRegionAttempts<'_> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapter::PreparedCursorTopology;
 
     fn segment(paragraph: u32, height: f64) -> Arc<ParagraphSceneSegment> {
         let document = crate::DocumentId::from_bytes(*b"scene-spine-test");
@@ -828,11 +827,7 @@ mod tests {
             },
             Arc::new(CachedGeometry {
                 features: SceneFeatures::DISPLAY,
-                artifact: PreparedParagraphFacts::for_test(
-                    0,
-                    SceneFeatures::DISPLAY,
-                    PreparedCursorTopology::from_movements(Vec::new(), Vec::new(), 0),
-                ),
+                artifact: PreparedParagraphFacts::for_test(0, SceneFeatures::DISPLAY, Vec::new()),
                 facts: Arc::new(CachedGeometryFacts {
                     height,
                     empty_bounds: Rect::ZERO,

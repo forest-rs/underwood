@@ -93,22 +93,6 @@ enum SourceLeafKind {
 }
 
 impl ParagraphSourceMap {
-    #[cfg(test)]
-    pub(super) fn snapshot_leaf(text: TextId, semantic: SemanticId, len: u32) -> Self {
-        Self {
-            source_len: len,
-            projected_len: len,
-            identity: true,
-            relations: Vec::new(),
-            leaves: alloc::vec![SourceLeaf {
-                paragraph: SourceSpan::new(0, len),
-                text,
-                semantic,
-                source: SourceLeafKind::Snapshot { start: 0 },
-            }],
-        }
-    }
-
     pub(super) fn from_projection(projection: &Projection<'_>) -> Result<Self, SceneError> {
         let source_len = u32::try_from(projection.mapping.source_text().len()).map_err(|_| {
             SceneError::for_paragraph(SceneErrorKind::SourceCoverage, projection.paragraph)

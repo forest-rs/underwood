@@ -31,7 +31,7 @@ use underwood::{Language, Script};
 
 use super::{AdapterErrorKind, Font, FontSet, ParleyParagraphEngine};
 use crate::font::{read_u16, read_u32};
-use crate::interaction::{collect_analysis_units, prepared_cursor_movements};
+use crate::interaction::collect_analysis_units;
 use crate::line_break::{choose_line, collect_logical_clusters};
 use crate::lowering::checked_source_range;
 use crate::shaping::{analyze_text, analyze_text_with_styles, split_item_after};
@@ -196,14 +196,12 @@ impl ParagraphFormation for AnalysisCursorProof {
             prepared_units,
             [run],
         )?;
-        let movements = prepared_cursor_movements(core::slice::from_ref(&line), source.end)?;
         let paragraph = PreparedParagraph::try_new_with_features(
             input.paragraph(),
             source.end,
             ResolvedDirection::Ltr,
             input.features(),
             [line],
-            movements,
         )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
@@ -359,7 +357,7 @@ fn fixture_paragraph_engine() -> ParleyParagraphEngine {
 }
 
 #[test]
-fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formation() {
+fn cursor_derivation_adds_no_adapter_graph_during_warm_editable_upgrade() {
     let observed = Rc::new(RefCell::new(Vec::new()));
     let adapter = PreparedFactsProbe {
         inner: fixture_paragraph_engine(),
@@ -379,10 +377,7 @@ fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formatio
     let first_observed = observed.borrow();
     assert_eq!(first_observed.len(), 1);
     assert_eq!(first_observed[0].features(), SceneFeatures::DISPLAY);
-    assert!(
-        first_observed[0].movements().is_empty(),
-        "display lowering must not build a hidden movement graph"
-    );
+    let display_bytes = first_observed[0].accounted_owned_bytes();
     drop(first_observed);
 
     let editable_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
@@ -405,7 +400,11 @@ fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formatio
     let observed = observed.borrow();
     assert_eq!(observed.len(), 2);
     assert!(observed[1].features().contains(SceneFeatures::EDITABLE));
-    assert!(!observed[1].movements().is_empty());
+    assert_eq!(
+        observed[1].accounted_owned_bytes(),
+        display_bytes,
+        "editable cursor policy derives from the same formed facts"
+    );
     drop(observed);
 
     let smaller = layout
@@ -418,7 +417,11 @@ fn display_preparation_skips_movements_and_warm_editable_upgrade_reuses_formatio
         .expect("the fixture contains one paragraph");
     assert_eq!(paragraph.requested(), SceneFeatures::DISPLAY);
     assert_eq!(paragraph.resident(), SceneFeatures::EDITABLE);
-    assert!(paragraph.bytes().navigation() > 0);
+    assert_eq!(
+        paragraph.bytes().navigation(),
+        0,
+        "derived navigation retains no per-position graph"
+    );
 }
 
 #[test]

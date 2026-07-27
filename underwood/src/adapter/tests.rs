@@ -7,9 +7,9 @@ use peniko::Blob;
 
 use super::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment,
-    LineBreakReason, PreparationErrorKind, PreparedCaret, PreparedClusterSide,
-    PreparedCursorMovement, PreparedCursorStep, PreparedGlyph, PreparedInteractionSlice,
-    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedRun, TextAffinity,
+    LineBreakReason, PreparationErrorKind, PreparedClusterSide, PreparedGlyph,
+    PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine, PreparedParagraph,
+    PreparedRun, TextAffinity,
 };
 use crate::{
     DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, ResolvedDirection, Tag, Vec2,
@@ -132,122 +132,13 @@ fn prepared_paragraph_rejects_a_gap_between_lines() {
     };
     let first = line(0..1);
     let second = line(2..3);
-    let error =
-        PreparedParagraph::try_new(paragraph, 3, ResolvedDirection::Ltr, [first, second], [])
-            .expect_err("source gaps must be rejected at the adapter boundary");
+    let error = PreparedParagraph::try_new(paragraph, 3, ResolvedDirection::Ltr, [first, second])
+        .expect_err("source gaps must be rejected at the adapter boundary");
     assert_eq!(
         error.kind(),
         PreparationErrorKind::InvalidOutput,
         "a source gap is invalid adapter output"
     );
-}
-
-#[test]
-fn prepared_paragraph_rejects_incomplete_cursor_facts() {
-    let paragraph = ParagraphId {
-        document: DocumentId::from_bytes(*b"adapter-test-002"),
-        index: 0,
-    };
-    let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
-    let end = PreparedClusterSide::new(1, TextAffinity::Upstream);
-    let unknown = PreparedClusterSide::new(0, TextAffinity::Upstream);
-    let caret = PreparedCaret::try_new(0, 0.0).expect("test caret is valid");
-    let start_movement = PreparedCursorMovement::new(
-        start,
-        caret,
-        None,
-        Some(PreparedCursorStep::new(unknown, Some(0..1))),
-        None,
-        Some(PreparedCursorStep::new(end, Some(0..1))),
-    );
-    let end_movement = PreparedCursorMovement::new(
-        end,
-        caret,
-        Some(PreparedCursorStep::new(start, Some(0..1))),
-        None,
-        Some(PreparedCursorStep::new(start, Some(0..1))),
-        None,
-    );
-    let error = PreparedParagraph::try_new(
-        paragraph,
-        1,
-        ResolvedDirection::Ltr,
-        [line(0..1)],
-        [start_movement, end_movement],
-    )
-    .expect_err("every cursor target must have its own movement record");
-    assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
-}
-
-#[test]
-fn prepared_paragraph_rejects_a_caret_on_an_unknown_line() {
-    let paragraph = ParagraphId {
-        document: DocumentId::from_bytes(*b"adapter-test-003"),
-        index: 0,
-    };
-    let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
-    let end = PreparedClusterSide::new(1, TextAffinity::Upstream);
-    let invalid_caret = PreparedCaret::try_new(1, 0.0).expect("coordinates are finite");
-    let start_movement = PreparedCursorMovement::new(
-        start,
-        invalid_caret,
-        None,
-        Some(PreparedCursorStep::new(end, Some(0..1))),
-        None,
-        Some(PreparedCursorStep::new(end, Some(0..1))),
-    );
-    let end_movement = PreparedCursorMovement::new(
-        end,
-        invalid_caret,
-        Some(PreparedCursorStep::new(start, Some(0..1))),
-        None,
-        Some(PreparedCursorStep::new(start, Some(0..1))),
-        None,
-    );
-    let error = PreparedParagraph::try_new(
-        paragraph,
-        1,
-        ResolvedDirection::Ltr,
-        [line(0..1)],
-        [start_movement, end_movement],
-    )
-    .expect_err("caret line identities must resolve inside the paragraph");
-    assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
-}
-
-#[test]
-fn prepared_paragraph_rejects_a_step_source_that_is_not_an_interaction_unit() {
-    let paragraph = ParagraphId {
-        document: DocumentId::from_bytes(*b"adapter-test-004"),
-        index: 0,
-    };
-    let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
-    let end = PreparedClusterSide::new(2, TextAffinity::Upstream);
-    let start_movement = PreparedCursorMovement::new(
-        start,
-        PreparedCaret::try_new(0, 0.0).expect("test caret is valid"),
-        None,
-        Some(PreparedCursorStep::new(end, Some(0..1))),
-        None,
-        Some(PreparedCursorStep::new(end, Some(0..1))),
-    );
-    let end_movement = PreparedCursorMovement::new(
-        end,
-        PreparedCaret::try_new(0, 1.0).expect("test caret is valid"),
-        Some(PreparedCursorStep::new(start, Some(0..1))),
-        None,
-        Some(PreparedCursorStep::new(start, Some(0..1))),
-        None,
-    );
-    let error = PreparedParagraph::try_new(
-        paragraph,
-        2,
-        ResolvedDirection::Ltr,
-        [line(0..2)],
-        [start_movement, end_movement],
-    )
-    .expect_err("a cursor step must cross one actual prepared interaction unit");
-    assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
 #[test]

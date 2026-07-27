@@ -49,13 +49,6 @@ impl<T> CachedSidecar<T> {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn from_records(records: Vec<T>) -> Self {
-        Self {
-            records: Some(Arc::new(records)),
-        }
-    }
-
     fn capacity(&self) -> usize {
         self.records
             .as_ref()
@@ -111,13 +104,6 @@ impl CachedHitSidecar {
         );
         Self {
             records: retain.then(|| Arc::new(CachedHitGeometry { placements })),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn from_records(placements: Vec<CachedHitPlacement>) -> Self {
-        Self {
-            records: Some(Arc::new(CachedHitGeometry { placements })),
         }
     }
 
@@ -415,36 +401,46 @@ impl CachedGeometry {
         })
     }
 
-    pub(super) fn movements(&self) -> Option<PreparedCursorMovements<'_>> {
+    pub(super) fn cursor(&self) -> Option<ParagraphCursor<'_>> {
         self.features
             .has_selection()
-            .then(|| self.artifact.movements())
+            .then(|| ParagraphCursor::new(&self.artifact))
     }
 
     pub(super) fn movement_count(&self) -> usize {
-        self.movements().map_or(0, PreparedCursorMovements::len)
+        self.cursor().map_or(0, ParagraphCursor::count)
     }
 
-    pub(super) fn caret_bounds(&self, movement: PreparedCursorMovementView<'_>) -> Option<Rect> {
-        let caret = movement.caret();
-        let line = usize::try_from(caret.line()).ok()?;
-        let (line_bounds, adjusted_inline) =
-            match (self.artifact.lines().get(line), self.lines.get(line)) {
-                (Some(prepared), Some(cached)) => (
-                    cached.bounds,
-                    adjusted_caret_inline(prepared, cached.adjustment, caret.inline())?,
-                ),
-                (None, None)
-                    if self.artifact.lines().is_empty() && line == 0 && caret.inline() == 0.0 =>
-                {
-                    (self.empty_bounds, 0.0)
-                }
-                _ => return None,
-            };
+    pub(super) fn caret_bounds(&self, movement: CursorMovement<'_>) -> Option<Rect> {
+        let (line_bounds, inline) = match movement.caret_anchor() {
+            CursorCaretAnchor::Unit { cluster, at_end } => {
+                let line = u32::try_from(cluster.line).ok()?;
+                let placements = self.hit_geometry.placements_for_line(line);
+                let placement = placements.get(cluster.unit)?;
+                let start = cluster.unit.checked_sub(1).map_or_else(
+                    || self.lines.get(cluster.line).map(|line| line.bounds.x0),
+                    |previous| {
+                        placements
+                            .get(previous)
+                            .map(|placement| placement.inline_end)
+                    },
+                )?;
+                (
+                    self.lines.get(cluster.line)?.bounds,
+                    if at_end { placement.inline_end } else { start },
+                )
+            }
+            CursorCaretAnchor::LastLineStart => self
+                .lines
+                .last()
+                .map_or((self.empty_bounds, self.empty_bounds.x0), |line| {
+                    (line.bounds, line.bounds.x0)
+                }),
+        };
         Some(Rect::new(
-            line_bounds.x0 + adjusted_inline,
+            inline,
             line_bounds.y0,
-            line_bounds.x0 + adjusted_inline + 1.0,
+            inline + 1.0,
             line_bounds.y1,
         ))
     }
@@ -491,8 +487,8 @@ impl CachedGeometry {
             sources,
             vec_bytes::<CachedSemantic>(self.semantics.capacity()),
             hit_testing,
-            self.artifact.movements().selection_owned_bytes(),
-            self.artifact.movements().navigation_owned_bytes(),
+            0,
+            0,
             0,
         )
     }
@@ -510,43 +506,6 @@ fn inline_distance_to_rect(inline: f64, bounds: Rect) -> f64 {
     } else {
         0.0
     }
-}
-
-fn adjusted_caret_inline(
-    line: &PreparedLine,
-    adjustment: LineAdjustment,
-    inline: f64,
-) -> Option<f64> {
-    const TOLERANCE: f64 = 1.0e-6;
-    let expansion = adjustment.opportunity_expansion();
-    let mut original_start = 0.0;
-    let mut adjusted_start = 0.0;
-    for unit in line.units() {
-        let original_end = original_start + unit.advance();
-        let adjusted_end = adjusted_start
-            + unit.advance()
-            + if expansion > 0.0
-                && unit.is_western_justification_opportunity()
-                && unit.source().end <= line.trailing_whitespace_start()
-            {
-                expansion
-            } else {
-                0.0
-            };
-        if (inline - original_start).abs() <= TOLERANCE {
-            return Some(adjusted_start);
-        }
-        if (inline - original_end).abs() <= TOLERANCE {
-            return Some(adjusted_end);
-        }
-        if original_start < inline && inline < original_end {
-            let fraction = (inline - original_start) / (original_end - original_start);
-            return Some(adjusted_start + fraction * (adjusted_end - adjusted_start));
-        }
-        original_start = original_end;
-        adjusted_start = adjusted_end;
-    }
-    (line.units().is_empty() && inline == 0.0).then_some(0.0)
 }
 
 const fn vec_bytes<T>(capacity: usize) -> usize {
@@ -576,8 +535,13 @@ pub(super) fn build_geometry(
         .transpose()?
         .map(Arc::new);
     if features.has_selection() {
-        for movement in prepared.movements().iter() {
-            let offset = movement.position().offset();
+        for position in prepared
+            .lines()
+            .iter()
+            .flat_map(|line| line.units())
+            .flat_map(|unit| [unit.left(), unit.right()])
+        {
+            let offset = position.offset();
             let offset_usize = usize::try_from(offset).map_err(|_| {
                 SceneError::for_source(
                     SceneErrorKind::SourceCoverage,
@@ -1202,17 +1166,17 @@ pub(super) fn materialize_optional_snapshot_range(
 
 pub(super) fn materialize_cursor_step(
     source_map: &ParagraphSourceMap,
-    step: Option<PreparedCursorStepView<'_>>,
+    step: Option<DerivedCursorStep>,
     revision: DocumentRevision,
 ) -> Option<SceneCursorStep> {
     step.map(|step| SceneCursorStep {
         target: materialize_position(
             source_map,
-            SourcePosition::new(step.target().offset(), step.target().affinity()),
+            SourcePosition::new(step.target.offset(), step.target.affinity()),
             revision,
         ),
         source: step
-            .source()
+            .source
             .map(SourceSpan::from)
             .map(|source| materialize_snapshot_unit(source_map, source, revision)),
     })

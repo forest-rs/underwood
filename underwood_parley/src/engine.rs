@@ -26,7 +26,7 @@ use underwood::{
 };
 
 use crate::font::FontSet;
-use crate::interaction::{collect_analysis_units, lower_visual_units, prepared_cursor_movements};
+use crate::interaction::{collect_analysis_units, lower_visual_units};
 use crate::line_break::{
     FormedLine, LineFormationScratch, LineFormationWork, LogicalCluster, apply_wrap_policy,
     collect_logical_clusters, form_lines, line_run_pieces, reorder_visual_pieces,
@@ -558,11 +558,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 prepared_runs,
             )?);
         }
-        let movements = if input.features().has_selection() {
-            prepared_cursor_movements(&prepared_lines, text_len)?
-        } else {
-            Vec::new()
-        };
         let resolved_direction = if preparation.analysis.is_rtl() {
             ResolvedDirection::Rtl
         } else {
@@ -574,7 +569,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             resolved_direction,
             input.features(),
             prepared_lines,
-            movements,
         )?;
         let region_transcript = preparation.region_transcript.clone();
         match region_transcript {

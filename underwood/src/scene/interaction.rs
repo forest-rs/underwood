@@ -206,7 +206,7 @@ impl CompositionScene {
     ) -> Option<SceneCaret<ProjectedTextPosition>> {
         let (positioned, source_map, source) =
             positioned_projected_source(&self.core.spine, self.revision, position)?;
-        let movement = prepared_movement_at(&positioned.segment.geometry, source)?;
+        let movement = cursor_movement_at(&positioned.segment.geometry, source)?;
         let bounds = positioned.segment.geometry.caret_bounds(movement)?;
         Some(SceneCaret {
             position: projected_position(source_map, source, self.revision),
@@ -223,14 +223,14 @@ impl CompositionScene {
     ) -> Option<ProjectedTextPosition> {
         let (positioned, source_map, source) =
             positioned_projected_source(&self.core.spine, self.revision, position)?;
-        let record = prepared_movement_at(&positioned.segment.geometry, source)?;
+        let record = cursor_movement_at(&positioned.segment.geometry, source)?;
         let step = match movement {
             TextMovement::PreviousVisual => record.previous_visual(),
             TextMovement::NextVisual => record.next_visual(),
             TextMovement::PreviousLogical => record.previous_logical(),
             TextMovement::NextLogical => record.next_logical(),
         }?;
-        let target = step.target();
+        let target = step.target;
         Some(projected_position(
             source_map,
             SourcePosition::new(target.offset(), target.affinity()),
@@ -742,7 +742,7 @@ impl TextScene {
             byte: position.byte(),
             affinity: position.affinity(),
         })?;
-        let movement = prepared_movement_at(&positioned.segment.geometry, source)?;
+        let movement = cursor_movement_at(&positioned.segment.geometry, source)?;
         let bounds = positioned.segment.geometry.caret_bounds(movement)?;
         Some(SceneCaret {
             position: materialize_position(source_map, source, self.revision),
@@ -758,22 +758,13 @@ impl TextScene {
     pub(crate) fn start_position(&self) -> Option<SnapshotTextPosition> {
         let first = self.core.spine.positioned_movement(0)?;
         let source_map = first.position.segment.geometry.source_map.as_deref()?;
-        first
-            .position
-            .segment
-            .geometry
-            .movements()?
-            .iter()
-            .filter(|movement| movement.previous_logical().is_none())
-            .map(|movement| {
-                let position = movement.position();
-                materialize_position(
-                    source_map,
-                    SourcePosition::new(position.offset(), position.affinity()),
-                    self.revision,
-                )
-            })
-            .min_by_key(logical_position_key)
+        let movement = first.position.segment.geometry.cursor()?.start()?;
+        let position = movement.position();
+        Some(materialize_position(
+            source_map,
+            SourcePosition::new(position.offset(), position.affinity()),
+            self.revision,
+        ))
     }
 
     /// Returns the final logical caret position in the complete scene.
@@ -790,21 +781,13 @@ impl TextScene {
             .checked_sub(1)
             .and_then(|index| self.core.spine.positioned_movement(index))?;
         let source_map = last.position.segment.geometry.source_map.as_deref()?;
-        last.position
-            .segment
-            .geometry
-            .movements()?
-            .iter()
-            .filter(|movement| movement.next_logical().is_none())
-            .map(|movement| {
-                let position = movement.position();
-                materialize_position(
-                    source_map,
-                    SourcePosition::new(position.offset(), position.affinity()),
-                    self.revision,
-                )
-            })
-            .max_by_key(logical_position_key)
+        let movement = last.position.segment.geometry.cursor()?.end()?;
+        let position = movement.position();
+        Some(materialize_position(
+            source_map,
+            SourcePosition::new(position.offset(), position.affinity()),
+            self.revision,
+        ))
     }
 
     /// Resolves a represented caret at one leaf-local UTF-8 boundary.
@@ -840,7 +823,7 @@ impl TextScene {
             }) else {
                 continue;
             };
-            if let Some(movement) = prepared_movement_at(&positioned.segment.geometry, source) {
+            if let Some(movement) = cursor_movement_at(&positioned.segment.geometry, source) {
                 let position = movement.position();
                 return Some(materialize_position(
                     source_map,
@@ -887,7 +870,7 @@ impl TextScene {
         (
             PositionedSegment<'a>,
             &'a ParagraphSourceMap,
-            PreparedCursorMovementView<'a>,
+            CursorMovement<'a>,
         ),
         SelectionError,
     > {
@@ -911,7 +894,7 @@ impl TextScene {
                 affinity: position.affinity(),
             })
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
-        let movement = prepared_movement_at(&positioned.segment.geometry, source)
+        let movement = cursor_movement_at(&positioned.segment.geometry, source)
             .ok_or_else(|| SelectionError::new(SelectionErrorKind::UnknownPosition))?;
         Ok((positioned, source_map, movement))
     }
@@ -1118,27 +1101,19 @@ impl TextScene {
         };
         let adjacent = self.core.spine.positioned_movement(global)?;
         let source_map = adjacent.position.segment.geometry.source_map.as_deref()?;
-        let mut candidates = adjacent
-            .position
-            .segment
-            .geometry
-            .movements()?
-            .iter()
-            .filter(|record| match movement {
-                TextMovement::PreviousVisual => record.next_visual().is_none(),
-                TextMovement::NextVisual => record.previous_visual().is_none(),
-                TextMovement::PreviousLogical => record.next_logical().is_none(),
-                TextMovement::NextLogical => record.previous_logical().is_none(),
-            });
-        let target = candidates.next()?.position();
+        let cursor = adjacent.position.segment.geometry.cursor()?;
+        let target = match movement {
+            TextMovement::PreviousVisual => cursor.last_visual(),
+            TextMovement::NextVisual => cursor.first_visual(),
+            TextMovement::PreviousLogical => cursor.end(),
+            TextMovement::NextLogical => cursor.start(),
+        }?
+        .position();
         let target = materialize_position(
             source_map,
             SourcePosition::new(target.offset(), target.affinity()),
             self.revision,
         );
-        if candidates.next().is_some() {
-            return None;
-        }
         Some(SceneCursorStep {
             target,
             source: None,
@@ -1654,12 +1629,12 @@ fn closest_cluster<'a>(
     closest.map(|(cluster, _, _)| cluster)
 }
 
-fn prepared_movement_at<'a>(
+fn cursor_movement_at<'a>(
     geometry: &'a CachedGeometry,
     position: SourcePosition,
-) -> Option<PreparedCursorMovementView<'a>> {
+) -> Option<CursorMovement<'a>> {
     geometry
-        .movements()?
+        .cursor()?
         .get(PreparedClusterSide::new(position.offset, position.affinity))
 }
 

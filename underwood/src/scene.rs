@@ -14,7 +14,6 @@ use crate::adapter::{
     LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationCacheDiagnostics, ParagraphFormationChange, ParagraphFormationReuse,
     ParagraphInput, ParagraphPreparationId, PreparationErrorKind, PreparedClusterSide,
-    PreparedCursorMovementView, PreparedCursorMovements, PreparedCursorStepView,
     PreparedInteractionUnitView, PreparedLine, PreparedParagraph, PreparedParagraphFacts,
     ShapingRun, ShapingStyleId, TextAffinity,
 };
@@ -33,6 +32,7 @@ use crate::{
 };
 
 mod adjustment;
+mod cursor;
 mod engine;
 mod facades;
 mod geometry;
@@ -74,6 +74,7 @@ pub use views::{
 };
 
 use adjustment::*;
+use cursor::*;
 use geometry::*;
 use interaction::{SceneCore, SceneCursorStep};
 use projection::*;

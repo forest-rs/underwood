@@ -16,14 +16,16 @@ The scene layer adds paragraph placement, line adjustment, paint binding,
 authored-source binding, and document revision; it does not copy the artifact
 into another owned glyph or interaction model.
 
-Editable interaction is retained as indexed topology:
+Editable interaction retains the smallest authoritative facts:
 
 - one paragraph-local interaction-unit table;
-- one table of unique source positions and caret placements;
-- compact indexes for logical and visual adjacency;
+- exact source, bidi, boundary, whitespace, and visual-side facts per unit;
+- line-local visual order and formed-line break reasons;
 - rare spill tables for multi-source or multi-semantic geometry.
 
-It is not retained as separate hit clusters, carets, and four complete
+Cursor positions, caret anchors, and logical/visual adjacency are
+allocation-free borrowed derivations over those facts. They are not retained
+as separate hit clusters, position tables, carets, or four complete
 source-aware transitions per position.
 
 `TextBlock` remains a facade over the same paragraph preparation and scene
@@ -149,7 +151,8 @@ published result:
 - selected font instances and glyph identities;
 - formed line boundaries and paragraph-local placement;
 - compact glyph source-coverage topology;
-- resolved interaction units and bidi/caret topology requested by the scene;
+- resolved interaction units and line-local visual order requested by the
+  scene;
 - the authored/projected source relation requested by the scene;
 - immutable revision and capability identity at the scene root.
 
@@ -159,9 +162,9 @@ Do not retain values that are cheap joins of authoritative tables:
 
 - absolute glyph and caret coordinates from paragraph origin, line placement,
   and local coordinates;
-- caret rectangles from one position record and line metrics;
-- movement targets from edge indexes;
-- traversed source from an edge's unit index and the source map;
+- caret rectangles from visual unit sides, line placement, and line metrics;
+- movement targets from neighboring logical or visual units;
+- traversed source from the crossed unit and the source map;
 - semantic identity from a compact source/leaf index;
 - selection rectangles from selected unit ranges and line geometry;
 - public fragments, hits, movements, and source observations.
@@ -314,8 +317,8 @@ build a second owned portable representation.
 
 - Glyph source coverage lives with glyph topology.
 - Authored/projected correspondence lives in the paragraph source map.
-- A cursor position and caret placement live in one position table.
-- Visual and logical movement refer to positions and traversed units by index.
+- Cursor positions, caret anchors, and movement are derived from the
+  interaction-unit and line tables.
 - Paint fragments refer to glyph ranges and paint slots.
 
 Public views may join those tables, but retained records do not repeat their
@@ -338,7 +341,8 @@ pay for the rare one.
 ### 5. Validation happens once per trust transition
 
 Public adapter constructors validate ranges, table ordering, index coverage,
-UTF-8 boundaries, cursor topology, and finite geometry. Internal construction
+interaction-unit sides, and finite geometry. Scene binding validates UTF-8
+boundaries against the projected text. Internal construction
 then carries validated provenance. Scene publication checks identity and
 revision compatibility without reconstructing and deep-comparing the artifact.
 
@@ -480,31 +484,37 @@ Authored `TextId`, semantic identity, and document revision remain in the
 source map and source snapshot. Hot glyph and interaction records keep compact
 projected spans or leaf indexes.
 
-## Indexed interaction topology
+## Derived interaction navigation
 
-The adapter remains responsible for Unicode and bidi cursor policy. Core does
-not infer movement from glyph order.
+The adapter remains responsible for Unicode analysis, extended-grapheme
+grouping, resolved bidi levels, and line-local visual unit order. Core does
+not infer interaction from glyph order.
 
-The adapter expresses that policy compactly:
+The compact artifact already expresses the authoritative inputs:
 
 ```text
-Position {
-    projected byte + affinity,
-    line index + inline caret coordinate,
-    previous/next visual position index,
-    previous/next logical position index,
-    traversed unit index or soft-wrap sentinel for each edge
+InteractionUnit {
+    projected source range,
+    resolved bidi level,
+    left and right source positions,
+    boundary and whitespace facts
+}
+
+PreparedLine {
+    source range,
+    break reason,
+    interaction units in visual order
 }
 ```
 
-The exact packing may split positions, carets, and edges into structure-of-
-arrays tables when that improves size or traversal. The law is that a target
-`SourcePosition` and traversed `SourceSpan` are not copied four times into
-four owned step records.
-
-Hit units point at the same endpoint positions. Selection obtains carets from
-the position table. Movement returns source observations by joining an edge to
-its unit and the paragraph source map. All are borrowed and allocation-free.
+Logical lookup binary-searches source-ordered lines and units, with a fallback
+inside genuinely visually reordered bidi lines. Visual movement follows
+line-local unit order and formed-line boundaries. Soft-wrap affinity and
+mandatory-break caret placement are derived from the same rules as Parley's
+cluster cursor. Hit placement supplies adjusted inline coordinates, so
+selection obtains exact carets without a retained caret table. Movement
+returns source observations by joining the crossed unit to the paragraph
+source map. All are borrowed and allocation-free.
 
 The existing exact, closest, and byte-position binary searches remain. Packing
 must not restore line-local scans over long unwrapped text.
@@ -624,6 +634,10 @@ This is a deliberate breaking adapter migration:
 
 - nested `PreparedLine`, `PreparedRun`, `PreparedGlyph`, and complete
   `PreparedCursorMovement` construction move to flat artifact builders/views;
+- `PreparedParagraph::{try_new, try_new_with_features}` no longer accept a
+  cursor-movement iterator;
+- `PreparedCaret`, `PreparedCursorMovement`, `PreparedCursorStep`, and their
+  borrowed topology views are removed;
 - paint-slot coverage leaves adapter-prepared glyph values in favor of
   source-coverage topology plus core paint binding;
 - `ParagraphFormationOutput` transfers or shares one validated artifact;
@@ -634,6 +648,37 @@ This is a deliberate breaking adapter migration:
 
 There will be one migration note with before/after custom-adapter examples.
 There is no compatibility shim retaining both forms.
+
+The cursor portion of that migration is already concrete. A custom adapter
+previously constructed every position, caret, and four-way transition after
+constructing its lines:
+
+```rust,ignore
+PreparedParagraph::try_new_with_features(
+    paragraph,
+    text_len,
+    direction,
+    features,
+    lines,
+    movements,
+)
+```
+
+It now supplies only validated lines whose interaction units carry exact
+source, bidi, and visual-side facts:
+
+```rust,ignore
+PreparedParagraph::try_new_with_features(
+    paragraph,
+    text_len,
+    direction,
+    features,
+    lines,
+)
+```
+
+Scene navigation and carets are derived from those units. Adapters must not
+rebuild the removed graph privately.
 
 ## Required wind tunnels
 
@@ -679,8 +724,8 @@ with raw evidence.
 1. Check in the matched failure proof and keep it reproducible.
 2. Replace the portable nested adapter output and scene copy together. A flat
    adapter artifact beside copied scene geometry is not landable.
-3. Replace movement/caret duplication with indexed topology and migrate every
-   query in one vertical slice.
+3. Delete movement/caret topology and derive every query from authoritative
+   line and interaction-unit facts in one vertical slice.
 4. Move paint binding out of adapter output and remove retained final prepared
    output.
 5. Introduce compact `TextBlock` source state through the common paragraph

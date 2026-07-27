@@ -69,9 +69,11 @@ physical lines:
 - the `PreparedParagraphFacts::movements` owner
 - movement graph membership and dedup validation over repeated source values
 
-Replacement: compact indexes over one unique position/caret table and one
-interaction-unit table. The adapter remains responsible for resolved bidi
-policy; core borrows its topology rather than reconstructing Unicode behavior.
+Replacement: allocation-free cursor and caret views over the one
+interaction-unit table and formed-line facts. The adapter remains responsible
+for grapheme grouping, resolved bidi levels, and visual unit order; core
+derives navigation without reconstructing Unicode analysis or retaining
+another topology.
 
 ### Complete copied scene cursor graph
 
@@ -81,8 +83,8 @@ policy; core borrows its topology rather than reconstructing Unicode behavior.
 - independent `carets` and `movements` sidecar owners
 - lowering that copies every portable target and source span into scene values
 
-Replacement: borrowed caret and movement views joining the artifact's position,
-edge, unit, line, and source-map tables.
+Replacement: borrowed caret and movement views joining interaction units,
+formed lines, hit placement, and the source map.
 
 ### Adapter final-output cache
 
@@ -143,11 +145,11 @@ same internal paragraph-source view used by document paragraphs.
 
 | Obligation | Before | After | Status |
 |---|---|---|---|
-| affected production files | 30 | — | pending |
-| affected physical lines | 19,381 | — | pending |
-| seven duplicate-owner files | 6,161 | — | pending |
-| portable complete cursor graph | present | — | pending |
-| copied scene cursor graph | present | — | pending |
+| affected production files | 30 | 31 | in progress; one focused cursor module added |
+| affected physical lines | 19,381 | 19,013 | in progress; −368 |
+| seven duplicate-owner files | 6,161 | 5,380 | in progress; −781 |
+| portable complete cursor graph | present | deleted | complete |
+| copied scene cursor graph | present | deleted | complete |
 | adapter final-output cache | present | — | pending |
 | clone-based repaint | present | — | pending |
 | nested-to-flat final lowering | present | — | pending |
@@ -157,3 +159,46 @@ same internal paragraph-source view used by document paragraphs.
 
 This ledger stays pending until the implementation, numeric gates, and
 requirement-by-requirement audit are complete.
+
+## Cursor-derivation checkpoint
+
+The first complete Design-0021 deletion removes:
+
+- the public `PreparedCaret`, `PreparedCursorMovement`, and
+  `PreparedCursorStep` types;
+- `PreparedCursorTopology`, its position/caret/edge vectors, and its
+  membership and source-index validation;
+- `prepared_cursor_movements` and the adapter's O(positions × units)
+  construction pass;
+- cursor-movement arguments from both `PreparedParagraph` constructors;
+- the old artificial graph-only tests and fixture helpers.
+
+`scene/cursor.rs` is a borrowed derivation over `PreparedLine` and
+`PreparedInteractionUnit`. Source lookup is binary. A visually reordered bidi
+line retains only a 32-bit permutation from source rank to its existing visual
+unit; source-monotonic lines retain no permutation.
+
+The matched macOS live-heap run, after subtracting Underwood's font baseline,
+measured:
+
+| 1,000 labels | Before | After | Change |
+|---|---:|---:|---:|
+| editable/default | 17,746,272 B | 14,618,272 B | −3,128,000 B |
+| editable/warm | 27,445,152 B | 24,317,152 B | −3,128,000 B |
+| display | 13,698,272 B | 13,642,272 B | −56,000 B |
+
+Parley's matched retained-layout delta remains 3,378,240 bytes, so editable
+Underwood moved from 5.25× to 4.33×. The graph was deleted rather than shifted
+to another retained owner.
+
+On the 1,000-unit mixed LTR/RTL query fixture:
+
+| Query | Underwood | Parley |
+|---|---:|---:|
+| exact point | 139 ns | 157 ns from the prior matched run |
+| closest point | 230 ns | 200 ns from the prior matched run |
+| byte position | 59 ns | 178 ns |
+
+An intermediate scan-based derivation measured 2,709 ns for byte lookup. It
+was rejected and replaced by the conditional 32-bit source-order permutation
+before this checkpoint was accepted.

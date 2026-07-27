@@ -32,18 +32,13 @@ pub use formation::{
     ParagraphPreparationId, ShapingRun, ShapingStyleId,
 };
 pub use interaction::{
-    ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedCaret, PreparedClusterSide,
-    PreparedCursorMovement, PreparedCursorStep, PreparedInteractionSlice, PreparedInteractionUnit,
-    PreparedInteractionUnitView, PreparedInteractionUnits, TextAffinity,
+    ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedClusterSide,
+    PreparedInteractionSlice, PreparedInteractionUnit, PreparedInteractionUnitView,
+    PreparedInteractionUnits, TextAffinity,
 };
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
-#[cfg(test)]
-pub(crate) use prepared::PreparedCursorTopology;
 pub(crate) use prepared::PreparedParagraphFacts;
-pub use prepared::{
-    FontSynthesis, PreparedCursorMovementView, PreparedCursorMovements, PreparedCursorStepView,
-    PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun,
-};
+pub use prepared::{FontSynthesis, PreparedGlyph, PreparedLine, PreparedParagraph, PreparedRun};
 
 #[cfg(test)]
 mod tests;
