@@ -231,8 +231,8 @@ fn prepared_interaction_unit_retains_visual_slices_and_checks_canonical_coverage
         .expect("the line has one unit");
     assert_eq!(unit.source(), 0..3);
     assert_eq!(unit.advance(), 5.0);
-    assert_eq!(unit.slices()[0].source(), 1..3);
-    assert_eq!(unit.slices()[1].source(), 0..1);
+    assert_eq!(unit.slices().get(0).expect("mark slice").source(), 1..3);
+    assert_eq!(unit.slices().get(1).expect("base slice").source(), 0..1);
 
     let incomplete = PreparedInteractionUnit::try_new(
         0..3,

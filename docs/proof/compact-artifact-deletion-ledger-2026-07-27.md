@@ -421,3 +421,21 @@ At 1,000 labels this deletes another 1,000 live allocations and 392,536 net
 allocator bytes. Scene-cache accounting falls from 4,126,778 to 3,854,778
 bytes. Exact stable repeat and paint-only preparation remain allocation-free,
 and edited-paragraph preparation still retains 1,440 net bytes.
+
+## Inline one-slice interaction units
+
+The common interaction unit no longer retains a separate slice record with
+the same source and advance. Its public slice traversal derives one copyable
+observation from the unit. Only multi-slice graphemes—such as a base and
+zero-advance mark split across shaping records—occupy the paragraph spill
+table.
+
+The 1,000-label tunnel removes another 1,000 live allocations and 279,000
+retained bytes. Scene-cache accounting falls to 3,575,586 bytes and the
+caller-held scene to 3,143,320 bytes. Exact repeat and repaint remain at zero
+allocations; edited-paragraph preparation falls to 1,248 net bytes.
+
+An exact matched live-heap checkpoint immediately before this change measured
+7,234,848 bytes above Underwood's font baseline versus 3,378,240 bytes above
+Parley's, or 2.14×. The slice deletion projects the same fixture to about
+2.06×; the matched heap run, rather than that projection, remains the gate.

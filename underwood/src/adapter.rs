@@ -43,8 +43,8 @@ pub use formation::{
 pub(crate) use interaction::PreparedInteractionUnitRecord;
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedClusterSide,
-    PreparedInteractionSlice, PreparedInteractionUnit, PreparedInteractionUnitView,
-    PreparedInteractionUnits, TextAffinity,
+    PreparedInteractionSlice, PreparedInteractionSlices, PreparedInteractionUnit,
+    PreparedInteractionUnitView, PreparedInteractionUnits, TextAffinity,
 };
 pub(crate) use paint::whole_glyph_paint;
 pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};

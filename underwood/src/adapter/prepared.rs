@@ -586,7 +586,13 @@ impl PreparedParagraphFacts {
             .flat_map(|line| &line.runs)
             .map(|run| run.glyphs.len())
             .sum();
-        let slice_capacity = lines.iter().map(|line| line.interaction.slices.len()).sum();
+        let slice_capacity = lines
+            .iter()
+            .flat_map(|line| &line.interaction.units)
+            .map(PreparedInteractionUnit::slice_range)
+            .filter(|range| range.len() != 1)
+            .map(|range| range.len())
+            .sum();
         let unit_capacity = lines.iter().map(|line| line.interaction.units.len()).sum();
         let source_order_capacity = lines
             .iter()
@@ -635,10 +641,24 @@ impl PreparedParagraphFacts {
             } = interaction;
 
             let slices_start = interaction_slices.len();
-            interaction_slices.extend(slices);
             let units_start = interaction_units.len();
             for unit in units {
-                interaction_units.push(PreparedInteractionUnitRecord::try_from_unit(unit)?);
+                let unit_slices = slices
+                    .get(unit.slice_range())
+                    .expect("validated interaction units index the input slice table");
+                let direct_slice = unit_slices.len() == 1;
+                let retained_start = u32::try_from(interaction_slices.len() - slices_start)
+                    .map_err(|_| PreparationError::invalid_output())?;
+                if !direct_slice {
+                    interaction_slices.extend_from_slice(unit_slices);
+                }
+                let retained_end = u32::try_from(interaction_slices.len() - slices_start)
+                    .map_err(|_| PreparationError::invalid_output())?;
+                interaction_units.push(PreparedInteractionUnitRecord::try_from_unit(
+                    unit,
+                    retained_start..retained_end,
+                    direct_slice,
+                )?);
             }
             let source_order_start = source_order.len();
             source_order.extend(line_source_order);

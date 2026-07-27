@@ -740,6 +740,14 @@ to the wide `PreparedInteractionUnit` construction value. Its method surface
 is unchanged. Interaction slice advances likewise retain native `f32`
 precision and are exposed as `f64`.
 
+`PreparedInteractionUnitView::slices` now returns the exact-size
+`PreparedInteractionSlices` traversal rather than a borrowed slice. A unit
+with one shaping slice derives that observation directly from the unit's
+authoritative source and advance; only genuinely multi-slice units retain
+records in the paragraph spill table. Callers replace indexing with
+`slices().get(index)` or ordinary iteration. `PreparedInteractionSlice`
+remains the checked adapter construction value and is now copyable.
+
 ## Required wind tunnels
 
 All runs use the matched source, font, style, width, and scale fixture in
