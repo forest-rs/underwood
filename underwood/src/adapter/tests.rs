@@ -164,6 +164,15 @@ fn prepared_line_rejects_missing_run_source() {
 }
 
 #[test]
+fn prepared_line_rejects_overlapping_extra_run_source() {
+    let (slices, units) = interaction(0..2, 1.0);
+    let line = test_line(0..2, 1.0, slices, units, [run(0..2), run(1..2)]);
+    let error = build_paragraph(test_paragraph(21), 2, ResolvedDirection::Ltr, [line])
+        .expect_err("visual runs must cover the line exactly once");
+    assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
+}
+
+#[test]
 fn prepared_line_rejects_missing_interaction_unit_source() {
     let (slices, units) = interaction(0..1, 1.0);
     let line = test_line(0..2, 1.0, slices, units, [run(0..2)]);

@@ -190,8 +190,16 @@ impl<'a> AnyFragment<'a> {
 
     fn owns_multiple_sources(self) -> bool {
         match self {
-            Self::Committed(fragment, sources) => sources.for_fragment(fragment).nth(1).is_some(),
-            Self::Projected(fragment, sources) => sources.for_fragment(fragment).nth(1).is_some(),
+            Self::Committed(fragment, sources) => sources
+                .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
+                .nth(1)
+                .is_some(),
+            Self::Projected(fragment, sources) => sources
+                .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
+                .nth(1)
+                .is_some(),
         }
     }
 }
@@ -247,8 +255,16 @@ impl AnyGlyph<'_> {
 
     fn owns_multiple_sources(self) -> bool {
         match self {
-            Self::Committed(glyph, sources) => sources.for_glyph(glyph).nth(1).is_some(),
-            Self::Projected(glyph, sources) => sources.for_glyph(glyph).nth(1).is_some(),
+            Self::Committed(glyph, sources) => sources
+                .for_glyph(glyph)
+                .expect("glyph belongs to source scene")
+                .nth(1)
+                .is_some(),
+            Self::Projected(glyph, sources) => sources
+                .for_glyph(glyph)
+                .expect("glyph belongs to source scene")
+                .nth(1)
+                .is_some(),
         }
     }
 }

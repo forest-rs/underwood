@@ -21,7 +21,7 @@ const NATIVE_TEXT_INPUT: u8 = 1 << 6;
 /// Capabilities form a dependency lattice rather than independent flags.
 /// Builder methods include every prerequisite, so an arbitrary invalid bit
 /// pattern cannot be constructed through the public API.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SceneFeatures {
     bits: u8,
 }
@@ -145,6 +145,29 @@ impl SceneFeatures {
         Self {
             bits: self.bits | other.bits,
         }
+    }
+}
+
+impl fmt::Debug for SceneFeatures {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SceneFeatures(")?;
+        let mut separator = "";
+        for (bit, name) in [
+            (DISPLAY, "DISPLAY"),
+            (SOURCES, "SOURCES"),
+            (SEMANTICS, "SEMANTICS"),
+            (HIT_TESTING, "HIT_TESTING"),
+            (SELECTION, "SELECTION"),
+            (NAVIGATION, "NAVIGATION"),
+            (NATIVE_TEXT_INPUT, "NATIVE_TEXT_INPUT"),
+        ] {
+            if self.bits & bit != 0 {
+                formatter.write_str(separator)?;
+                formatter.write_str(name)?;
+                separator = " | ";
+            }
+        }
+        formatter.write_str(")")
     }
 }
 
@@ -349,7 +372,7 @@ impl core::error::Error for MissingSceneCapability {}
 
 #[cfg(test)]
 mod tests {
-    use super::{SceneFeaturePolicy, SceneFeatures};
+    use super::{MissingSceneCapability, SceneFeaturePolicy, SceneFeatures};
     use crate::{DocumentId, ParagraphId};
 
     #[test]
@@ -372,5 +395,21 @@ mod tests {
         assert_eq!(policy.features_for(first), SceneFeatures::DISPLAY);
         assert_eq!(policy.features_for(second), SceneFeatures::SELECTABLE);
         assert_eq!(policy.override_count(), 1);
+    }
+
+    #[test]
+    fn missing_capability_diagnostic_names_capabilities() {
+        let error = MissingSceneCapability::new(
+            None,
+            SceneFeatures::SELECTABLE,
+            SceneFeatures::DISPLAY,
+            SceneFeatures::DISPLAY,
+        );
+        let diagnostic = alloc::format!("{error}");
+
+        assert!(diagnostic.contains("HIT_TESTING"));
+        assert!(diagnostic.contains("SELECTION"));
+        assert!(diagnostic.contains("DISPLAY"));
+        assert!(!diagnostic.contains("bits"));
     }
 }

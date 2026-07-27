@@ -262,10 +262,16 @@ let sources = output
     .expect("scene is missing the requested source capability");
 for fragment in output.scene().display().fragments() {
     for glyph in fragment.glyphs() {
-        export(glyph, sources.for_glyph(glyph));
+        export(glyph, sources.for_glyph(glyph)?);
     }
 }
 ```
+
+Source accessors are fallible because public display views can outlive their
+original traversal and be presented to another source facade. Line, fragment,
+and glyph views are branded with the exact prepared scene root; a mismatched
+view returns `ForeignSceneView` instead of reaching another scene's source-map
+invariants.
 
 `BlockRequest` receives the same `with_features` method. Overstory can reuse a
 single `ComputedInlineStyle` while choosing display, link, selectable, or
@@ -523,7 +529,7 @@ data; an empty-vector implementation does not pass.
 
 ### Most dangerous gap
 
-The adapter currently treats interaction units and the complete movement graph
+The adapter currently treats interaction units and complete cursor topology
 as mandatory `PreparedParagraph` output. Scene-only sidecars cannot earn the
 memory law unless capability requirements cross that contract and the adapter
 retains a reusable base from which missing sidecars can be built.
@@ -560,7 +566,7 @@ selected first design.
 
 1. Add `SceneFeatures`, uniform-plus-sparse feature policy, and request
    migration together with the adapter prepared-output split. The first
-   mergeable slice must prove display requests do not build the movement graph;
+   mergeable slice must prove display requests do not build cursor topology;
    a maximal mask with maximal lowering is not an independently landable step.
    Implemented in the first checkpoint.
 2. Add separately budgeted adapter-fact residency, warm/cold upgrade

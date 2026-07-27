@@ -428,10 +428,13 @@ fn collapsed_whitespace_crosses_semantic_leaves_with_complete_source_and_first_o
         .fragments()
         .iter()
         .find(|fragment| {
-            fragment
-                .glyphs()
-                .iter()
-                .any(|glyph| scene_sources(scene).for_glyph(glyph).count() == 2)
+            fragment.glyphs().iter().any(|glyph| {
+                scene_sources(scene)
+                    .for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .count()
+                    == 2
+            })
         })
         .expect("the collapsed space must retain both source leaves");
     assert_eq!(
@@ -486,6 +489,7 @@ fn split_leaf_grapheme_is_one_hit_movement_and_atomic_replacement_unit() {
     assert!(output.scene().fragments().iter().any(|fragment| {
         let texts: Vec<_> = sources
             .for_fragment(fragment)
+            .expect("fragment belongs to source scene")
             .map(|source| source.text())
             .collect();
         texts.contains(&base) && texts.contains(&mark)

@@ -514,10 +514,13 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     assert_eq!(transient.work().reused_paragraphs(), 2);
     assert!(transient.scene().fragments().iter().any(|fragment| {
         fragment.script() == *b"Arab"
-            && projected_sources.for_fragment(fragment).any(|source| {
-                matches!(source, ProjectedTextSource::Composition(range)
+            && projected_sources
+                .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
+                .any(|source| {
+                    matches!(source, ProjectedTextSource::Composition(range)
                             if range.id() == session.id() && range.epoch() == session.epoch())
-            })
+                })
     }));
     assert_eq!(snapshot.text(start.text()), Some("alpha"));
 
@@ -760,6 +763,7 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
     assert!(transient.scene().fragments().iter().any(|fragment| {
         projected_sources
             .for_fragment(fragment)
+            .expect("fragment belongs to source scene")
             .any(|source| matches!(source, ProjectedTextSource::Composition(_)))
     }));
     let line = transient.scene().line(0).expect("line exists").bounds();

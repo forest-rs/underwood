@@ -9,27 +9,27 @@ use super::*;
 #[derive(Clone, Debug)]
 pub struct SceneLines<'a> {
     revision: DocumentRevision,
-    spine: &'a SceneSpine,
+    core: &'a SceneCore,
     segments: SpineSegments<'a>,
     current: Option<(PositionedSegment<'a>, usize)>,
     remaining: usize,
 }
 
 impl<'a> SceneLines<'a> {
-    pub(super) fn new(revision: DocumentRevision, spine: &'a SceneSpine) -> Self {
+    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
         Self {
             revision,
-            spine,
-            segments: spine.segments(),
+            core,
+            segments: core.spine.segments(),
             current: None,
-            remaining: spine.summary().lines,
+            remaining: core.spine.summary().lines,
         }
     }
 
     /// Returns a fresh iterator over every line.
     #[must_use]
     pub fn iter(&self) -> Self {
-        Self::new(self.revision, self.spine)
+        Self::new(self.revision, self.core)
     }
 
     /// Returns the number of visual lines.
@@ -47,9 +47,10 @@ impl<'a> SceneLines<'a> {
     /// Returns a positioned line by global visual index.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<SceneLineView<'a>> {
-        self.spine
+        self.core
+            .spine
             .positioned_line(index)
-            .map(|line| SceneLineView::new(self.revision, line))
+            .map(|line| SceneLineView::new(self.revision, self.core, line))
     }
 
     /// Returns the first visual line.
@@ -81,7 +82,7 @@ impl<'a> Iterator for SceneLines<'a> {
                 };
                 *local += 1;
                 self.remaining -= 1;
-                return Some(SceneLineView::new(self.revision, line));
+                return Some(SceneLineView::new(self.revision, self.core, line));
             }
             self.current = self.segments.next().map(|positioned| (positioned, 0));
             self.current?;
@@ -111,9 +112,9 @@ pub struct ProjectedSceneLines<'a> {
 }
 
 impl<'a> ProjectedSceneLines<'a> {
-    pub(super) fn new(revision: DocumentRevision, spine: &'a SceneSpine) -> Self {
+    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
         Self {
-            inner: SceneLines::new(revision, spine),
+            inner: SceneLines::new(revision, core),
         }
     }
 
@@ -181,6 +182,10 @@ impl<'a> ProjectedSceneLineView<'a> {
         Self { inner }
     }
 
+    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
+        self.inner.source_identity()
+    }
+
     /// Returns scene-space line bounds.
     #[must_use]
     pub fn bounds(self) -> Rect {
@@ -239,15 +244,29 @@ impl<'a> ProjectedSceneLineView<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct SceneLineView<'a> {
     revision: DocumentRevision,
+    core: &'a SceneCore,
     positioned: PositionedLine<'a>,
 }
 
 impl<'a> SceneLineView<'a> {
-    fn new(revision: DocumentRevision, positioned: PositionedLine<'a>) -> Self {
+    fn new(
+        revision: DocumentRevision,
+        core: &'a SceneCore,
+        positioned: PositionedLine<'a>,
+    ) -> Self {
         Self {
             revision,
+            core,
             positioned,
         }
+    }
+
+    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
+        (
+            self.revision,
+            self.core,
+            self.positioned.position.segment.paragraph,
+        )
     }
 
     fn local(self) -> &'a CachedLine {
@@ -360,27 +379,27 @@ impl<'a> SceneLineView<'a> {
 #[derive(Clone, Debug)]
 pub struct SceneFragments<'a> {
     revision: DocumentRevision,
-    spine: &'a SceneSpine,
+    core: &'a SceneCore,
     segments: SpineSegments<'a>,
     current: Option<(PositionedSegment<'a>, usize)>,
     remaining: usize,
 }
 
 impl<'a> SceneFragments<'a> {
-    pub(super) fn new(revision: DocumentRevision, spine: &'a SceneSpine) -> Self {
+    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
         Self {
             revision,
-            spine,
-            segments: spine.segments(),
+            core,
+            segments: core.spine.segments(),
             current: None,
-            remaining: spine.summary().fragments,
+            remaining: core.spine.summary().fragments,
         }
     }
 
     /// Returns a fresh iterator over every fragment.
     #[must_use]
     pub fn iter(&self) -> Self {
-        Self::new(self.revision, self.spine)
+        Self::new(self.revision, self.core)
     }
 
     /// Returns the number of fragments.
@@ -398,9 +417,10 @@ impl<'a> SceneFragments<'a> {
     /// Returns a fragment by global visual index.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<SceneFragmentView<'a>> {
-        self.spine
+        self.core
+            .spine
             .positioned_fragment(index)
-            .map(|fragment| SceneFragmentView::new(self.revision, fragment))
+            .map(|fragment| SceneFragmentView::new(self.revision, self.core, fragment))
     }
 
     /// Returns the first fragment.
@@ -432,7 +452,7 @@ impl<'a> Iterator for SceneFragments<'a> {
                 };
                 *local += 1;
                 self.remaining -= 1;
-                return Some(SceneFragmentView::new(self.revision, fragment));
+                return Some(SceneFragmentView::new(self.revision, self.core, fragment));
             }
             self.current = self.segments.next().map(|positioned| (positioned, 0));
             self.current?;
@@ -462,9 +482,9 @@ pub struct ProjectedSceneFragments<'a> {
 }
 
 impl<'a> ProjectedSceneFragments<'a> {
-    pub(super) fn new(revision: DocumentRevision, spine: &'a SceneSpine) -> Self {
+    pub(super) fn new(revision: DocumentRevision, core: &'a SceneCore) -> Self {
         Self {
-            inner: SceneFragments::new(revision, spine),
+            inner: SceneFragments::new(revision, core),
         }
     }
 
@@ -530,6 +550,10 @@ pub struct ProjectedSceneFragmentView<'a> {
 impl<'a> ProjectedSceneFragmentView<'a> {
     fn new(inner: SceneFragmentView<'a>) -> Self {
         Self { inner }
+    }
+
+    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
+        self.inner.source_identity()
     }
 
     /// Returns the retained fragment identity.
@@ -624,15 +648,29 @@ impl<'a> ProjectedSceneFragmentView<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct SceneFragmentView<'a> {
     revision: DocumentRevision,
+    core: &'a SceneCore,
     positioned: PositionedFragment<'a>,
 }
 
 impl<'a> SceneFragmentView<'a> {
-    fn new(revision: DocumentRevision, positioned: PositionedFragment<'a>) -> Self {
+    fn new(
+        revision: DocumentRevision,
+        core: &'a SceneCore,
+        positioned: PositionedFragment<'a>,
+    ) -> Self {
         Self {
             revision,
+            core,
             positioned,
         }
+    }
+
+    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
+        (
+            self.revision,
+            self.core,
+            self.positioned.position.segment.paragraph,
+        )
     }
 
     fn local(self) -> &'a CachedFragment {
@@ -998,6 +1036,10 @@ impl<'a> ProjectedSceneGlyphView<'a> {
         Self { inner }
     }
 
+    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
+        self.inner.source_identity()
+    }
+
     /// Returns the identity shared by split-paint observations.
     #[must_use]
     pub fn instance_id(self) -> SceneGlyphInstanceId {
@@ -1049,6 +1091,10 @@ pub struct SceneGlyphView<'a> {
 impl<'a> SceneGlyphView<'a> {
     fn prepared(self) -> PreparedGlyphView<'a> {
         self.fragment.prepared_glyph(self.local)
+    }
+
+    pub(super) const fn source_identity(self) -> (DocumentRevision, &'a SceneCore, ParagraphId) {
+        self.fragment.source_identity()
     }
 
     /// Returns the identity shared by split-paint observations.

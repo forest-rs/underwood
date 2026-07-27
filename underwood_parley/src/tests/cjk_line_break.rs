@@ -171,6 +171,7 @@ fn public_scene_path_preserves_cjk_word_break_policy() {
     assert_eq!(
         sources
             .for_line(normal.scene().line(0).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")

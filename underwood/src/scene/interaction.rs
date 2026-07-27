@@ -122,7 +122,7 @@ impl CompositionScene {
     /// Returns visual lines in flow order.
     #[must_use]
     pub fn lines(&self) -> ProjectedSceneLines<'_> {
-        ProjectedSceneLines::new(self.revision, &self.core.spine)
+        ProjectedSceneLines::new(self.revision, &self.core)
     }
 
     /// Returns one visual line by its global flow-order index.
@@ -140,7 +140,7 @@ impl CompositionScene {
     /// Returns paint-homogeneous projected glyph fragments.
     #[must_use]
     pub fn fragments(&self) -> ProjectedSceneFragments<'_> {
-        ProjectedSceneFragments::new(self.revision, &self.core.spine)
+        ProjectedSceneFragments::new(self.revision, &self.core)
     }
 
     /// Returns one projected glyph fragment by its global visual index.
@@ -545,19 +545,26 @@ impl TextScene {
         selections: impl IntoIterator<Item = SnapshotTextSelection>,
     ) -> Result<SnapshotTextSelectionSet, SelectionError> {
         let selections: Vec<_> = selections.into_iter().collect();
-        for selection in &selections {
+        self.validate_selections(&selections)?;
+        Ok(SnapshotTextSelectionSet::new(
+            self.document,
+            self.revision,
+            selections,
+        ))
+    }
+
+    fn validate_selections(
+        &self,
+        selections: &[SnapshotTextSelection],
+    ) -> Result<(), SelectionError> {
+        for selection in selections {
             let expected =
                 self.selection_between(selection.anchor(), selection.extent(), selection.mode())?;
             if expected.ranges() != selection.ranges() {
                 return Err(SelectionError::new(SelectionErrorKind::UnknownPosition));
             }
         }
-        validate_independent_selections(&selections)?;
-        Ok(SnapshotTextSelectionSet::new(
-            self.document,
-            self.revision,
-            selections,
-        ))
+        validate_independent_selections(selections)
     }
 
     /// Moves every independent selection through the exact scene cursor map.
@@ -602,6 +609,7 @@ impl TextScene {
         if selections.document() != self.document || selections.revision() != self.revision {
             return Err(SelectionError::new(SelectionErrorKind::WrongSnapshot));
         }
+        self.validate_selections(selections.selections())?;
         let mut geometry: Vec<SceneSelectionRect> = Vec::new();
         for (selection_index, selection) in selections.selections().iter().enumerate() {
             for (positioned, cluster) in self.positioned_clusters() {
@@ -647,7 +655,7 @@ impl TextScene {
     /// Returns visual lines in flow order.
     #[must_use]
     pub fn lines(&self) -> SceneLines<'_> {
-        SceneLines::new(self.revision, &self.core.spine)
+        SceneLines::new(self.revision, &self.core)
     }
 
     /// Returns one visual line by global index.
@@ -665,7 +673,7 @@ impl TextScene {
     /// Returns paint-homogeneous glyph fragments in visual order.
     #[must_use]
     pub fn fragments(&self) -> SceneFragments<'_> {
-        SceneFragments::new(self.revision, &self.core.spine)
+        SceneFragments::new(self.revision, &self.core)
     }
 
     /// Returns one paint-homogeneous fragment by global visual index.
@@ -750,10 +758,10 @@ impl TextScene {
         })
     }
 
-    /// Returns the first logical caret position in the complete scene.
+    /// Returns the first logical caret retained by this scene's feature policy.
     ///
-    /// This follows Underwood's cross-paragraph movement graph rather than
-    /// treating every paragraph-local start as a document start.
+    /// This traverses retained paragraphs in scene order. A sparse policy can
+    /// therefore return a position after the document's authored start.
     #[must_use]
     pub(crate) fn start_position(&self) -> Option<SnapshotTextPosition> {
         let first = self.core.spine.positioned_movement(0)?;
@@ -767,10 +775,10 @@ impl TextScene {
         ))
     }
 
-    /// Returns the final logical caret position in the complete scene.
+    /// Returns the final logical caret retained by this scene's feature policy.
     ///
-    /// This follows Underwood's cross-paragraph movement graph rather than
-    /// treating every paragraph-local end as a document end.
+    /// This traverses retained paragraphs in scene order. A sparse policy can
+    /// therefore return a position before the document's authored end.
     #[must_use]
     pub(crate) fn end_position(&self) -> Option<SnapshotTextPosition> {
         let last = self

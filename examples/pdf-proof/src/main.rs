@@ -225,10 +225,13 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     );
     assert!(
         scene.fragments().iter().any(|fragment| {
-            fragment
-                .glyphs()
-                .iter()
-                .any(|glyph| sources.for_glyph(glyph).count() > 1)
+            fragment.glyphs().iter().any(|glyph| {
+                sources
+                    .for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .count()
+                    > 1
+            })
         }),
         "the decomposed accent must retain cross-leaf glyph provenance"
     );
@@ -237,10 +240,13 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter(|glyph| {
-            sources.for_glyph(*glyph).any(|source| {
-                let bytes = source.bytes();
-                source.text() == ligature_text && bytes.start < 6 && bytes.end > 0
-            })
+            sources
+                .for_glyph(*glyph)
+                .expect("glyph belongs to source scene")
+                .any(|source| {
+                    let bytes = source.bytes();
+                    source.text() == ligature_text && bytes.start < 6 && bytes.end > 0
+                })
         })
         .count();
     assert_eq!(

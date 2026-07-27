@@ -101,6 +101,21 @@ need only to iterate it. A caller that must retain the complete unit uses
 likewise return allocation-free `SnapshotSources` or `ProjectedSources`
 iterators.
 
+Source accessors now return
+`Result<SnapshotSources, ForeignSceneView>` (or the projected equivalent).
+This intentionally replaces the earlier infallible calls:
+
+```rust
+for source in sources.for_glyph(glyph)? {
+    export(source);
+}
+```
+
+Every public display view carries the identity of its exact prepared scene
+root. Passing a line, fragment, or glyph from another scene is therefore a
+reported error, even when both scenes share one document revision, rather
+than a panic or an accidental lookup in unrelated source tables.
+
 The prepared-adapter interaction representation is also intentionally
 breaking. `PreparedLine::{try_new, try_new_in_slot}` now accept one flat visual
 slice table followed by range-indexed interaction-unit records.

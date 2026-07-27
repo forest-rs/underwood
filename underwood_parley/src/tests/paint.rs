@@ -268,6 +268,7 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
     assert_eq!(
         sources
             .for_line(output.scene().line(0).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -282,6 +283,7 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
         fragment.glyphs().iter().all(|glyph| {
             let source = sources
                 .first_for_glyph(glyph)
+                .expect("glyph belongs to source scene")
                 .expect("source-aware glyph retains source")
                 .bytes();
             !((source.start <= isolate && source.end >= isolate + 3)

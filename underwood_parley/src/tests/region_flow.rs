@@ -55,6 +55,7 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
     assert_eq!(
         sources
             .for_line(output.scene().line(0).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -114,12 +115,14 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
     assert!(lines.get(1).expect("line exists").bounds().x0 >= 110.0);
     let left_source = sources
         .for_line(lines.get(0).expect("line exists"))
+        .expect("line belongs to source scene")
         .iter()
         .next()
         .expect("source exists")
         .bytes();
     let right_source = sources
         .for_line(lines.get(1).expect("line exists"))
+        .expect("line belongs to source scene")
         .iter()
         .next()
         .expect("source exists")
@@ -146,6 +149,7 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
                     && attempt.source()
                         == sources
                             .for_line(line)
+                            .expect("line belongs to source scene")
                             .iter()
                             .fold(None, |range, source| {
                                 let bytes = source.bytes();
@@ -652,12 +656,15 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
             .all(|line| line.bounds().x0 >= 40.0 && line.bounds().y0 >= 20.0)
     );
     assert!(transient.scene().fragments().iter().any(|fragment| {
-        sources.for_fragment(fragment).any(|source| {
-            matches!(
-                source,
-                ProjectedTextSource::Composition(range)
-                    if range.id() == session.id() && range.epoch() == session.epoch()
-            )
-        })
+        sources
+            .for_fragment(fragment)
+            .expect("fragment belongs to source scene")
+            .any(|source| {
+                matches!(
+                    source,
+                    ProjectedTextSource::Composition(range)
+                        if range.id() == session.id() && range.epoch() == session.epoch()
+                )
+            })
     }));
 }

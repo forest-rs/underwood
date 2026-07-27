@@ -49,7 +49,7 @@ mod views;
 
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
 pub use facades::{
-    ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneInteraction,
+    ForeignSceneView, ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneInteraction,
     ProjectedSceneSemanticAccess, ProjectedSceneSourceAccess, SceneDisplay, SceneEditing,
     SceneInteraction, SceneSelection, SceneSemanticAccess, SceneSourceAccess,
 };

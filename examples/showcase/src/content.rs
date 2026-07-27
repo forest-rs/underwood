@@ -840,6 +840,7 @@ mod tests {
             .find(|line| {
                 sources
                     .for_line(*line)
+                    .expect("line belongs to source scene")
                     .iter()
                     .any(|source| source.text() == content.leaves.title)
             })
@@ -952,6 +953,7 @@ mod tests {
             .filter(|line| {
                 sources
                     .for_line(*line)
+                    .expect("line belongs to source scene")
                     .iter()
                     .any(|source| source.text() == text)
             })
@@ -960,6 +962,7 @@ mod tests {
         assert_eq!(lines.len(), 1, "authored newline must collapse, not break");
         let represented: Vec<_> = sources
             .for_line(lines[0])
+            .expect("line belongs to source scene")
             .iter()
             .filter(|source| source.text() == text)
             .map(|source| source.bytes())
@@ -990,6 +993,7 @@ mod tests {
                 .filter(|fragment| {
                     sources
                         .for_fragment(*fragment)
+                        .expect("fragment belongs to source scene")
                         .any(|source| source.text() == text)
                 })
                 .collect();
@@ -1045,6 +1049,7 @@ mod tests {
             .filter(|fragment| {
                 !initial_sources
                     .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
                     .any(|source| editable.contains(&source.text()))
             })
             .map(|fragment| fragment.id())
@@ -1061,6 +1066,7 @@ mod tests {
             .filter(|fragment| {
                 !edited_sources
                     .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
                     .any(|source| editable.contains(&source.text()))
             })
             .map(|fragment| fragment.id())
@@ -1098,6 +1104,7 @@ mod tests {
         for fragment in frame.scene.fragments() {
             if sources
                 .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == content.leaves.title)
             {
                 assert_eq!(fragment.paint(), TITLE);
@@ -1162,6 +1169,7 @@ mod tests {
             .filter(|fragment| {
                 sources
                     .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
                     .any(|source| source.text() == content.leaves.arabic)
             })
             .collect();
@@ -1182,7 +1190,9 @@ mod tests {
             .iter()
             .flat_map(|fragment| fragment.glyphs())
             .filter_map(|glyph| {
-                let source = sources.first_for_glyph(glyph)?;
+                let source = sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")?;
                 (source.text() == content.leaves.arabic).then(|| source.bytes())
             })
             .collect();
@@ -1223,6 +1233,7 @@ mod tests {
         assert!(mixed.scene.fragments().iter().any(|fragment| {
             sources
                 .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == content.leaves.arabic)
                 && fragment.script() == *b"Latn"
                 && fragment.font().data.as_ref() == LATIN_FONT_BYTES
@@ -1237,6 +1248,7 @@ mod tests {
             .find(|fragment| {
                 sources
                     .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
                     .any(|source| source.text() == title)
             })
             .expect("title must produce a fragment")
@@ -1253,6 +1265,7 @@ mod tests {
             .filter(|glyph| {
                 sources
                     .for_glyph(*glyph)
+                    .expect("glyph belongs to source scene")
                     .any(|source| source.text() == text)
             })
             .count()
@@ -1266,6 +1279,7 @@ mod tests {
             .filter(|line| {
                 sources
                     .for_line(*line)
+                    .expect("line belongs to source scene")
                     .iter()
                     .any(|source| texts.contains(&source.text()))
             })

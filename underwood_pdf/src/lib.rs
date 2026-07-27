@@ -285,7 +285,10 @@ fn prepare_scene(
 
     let mut lines = Vec::with_capacity(scene.lines().len());
     for line in scene.lines() {
-        let map = LineSourceMap::new(snapshot, sources.for_line(line))?;
+        let line_sources = sources
+            .for_line(line)
+            .map_err(|_| PdfError::new(PdfErrorKind::InvalidSource, None))?;
+        let map = LineSourceMap::new(snapshot, line_sources)?;
         let mut groups: Vec<PreparedGroup> = Vec::new();
         let mut seen_instances: Vec<SceneGlyphInstanceId> = Vec::new();
         for fragment_index in line.fragment_range() {
@@ -444,8 +447,10 @@ impl LineSourceMap {
         glyph: SceneGlyphView<'_>,
         fragment: SceneFragmentId,
     ) -> Result<Range<usize>, PdfError> {
-        let ranges: Vec<_> = sources
+        let glyph_sources = sources
             .for_glyph(glyph)
+            .map_err(|_| PdfError::new(PdfErrorKind::InvalidSource, Some(fragment)))?;
+        let ranges: Vec<_> = glyph_sources
             .map(|source| self.map_source(&source))
             .collect::<Option<_>>()
             .ok_or_else(|| PdfError::new(PdfErrorKind::InvalidSource, Some(fragment)))?;
@@ -588,7 +593,10 @@ fn glyph_text(
     fragment: SceneFragmentId,
 ) -> Result<String, PdfError> {
     let mut text = String::new();
-    for source in sources.for_glyph(glyph) {
+    let glyph_sources = sources
+        .for_glyph(glyph)
+        .map_err(|_| PdfError::new(PdfErrorKind::InvalidSource, Some(fragment)))?;
+    for source in glyph_sources {
         text.push_str(source_text(snapshot, &source, Some(fragment))?);
     }
     if text.is_empty() {

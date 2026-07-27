@@ -394,6 +394,7 @@ impl LayoutEngine {
         snapshot: &DocumentSnapshot,
         request: &SceneRequest<'_>,
     ) -> Result<SceneOutput, SceneError> {
+        validate_feature_policy(snapshot, &request.features)?;
         if let Some(output) = self.reuse_published_scene(snapshot, request) {
             return Ok(output);
         }
@@ -770,6 +771,7 @@ impl LayoutEngine {
                 snapshot.id(),
             ));
         }
+        validate_feature_policy(snapshot, &request.features)?;
         if let Some(output) = self.reuse_published_composition(snapshot, request, composition) {
             return Ok(output);
         }

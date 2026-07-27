@@ -1612,6 +1612,7 @@ mod tests {
         assert!(prepared.scene.fragments().iter().any(|fragment| {
             sources
                 .for_fragment(fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == content.editable_text())
                 && fragment.script() == *b"Hani"
         }));

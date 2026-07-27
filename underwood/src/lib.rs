@@ -55,9 +55,9 @@ pub use region::{
     RegionFloat, RegionFlow, RegionTranscript,
 };
 pub use scene::{
-    CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
-    LineAdjustment, ParagraphSceneResidency, PreparationMemory, PreparationReuse, PreparationTrace,
-    ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneFragmentView,
+    CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, ForeignSceneView,
+    LayoutEngine, LineAdjustment, ParagraphSceneResidency, PreparationMemory, PreparationReuse,
+    PreparationTrace, ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneFragmentView,
     ProjectedSceneFragments, ProjectedSceneGlyphView, ProjectedSceneGlyphs,
     ProjectedSceneInteraction, ProjectedSceneLineView, ProjectedSceneLines,
     ProjectedSceneSemanticAccess, ProjectedSceneSourceAccess, ProjectedSources,

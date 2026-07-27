@@ -645,24 +645,30 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
     let first_sources = projected_scene_sources(first_output.scene());
     let second_sources = projected_scene_sources(second_output.scene());
     assert!(first_output.scene().fragments().iter().any(|fragment| {
-        first_sources.for_fragment(fragment).any(|source| {
-            matches!(
-                source,
-                ProjectedTextSource::Composition(range)
-                    if range.id() == first_session.id()
-                        && range.epoch() == first_session.epoch()
-            )
-        })
+        first_sources
+            .for_fragment(fragment)
+            .expect("fragment belongs to source scene")
+            .any(|source| {
+                matches!(
+                    source,
+                    ProjectedTextSource::Composition(range)
+                        if range.id() == first_session.id()
+                            && range.epoch() == first_session.epoch()
+                )
+            })
     }));
     assert!(second_output.scene().fragments().iter().any(|fragment| {
-        second_sources.for_fragment(fragment).any(|source| {
-            matches!(
-                source,
-                ProjectedTextSource::Composition(range)
-                    if range.id() == second_session.id()
-                        && range.epoch() == second_session.epoch()
-            )
-        })
+        second_sources
+            .for_fragment(fragment)
+            .expect("fragment belongs to source scene")
+            .any(|source| {
+                matches!(
+                    source,
+                    ProjectedTextSource::Composition(range)
+                        if range.id() == second_session.id()
+                            && range.epoch() == second_session.epoch()
+                )
+            })
     }));
 }
 

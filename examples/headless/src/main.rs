@@ -151,7 +151,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "the first real Parley fragment must contain shaped glyphs"
     );
     assert!(
-        sources.first_for_fragment(fragment).is_some(),
+        sources
+            .first_for_fragment(fragment)
+            .expect("fragment belongs to source scene")
+            .is_some(),
         "authored glyph fragments must retain snapshot source"
     );
     assert!(
@@ -186,6 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find(|fragment| {
             sources
                 .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == first_arabic)
         })
         .expect("Arabic fallback leaf must produce a scene fragment");
@@ -206,6 +210,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find(|fragment| {
             sources
                 .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == first_arabic)
                 && fragment
                     .glyphs()
@@ -223,7 +228,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter_map(|glyph| {
-            let source = sources.first_for_glyph(glyph).expect("glyph source exists");
+            let source = sources
+                .first_for_glyph(glyph)
+                .expect("glyph belongs to source scene")
+                .expect("glyph source exists");
             (source.text() == first_arabic).then(|| source.bytes())
         })
         .collect();
@@ -249,6 +257,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .find(|fragment| {
             sources
                 .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == direct_arabic)
         })
         .expect("direct named-family leaf must produce a scene fragment");
@@ -313,7 +322,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(
         first_scene.scene().fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                let source = sources.first_for_glyph(glyph).expect("glyph source exists");
+                let source = sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .expect("glyph source exists");
                 source.text() == ligatures_on && source.bytes() == (1..4)
             })
         }),
@@ -435,6 +447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|fragment| {
                 reassigned_sources
                     .for_fragment(*fragment)
+                    .expect("fragment belongs to source scene")
                     .any(|source| source.text() == first_suffix)
             })
             .all(|fragment| fragment.paint() == PaintSlot::new(0)),
@@ -718,6 +731,7 @@ fn glyph_count(scene: &TextScene, text: TextId) -> usize {
         .filter(|glyph| {
             sources
                 .for_glyph(*glyph)
+                .expect("glyph belongs to source scene")
                 .any(|source| source.text() == text)
         })
         .count()
@@ -731,6 +745,7 @@ fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
         .find(|fragment| {
             sources
                 .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })
         .map(|fragment| fragment.normalized_coords().to_vec())
@@ -745,6 +760,7 @@ fn synthesis_variations(scene: &TextScene, text: TextId) -> Vec<FontVariation> {
         .find(|fragment| {
             sources
                 .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })
         .map(|fragment| fragment.synthesis().variations().to_vec())

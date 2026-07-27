@@ -62,14 +62,71 @@ impl<'a> SceneDisplay<'a> {
 /// Source-aware access to a committed text scene.
 #[derive(Clone, Copy, Debug)]
 pub struct SceneSourceAccess<'a> {
-    _scene: &'a TextScene,
+    scene: &'a TextScene,
 }
 
 /// Source-aware access to a transient composition scene.
 #[derive(Clone, Copy, Debug)]
 pub struct ProjectedSceneSourceAccess<'a> {
-    _scene: &'a CompositionScene,
+    scene: &'a CompositionScene,
 }
+
+/// Error returned when source traversal receives a view from another scene.
+///
+/// Public line, fragment, and glyph views are branded with their prepared
+/// scene root. A source facade accepts only views produced by the same root
+/// and revision, preventing foreign display-only views from reaching
+/// source-map invariants they do not satisfy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForeignSceneView {
+    paragraph: ParagraphId,
+    scene_revision: DocumentRevision,
+    view_revision: DocumentRevision,
+}
+
+impl ForeignSceneView {
+    fn new(
+        paragraph: ParagraphId,
+        scene_revision: DocumentRevision,
+        view_revision: DocumentRevision,
+    ) -> Self {
+        Self {
+            paragraph,
+            scene_revision,
+            view_revision,
+        }
+    }
+
+    /// Returns the paragraph named by the rejected view.
+    #[must_use]
+    pub const fn paragraph(self) -> ParagraphId {
+        self.paragraph
+    }
+
+    /// Returns the revision owned by the source facade.
+    #[must_use]
+    pub const fn scene_revision(self) -> DocumentRevision {
+        self.scene_revision
+    }
+
+    /// Returns the revision stamped on the rejected view.
+    #[must_use]
+    pub const fn view_revision(self) -> DocumentRevision {
+        self.view_revision
+    }
+}
+
+impl core::fmt::Display for ForeignSceneView {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "source view belongs to another prepared scene: paragraph {:?}, scene revision {:?}, view revision {:?}",
+            self.paragraph, self.scene_revision, self.view_revision
+        )
+    }
+}
+
+impl core::error::Error for ForeignSceneView {}
 
 /// Semantic structure and geometry from a committed scene.
 #[derive(Clone, Copy, Debug)]
@@ -109,79 +166,209 @@ impl<'a> ProjectedSceneSemanticAccess<'a> {
 
 impl<'a> SceneSourceAccess<'a> {
     pub(super) const fn new(scene: &'a TextScene) -> Self {
-        Self { _scene: scene }
+        Self { scene }
     }
 
     /// Returns source provenance for one line from this scene.
-    #[must_use]
-    pub fn for_line(self, line: SceneLineView<'a>) -> SnapshotSources<'a> {
-        line.sources()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `line` belongs to another prepared
+    /// scene root or revision.
+    pub fn for_line(
+        self,
+        line: SceneLineView<'a>,
+    ) -> Result<SnapshotSources<'a>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            line.source_identity(),
+        )?;
+        Ok(line.sources())
     }
 
     /// Returns source provenance for one paint fragment from this scene.
-    #[must_use]
-    pub fn for_fragment(self, fragment: SceneFragmentView<'a>) -> SnapshotSources<'a> {
-        fragment.sources()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `fragment` belongs to another
+    /// prepared scene root or revision.
+    pub fn for_fragment(
+        self,
+        fragment: SceneFragmentView<'a>,
+    ) -> Result<SnapshotSources<'a>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            fragment.source_identity(),
+        )?;
+        Ok(fragment.sources())
     }
 
     /// Returns the first source range represented by one paint fragment.
-    #[must_use]
-    pub fn first_for_fragment(self, fragment: SceneFragmentView<'a>) -> Option<SnapshotTextRange> {
-        fragment.source()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `fragment` belongs to another
+    /// prepared scene root or revision.
+    pub fn first_for_fragment(
+        self,
+        fragment: SceneFragmentView<'a>,
+    ) -> Result<Option<SnapshotTextRange>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            fragment.source_identity(),
+        )?;
+        Ok(fragment.source())
     }
 
     /// Returns source provenance for one shaped glyph from this scene.
-    #[must_use]
-    pub fn for_glyph(self, glyph: SceneGlyphView<'a>) -> SnapshotSources<'a> {
-        glyph.sources()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `glyph` belongs to another prepared
+    /// scene root or revision.
+    pub fn for_glyph(
+        self,
+        glyph: SceneGlyphView<'a>,
+    ) -> Result<SnapshotSources<'a>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            glyph.source_identity(),
+        )?;
+        Ok(glyph.sources())
     }
 
     /// Returns the first source range represented by one shaped glyph.
-    #[must_use]
-    pub fn first_for_glyph(self, glyph: SceneGlyphView<'a>) -> Option<SnapshotTextRange> {
-        glyph.sources().next()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `glyph` belongs to another prepared
+    /// scene root or revision.
+    pub fn first_for_glyph(
+        self,
+        glyph: SceneGlyphView<'a>,
+    ) -> Result<Option<SnapshotTextRange>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            glyph.source_identity(),
+        )?;
+        Ok(glyph.sources().next())
     }
 }
 
 impl<'a> ProjectedSceneSourceAccess<'a> {
     pub(super) const fn new(scene: &'a CompositionScene) -> Self {
-        Self { _scene: scene }
+        Self { scene }
     }
 
     /// Returns source provenance for one transient line.
-    #[must_use]
-    pub fn for_line(self, line: ProjectedSceneLineView<'a>) -> ProjectedSources<'a> {
-        line.sources()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `line` belongs to another prepared
+    /// scene root or revision.
+    pub fn for_line(
+        self,
+        line: ProjectedSceneLineView<'a>,
+    ) -> Result<ProjectedSources<'a>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            line.source_identity(),
+        )?;
+        Ok(line.sources())
     }
 
     /// Returns source provenance for one transient paint fragment.
-    #[must_use]
-    pub fn for_fragment(self, fragment: ProjectedSceneFragmentView<'a>) -> ProjectedSources<'a> {
-        fragment.sources()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `fragment` belongs to another
+    /// prepared scene root or revision.
+    pub fn for_fragment(
+        self,
+        fragment: ProjectedSceneFragmentView<'a>,
+    ) -> Result<ProjectedSources<'a>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            fragment.source_identity(),
+        )?;
+        Ok(fragment.sources())
     }
 
     /// Returns the first source represented by one transient paint fragment.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `fragment` belongs to another
+    /// prepared scene root or revision.
     pub fn first_for_fragment(
         self,
         fragment: ProjectedSceneFragmentView<'a>,
-    ) -> Option<ProjectedTextSource> {
-        fragment.source()
+    ) -> Result<Option<ProjectedTextSource>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            fragment.source_identity(),
+        )?;
+        Ok(fragment.source())
     }
 
     /// Returns source provenance for one transient shaped glyph.
-    #[must_use]
-    pub fn for_glyph(self, glyph: ProjectedSceneGlyphView<'a>) -> ProjectedSources<'a> {
-        glyph.sources()
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `glyph` belongs to another prepared
+    /// scene root or revision.
+    pub fn for_glyph(
+        self,
+        glyph: ProjectedSceneGlyphView<'a>,
+    ) -> Result<ProjectedSources<'a>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            glyph.source_identity(),
+        )?;
+        Ok(glyph.sources())
     }
 
     /// Returns the first source represented by one transient shaped glyph.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForeignSceneView`] when `glyph` belongs to another prepared
+    /// scene root or revision.
     pub fn first_for_glyph(
         self,
         glyph: ProjectedSceneGlyphView<'a>,
-    ) -> Option<ProjectedTextSource> {
-        glyph.sources().next()
+    ) -> Result<Option<ProjectedTextSource>, ForeignSceneView> {
+        validate_source_view(
+            &self.scene.core,
+            self.scene.revision,
+            glyph.source_identity(),
+        )?;
+        Ok(glyph.sources().next())
+    }
+}
+
+fn validate_source_view(
+    scene: &SceneCore,
+    scene_revision: DocumentRevision,
+    (view_revision, view_scene, paragraph): (DocumentRevision, &SceneCore, ParagraphId),
+) -> Result<(), ForeignSceneView> {
+    if scene_revision == view_revision && core::ptr::eq(scene, view_scene) {
+        Ok(())
+    } else {
+        Err(ForeignSceneView::new(
+            paragraph,
+            scene_revision,
+            view_revision,
+        ))
     }
 }
 
@@ -290,13 +477,13 @@ impl<'a> SceneEditing<'a> {
         self.scene.hit_test_closest(point)
     }
 
-    /// Returns the first logical caret position.
+    /// Returns the first logical caret retained by this scene's feature policy.
     #[must_use]
     pub fn start_position(self) -> Option<SnapshotTextPosition> {
         self.scene.start_position()
     }
 
-    /// Returns the final logical caret position.
+    /// Returns the final logical caret retained by this scene's feature policy.
     #[must_use]
     pub fn end_position(self) -> Option<SnapshotTextPosition> {
         self.scene.end_position()
@@ -366,7 +553,7 @@ impl<'a> SceneEditing<'a> {
         self.scene.next_word_position(position)
     }
 
-    /// Moves every selection through the retained movement graph.
+    /// Moves every selection through the represented cursor topology.
     pub fn move_selections(
         self,
         selections: &SnapshotTextSelectionSet,
@@ -484,7 +671,7 @@ impl<'a> ProjectedSceneEditing<'a> {
         self.scene.caret(position)
     }
 
-    /// Moves one position through the retained adapter movement graph.
+    /// Moves one position through the represented cursor topology.
     #[must_use]
     pub fn move_position(
         self,

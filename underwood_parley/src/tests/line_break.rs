@@ -34,6 +34,7 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
     assert_eq!(
         sources
             .for_line(lines.get(0).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -43,6 +44,7 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
     assert_eq!(
         sources
             .for_line(lines.get(1).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -53,6 +55,7 @@ fn product_path_wraps_only_at_parley_line_boundaries() {
     assert_eq!(
         sources
             .for_line(lines.get(2).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -82,6 +85,7 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
         .map(|line| {
             sources
                 .for_line(line)
+                .expect("line belongs to source scene")
                 .next()
                 .expect("source exists")
                 .bytes()
@@ -95,6 +99,7 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
     assert_eq!(
         sources
             .for_line(lines.get(0).expect("line exists"))
+            .expect("line belongs to source scene")
             .next()
             .expect("source exists")
             .bytes(),
@@ -114,6 +119,7 @@ fn product_path_coalesces_crlf_and_honors_mandatory_breaks() {
     assert_eq!(
         sources
             .for_line(lines.get(lines.len() - 1).expect("final line exists"))
+            .expect("line belongs to source scene")
             .next()
             .expect("source exists")
             .bytes()
@@ -199,10 +205,17 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
         .expect("mixed leaf formation succeeds");
     let line = &output.scene().line(0).expect("line exists");
     let sources = scene_sources(output.scene());
-    assert_eq!(sources.for_line(*line).len(), 2);
     assert_eq!(
         sources
             .for_line(*line)
+            .expect("line belongs to source scene")
+            .len(),
+        2
+    );
+    assert_eq!(
+        sources
+            .for_line(*line)
+            .expect("line belongs to source scene")
             .next()
             .expect("source exists")
             .text(),
@@ -211,6 +224,7 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
     assert_eq!(
         sources
             .for_line(*line)
+            .expect("line belongs to source scene")
             .next()
             .expect("source exists")
             .bytes(),
@@ -219,6 +233,7 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
     assert_eq!(
         sources
             .for_line(*line)
+            .expect("line belongs to source scene")
             .nth(1)
             .expect("source exists")
             .text(),
@@ -227,6 +242,7 @@ fn line_metrics_and_source_slices_span_mixed_semantic_leaves() {
     assert_eq!(
         sources
             .for_line(*line)
+            .expect("line belongs to source scene")
             .nth(1)
             .expect("source exists")
             .bytes(),
@@ -678,6 +694,7 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
                 glyph.id(),
                 unbroken_sources
                     .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
                     .expect("glyph source exists")
                     .bytes(),
             )
@@ -705,6 +722,7 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
                 glyph.id(),
                 sources
                     .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
                     .expect("glyph source exists")
                     .bytes(),
             )
@@ -718,6 +736,7 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     assert_eq!(
         sources
             .for_line(output.scene().line(0).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -727,6 +746,7 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
     assert_eq!(
         sources
             .for_line(output.scene().line(1).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -737,6 +757,7 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         fragment.glyphs().iter().all(|glyph| {
             let source = sources
                 .first_for_glyph(glyph)
+                .expect("glyph belongs to source scene")
                 .expect("glyph source exists")
                 .bytes();
             source.end <= break_at || source.start >= break_at
@@ -809,6 +830,7 @@ fn reshape_overflow_backs_up_and_restores_the_rejected_seam() {
     assert_eq!(
         sources
             .for_line(output.scene().line(0).expect("line exists"))
+            .expect("line belongs to source scene")
             .iter()
             .next()
             .expect("source exists")
@@ -857,6 +879,7 @@ fn mixed_bidi_glyphs_are_visual_inside_a_logical_line() {
                 glyph.position().x,
                 sources
                     .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
                     .expect("glyph source exists")
                     .bytes()
                     .start,

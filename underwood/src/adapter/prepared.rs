@@ -908,6 +908,7 @@ fn validate_run_coverage(
     runs: &[PreparedRunRecord],
 ) -> Result<(), PreparationError> {
     let mut covered = source.start;
+    let mut consumed = 0_usize;
     while covered < source.end {
         let mut matching = runs.iter().filter(|run| run.source.start == covered);
         let run = matching
@@ -917,8 +918,9 @@ fn validate_run_coverage(
             return Err(PreparationError::invalid_output());
         }
         covered = run.source.end;
+        consumed = consumed.saturating_add(1);
     }
-    (covered == source.end)
+    (covered == source.end && consumed == runs.len())
         .then_some(())
         .ok_or_else(PreparationError::invalid_output)
 }

@@ -527,7 +527,10 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     assert!(
         initial.scene().fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                let source = sources.first_for_glyph(glyph).expect("glyph source exists");
+                let source = sources
+                    .first_for_glyph(glyph)
+                    .expect("glyph belongs to source scene")
+                    .expect("glyph source exists");
                 source.text() == suffix && source.bytes() == (1..4)
             })
         }),
@@ -702,6 +705,7 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         .find(|fragment| {
             sources
                 .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == arabic_text)
         })
         .expect("Fontique fallback specimen must produce a fragment");
@@ -776,6 +780,7 @@ fn glyph_count(scene: &TextScene, text: TextId) -> usize {
         .filter(|glyph| {
             sources
                 .for_glyph(*glyph)
+                .expect("glyph belongs to source scene")
                 .any(|source| source.text() == text)
         })
         .count()
@@ -789,6 +794,7 @@ fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
         .find(|fragment| {
             sources
                 .for_fragment(*fragment)
+                .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })
         .map(|fragment| fragment.normalized_coords().to_vec())

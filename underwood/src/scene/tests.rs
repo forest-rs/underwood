@@ -986,6 +986,37 @@ fn paragraph_style_override_from_another_document_is_rejected() {
 }
 
 #[test]
+fn feature_override_from_another_document_is_rejected_on_an_exact_scene_hit() {
+    let (first, styles, paint) = one_leaf_document(*b"scene-feat-doc01", "a");
+    let (second, _, _) = one_leaf_document(*b"scene-feat-doc02", "b");
+    let foreign = second.snapshot().paragraphs()[0].id;
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let valid = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint);
+    layout
+        .prepare(&first.snapshot(), &valid)
+        .expect("the valid scene must establish an exact reusable root");
+
+    let invalid = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_feature_policy(
+            crate::SceneFeaturePolicy::default()
+                .with_paragraph(foreign, crate::SceneFeatures::DISPLAY),
+        );
+    let error = layout
+        .prepare(&first.snapshot(), &invalid)
+        .expect_err("warm reuse must not bypass feature-policy validation");
+    assert_eq!(error.kind(), SceneErrorKind::InvalidFeatures);
+}
+
+#[test]
 fn composition_whitespace_collapse_retains_complete_generated_provenance() {
     let (document, mut styles, paint) = one_leaf_document(*b"collapse-preedt1", "x");
     let snapshot = document.snapshot();
@@ -1504,6 +1535,21 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
         Arc::ptr_eq(&first.scene().core, &repeated.scene().core),
         "an exact composition epoch must return the published scene core"
     );
+    let first_sources = first
+        .scene()
+        .sources()
+        .expect("editable projection retains source provenance");
+    assert!(
+        first_sources
+            .for_line(
+                repeated
+                    .scene()
+                    .line(0)
+                    .expect("the repeated projection has a line")
+            )
+            .is_ok(),
+        "views from the same persistent scene root must remain compatible"
+    );
 
     let selection_epoch = session
         .update(
@@ -1529,6 +1575,17 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
             .composition_selection_geometry(&session)
             .expect("rebound selected range must resolve")
             .is_empty()
+    );
+    assert!(
+        first_sources
+            .for_line(
+                selection_only
+                    .scene()
+                    .line(0)
+                    .expect("the rebound projection has a line")
+            )
+            .is_err(),
+        "a projected view from another prepared root must be rejected"
     );
 
     let second_epoch = session
@@ -2628,6 +2685,72 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
 }
 
 #[test]
+fn source_facade_rejects_views_from_another_scene_without_panicking() {
+    let (first_document, first_styles, first_paint) =
+        one_leaf_document(*b"source-facade-01", "first");
+    let (second_document, second_styles, second_paint) =
+        one_leaf_document(*b"source-facade-02", "second");
+    let mut layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(32),
+    );
+    let first_request = SceneRequest::new(TextConstraint::MaxContent, &first_styles, &first_paint)
+        .with_features(crate::SceneFeatures::DISPLAY.with_sources());
+    let first = layout
+        .prepare(&first_document.snapshot(), &first_request)
+        .expect("source-capable scene must prepare");
+    let second_request =
+        SceneRequest::new(TextConstraint::MaxContent, &second_styles, &second_paint);
+    let second = layout
+        .prepare(&second_document.snapshot(), &second_request)
+        .expect("display-only scene must prepare");
+    let sources = first
+        .scene()
+        .sources()
+        .expect("the first scene retains complete sources");
+    let foreign = second.scene().line(0).expect("the second scene has a line");
+
+    let error = sources
+        .for_line(foreign)
+        .expect_err("a foreign public line view must be rejected");
+    assert_eq!(
+        error.paragraph(),
+        second_document.snapshot().paragraphs()[0].id
+    );
+
+    let foreign_fragment = second
+        .scene()
+        .fragment(0)
+        .expect("the second scene has a fragment");
+    assert!(
+        sources.for_fragment(foreign_fragment).is_err(),
+        "a foreign fragment traversal must be rejected"
+    );
+    assert!(
+        sources.first_for_fragment(foreign_fragment).is_err(),
+        "a foreign fragment lookup must be rejected"
+    );
+    let foreign_glyph = foreign_fragment
+        .glyphs()
+        .next()
+        .expect("the second scene has a glyph");
+    assert!(
+        sources.for_glyph(foreign_glyph).is_err(),
+        "a foreign glyph traversal must be rejected"
+    );
+    assert!(
+        sources.first_for_glyph(foreign_glyph).is_err(),
+        "a foreign glyph lookup must be rejected"
+    );
+}
+
+#[test]
 fn sparse_editable_override_does_not_promote_a_display_sibling() {
     let mut document = Document::new(DocumentId::from_bytes(*b"scene-features02"));
     let mut edit = document.edit();
@@ -2754,6 +2877,45 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
         cache_residency.sources(),
         editor_residency.bytes().sources()
     );
+
+    let mut complete_layout = LayoutEngine::new(
+        EchoAdapter {
+            split_utf8: false,
+            split_paint: false,
+            mismatched_paint: false,
+            glyphless: false,
+            interior_cursor: false,
+        },
+        CacheBudget::new(8),
+    );
+    let complete_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
+        .with_features(crate::SceneFeatures::EDITABLE);
+    let complete = complete_layout
+        .prepare(&snapshot, &complete_request)
+        .expect("complete scene must prepare");
+    let complete_editing = complete
+        .scene()
+        .editing()
+        .expect("complete editing must exist");
+    let complete_selection = complete_editing
+        .selection_between(
+            &complete_editing
+                .position_at(display_text, 0)
+                .expect("display start exists in the complete scene"),
+            &complete_editing
+                .position_at(editor_text, 6)
+                .expect("editor end exists in the complete scene"),
+            TextSelectionMode::Logical,
+        )
+        .expect("complete cross-paragraph selection must form");
+    let complete_selections = complete_editing
+        .selection_set([complete_selection])
+        .expect("complete selection set must validate");
+    scene
+        .selection()
+        .expect("the sparse scene exposes its selectable paragraph")
+        .geometry(&complete_selections)
+        .expect_err("sparse geometry must reject an omitted selected paragraph");
 
     let position = editing
         .position_at(editor_text, 0)
