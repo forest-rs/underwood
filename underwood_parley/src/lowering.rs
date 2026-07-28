@@ -53,7 +53,7 @@ pub(crate) fn lower_glyphs_into(
         {
             return Err(PreparationError::invalid_output());
         }
-        if !source_contributes_to_shaping(text, analysis, char_starts, &source)? {
+        if !source_contributes_to_shaping(analysis, char_starts, &source) {
             return Ok(());
         }
         lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
@@ -79,23 +79,15 @@ pub(crate) fn lower_glyphs_into(
 }
 
 fn source_contributes_to_shaping(
-    text: &str,
     analysis: &Analysis,
     char_starts: &[u32],
     source: &Range<u32>,
-) -> Result<bool, PreparationError> {
-    let start = source.start as usize;
-    let end = source.end as usize;
-    text.get(start..end)
-        .ok_or_else(PreparationError::invalid_output)?;
-    let char_start = char_index(char_starts, source.start)?;
-    let char_end = char_index(char_starts, source.end)?;
-    Ok(analysis
-        .char_info()
-        .get(char_start..char_end)
-        .ok_or_else(PreparationError::invalid_output)?
+) -> bool {
+    let char_start = char_index(char_starts, source.start);
+    let char_end = char_index(char_starts, source.end);
+    analysis.char_info()[char_start..char_end]
         .iter()
-        .any(|info| info.contributes_to_shaping()))
+        .any(|info| info.contributes_to_shaping())
 }
 
 pub(crate) fn append_unrendered_source(
@@ -112,7 +104,7 @@ pub(crate) fn append_unrendered_source(
     let char_start = char_index(
         char_starts,
         u32::try_from(source.start).map_err(|_| PreparationError::invalid_output())?,
-    )?;
+    );
     let mut pending: Option<Range<u32>> = None;
     for (index, (offset, character)) in source_text.char_indices().enumerate() {
         let start = source
@@ -122,7 +114,7 @@ pub(crate) fn append_unrendered_source(
         let end = start
             .checked_add(character.len_utf8())
             .ok_or_else(PreparationError::invalid_output)?;
-        let range = checked_source_range(&(start..end))?;
+        let range = source_range(&(start..end));
         if output.renders(glyphs.clone(), range.clone())? {
             continue;
         }
@@ -149,20 +141,23 @@ pub(crate) fn append_unrendered_source(
     Ok(())
 }
 
-pub(crate) fn index_char_starts(text: &str, output: &mut Vec<u32>) -> Result<(), PreparationError> {
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "ParagraphFormation::form rejects text longer than u32 before indexing"
+)]
+pub(crate) fn index_char_starts(text: &str, output: &mut Vec<u32>) {
     output.clear();
     output.reserve(text.chars().count().saturating_add(1));
     for (byte, _) in text.char_indices() {
-        output.push(u32::try_from(byte).map_err(|_| PreparationError::invalid_output())?);
+        output.push(byte as u32);
     }
-    output.push(u32::try_from(text.len()).map_err(|_| PreparationError::invalid_output())?);
-    Ok(())
+    output.push(text.len() as u32);
 }
 
-fn char_index(char_starts: &[u32], byte: u32) -> Result<usize, PreparationError> {
+fn char_index(char_starts: &[u32], byte: u32) -> usize {
     char_starts
         .binary_search(&byte)
-        .map_err(|_| PreparationError::invalid_output())
+        .expect("Parley cluster sources end on scalar boundaries")
 }
 
 fn cluster_source(
@@ -214,7 +209,7 @@ fn cluster_source(
             }
         }
     }
-    checked_source_range(&(start..end))
+    Ok(source_range(&(start..end)))
 }
 
 fn lower_cluster_glyphs(
@@ -249,10 +244,12 @@ fn lower_cluster_glyphs(
     Ok(())
 }
 
-pub(crate) fn checked_source_range(range: &Range<usize>) -> Result<Range<u32>, PreparationError> {
-    let start = u32::try_from(range.start).map_err(|_| PreparationError::invalid_output())?;
-    let end = u32::try_from(range.end).map_err(|_| PreparationError::invalid_output())?;
-    Ok(start..end)
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "ParagraphFormation::form rejects text longer than u32 before lowering"
+)]
+pub(crate) fn source_range(range: &Range<usize>) -> Range<u32> {
+    range.start as u32..range.end as u32
 }
 
 pub(crate) fn portable_synthesis(synthesis: Synthesis) -> Result<FontSynthesis, PreparationError> {

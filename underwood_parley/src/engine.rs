@@ -30,8 +30,8 @@ use crate::line_break::{
     reorder_visual_pieces, shaped_text_accounted_bytes, update_line_metrics,
 };
 use crate::lowering::{
-    append_unrendered_source, checked_source_range, index_char_starts, lower_glyphs_into,
-    portable_synthesis,
+    append_unrendered_source, index_char_starts, lower_glyphs_into, portable_synthesis,
+    source_range,
 };
 use crate::shaping::{
     analyze_text_with_styles_into, prepare_inline_flow_indices,
@@ -185,15 +185,15 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 input.analysis_styles,
                 input.analysis_runs,
                 &mut cache.analysis,
-            )?;
-            collect_analysis_units_into(input.text, &cache.analysis, &mut cache.interaction_units)?;
+            );
+            collect_analysis_units_into(input.text, &cache.analysis, &mut cache.interaction_units);
             collect_joining_units(
                 input.text,
                 &cache.analysis,
                 &cache.interaction_units,
                 &mut cache.joining_units,
-            )?;
-            index_char_starts(input.text, &mut cache.char_starts)?;
+            );
+            index_char_starts(input.text, &mut cache.char_starts);
             cache.style_indices.clear();
             cache.inline_flow_indices.clear();
             cache.shaped_text.clear();
@@ -263,7 +263,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 input.text,
                 input.inline_flow_runs,
                 &mut cache.inline_flow_indices,
-            )?;
+            );
         }
 
         if shaped || spacing_changed {
@@ -276,7 +276,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     &mut cache.shaped_text,
                     &cache.base_cluster_advances,
                     &cache.base_glyph_advances,
-                )?;
+                );
             }
             apply_spacing(
                 &mut cache.shaped_text,
@@ -448,11 +448,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
         for formed in &preparation.formed_lines {
             let plan = &formed.plan;
             let shaped_text = formed.shaping(&preparation.shaped_text);
-            line_run_pieces_into(shaped_text, plan.clusters.clone(), &mut self.run_pieces)?;
+            line_run_pieces_into(shaped_text, plan.clusters.clone(), &mut self.run_pieces);
             reorder_visual_pieces(shaped_text, &mut self.run_pieces);
             let line = PreparedLine::try_new_in_slot(
                 plan.slot,
-                checked_source_range(&plan.source)?,
+                source_range(&plan.source),
                 plan.reason,
                 plan.baseline,
                 plan.height,
@@ -502,7 +502,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         + usize::from(last.text_len);
                 let synthesis = portable_synthesis(font.synthesis)?;
                 let prepared_run = PreparedRun::try_new(
-                    checked_source_range(&source)?,
+                    source_range(&source),
                     run.bidi_level,
                     run.script.to_bytes(),
                     font.font.clone(),

@@ -209,7 +209,7 @@ Today:
 
 ```rust,ignore
 let mut paragraph = PreparedParagraphBuilder::with_features(
-    input.paragraph(),
+    input.paragraph,
     text_len,
     direction,
     input.features(),
@@ -250,7 +250,7 @@ for formed in &preparation.formed_lines {
 }
 
 let paragraph = PreparedParagraph::try_from_data(
-    input.paragraph(),
+    input.paragraph,
     text_len,
     direction,
     input.features(),

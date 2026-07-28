@@ -749,7 +749,8 @@ only in the paragraph builder's final tables.
 `PreparedLineView`, `PreparedRunView`, and their exact-size traversals are the
 read contract after `PreparedParagraph` has flattened those values. Code that
 needs to prove shared preparation uses
-`PreparedParagraph::shares_facts_with` rather than comparing slice pointers.
+Reuse is observed through preparation work and cache diagnostics rather than
+through public pointer-identity probes on `PreparedParagraph`.
 
 Glyph traversal follows the same rule:
 

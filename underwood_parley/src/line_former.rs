@@ -7,6 +7,8 @@
 //! shaping orchestration, or rendering. It turns an immutable sequence of
 //! Parley-derived cluster facts into reversible line candidates. Callers own
 //! line-final shaping and any provisional output.
+//! Inputs are crate-private products of validated collection and constraint
+//! types; this kernel does not re-prove those invariants.
 
 use alloc::vec::Vec;
 use core::ops::Range;
@@ -50,8 +52,6 @@ pub(crate) struct LineCandidate {
     source_end: usize,
     reason: CandidateBreak,
     canonical_advance: f64,
-    trailing_whitespace_start: usize,
-    trailing_whitespace_advance: f64,
 }
 
 impl LineCandidate {
@@ -73,14 +73,6 @@ impl LineCandidate {
 
     pub(crate) const fn canonical_advance(self) -> f64 {
         self.canonical_advance
-    }
-
-    pub(crate) const fn trailing_whitespace_clusters(self) -> Range<usize> {
-        self.trailing_whitespace_start..self.end
-    }
-
-    pub(crate) const fn trailing_whitespace_advance(self) -> f64 {
-        self.trailing_whitespace_advance
     }
 }
 
@@ -109,15 +101,11 @@ pub(crate) struct LineFormerWork {
     pub(crate) rejected: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LineFormerError;
-
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LineCheckpoint {
     cursor: usize,
     last_break: Option<CandidateBreak>,
     output_len: usize,
-    cluster_count: usize,
 }
 
 #[derive(Debug)]
@@ -130,10 +118,7 @@ pub(crate) struct LineFormer<'a> {
 }
 
 impl<'a> LineFormer<'a> {
-    pub(crate) fn new(
-        clusters: &'a [LogicalCluster],
-        constraint: FormationConstraint,
-    ) -> Result<Self, LineFormerError> {
+    pub(crate) fn new(clusters: &'a [LogicalCluster], constraint: FormationConstraint) -> Self {
         Self::at(clusters, constraint, 0)
     }
 
@@ -141,17 +126,14 @@ impl<'a> LineFormer<'a> {
         clusters: &'a [LogicalCluster],
         constraint: FormationConstraint,
         cursor: usize,
-    ) -> Result<Self, LineFormerError> {
-        if cursor > clusters.len() || !valid_constraint(constraint) {
-            return Err(LineFormerError);
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             clusters,
             constraint,
             cursor,
             last_break: None,
             work: LineFormerWork::default(),
-        })
+        }
     }
 
     pub(crate) const fn is_done(&self) -> bool {
@@ -170,15 +152,8 @@ impl<'a> LineFormer<'a> {
     ///
     /// Traversal, prior-break state, and accumulated work remain intact so a
     /// caller can retry the same text in a different region slot.
-    pub(crate) fn set_constraint(
-        &mut self,
-        constraint: FormationConstraint,
-    ) -> Result<(), LineFormerError> {
-        if !valid_constraint(constraint) {
-            return Err(LineFormerError);
-        }
+    pub(crate) fn set_constraint(&mut self, constraint: FormationConstraint) {
         self.constraint = constraint;
-        Ok(())
     }
 
     pub(crate) const fn checkpoint(&self, output_len: usize) -> LineCheckpoint {
@@ -186,34 +161,22 @@ impl<'a> LineFormer<'a> {
             cursor: self.cursor,
             last_break: self.last_break,
             output_len,
-            cluster_count: self.clusters.len(),
         }
     }
 
-    pub(crate) fn restore<T>(
-        &mut self,
-        checkpoint: LineCheckpoint,
-        output: &mut Vec<T>,
-    ) -> Result<(), LineFormerError> {
-        if checkpoint.cluster_count != self.clusters.len()
-            || checkpoint.cursor > self.clusters.len()
-            || checkpoint.output_len > output.len()
-        {
-            return Err(LineFormerError);
-        }
+    pub(crate) fn restore<T>(&mut self, checkpoint: LineCheckpoint, output: &mut Vec<T>) {
         self.cursor = checkpoint.cursor;
         self.last_break = checkpoint.last_break;
         output.truncate(checkpoint.output_len);
-        Ok(())
     }
 
-    pub(crate) fn candidate(&mut self) -> Result<Option<LineCandidate>, LineFormerError> {
+    pub(crate) fn candidate(&mut self) -> Option<LineCandidate> {
         if self.is_done() {
-            return Ok(None);
+            return None;
         }
-        let candidate = choose_candidate(self.clusters, self.cursor, self.constraint)?;
+        let candidate = choose_candidate(self.clusters, self.cursor, self.constraint);
         self.work.proposed = self.work.proposed.saturating_add(1);
-        Ok(Some(candidate))
+        Some(candidate)
     }
 
     pub(crate) fn commit(
@@ -221,24 +184,13 @@ impl<'a> LineFormer<'a> {
         candidate: LineCandidate,
         measurements: LineMeasurements,
         limits: LineLimits,
-    ) -> Result<CommitOutcome, LineFormerError> {
-        if candidate.start != self.cursor
-            || candidate.end <= candidate.start
-            || candidate.end > self.clusters.len()
-            || !valid_measurement(measurements.advance)
-            || !valid_measurement(measurements.height)
-            || !valid_limit(limits.max_advance)
-            || !valid_limit(limits.max_height)
-        {
-            return Err(LineFormerError);
-        }
-
+    ) -> CommitOutcome {
         if limits
             .max_height
             .is_some_and(|height| measurements.height > height)
         {
             self.work.rejected = self.work.rejected.saturating_add(1);
-            return Ok(CommitOutcome::SlotRejected);
+            return CommitOutcome::SlotRejected;
         }
 
         let inline_overflow = limits
@@ -246,58 +198,35 @@ impl<'a> LineFormer<'a> {
             .is_some_and(|advance| measurements.advance > advance);
         if candidate.reason == CandidateBreak::Regular
             && inline_overflow
-            && let Some(retry) = self.retry_before(candidate)?
+            && let Some(retry) = self.retry_before(candidate)
         {
             self.work.rejected = self.work.rejected.saturating_add(1);
             self.work.proposed = self.work.proposed.saturating_add(1);
-            return Ok(CommitOutcome::Retry(retry));
+            return CommitOutcome::Retry(retry);
         }
 
         self.cursor = candidate.end;
         self.last_break = Some(candidate.reason);
-        Ok(CommitOutcome::Accepted)
+        CommitOutcome::Accepted
     }
 
-    fn retry_before(
-        &self,
-        candidate: LineCandidate,
-    ) -> Result<Option<LineCandidate>, LineFormerError> {
-        if candidate.start != self.cursor || candidate.end > self.clusters.len() {
-            return Err(LineFormerError);
-        }
-        let Some(end) = (candidate.start + 1..candidate.end).rev().find(|&index| {
+    fn retry_before(&self, candidate: LineCandidate) -> Option<LineCandidate> {
+        let end = (candidate.start + 1..candidate.end).rev().find(|&index| {
             is_soft_boundary(&self.clusters[index])
                 || is_emergency_boundary(&self.clusters[index], self.constraint)
-        }) else {
-            return Ok(None);
-        };
+        })?;
         let canonical_advance = self.clusters[candidate.start..end]
             .iter()
             .map(|cluster| cluster.advance)
             .sum();
-        Ok(Some(make_candidate(
+        Some(make_candidate(
             self.clusters,
             candidate.start,
             end,
             CandidateBreak::Regular,
             canonical_advance,
-        )))
+        ))
     }
-}
-
-fn valid_measurement(value: f64) -> bool {
-    value.is_finite() && value >= 0.0
-}
-
-fn valid_constraint(constraint: FormationConstraint) -> bool {
-    match constraint {
-        FormationConstraint::Wrap(width) => width.is_finite() && width > 0.0,
-        FormationConstraint::MinContent | FormationConstraint::MaxContent => true,
-    }
-}
-
-fn valid_limit(value: Option<f64>) -> bool {
-    value.is_none_or(|value| value.is_finite() && value > 0.0)
 }
 
 fn is_soft_boundary(cluster: &LogicalCluster) -> bool {
@@ -318,32 +247,17 @@ fn choose_candidate(
     clusters: &[LogicalCluster],
     start: usize,
     constraint: FormationConstraint,
-) -> Result<LineCandidate, LineFormerError> {
-    if start >= clusters.len() {
-        return Err(LineFormerError);
-    }
+) -> LineCandidate {
     let mut index = start;
     let mut advance = 0.0_f64;
     let mut last_opportunity: Option<(usize, f64)> = None;
     while index < clusters.len() {
         let cluster = &clusters[index];
-        if cluster.source.start > cluster.source.end
-            || !cluster.advance.is_finite()
-            || cluster.advance < 0.0
-        {
-            return Err(LineFormerError);
-        }
         if index > start {
             let soft = is_soft_boundary(cluster);
             let emergency = is_emergency_boundary(cluster, constraint);
             if constraint == FormationConstraint::MinContent && (soft || emergency) {
-                return Ok(make_candidate(
-                    clusters,
-                    start,
-                    index,
-                    CandidateBreak::Regular,
-                    advance,
-                ));
+                return make_candidate(clusters, start, index, CandidateBreak::Regular, advance);
             }
             if matches!(constraint, FormationConstraint::Wrap(_)) && soft {
                 last_opportunity = Some((index, advance));
@@ -355,22 +269,16 @@ fn choose_candidate(
             && index > start
         {
             if let Some((end, opportunity_advance)) = last_opportunity {
-                return Ok(make_candidate(
+                return make_candidate(
                     clusters,
                     start,
                     end,
                     CandidateBreak::Regular,
                     opportunity_advance,
-                ));
+                );
             }
             if is_emergency_boundary(cluster, constraint) {
-                return Ok(make_candidate(
-                    clusters,
-                    start,
-                    index,
-                    CandidateBreak::Regular,
-                    advance,
-                ));
+                return make_candidate(clusters, start, index, CandidateBreak::Regular, advance);
             }
         }
         if cluster.whitespace == Whitespace::Newline {
@@ -383,25 +291,19 @@ fn choose_candidate(
             if cr_before_lf {
                 continue;
             }
-            return Ok(make_candidate(
-                clusters,
-                start,
-                index,
-                CandidateBreak::Mandatory,
-                advance,
-            ));
+            return make_candidate(clusters, start, index, CandidateBreak::Mandatory, advance);
         }
 
         advance = next_advance;
         index += 1;
     }
-    Ok(make_candidate(
+    make_candidate(
         clusters,
         start,
         clusters.len(),
         CandidateBreak::End,
         advance,
-    ))
+    )
 }
 
 fn make_candidate(
@@ -411,16 +313,6 @@ fn make_candidate(
     reason: CandidateBreak,
     canonical_advance: f64,
 ) -> LineCandidate {
-    let mut trailing_whitespace_start = end;
-    let mut trailing_whitespace_advance = 0.0;
-    while trailing_whitespace_start > start {
-        let cluster = &clusters[trailing_whitespace_start - 1];
-        if cluster.whitespace == Whitespace::None {
-            break;
-        }
-        trailing_whitespace_start -= 1;
-        trailing_whitespace_advance += cluster.advance;
-    }
     LineCandidate {
         start,
         end,
@@ -428,7 +320,5 @@ fn make_candidate(
         source_end: clusters[end - 1].source.end,
         reason,
         canonical_advance,
-        trailing_whitespace_start,
-        trailing_whitespace_advance,
     }
 }

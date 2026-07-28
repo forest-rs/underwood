@@ -49,6 +49,13 @@ Underwood does not yet make compatibility promises.
   bytes. The permanently zero `selection`, `navigation`, and
   `native_text_input` fields are removed; those operations derive from shared
   interaction data without separate storage.
+- Removed proof-only prepared-output observations and empty-selection
+  convenience from the pre-stable API. Adapters should inspect
+  `ParagraphFormationReuse` directly instead of calling `is_hit`; cache and
+  preparation diagnostics report reuse without exposing `Arc` pointer
+  identity or the internals of opaque `ParagraphPreparationId`s. Constructed
+  glyph values are append-only inputs; consumers continue to inspect glyphs
+  through `PreparedGlyphView`.
 - Added `FontSynthesis::skew_transform` as the canonical `no_std` affine used
   by coverage adapters and renderers. Existing callers may replace local
   degree-to-shear math with this method; `skew_degrees` remains available.

@@ -21,8 +21,8 @@ use underwood::{
 };
 
 use crate::line_former::{
-    CandidateBreak, CommitOutcome, FormationConstraint, LineCandidate, LineFormer, LineFormerError,
-    LineFormerWork, LineLimits, LineMeasurements,
+    CandidateBreak, CommitOutcome, FormationConstraint, LineCandidate, LineFormer, LineFormerWork,
+    LineLimits, LineMeasurements,
 };
 
 pub(crate) use crate::line_former::LogicalCluster;
@@ -279,13 +279,10 @@ pub(crate) fn form_lines(
 
     let constraint = formation_constraint(constraints.text());
     let limits = line_limits(constraint);
-    let mut former =
-        LineFormer::new(clusters, constraint).map_err(|_| PreparationError::invalid_output())?;
+    let mut former = LineFormer::new(clusters, constraint);
     let first_candidate = former
         .candidate()
-        .map_err(map_former_error)?
         .ok_or_else(PreparationError::invalid_output)?;
-    validate_candidate(first_candidate)?;
     if first_candidate.reason() == CandidateBreak::End && first_candidate.end() == clusters.len() {
         let plan = make_line_plan(
             canonical_text,
@@ -298,17 +295,14 @@ pub(crate) fn form_lines(
             None,
             None,
         )?;
-        match former
-            .commit(
-                first_candidate,
-                LineMeasurements {
-                    advance: plan.advance,
-                    height: plan.height,
-                },
-                limits,
-            )
-            .map_err(map_former_error)?
-        {
+        match former.commit(
+            first_candidate,
+            LineMeasurements {
+                advance: plan.advance,
+                height: plan.height,
+            },
+            limits,
+        ) {
             CommitOutcome::Accepted => {}
             CommitOutcome::Retry(_) | CommitOutcome::SlotRejected => {
                 return Err(PreparationError::invalid_output());
@@ -325,7 +319,6 @@ pub(crate) fn form_lines(
     loop {
         let checkpoint = former.checkpoint(lines.len());
         loop {
-            validate_candidate(candidate)?;
             let source = candidate.source();
             let uses_canonical = candidate_uses_canonical(candidate, clusters);
             let plan = if uses_canonical {
@@ -373,17 +366,14 @@ pub(crate) fn form_lines(
                     None,
                 )?
             };
-            match former
-                .commit(
-                    candidate,
-                    LineMeasurements {
-                        advance: plan.advance,
-                        height: plan.height,
-                    },
-                    limits,
-                )
-                .map_err(map_former_error)?
-            {
+            match former.commit(
+                candidate,
+                LineMeasurements {
+                    advance: plan.advance,
+                    height: plan.height,
+                },
+                limits,
+            ) {
                 CommitOutcome::Accepted => {
                     if uses_canonical {
                         lines.push(FormedLine::canonical(plan));
@@ -394,14 +384,12 @@ pub(crate) fn form_lines(
                 }
                 CommitOutcome::Retry(retry) => candidate = retry,
                 CommitOutcome::SlotRejected => {
-                    former
-                        .restore(checkpoint, lines)
-                        .map_err(map_former_error)?;
+                    former.restore(checkpoint, lines);
                     return Err(PreparationError::invalid_output());
                 }
             }
         }
-        let Some(next) = former.candidate().map_err(map_former_error)? else {
+        let Some(next) = former.candidate() else {
             break;
         };
         candidate = next;
@@ -477,8 +465,7 @@ fn form_region_lines(
     let mut former = LineFormer::new(
         clusters,
         FormationConstraint::Wrap(first_slot.inline_size()),
-    )
-    .map_err(map_former_error)?;
+    );
     let mut work = LineFormationWork::default();
     let mut attempts = Vec::new();
 
@@ -486,16 +473,12 @@ fn form_region_lines(
         let slot = flow
             .slot(cursor)
             .ok_or_else(PreparationError::invalid_output)?;
-        former
-            .set_constraint(FormationConstraint::Wrap(slot.inline_size()))
-            .map_err(map_former_error)?;
+        former.set_constraint(FormationConstraint::Wrap(slot.inline_size()));
         let checkpoint = former.checkpoint(lines.len());
         let mut candidate = former
             .candidate()
-            .map_err(map_former_error)?
             .ok_or_else(PreparationError::invalid_output)?;
         loop {
-            validate_candidate(candidate)?;
             let source = candidate.source();
             let uses_canonical = candidate_uses_canonical(candidate, clusters);
             let line_shape_work = if uses_canonical {
@@ -553,20 +536,17 @@ fn form_region_lines(
                 None,
                 Some(slot),
             )?;
-            match former
-                .commit(
-                    candidate,
-                    LineMeasurements {
-                        advance: plan.advance,
-                        height: plan.height,
-                    },
-                    LineLimits {
-                        max_advance: Some(slot.inline_size()),
-                        max_height: Some(slot.block_size()),
-                    },
-                )
-                .map_err(map_former_error)?
-            {
+            match former.commit(
+                candidate,
+                LineMeasurements {
+                    advance: plan.advance,
+                    height: plan.height,
+                },
+                LineLimits {
+                    max_advance: Some(slot.inline_size()),
+                    max_height: Some(slot.block_size()),
+                },
+            ) {
                 CommitOutcome::Accepted => {
                     attempts.push(
                         RegionAttempt::try_new(
@@ -602,9 +582,7 @@ fn form_region_lines(
                         )
                         .map_err(|_| PreparationError::invalid_output())?,
                     );
-                    former
-                        .restore(checkpoint, lines)
-                        .map_err(map_former_error)?;
+                    former.restore(checkpoint, lines);
                     cursor = flow
                         .reject(cursor, slot)
                         .map_err(|_| PreparationError::invalid_output())?;
@@ -704,22 +682,6 @@ fn line_break_reason(reason: CandidateBreak) -> LineBreakReason {
     }
 }
 
-fn map_former_error(_error: LineFormerError) -> PreparationError {
-    PreparationError::invalid_output()
-}
-
-fn validate_candidate(candidate: LineCandidate) -> Result<(), PreparationError> {
-    let clusters = candidate.clusters();
-    let trailing = candidate.trailing_whitespace_clusters();
-    if trailing.start < clusters.start
-        || trailing.end != clusters.end
-        || candidate.trailing_whitespace_advance() > candidate.canonical_advance()
-    {
-        return Err(PreparationError::invalid_output());
-    }
-    Ok(())
-}
-
 fn record_former_work(work: &mut LineFormationWork, former: LineFormerWork) {
     work.candidates = former.proposed;
     work.rejected_candidates = former.rejected;
@@ -738,11 +700,9 @@ pub(crate) fn choose_line(
     start: usize,
     constraint: TextConstraint,
 ) -> Result<LineChoice, PreparationError> {
-    let mut former = LineFormer::at(clusters, formation_constraint(constraint), start)
-        .map_err(map_former_error)?;
+    let mut former = LineFormer::at(clusters, formation_constraint(constraint), start);
     let candidate = former
         .candidate()
-        .map_err(map_former_error)?
         .ok_or_else(PreparationError::invalid_output)?;
     Ok(LineChoice {
         end: candidate.end(),
@@ -816,6 +776,10 @@ pub(crate) fn collect_logical_clusters_into(
             if text.get(start..end).is_none() {
                 return Err(PreparationError::invalid_output());
             }
+            let advance = f64::from(cluster.advance);
+            if !advance.is_finite() || advance < 0.0 {
+                return Err(PreparationError::invalid_output());
+            }
             clusters.push(LogicalCluster {
                 run: run_index,
                 index: cluster_index,
@@ -827,7 +791,7 @@ pub(crate) fn collect_logical_clusters_into(
                 allows_soft_wrap: true,
                 allows_emergency_wrap: false,
                 emergency_affects_min_content: false,
-                advance: f64::from(cluster.advance),
+                advance,
             });
         }
     }
@@ -878,7 +842,7 @@ pub(crate) fn apply_wrap_policy(
     runs: &[InlineFlowRun],
 ) -> Result<(), PreparationError> {
     for cluster in clusters {
-        let style = inline_flow_style_at(cluster.source.start, styles, runs)?;
+        let style = inline_flow_style_at(cluster.source.start, styles, runs);
         cluster.allows_soft_wrap = style.text_wrap_mode() == TextWrapMode::Wrap;
         cluster.allows_emergency_wrap = cluster.allows_soft_wrap
             && matches!(
@@ -895,19 +859,9 @@ fn inline_flow_style_at(
     source: usize,
     styles: &[InlineFlowStyle],
     runs: &[InlineFlowRun],
-) -> Result<InlineFlowStyle, PreparationError> {
+) -> InlineFlowStyle {
     let index = runs.partition_point(|run| run.bytes().end as usize <= source);
-    let run = runs
-        .get(index)
-        .filter(|run| {
-            let bytes = run.bytes();
-            bytes.start as usize <= source && source < bytes.end as usize
-        })
-        .ok_or_else(PreparationError::invalid_output)?;
-    styles
-        .get(run.style().index())
-        .copied()
-        .ok_or_else(PreparationError::invalid_output)
+    styles[runs[index].style().index()]
 }
 
 fn make_line_plan(
@@ -996,9 +950,7 @@ fn inline_flow_line_height(
         if bytes.start as usize >= source.end || bytes.end as usize <= source.start {
             continue;
         }
-        let style = styles
-            .get(run.style().index())
-            .ok_or_else(PreparationError::invalid_output)?;
+        let style = styles[run.style().index()];
         height = height.max(style.line_height().resolve(font_size, metrics_height));
     }
     if !height.is_finite() || height <= 0.0 {
@@ -1011,7 +963,7 @@ pub(crate) fn line_run_pieces_into(
     shaped_text: &ShapedText,
     clusters: Range<usize>,
     pieces: &mut Vec<RunPiece>,
-) -> Result<(), PreparationError> {
+) {
     pieces.clear();
     for (run_index, run) in shaped_text.runs().iter().enumerate() {
         let start = run.clusters_range.start.max(clusters.start);
@@ -1023,16 +975,6 @@ pub(crate) fn line_run_pieces_into(
             });
         }
     }
-    if !clusters.is_empty()
-        && pieces
-            .iter()
-            .map(|piece| piece.clusters.len())
-            .sum::<usize>()
-            != clusters.len()
-    {
-        return Err(PreparationError::invalid_output());
-    }
-    Ok(())
 }
 
 pub(crate) fn reorder_visual_pieces(shaped_text: &ShapedText, pieces: &mut [RunPiece]) {

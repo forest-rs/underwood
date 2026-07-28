@@ -380,12 +380,6 @@ impl PreparedParagraph {
     pub fn accounted_owned_bytes(&self) -> usize {
         self.facts.estimated_owned_bytes()
     }
-
-    /// Returns whether both paragraph envelopes share one canonical artifact.
-    #[must_use]
-    pub fn shares_facts_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.facts, &other.facts)
-    }
 }
 
 /// Flat checked input tables for one prepared paragraph.
@@ -1295,29 +1289,5 @@ impl PreparedGlyph {
             advance,
             offset,
         })
-    }
-
-    /// Returns the backend glyph identifier.
-    #[must_use]
-    pub const fn id(&self) -> u32 {
-        self.id
-    }
-
-    /// Returns the paragraph-local source range.
-    #[must_use]
-    pub fn source(&self) -> Range<u32> {
-        self.source.clone()
-    }
-
-    /// Returns the shaped advance.
-    #[must_use]
-    pub const fn advance(&self) -> Vec2 {
-        self.advance
-    }
-
-    /// Returns the shaped glyph offset.
-    #[must_use]
-    pub const fn offset(&self) -> Vec2 {
-        self.offset
     }
 }

@@ -2277,7 +2277,7 @@ fn prepare_paragraph_geometry(
         };
     let backend_called = formation_reuse.is_some();
     if let Some(formation_reuse) = formation_reuse {
-        if formation_reuse.is_hit() {
+        if formation_reuse == ParagraphFormationReuse::RetainedFacts {
             reuse.adapter_fact_hits = reuse.adapter_fact_hits.saturating_add(1);
         } else {
             reuse.adapter_fact_misses = reuse.adapter_fact_misses.saturating_add(1);

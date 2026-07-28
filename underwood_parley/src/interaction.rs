@@ -18,50 +18,32 @@ use underwood::adapter::{
 };
 
 use crate::line_break::RunPiece;
-use crate::lowering::checked_source_range;
+use crate::lowering::source_range;
 
 #[cfg(test)]
-pub(crate) fn collect_analysis_units(
-    text: &str,
-    analysis: &Analysis,
-) -> Result<Vec<Range<usize>>, PreparationError> {
+pub(crate) fn collect_analysis_units(text: &str, analysis: &Analysis) -> Vec<Range<usize>> {
     let mut units = Vec::new();
-    collect_analysis_units_into(text, analysis, &mut units)?;
-    Ok(units)
+    collect_analysis_units_into(text, analysis, &mut units);
+    units
 }
 
 pub(crate) fn collect_analysis_units_into(
     text: &str,
     analysis: &Analysis,
     units: &mut Vec<Range<usize>>,
-) -> Result<(), PreparationError> {
+) {
     units.clear();
-    let mut characters = 0_usize;
     let mut start = None;
     for ((byte, _), info) in text.char_indices().zip(analysis.char_info()) {
-        characters += 1;
-        if info.is_grapheme_start() {
-            if start.is_none() && byte != 0 {
-                return Err(PreparationError::invalid_output());
-            }
-            if let Some(previous) = start.replace(byte) {
-                units.push(previous..byte);
-            }
+        if info.is_grapheme_start()
+            && let Some(previous) = start.replace(byte)
+        {
+            units.push(previous..byte);
         }
-    }
-    if characters != text.chars().count()
-        || characters != analysis.char_info().len()
-        || (!text.is_empty() && start.is_none())
-    {
-        return Err(PreparationError::invalid_output());
     }
     if let Some(start) = start {
-        if start >= text.len() || text.get(start..text.len()).is_none() {
-            return Err(PreparationError::invalid_output());
-        }
         units.push(start..text.len());
     }
-    Ok(())
 }
 
 #[derive(Debug, Default)]
@@ -197,7 +179,7 @@ fn lower_visual_slice(
         .checked_add(usize::from(cluster.text_len))
         .ok_or_else(PreparationError::invalid_output)?;
     Ok(VisualInteractionSlice {
-        source: checked_source_range(&(start..end))?,
+        source: source_range(&(start..end)),
         advance: f64::from(cluster.advance),
         bidi_level: run.bidi_level,
         script: run.script.to_bytes(),
@@ -245,7 +227,7 @@ fn lower_prepared_unit(
         .ok_or_else(PreparationError::invalid_output)?;
     let western_justification_opportunity =
         source_text == " " && matches!(&logical_first.script, b"Latn" | b"Grek" | b"Cyrl");
-    let source = checked_source_range(source)?;
+    let source = source_range(source);
     let (left, right) = if bidi_level & 1 == 1 {
         (
             PreparedClusterSide::new(source.end, TextAffinity::Upstream),

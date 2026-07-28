@@ -19,31 +19,19 @@ pub(crate) fn collect_joining_units(
     analysis: &Analysis,
     interaction_units: &[core::ops::Range<usize>],
     joining_units: &mut Vec<bool>,
-) -> Result<(), PreparationError> {
+) {
     joining_units.clear();
     joining_units.resize(interaction_units.len(), false);
     let mut unit = 0_usize;
-    let mut characters = 0_usize;
     for ((byte, _), info) in text.char_indices().zip(analysis.char_info()) {
-        characters += 1;
         while interaction_units
             .get(unit)
             .is_some_and(|range| byte >= range.end)
         {
             unit += 1;
         }
-        if !interaction_units
-            .get(unit)
-            .is_some_and(|range| range.start <= byte && byte < range.end)
-        {
-            return Err(PreparationError::invalid_output());
-        }
         joining_units[unit] |= has_joining_behavior(info.joining_type);
     }
-    if characters != text.chars().count() || characters != analysis.char_info().len() {
-        return Err(PreparationError::invalid_output());
-    }
-    Ok(())
 }
 
 pub(crate) fn capture_base_advances(
@@ -57,21 +45,13 @@ pub(crate) fn capture_base_advances(
     glyphs.extend(shaped.glyphs().iter().map(|glyph| glyph.advance));
 }
 
-pub(crate) fn restore_base_advances(
-    shaped: &mut ShapedText,
-    clusters: &[f32],
-    glyphs: &[f32],
-) -> Result<(), PreparationError> {
-    if shaped.clusters().len() != clusters.len() || shaped.glyphs().len() != glyphs.len() {
-        return Err(PreparationError::invalid_output());
-    }
+pub(crate) fn restore_base_advances(shaped: &mut ShapedText, clusters: &[f32], glyphs: &[f32]) {
     for (cluster, advance) in shaped.clusters_mut().iter_mut().zip(clusters) {
         cluster.advance = *advance;
     }
     for (glyph, advance) in shaped.glyphs_mut().iter_mut().zip(glyphs) {
         glyph.advance = *advance;
     }
-    Ok(())
 }
 
 pub(crate) fn apply_spacing(
@@ -81,9 +61,6 @@ pub(crate) fn apply_spacing(
     interaction_units: &[core::ops::Range<usize>],
     joining_units: &[bool],
 ) -> Result<(), PreparationError> {
-    if interaction_units.len() != joining_units.len() {
-        return Err(PreparationError::invalid_output());
-    }
     for run_index in 0..shaped.runs().len() {
         let (source_start, clusters_start, clusters_end, glyphs_start) = {
             let run = &shaped.runs()[run_index];
@@ -94,7 +71,7 @@ pub(crate) fn apply_spacing(
                 run.glyphs_range.start,
             )
         };
-        let flow = flow_style_at(source_start, styles, runs)?;
+        let flow = flow_style_at(source_start, styles, runs);
         let spacing = flow.spacing();
         if spacing == underwood::TextSpacing::NORMAL {
             continue;
@@ -159,19 +136,9 @@ fn flow_style_at(
     source: usize,
     styles: &[InlineFlowStyle],
     runs: &[InlineFlowRun],
-) -> Result<InlineFlowStyle, PreparationError> {
+) -> InlineFlowStyle {
     let index = runs.partition_point(|run| run.bytes().end as usize <= source);
-    let run = runs
-        .get(index)
-        .filter(|run| {
-            let bytes = run.bytes();
-            bytes.start as usize <= source && source < bytes.end as usize
-        })
-        .ok_or_else(PreparationError::invalid_output)?;
-    styles
-        .get(run.style().index())
-        .copied()
-        .ok_or_else(PreparationError::invalid_output)
+    styles[runs[index].style().index()]
 }
 
 #[cfg(test)]
@@ -188,11 +155,10 @@ mod tests {
         let text = "Aب\u{64e}𐫍";
         let mut analysis = Analysis::new();
         Analyzer::new().analyze(text, &AnalysisOptions::default(), &mut analysis);
-        let units = collect_analysis_units(text, &analysis).expect("analysis units are valid");
+        let units = collect_analysis_units(text, &analysis);
         let mut joining = Vec::new();
 
-        collect_joining_units(text, &analysis, &units, &mut joining)
-            .expect("joining facts align with analysis units");
+        collect_joining_units(text, &analysis, &units, &mut joining);
 
         assert_eq!(units.len(), 3);
         assert_eq!(joining, [false, true, true]);
