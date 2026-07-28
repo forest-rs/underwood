@@ -3,7 +3,7 @@
 - **Campaign:** `und-0re`
 - **Design:** Design-0022
 - **Baseline commit:** `3fe34114acafa630c58151e29d795359e00154b7`
-- **Status:** implementation in progress
+- **Status:** implementation complete; external scalpel review recommended
 
 This is an external engineering ledger for a text framework, not runtime proof
 state. It records complete concepts deleted, API migrations, source movement,
@@ -302,10 +302,10 @@ struct literal.
 |---|---:|---:|
 | Baseline | 21,366 | 18,407 |
 | After slice 3 | 19,457 | 17,823 |
-| After slice 4 | 18,845 | 16,483 |
-| Deleted since baseline | 2,521 | 1,924 |
+| After slice 4 | 18,849 | 16,486 |
+| Deleted since baseline | 2,517 | 1,921 |
 
-`tokei` and `scc` agree on 16,483 Rust code lines. The implementation is below
+`tokei` and `scc` agree on 16,486 Rust code lines. The implementation is below
 the accepted design's 17,000 requirement and 16,500 stretch gate. The
 aspirational 16,000 target remains a review prompt rather than a reason to
 compress meaningful algorithms.
@@ -319,6 +319,117 @@ compress meaningful algorithms.
   source completeness, bidi interaction, regions, PDF, showcase, and visual
   snapshots remain covered by the unchanged executable suites.
 
-Final allocation, residency, latency, Rust 1.88, `no_std`, wasm, rustdoc, and
-repository-policy measurements belong to the closure slice after the
-scalpel review.
+## Closure: measured product result
+
+The compaction closes with the same product behavior and a materially smaller
+implementation. It does not claim that Underwood is now irreducible. In
+particular, Parley's simpler retained representation remains the right
+external challenge: every additional Underwood table and cache should
+continue to earn a capability or a measured result.
+
+### Release latency
+
+Seven matched release samples produced these medians:
+
+| Scale | Operation | Underwood | Parley | Ratio |
+|---:|---|---:|---:|---:|
+| 64 | exact repeat | 77 ns | 186 ns | 0.41× |
+| 64 | localized edit | 5,533 ns | 2,987 ns | 1.85× |
+| 64 | warm localized edit | 5,483 ns | — | — |
+| 64 | churn | 9,710 ns | 6,327 ns | 1.53× |
+| 1,000 | exact repeat | 120 ns | 186 ns | 0.65× |
+| 1,000 | localized edit | 5,677 ns | 3,043 ns | 1.87× |
+| 1,000 | warm localized edit | 5,657 ns | — | — |
+| 1,000 | churn | 8,449 ns | 4,706 ns | 1.80× |
+
+The edit and churn gates pass at both scales. Exact repeat remains faster than
+the matched Parley path.
+
+Small-query timings are sensitive to host noise at this scale, so the closure
+also built the baseline commit and current commit in separate worktrees and
+ran 31 samples of 100,000 operations under the same conditions:
+
+| 64-unit Underwood query | Baseline | Compacted |
+|---|---:|---:|
+| exact hit | 70 ns | 72 ns |
+| closest hit | 110 ns | 106 ns |
+| represented byte position | 92 ns | 71 ns |
+
+Exact hit is unchanged within nanosecond-scale noise; closest hit and
+represented-position lookup improve. At 1,000 units, the seven-sample current
+medians are 81/113/95 ns for exact/closest/position, versus the campaign
+baseline's 80/121/124 ns. Query gates therefore pass without relying on the
+long-text result to hide a small-text regression.
+
+### Allocation and residency
+
+The optional counting allocator reports:
+
+- stable repeat: zero calls;
+- edit publication: 2 calls / 104 requested bytes;
+- edited preparation: 16 calls / 3,200 requested bytes, with 13 calls /
+  2,784 bytes peak-live growth;
+- paint-only preparation: zero calls.
+
+The result exactly meets both parts of the counting-allocator gate. The
+matched `malloc_history` tunnel, which excludes the counting allocator's own
+instrumentation effect, records 15 calls / 2,886 bytes for the same edited
+preparation. Exact repeat, exact hit, closest hit, and represented-position
+lookup allocate nothing in that profiler.
+
+The last eight requested bytes were recovered by deleting `SceneCore`'s
+duplicate paragraph count and reading the existing O(1) scene-spine root.
+That leaves the O(1) capability union/intersection in six bytes of existing
+structure padding; no compressed bit trick or second policy cache was added.
+
+Three macOS live-heap samples were byte-identical:
+
+| 1,000 retained labels | Bytes above own font baseline | Parley ratio |
+|---|---:|---:|
+| Underwood display | 3,360,096 | 0.995× |
+| Underwood editable | 3,704,096 | 1.097× |
+| Parley | 3,378,240 | 1.000× |
+
+Bounded churn retains 319,184 bytes above Underwood's font baseline versus
+291,008 bytes for Parley, or 1.097×. All are below the 1.25× gate.
+
+The display and editable deltas are 60,000 bytes above the campaign baseline.
+That is not hidden as an unexplained regression: deleting the exact
+capacity-counting lowering pass intentionally leaves roughly 32 bytes of
+ordinary amortized flat-table capacity per paragraph, with allocator size
+classes accounting for the observed process delta. It removes a full glyph
+and cluster traversal in exchange for a small bounded cold-output reserve.
+
+### Correctness and portability
+
+The final locked matrix is green:
+
+- workspace tests and doc-tests;
+- strict all-target/all-feature Clippy;
+- rustdoc with warnings denied;
+- Rust 1.88 across supported workspace targets;
+- `x86_64-unknown-none` for `underwood` and `underwood_parley`;
+- `wasm32-unknown-unknown` for both core crates;
+- formatting, Taplo, spelling, repository policy, dependency duplication,
+  Beads lint, and Beads cycle checks.
+
+No production dependency or `unsafe` was added.
+
+### Final Rook judgment
+
+**Real:** the branch deletes complete state machines, wrapper families,
+duplicate traversal implementations, and redundant validation. The flat
+adapter boundary is checked once; internal traversal trusts it. Sparse scene
+capabilities, source-complete mapping, regions, bidi editing, PDF export, and
+composition remain executable behavior rather than architecture prose.
+
+**Mirage retired:** the old facade taxonomy, foreign-scene defense, nested
+poisoning protocol, exact-capacity proof pass, adapter validation replay, and
+iterator-container vocabulary no longer exist under replacement names.
+
+**Remaining risk:** Underwood can still mistake a sophisticated retained
+representation for a necessary one. A follow-up comparison should review each
+table, sidecar, cache layer, and diagnostic against Parley's smaller model and
+classify it as delete, replace, upstream, or keep. That review should be
+deletion-first and measurement-backed; this campaign's green gates are a
+floor, not a defense of the remaining architecture.

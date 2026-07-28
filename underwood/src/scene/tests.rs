@@ -2118,7 +2118,7 @@ fn appended_paragraph_extends_the_persistent_scene_path() {
     assert_eq!(appended.work.shape.paragraphs, 1);
     assert_eq!(appended.work.paint.paragraphs, 1);
     assert_eq!(appended.work.reused_paragraphs, 64);
-    assert_eq!(appended.scene.core.paragraph_count, 65);
+    assert_eq!(appended.scene.core.spine.paragraph_count(), 65);
     assert!(Arc::ptr_eq(
         first
             .scene

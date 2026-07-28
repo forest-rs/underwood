@@ -401,7 +401,6 @@ impl LayoutEngine {
         });
         let core = retained_core.unwrap_or_else(|| {
             Arc::new(scene_core(
-                paragraph_count,
                 spine,
                 TextMetrics::from_summary(summary),
                 region,
@@ -1131,7 +1130,7 @@ impl LayoutEngine {
             .published
             .get(&snapshot.id())
             .expect("the refreshed published scene remains present");
-        let paragraph_count = published.core.paragraph_count;
+        let paragraph_count = published.core.spine.paragraph_count();
         let work = WorkReport {
             reused_paragraphs: paragraph_count,
             ..WorkReport::default()
@@ -1168,7 +1167,7 @@ impl LayoutEngine {
         let preflight = &cache.preflight_key;
         let region_cursor = request.region_flow.map(RegionFlow::cursor);
         if !published.snapshot.shares_state_with(snapshot)
-            || published.core.paragraph_count != 1
+            || published.core.spine.paragraph_count() != 1
             || !cache.segment.geometry.features.contains(request.features)
             || preflight.version != snapshot.revision().0
             || preflight.styles.default_style() != request.style
@@ -1228,7 +1227,7 @@ impl LayoutEngine {
             || published.region_flow.is_some()
             || request.region_flow.is_some()
             || !published.core.resident.contains_policy(&request.features)
-            || published.core.paragraph_count != snapshot.paragraphs().len()
+            || published.core.spine.paragraph_count() != snapshot.paragraphs().len()
             || request.paint.len() < published.required_paint_slots
         {
             return Ok(None);
@@ -1545,7 +1544,7 @@ impl LayoutEngine {
         };
         if published.constraint != ConstraintKey::from(request.constraint)
             || !region_provenance_matches(published.region_flow.as_ref(), Some(region_flow))
-            || published.core.paragraph_count != snapshot.paragraphs().len()
+            || published.core.spine.paragraph_count() != snapshot.paragraphs().len()
             || request.paint.len() < published.required_paint_slots
         {
             return Ok(None);
@@ -1764,7 +1763,7 @@ impl LayoutEngine {
             && published.constraint == ConstraintKey::from(request.constraint)
             && region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
             && published.core.resident.contains_policy(&request.features)
-            && published.core.paragraph_count == snapshot.paragraphs().len())
+            && published.core.spine.paragraph_count() == snapshot.paragraphs().len())
         .then(|| published.core.spine.clone())
     }
 
@@ -1795,7 +1794,7 @@ impl LayoutEngine {
             .published_compositions
             .get(&snapshot.id())
             .expect("the refreshed published composition remains present");
-        let paragraph_count = published.core.paragraph_count;
+        let paragraph_count = published.core.spine.paragraph_count();
         let work = WorkReport {
             reused_paragraphs: paragraph_count,
             ..WorkReport::default()
@@ -1842,7 +1841,7 @@ impl LayoutEngine {
                         request.region_flow,
                     )
                     && published.core.resident.contains_policy(&effective_features)
-                    && published.core.paragraph_count == snapshot.paragraphs().len()
+                    && published.core.spine.paragraph_count() == snapshot.paragraphs().len()
             })
             .map(|published| published.core.spine.clone())
             .or_else(|| {
@@ -1856,7 +1855,7 @@ impl LayoutEngine {
                         request.region_flow,
                     )
                     && published.core.resident.contains_policy(&effective_features)
-                    && published.core.paragraph_count == snapshot.paragraphs().len())
+                    && published.core.spine.paragraph_count() == snapshot.paragraphs().len())
                 .then(|| published.core.spine.clone())
             })
     }
@@ -2803,7 +2802,6 @@ fn effective_composition_features(
 }
 
 fn scene_core(
-    paragraph_count: usize,
     spine: SceneSpine,
     metrics: TextMetrics,
     region: Option<SceneRegionBinding>,
@@ -2820,7 +2818,6 @@ fn scene_core(
         (default_features, default_features)
     };
     SceneCore {
-        paragraph_count,
         resident: resident_feature_policy(&spine, default_features),
         spine,
         metrics,

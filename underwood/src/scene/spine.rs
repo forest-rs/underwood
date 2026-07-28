@@ -296,6 +296,14 @@ impl SceneSpine {
         }
     }
 
+    pub(super) fn paragraph_count(&self) -> usize {
+        match &self.root {
+            SceneSpineRoot::Empty => 0,
+            SceneSpineRoot::Single(_) => 1,
+            SceneSpineRoot::Tree(root) => root.summary().paragraphs,
+        }
+    }
+
     pub(super) const fn is_normal_flow(&self) -> bool {
         self.normal_flow
     }

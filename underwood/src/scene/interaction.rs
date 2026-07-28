@@ -364,7 +364,6 @@ impl Scene<ProjectedTextSource, (CompositionId, crate::CompositionEpoch)> {
 
 #[derive(Debug)]
 pub(super) struct SceneCore {
-    pub(super) paragraph_count: usize,
     pub(super) spine: SceneSpine,
     pub(super) metrics: TextMetrics,
     pub(super) region: Option<SceneRegionBinding>,
