@@ -129,13 +129,13 @@ impl ParagraphFormation for AnalysisCursorProof {
     ) -> Result<ParagraphFormationOutput, underwood::adapter::PreparationError> {
         let analysis = analyze_text_with_styles(
             &mut parley_engine::Analyzer::new(),
-            input.text(),
-            input.paragraph_style().base_direction(),
-            input.analysis_styles(),
-            input.analysis_runs(),
+            input.text,
+            input.paragraph_style.base_direction(),
+            input.analysis_styles,
+            input.analysis_runs,
         )?;
-        let units = collect_analysis_units(input.text(), &analysis)?;
-        let source = 0..u32::try_from(input.text().len())
+        let units = collect_analysis_units(input.text, &analysis)?;
+        let source = 0..u32::try_from(input.text.len())
             .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
         let unit_count = u32::try_from(units.len())
             .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
@@ -177,7 +177,7 @@ impl ParagraphFormation for AnalysisCursorProof {
         for (id, source) in units.iter().enumerate() {
             let source = checked_source_range(source)?;
             input
-                .paint_runs()
+                .paint_runs
                 .iter()
                 .find(|run| {
                     let bytes = run.bytes();
@@ -200,23 +200,23 @@ impl ParagraphFormation for AnalysisCursorProof {
             runs_start..data.run_count(),
         )?;
         let paragraph = PreparedParagraph::try_from_data(
-            input.paragraph(),
+            input.paragraph,
             source.end,
             ResolvedDirection::Ltr,
-            input.features(),
+            input.features,
             data,
         )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
-            FormationWork::new(
-                true,
-                false,
-                unit_count,
-                1,
-                unit_count,
-                1,
-                LineShapingWork::default(),
-            ),
+            FormationWork {
+                analyzed: true,
+                itemized: false,
+                selected_clusters: unit_count,
+                shaped_runs: 1,
+                shaped_glyphs: unit_count,
+                formed_lines: 1,
+                line_shaping: LineShapingWork::default(),
+            },
         ))
     }
 }
@@ -286,14 +286,14 @@ fn scan_line_hits(scene: &TextScene, line_index: usize) -> Vec<ScannedHit> {
     let mut x = bounds.x0;
     while x <= bounds.x1 {
         if let Some(hit) = interaction.hit_test(Point::new(x, y)) {
-            let source = sole_unit_source(hit.source()).bytes();
+            let source = sole_unit_source(&hit.source).bytes();
             if let Some(existing) = hits.iter_mut().find(|existing| existing.source == source) {
                 existing.max_x = x;
             } else {
                 hits.push(ScannedHit {
                     source,
-                    position: hit.position().byte(),
-                    affinity: hit.position().affinity(),
+                    position: hit.position.byte(),
+                    affinity: hit.position.affinity(),
                     min_x: x,
                     max_x: x,
                 });
@@ -365,7 +365,7 @@ fn cursor_derivation_adds_no_adapter_graph_during_warm_editable_upgrade() {
     let display = layout
         .prepare(&document.snapshot(), &display_request)
         .expect("display-only text must prepare");
-    assert_eq!(display.scene().fragment_count(), 1);
+    assert_eq!(display.scene.fragment_count(), 1);
     let first_observed = observed.borrow();
     assert_eq!(first_observed.len(), 1);
     assert_eq!(first_observed[0].features(), SceneFeatures::DISPLAY);
@@ -378,17 +378,17 @@ fn cursor_derivation_adds_no_adapter_graph_during_warm_editable_upgrade() {
     let editable = layout
         .prepare(&document.snapshot(), &editable_request)
         .expect("a retained display paragraph must upgrade");
-    assert_eq!(editable.work().analysis().paragraphs(), 0);
-    assert_eq!(editable.work().shape().paragraphs(), 0);
-    assert_eq!(editable.work().flow().paragraphs(), 0);
+    assert_eq!(editable.work.analysis.paragraphs, 0);
+    assert_eq!(editable.work.shape.paragraphs, 0);
+    assert_eq!(editable.work.flow.paragraphs, 0);
     let reuse = editable
-        .trace()
+        .trace
         .expect("the capability upgrade requested a trace")
-        .reuse();
-    assert_eq!(reuse.adapter_fact_hits(), 1);
-    assert_eq!(reuse.adapter_fact_misses(), 0);
-    assert_eq!(reuse.warm_capability_upgrades(), 1);
-    assert_eq!(reuse.cold_capability_upgrades(), 0);
+        .reuse;
+    assert_eq!(reuse.adapter_fact_hits, 1);
+    assert_eq!(reuse.adapter_fact_misses, 0);
+    assert_eq!(reuse.warm_capability_upgrades, 1);
+    assert_eq!(reuse.cold_capability_upgrades, 0);
     let observed = observed.borrow();
     assert_eq!(observed.len(), 2);
     assert!(observed[1].features().contains(SceneFeatures::EDITABLE));
@@ -403,15 +403,14 @@ fn cursor_derivation_adds_no_adapter_graph_during_warm_editable_upgrade() {
         .prepare(&document.snapshot(), &display_request)
         .expect("an editable resident segment satisfies a display request");
     let paragraph = smaller
-        .scene()
+        .scene
         .paragraph_residencies()
         .next()
         .expect("the fixture contains one paragraph");
-    assert_eq!(paragraph.requested(), SceneFeatures::DISPLAY);
-    assert_eq!(paragraph.resident(), SceneFeatures::EDITABLE);
+    assert_eq!(paragraph.requested, SceneFeatures::DISPLAY);
+    assert_eq!(paragraph.resident, SceneFeatures::EDITABLE);
     assert_eq!(
-        paragraph.bytes().navigation(),
-        0,
+        paragraph.bytes.navigation, 0,
         "derived navigation retains no per-position graph"
     );
 }
@@ -425,15 +424,15 @@ fn zero_adapter_budget_keeps_display_scene_and_reports_cold_upgrade() {
     let display = layout
         .prepare(&document.snapshot(), &display_request)
         .expect("display-only text must prepare");
-    let retained_display = display.scene().clone();
+    let retained_display = display.scene.clone();
     let adapter = layout
         .cache_diagnostics()
-        .adapter_facts()
+        .adapter_facts
         .expect("Parley reports adapter-fact accounting");
-    assert_eq!(adapter.budget_bytes(), 0);
-    assert_eq!(adapter.entries(), 0);
-    assert_eq!(adapter.resident_bytes(), 0);
-    assert_eq!(adapter.evictions(), 1);
+    assert_eq!(adapter.budget_bytes, 0);
+    assert_eq!(adapter.entries, 0);
+    assert_eq!(adapter.resident_bytes, 0);
+    assert_eq!(adapter.evictions, 1);
     assert_eq!(retained_display.fragment_count(), 1);
 
     let editable_request = SceneRequest::new(TextConstraint::MaxContent, &styles, &paint)
@@ -442,23 +441,23 @@ fn zero_adapter_budget_keeps_display_scene_and_reports_cold_upgrade() {
     let editable = layout
         .prepare(&document.snapshot(), &editable_request)
         .expect("cold capability upgrade must remain correct");
-    assert_eq!(editable.work().analysis().paragraphs(), 1);
-    assert_eq!(editable.work().shape().paragraphs(), 1);
-    assert_eq!(editable.work().flow().paragraphs(), 1);
+    assert_eq!(editable.work.analysis.paragraphs, 1);
+    assert_eq!(editable.work.shape.paragraphs, 1);
+    assert_eq!(editable.work.flow.paragraphs, 1);
     let reuse = editable
-        .trace()
+        .trace
         .expect("the cold upgrade requested a trace")
-        .reuse();
-    assert_eq!(reuse.adapter_fact_hits(), 0);
-    assert_eq!(reuse.adapter_fact_misses(), 1);
-    assert_eq!(reuse.warm_capability_upgrades(), 0);
-    assert_eq!(reuse.cold_capability_upgrades(), 1);
+        .reuse;
+    assert_eq!(reuse.adapter_fact_hits, 0);
+    assert_eq!(reuse.adapter_fact_misses, 1);
+    assert_eq!(reuse.warm_capability_upgrades, 0);
+    assert_eq!(reuse.cold_capability_upgrades, 1);
     assert!(
         retained_display.interaction().is_err(),
         "the caller-held display scene remains unchanged by the upgrade"
     );
     assert!(
-        editable.scene().editing().is_ok(),
+        editable.scene.editing().is_ok(),
         "the cold path still publishes the exact requested capability"
     );
 }
@@ -474,23 +473,23 @@ fn explicit_adapter_trim_preserves_scene_and_degrades_only_later_upgrade() {
     let display = layout
         .prepare(&document.snapshot(), &display_request)
         .expect("display-only text must prepare");
-    let retained_display = display.scene().clone();
+    let retained_display = display.scene.clone();
     assert_eq!(
         layout
             .cache_diagnostics()
-            .adapter_facts()
+            .adapter_facts
             .expect("Parley reports adapter-fact accounting")
-            .entries(),
+            .entries,
         1
     );
 
     layout.trim_adapter_facts();
     let trimmed = layout
         .cache_diagnostics()
-        .adapter_facts()
+        .adapter_facts
         .expect("Parley reports adapter-fact accounting");
-    assert_eq!(trimmed.entries(), 0);
-    assert_eq!(trimmed.resident_bytes(), 0);
+    assert_eq!(trimmed.entries, 0);
+    assert_eq!(trimmed.resident_bytes, 0);
     assert_eq!(retained_display.fragment_count(), 1);
 
     let upgraded = layout
@@ -503,10 +502,10 @@ fn explicit_adapter_trim_preserves_scene_and_degrades_only_later_upgrade() {
         .expect("upgrade after trim must reform rather than fail");
     assert_eq!(
         upgraded
-            .trace()
+            .trace
             .expect("upgrade requested a trace")
-            .reuse()
-            .cold_capability_upgrades(),
+            .reuse
+            .cold_capability_upgrades,
         1
     );
 }

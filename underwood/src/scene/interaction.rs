@@ -9,56 +9,69 @@
 use super::*;
 use crate::adapter::{ClusterBoundary, ClusterWhitespace};
 
-/// Immutable renderer-neutral scene for one generated composition epoch.
+/// Immutable renderer-neutral scene with a typed provenance model.
 #[derive(Clone, Debug)]
-pub struct CompositionScene {
+pub struct Scene<T = SnapshotTextRange, Identity = ()> {
     pub(super) document: crate::DocumentId,
     pub(super) revision: DocumentRevision,
-    pub(super) composition: CompositionId,
-    pub(super) epoch: crate::CompositionEpoch,
     pub(super) paint: PaintTable,
     pub(super) requested: SceneFeaturePolicy,
     pub(super) core: Arc<SceneCore>,
+    pub(super) identity: Identity,
+    pub(super) source: core::marker::PhantomData<fn() -> T>,
 }
 
-impl CompositionScene {
-    /// Returns exact intrinsic metrics for this projected scene.
+/// Immutable renderer-neutral text scene.
+pub type TextScene = Scene;
+
+/// Immutable renderer-neutral scene for one generated composition epoch.
+pub type CompositionScene = Scene<ProjectedTextSource, (CompositionId, crate::CompositionEpoch)>;
+
+impl<T, Identity> Scene<T, Identity> {
+    pub(super) const fn new(
+        document: crate::DocumentId,
+        revision: DocumentRevision,
+        paint: PaintTable,
+        requested: SceneFeaturePolicy,
+        core: Arc<SceneCore>,
+        identity: Identity,
+    ) -> Self {
+        Self {
+            document,
+            revision,
+            paint,
+            requested,
+            core,
+            identity,
+            source: core::marker::PhantomData,
+        }
+    }
+
+    /// Returns exact intrinsic metrics for this scene.
     #[must_use]
     pub fn metrics(&self) -> TextMetrics {
         self.core.metrics
     }
 
-    /// Returns the immutable document identity below the transient projection.
+    /// Returns the immutable document identity represented by this scene.
     #[must_use]
     pub const fn document(&self) -> crate::DocumentId {
         self.document
     }
 
-    /// Returns the immutable base revision below the transient projection.
+    /// Returns the immutable snapshot revision below this scene.
     #[must_use]
     pub const fn revision(&self) -> DocumentRevision {
         self.revision
     }
 
-    /// Returns the native composition identity.
-    #[must_use]
-    pub const fn composition(&self) -> CompositionId {
-        self.composition
-    }
-
-    /// Returns the exact transient epoch represented by this scene.
-    #[must_use]
-    pub const fn epoch(&self) -> crate::CompositionEpoch {
-        self.epoch
-    }
-
-    /// Returns the effective capability policy represented by this projection.
+    /// Returns the exact capability policy requested for this scene handle.
     #[must_use]
     pub const fn requested_features(&self) -> &SceneFeaturePolicy {
         &self.requested
     }
 
-    /// Returns the capability policy physically resident in this projection.
+    /// Returns the capability policy physically resident in this scene.
     #[must_use]
     pub fn resident_features(&self) -> &SceneFeaturePolicy {
         &self.core.resident
@@ -70,11 +83,84 @@ impl CompositionScene {
         SceneResidency::from_spine(&self.core.spine)
     }
 
-    /// Iterates requested capabilities, resident capabilities, and byte
-    /// charges for every paragraph segment.
+    /// Iterates requested and resident capabilities and paragraph byte charges.
     #[must_use]
-    pub fn paragraph_residencies(&self) -> SceneParagraphResidencies<'_> {
-        SceneParagraphResidencies::new(&self.requested, &self.core.spine)
+    pub fn paragraph_residencies(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ParagraphSceneResidency> + Clone + '_ {
+        paragraph_residencies(&self.requested, &self.core.spine)
+    }
+
+    /// Returns semantic structure when every represented paragraph retained it.
+    pub fn semantics(&self) -> Result<SceneSemantics<'_>, MissingSceneCapability> {
+        require_scene_features(
+            &self.core,
+            &self.requested,
+            SceneFeatures::DISPLAY.with_semantics(),
+        )?;
+        Ok(SceneSemantics::new(self.revision, &self.core.spine))
+    }
+
+    /// Returns visual lines in flow order.
+    #[must_use]
+    pub fn lines(&self) -> SceneLines<'_, T> {
+        SceneLines::new(self.revision, &self.core, &self.requested)
+    }
+
+    /// Returns one visual line by its global flow-order index.
+    #[must_use]
+    pub fn line(&self, index: usize) -> Option<SceneLineView<'_, T>> {
+        self.core
+            .spine
+            .positioned_line(index)
+            .map(|line| SceneLineView::new(self.revision, &self.requested, line))
+    }
+
+    /// Returns the number of visual lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.core.spine.summary().lines
+    }
+
+    /// Returns paint-homogeneous glyph fragments.
+    #[must_use]
+    pub fn fragments(&self) -> SceneFragments<'_, T> {
+        SceneFragments::new(self.revision, &self.core, &self.requested)
+    }
+
+    /// Returns one glyph fragment by its global visual index.
+    #[must_use]
+    pub fn fragment(&self, index: usize) -> Option<SceneFragmentView<'_, T>> {
+        self.core
+            .spine
+            .positioned_fragment(index)
+            .map(|fragment| SceneFragmentView::new(self.revision, &self.requested, fragment))
+    }
+
+    /// Returns the number of paint fragments.
+    #[must_use]
+    pub fn fragment_count(&self) -> usize {
+        self.core.spine.summary().fragments
+    }
+
+    /// Returns immutable paint values referenced by fragment slots.
+    #[must_use]
+    pub const fn paint(&self) -> &PaintTable {
+        &self.paint
+    }
+}
+
+impl Scene<ProjectedTextSource, (CompositionId, crate::CompositionEpoch)> {
+    /// Returns the native composition identity.
+    #[must_use]
+    pub const fn composition(&self) -> CompositionId {
+        self.identity.0
+    }
+
+    /// Returns the exact transient epoch represented by this scene.
+    #[must_use]
+    pub const fn epoch(&self) -> crate::CompositionEpoch {
+        self.identity.1
     }
 
     /// Returns exact point interaction over paragraphs that retained it.
@@ -91,58 +177,6 @@ impl CompositionScene {
     pub fn editing(&self) -> Result<ProjectedSceneEditing<'_>, MissingSceneCapability> {
         require_any_scene_features(&self.core, &self.requested, SceneFeatures::EDITABLE)?;
         Ok(ProjectedSceneEditing::new(self))
-    }
-
-    /// Returns semantic structure when every represented paragraph retained it.
-    pub fn semantics(&self) -> Result<SceneSemantics<'_>, MissingSceneCapability> {
-        require_scene_features(
-            &self.core,
-            &self.requested,
-            SceneFeatures::DISPLAY.with_semantics(),
-        )?;
-        Ok(SceneSemantics::new(self.revision, &self.core.spine))
-    }
-
-    /// Returns visual lines in flow order.
-    #[must_use]
-    pub fn lines(&self) -> ProjectedSceneLines<'_> {
-        ProjectedSceneLines::new(self.revision, &self.core, &self.requested)
-    }
-
-    /// Returns one visual line by its global flow-order index.
-    #[must_use]
-    pub fn line(&self, index: usize) -> Option<ProjectedSceneLineView<'_>> {
-        self.lines().get(index)
-    }
-
-    /// Returns the number of visual lines.
-    #[must_use]
-    pub fn line_count(&self) -> usize {
-        self.core.spine.summary().lines
-    }
-
-    /// Returns paint-homogeneous projected glyph fragments.
-    #[must_use]
-    pub fn fragments(&self) -> ProjectedSceneFragments<'_> {
-        ProjectedSceneFragments::new(self.revision, &self.core, &self.requested)
-    }
-
-    /// Returns one projected glyph fragment by its global visual index.
-    #[must_use]
-    pub fn fragment(&self, index: usize) -> Option<ProjectedSceneFragmentView<'_>> {
-        self.fragments().get(index)
-    }
-
-    /// Returns the number of projected paint fragments.
-    #[must_use]
-    pub fn fragment_count(&self) -> usize {
-        self.core.spine.summary().fragments
-    }
-
-    /// Returns immutable paint values referenced by fragment slots.
-    #[must_use]
-    pub const fn paint(&self) -> &PaintTable {
-        &self.paint
     }
 
     /// Returns the exact projected interaction unit under a point.
@@ -250,8 +284,8 @@ impl CompositionScene {
     ) -> Result<(), CompositionError> {
         if session.document() != self.document
             || session.base_revision() != self.revision
-            || session.id() != self.composition
-            || session.epoch() != self.epoch
+            || session.id() != self.composition()
+            || session.epoch() != self.epoch()
         {
             return Err(CompositionError::new(CompositionErrorKind::WrongSnapshot));
         }
@@ -266,8 +300,8 @@ impl CompositionScene {
             };
             if !source_map.ranges_for_span(cluster.source).any(|source| {
                 matches!(source, LocalRange::Composition { id, epoch, bytes: source }
-                    if id == self.composition
-                        && epoch == self.epoch
+                    if id == self.composition()
+                        && epoch == self.epoch()
                         && source.start < bytes.end
                         && bytes.start < source.end)
             }) {
@@ -328,16 +362,6 @@ impl CompositionScene {
     }
 }
 
-/// Immutable renderer-neutral text scene.
-#[derive(Clone, Debug)]
-pub struct TextScene {
-    pub(super) document: crate::DocumentId,
-    pub(super) revision: DocumentRevision,
-    pub(super) paint: PaintTable,
-    pub(super) requested: SceneFeaturePolicy,
-    pub(super) core: Arc<SceneCore>,
-}
-
 #[derive(Debug)]
 pub(super) struct SceneCore {
     pub(super) paragraph_count: usize,
@@ -349,50 +373,7 @@ pub(super) struct SceneCore {
     pub(super) resident_intersection: SceneFeatures,
 }
 
-impl TextScene {
-    /// Returns exact intrinsic metrics for this scene.
-    #[must_use]
-    pub fn metrics(&self) -> TextMetrics {
-        self.core.metrics
-    }
-
-    /// Returns the document identity represented by this scene.
-    #[must_use]
-    pub const fn document(&self) -> crate::DocumentId {
-        self.document
-    }
-
-    /// Returns the exact immutable snapshot revision represented by this scene.
-    #[must_use]
-    pub const fn revision(&self) -> DocumentRevision {
-        self.revision
-    }
-
-    /// Returns the exact capability policy requested for this scene handle.
-    #[must_use]
-    pub const fn requested_features(&self) -> &SceneFeaturePolicy {
-        &self.requested
-    }
-
-    /// Returns the capability policy physically resident in this scene.
-    #[must_use]
-    pub fn resident_features(&self) -> &SceneFeaturePolicy {
-        &self.core.resident
-    }
-
-    /// Returns aggregate deterministic prepared-scene residency.
-    #[must_use]
-    pub fn residency(&self) -> SceneResidency {
-        SceneResidency::from_spine(&self.core.spine)
-    }
-
-    /// Iterates requested capabilities, resident capabilities, and byte
-    /// charges for every paragraph segment.
-    #[must_use]
-    pub fn paragraph_residencies(&self) -> SceneParagraphResidencies<'_> {
-        SceneParagraphResidencies::new(&self.requested, &self.core.spine)
-    }
-
+impl Scene {
     /// Returns exact point interaction over paragraphs that retained it.
     pub fn interaction(&self) -> Result<SceneInteraction<'_>, MissingSceneCapability> {
         require_any_scene_features(
@@ -413,16 +394,6 @@ impl TextScene {
     pub fn selection(&self) -> Result<SceneSelection<'_>, MissingSceneCapability> {
         require_any_scene_features(&self.core, &self.requested, SceneFeatures::SELECTABLE)?;
         Ok(SceneSelection::new(self))
-    }
-
-    /// Returns semantic structure when every represented paragraph retained it.
-    pub fn semantics(&self) -> Result<SceneSemantics<'_>, MissingSceneCapability> {
-        require_scene_features(
-            &self.core,
-            &self.requested,
-            SceneFeatures::DISPLAY.with_semantics(),
-        )?;
-        Ok(SceneSemantics::new(self.revision, &self.core.spine))
     }
 
     /// Starts one native composition over the current primary insertion point.
@@ -615,48 +586,6 @@ impl TextScene {
             }
         }
         Ok(geometry)
-    }
-
-    /// Returns visual lines in flow order.
-    #[must_use]
-    pub fn lines(&self) -> SceneLines<'_> {
-        SceneLines::new(self.revision, &self.core, &self.requested)
-    }
-
-    /// Returns one visual line by global index.
-    #[must_use]
-    pub fn line(&self, index: usize) -> Option<SceneLineView<'_>> {
-        self.lines().get(index)
-    }
-
-    /// Returns the number of visual lines.
-    #[must_use]
-    pub fn line_count(&self) -> usize {
-        self.core.spine.summary().lines
-    }
-
-    /// Returns paint-homogeneous glyph fragments in visual order.
-    #[must_use]
-    pub fn fragments(&self) -> SceneFragments<'_> {
-        SceneFragments::new(self.revision, &self.core, &self.requested)
-    }
-
-    /// Returns one paint-homogeneous fragment by global visual index.
-    #[must_use]
-    pub fn fragment(&self, index: usize) -> Option<SceneFragmentView<'_>> {
-        self.fragments().get(index)
-    }
-
-    /// Returns the number of paint fragments.
-    #[must_use]
-    pub fn fragment_count(&self) -> usize {
-        self.core.spine.summary().fragments
-    }
-
-    /// Returns immutable paint values referenced by fragment slots.
-    #[must_use]
-    pub const fn paint(&self) -> &PaintTable {
-        &self.paint
     }
 
     /// Returns an exact interaction-unit hit under a scene-space point.
@@ -1303,7 +1232,7 @@ fn local_range_overlaps_projected(
     revision: DocumentRevision,
 ) -> bool {
     projected
-        .sources()
+        .sources
         .iter()
         .any(|source| match (local, source) {
             (LocalRange::Snapshot { text, bytes }, ProjectedTextSource::Snapshot(projected)) => {

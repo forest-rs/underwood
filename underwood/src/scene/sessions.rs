@@ -4,6 +4,7 @@
 //! Capability-checked operation sessions over immutable scenes.
 
 use super::*;
+use core::ops::Deref;
 
 /// Exact point interaction over a committed text scene.
 #[derive(Clone, Copy, Debug)]
@@ -32,18 +33,20 @@ impl<'a> SceneInteraction<'a> {
 /// Selection construction and geometry over a committed scene.
 #[derive(Clone, Copy, Debug)]
 pub struct SceneSelection<'a> {
-    scene: &'a TextScene,
+    interaction: SceneInteraction<'a>,
 }
 
 impl<'a> SceneSelection<'a> {
     pub(super) const fn new(scene: &'a TextScene) -> Self {
-        Self { scene }
+        Self {
+            interaction: SceneInteraction::new(scene),
+        }
     }
 
     /// Returns an empty set bound to this scene revision.
     #[must_use]
     pub fn empty_set(self) -> SnapshotTextSelectionSet {
-        self.scene.empty_selection_set()
+        self.interaction.scene.empty_selection_set()
     }
 
     /// Creates one collapsed selection at a represented caret.
@@ -51,7 +54,7 @@ impl<'a> SceneSelection<'a> {
         self,
         position: &SnapshotTextPosition,
     ) -> Result<SnapshotTextSelection, SelectionError> {
-        self.scene.collapsed_selection(position)
+        self.interaction.scene.collapsed_selection(position)
     }
 
     /// Creates one logical or visual selection between represented carets.
@@ -61,7 +64,9 @@ impl<'a> SceneSelection<'a> {
         extent: &SnapshotTextPosition,
         mode: TextSelectionMode,
     ) -> Result<SnapshotTextSelection, SelectionError> {
-        self.scene.selection_between(anchor, extent, mode)
+        self.interaction
+            .scene
+            .selection_between(anchor, extent, mode)
     }
 
     /// Validates and owns independent selections in this scene.
@@ -69,7 +74,7 @@ impl<'a> SceneSelection<'a> {
         self,
         selections: impl IntoIterator<Item = SnapshotTextSelection>,
     ) -> Result<SnapshotTextSelectionSet, SelectionError> {
-        self.scene.selection_set(selections)
+        self.interaction.scene.selection_set(selections)
     }
 
     /// Returns exact scene-space rectangles for every selected range.
@@ -77,95 +82,53 @@ impl<'a> SceneSelection<'a> {
         self,
         selections: &SnapshotTextSelectionSet,
     ) -> Result<Vec<SceneSelectionRect>, SelectionError> {
-        self.scene.selection_geometry(selections)
+        self.interaction.scene.selection_geometry(selections)
     }
 
     /// Returns exact caret geometry.
     #[must_use]
     pub fn caret(self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
-        self.scene.caret(position)
+        self.interaction.scene.caret(position)
+    }
+}
+
+impl<'a> Deref for SceneSelection<'a> {
+    type Target = SceneInteraction<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.interaction
     }
 }
 
 /// Complete selection, navigation, and native-input access to a committed scene.
 #[derive(Clone, Copy, Debug)]
 pub struct SceneEditing<'a> {
-    scene: &'a TextScene,
+    selection: SceneSelection<'a>,
 }
 
 impl<'a> SceneEditing<'a> {
     pub(super) const fn new(scene: &'a TextScene) -> Self {
-        Self { scene }
-    }
-
-    /// Returns the exact interaction unit under `point`.
-    #[must_use]
-    pub fn hit_test(self, point: Point) -> Option<TextHit<SnapshotTextUnitView<'a>>> {
-        self.scene.hit_test(point)
-    }
-
-    /// Returns the closest represented interaction-unit side.
-    #[must_use]
-    pub fn hit_test_closest(self, point: Point) -> Option<TextHit<SnapshotTextUnitView<'a>>> {
-        self.scene.hit_test_closest(point)
+        Self {
+            selection: SceneSelection::new(scene),
+        }
     }
 
     /// Returns the first logical caret retained by this scene's feature policy.
     #[must_use]
     pub fn start_position(self) -> Option<SnapshotTextPosition> {
-        self.scene.start_position()
+        self.selection.interaction.scene.start_position()
     }
 
     /// Returns the final logical caret retained by this scene's feature policy.
     #[must_use]
     pub fn end_position(self) -> Option<SnapshotTextPosition> {
-        self.scene.end_position()
+        self.selection.interaction.scene.end_position()
     }
 
     /// Resolves a represented caret at one leaf-local byte boundary.
     #[must_use]
     pub fn position_at(self, text: TextId, byte: u32) -> Option<SnapshotTextPosition> {
-        self.scene.position_at(text, byte)
-    }
-
-    /// Returns exact caret geometry.
-    #[must_use]
-    pub fn caret(self, position: &SnapshotTextPosition) -> Option<SceneCaret> {
-        self.scene.caret(position)
-    }
-
-    /// Creates one collapsed selection at a represented caret.
-    pub fn collapsed_selection(
-        self,
-        position: &SnapshotTextPosition,
-    ) -> Result<SnapshotTextSelection, SelectionError> {
-        self.scene.collapsed_selection(position)
-    }
-
-    /// Creates one logical or visual selection between represented carets.
-    pub fn selection_between(
-        self,
-        anchor: &SnapshotTextPosition,
-        extent: &SnapshotTextPosition,
-        mode: TextSelectionMode,
-    ) -> Result<SnapshotTextSelection, SelectionError> {
-        self.scene.selection_between(anchor, extent, mode)
-    }
-
-    /// Validates and owns independent selections in this scene.
-    pub fn selection_set(
-        self,
-        selections: impl IntoIterator<Item = SnapshotTextSelection>,
-    ) -> Result<SnapshotTextSelectionSet, SelectionError> {
-        self.scene.selection_set(selections)
-    }
-
-    /// Returns exact scene-space rectangles for every selected range.
-    pub fn selection_geometry(
-        self,
-        selections: &SnapshotTextSelectionSet,
-    ) -> Result<Vec<SceneSelectionRect>, SelectionError> {
-        self.scene.selection_geometry(selections)
+        self.selection.interaction.scene.position_at(text, byte)
     }
 
     /// Returns the preceding logical word start, or scene start.
@@ -174,7 +137,10 @@ impl<'a> SceneEditing<'a> {
         self,
         position: &SnapshotTextPosition,
     ) -> Option<SnapshotTextPosition> {
-        self.scene.previous_word_position(position)
+        self.selection
+            .interaction
+            .scene
+            .previous_word_position(position)
     }
 
     /// Returns the following logical word start, or scene end.
@@ -183,7 +149,10 @@ impl<'a> SceneEditing<'a> {
         self,
         position: &SnapshotTextPosition,
     ) -> Option<SnapshotTextPosition> {
-        self.scene.next_word_position(position)
+        self.selection
+            .interaction
+            .scene
+            .next_word_position(position)
     }
 
     /// Moves every selection through the represented cursor topology.
@@ -193,7 +162,10 @@ impl<'a> SceneEditing<'a> {
         movement: TextMovement,
         extend: bool,
     ) -> Result<SnapshotTextSelectionSet, SelectionError> {
-        self.scene.move_selections(selections, movement, extend)
+        self.selection
+            .interaction
+            .scene
+            .move_selections(selections, movement, extend)
     }
 
     /// Starts one native composition over the current primary insertion point.
@@ -202,7 +174,18 @@ impl<'a> SceneEditing<'a> {
         selections: &SnapshotTextSelectionSet,
         id: CompositionId,
     ) -> Result<CompositionStart, CompositionError> {
-        self.scene.begin_composition(selections, id)
+        self.selection
+            .interaction
+            .scene
+            .begin_composition(selections, id)
+    }
+}
+
+impl<'a> Deref for SceneEditing<'a> {
+    type Target = SceneSelection<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.selection
     }
 }
 
@@ -239,30 +222,14 @@ impl<'a> ProjectedSceneInteraction<'a> {
 /// Native composition interaction over one transient scene epoch.
 #[derive(Clone, Copy, Debug)]
 pub struct ProjectedSceneEditing<'a> {
-    scene: &'a CompositionScene,
+    interaction: ProjectedSceneInteraction<'a>,
 }
 
 impl<'a> ProjectedSceneEditing<'a> {
     pub(super) const fn new(scene: &'a CompositionScene) -> Self {
-        Self { scene }
-    }
-
-    /// Returns the exact projected interaction unit under `point`.
-    #[must_use]
-    pub fn hit_test(
-        self,
-        point: Point,
-    ) -> Option<TextHit<ProjectedTextUnitView<'a>, ProjectedTextPosition>> {
-        self.scene.hit_test(point)
-    }
-
-    /// Returns the closest projected interaction-unit side.
-    #[must_use]
-    pub fn hit_test_closest(
-        self,
-        point: Point,
-    ) -> Option<TextHit<ProjectedTextUnitView<'a>, ProjectedTextPosition>> {
-        self.scene.hit_test_closest(point)
+        Self {
+            interaction: ProjectedSceneInteraction::new(scene),
+        }
     }
 
     /// Resolves exact scene geometry for one projected caret position.
@@ -271,7 +238,7 @@ impl<'a> ProjectedSceneEditing<'a> {
         self,
         position: &ProjectedTextPosition,
     ) -> Option<SceneCaret<ProjectedTextPosition>> {
-        self.scene.caret(position)
+        self.interaction.scene.caret(position)
     }
 
     /// Moves one position through the represented cursor topology.
@@ -281,7 +248,7 @@ impl<'a> ProjectedSceneEditing<'a> {
         position: &ProjectedTextPosition,
         movement: TextMovement,
     ) -> Option<ProjectedTextPosition> {
-        self.scene.move_position(position, movement)
+        self.interaction.scene.move_position(position, movement)
     }
 
     /// Resolves highlight rectangles for the selected range inside preedit.
@@ -289,7 +256,9 @@ impl<'a> ProjectedSceneEditing<'a> {
         self,
         session: &CompositionSession,
     ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
-        self.scene.composition_selection_geometry(session)
+        self.interaction
+            .scene
+            .composition_selection_geometry(session)
     }
 
     /// Resolves visual rectangles covering the complete generated preedit.
@@ -297,6 +266,14 @@ impl<'a> ProjectedSceneEditing<'a> {
         self,
         session: &CompositionSession,
     ) -> Result<Vec<SceneCompositionRect>, CompositionError> {
-        self.scene.composition_geometry(session)
+        self.interaction.scene.composition_geometry(session)
+    }
+}
+
+impl<'a> Deref for ProjectedSceneEditing<'a> {
+    type Target = ProjectedSceneInteraction<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.interaction
     }
 }

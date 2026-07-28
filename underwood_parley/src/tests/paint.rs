@@ -40,13 +40,13 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
             &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
         )
         .expect("paint-slot change prepares");
-    assert_eq!(repainted.work().analysis().paragraphs(), 0);
-    assert_eq!(repainted.work().font_selection().paragraphs(), 0);
-    assert_eq!(repainted.work().shape().paragraphs(), 0);
-    assert_eq!(repainted.work().flow().paragraphs(), 0);
+    assert_eq!(repainted.work.analysis.paragraphs, 0);
+    assert_eq!(repainted.work.font_selection.paragraphs, 0);
+    assert_eq!(repainted.work.shape.paragraphs, 0);
+    assert_eq!(repainted.work.flow.paragraphs, 0);
     assert!(
         repainted
-            .scene()
+            .scene
             .fragments()
             .iter()
             .all(|fragment| fragment.paint() == PaintSlot::new(1))
@@ -66,7 +66,7 @@ fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
         .prepare(&document.snapshot(), &request)
         .expect("Arabic mark shaping must form a scene");
     let mark = output
-        .scene()
+        .scene
         .fragments()
         .iter()
         .find(|fragment| {
@@ -101,18 +101,18 @@ fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
         .prepare(&document.snapshot(), &request)
         .expect("ordinary glyph shaping must not require outline metrics");
     assert!(
-        !output.scene().fragments().is_empty(),
+        !output.scene.fragments().is_empty(),
         "the mixed fixture must produce renderable glyphs"
     );
     assert!(
         output
-            .scene()
+            .scene
             .fragments()
             .iter()
             .all(|fragment| fragment.paint_clip().is_none()),
         "single-paint glyphs must be complete unclipped draws"
     );
-    let fragments = output.scene().fragments();
+    let fragments = output.scene.fragments();
     let glyphs: usize = fragments
         .iter()
         .map(|fragment| fragment.glyphs().len())
@@ -158,10 +158,10 @@ fn synthetic_embolden_prepares_without_outline_metrics() {
         .prepare(&document.snapshot(), &request)
         .expect("synthetic emboldening must not require outline bounds to prepare");
 
-    assert!(!output.scene().fragments().is_empty());
+    assert!(!output.scene.fragments().is_empty());
     assert!(
         output
-            .scene()
+            .scene
             .fragments()
             .iter()
             .all(|fragment| { fragment.synthesis().embolden() && fragment.paint_clip().is_none() })
@@ -202,7 +202,7 @@ fn system_font_fallback_prepares_han_without_outline_metrics() {
         .prepare(&document.snapshot(), &request)
         .expect("Han source must prepare through the native fallback catalog");
 
-    assert!(output.scene().fragments().iter().any(|fragment| {
+    assert!(output.scene.fragments().iter().any(|fragment| {
         fragment.script() == *b"Hani"
             && fragment.font().data.as_ref() != LATIN_FONT
             && fragment.paint_clip().is_none()
@@ -263,10 +263,10 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("bidi format controls must not become phantom glyphs or source gaps");
-    assert_eq!(output.scene().lines().len(), 1);
+    assert_eq!(output.scene.lines().len(), 1);
     assert_eq!(
         output
-            .scene()
+            .scene
             .line(0)
             .expect("line exists")
             .sources()
@@ -281,7 +281,7 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
         u32::try_from(text.find('\u{2067}').expect("isolate exists")).expect("fixture range fits");
     let pop = u32::try_from(text.find('\u{2069}').expect("pop isolate exists"))
         .expect("fixture range fits");
-    assert!(output.scene().fragments().iter().all(|fragment| {
+    assert!(output.scene.fragments().iter().all(|fragment| {
         fragment.glyphs().iter().all(|glyph| {
             let source = glyph
                 .sources()

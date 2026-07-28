@@ -44,16 +44,13 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
         RegionAttemptOutcome::Accepted
     );
     assert_eq!(
-        output.scene().line(0).expect("line exists").bounds().x0,
+        output.scene.line(0).expect("line exists").bounds().x0,
         100.0
     );
-    assert_eq!(
-        output.scene().line(0).expect("line exists").bounds().y0,
-        0.0
-    );
+    assert_eq!(output.scene.line(0).expect("line exists").bounds().y0, 0.0);
     assert_eq!(
         output
-            .scene()
+            .scene
             .line(0)
             .expect("line exists")
             .sources()
@@ -65,25 +62,25 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
             .start,
         0
     );
-    assert!(output.work().rejected_line_candidates() >= 1);
-    assert!(output.work().line_checkpoint_restores() >= 1);
-    let trace = output.trace().expect("trace was requested");
-    assert_eq!(trace.region_attempts(), transcript.attempts().len());
-    assert_eq!(trace.region_height_rejections(), 1);
+    assert!(output.work.rejected_line_candidates >= 1);
+    assert!(output.work.line_checkpoint_restores >= 1);
+    let trace = output.trace.expect("trace was requested");
+    assert_eq!(trace.region_attempts, transcript.attempts().len());
+    assert_eq!(trace.region_height_rejections, 1);
     assert!(
-        trace.memory().scratch_growth_bytes() > 0,
+        trace.memory.scratch_growth_bytes() > 0,
         "cold region preparation retains reusable projection capacity"
     );
 
     let retained = engine
         .prepare(&document.snapshot(), &request)
         .expect("retained region trace prepares");
-    let retained_trace = retained.trace().expect("trace was requested");
-    assert_eq!(retained_trace.reuse().exact_geometry_reuses(), 1);
-    assert_eq!(retained_trace.memory().scratch_growth_bytes(), 0);
+    let retained_trace = retained.trace.expect("trace was requested");
+    assert_eq!(retained_trace.reuse.exact_geometry_reuses, 1);
+    assert_eq!(retained_trace.memory.scratch_growth_bytes(), 0);
     assert_eq!(
-        retained_trace.memory().scratch_capacity_before(),
-        retained_trace.memory().scratch_capacity_after()
+        retained_trace.memory.scratch_capacity_before,
+        retained_trace.memory.scratch_capacity_after
     );
 }
 
@@ -105,7 +102,7 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
     let output = fixture_engine()
         .prepare(&document.snapshot(), &request)
         .expect("text must fill both exclusion intervals");
-    let lines = output.scene().lines();
+    let lines = output.scene.lines();
 
     assert!(lines.len() >= 2);
     assert_eq!(
@@ -138,12 +135,12 @@ fn exclusion_intervals_share_a_row_without_overlapping_text_geometry() {
         (&lines.get(1).expect("line exists"), right_source),
     ] {
         let hit = output
-            .scene()
+            .scene
             .editing()
             .expect("fixture retains editable scene data")
             .hit_test(line.bounds().center())
             .expect("each same-row interval retains exact hit geometry");
-        assert!(source.start <= hit.position().byte() && hit.position().byte() <= source.end);
+        assert!(source.start <= hit.position.byte() && hit.position.byte() <= source.end);
     }
     let transcript = output.region_transcript().expect("transcript exists");
     for line in lines {
@@ -242,13 +239,10 @@ fn paragraphs_resume_one_cursor_across_region_boundaries() {
         .prepare(&document.snapshot(), &request)
         .expect("paragraphs must share the region cursor");
 
-    assert_eq!(output.scene().lines().len(), 2);
+    assert_eq!(output.scene.lines().len(), 2);
+    assert_eq!(output.scene.line(0).expect("line exists").bounds().x0, 0.0);
     assert_eq!(
-        output.scene().line(0).expect("line exists").bounds().x0,
-        0.0
-    );
-    assert_eq!(
-        output.scene().line(1).expect("line exists").bounds().x0,
+        output.scene.line(1).expect("line exists").bounds().x0,
         120.0
     );
     let transcript = output
@@ -264,14 +258,14 @@ fn paragraphs_resume_one_cursor_across_region_boundaries() {
     let retained = engine
         .prepare(&document.snapshot(), &request)
         .expect("cached paragraph transcripts resume the same cursor");
-    assert_eq!(retained.work().reused_paragraphs(), 2);
-    assert_eq!(retained.work().flow().paragraphs(), 0);
+    assert_eq!(retained.work.reused_paragraphs, 2);
+    assert_eq!(retained.work.flow.paragraphs, 0);
     assert_eq!(
-        retained.scene().line(0).expect("line exists").bounds().x0,
+        retained.scene.line(0).expect("line exists").bounds().x0,
         0.0
     );
     assert_eq!(
-        retained.scene().line(1).expect("line exists").bounds().x0,
+        retained.scene.line(1).expect("line exists").bounds().x0,
         120.0
     );
     assert_eq!(
@@ -326,10 +320,10 @@ fn localized_region_edit_stops_when_the_cursor_converges() {
         .prepare(publication.snapshot(), &request)
         .expect("localized region scene prepares");
 
-    assert_eq!(changed.work().shape().paragraphs(), 1);
-    assert_eq!(changed.work().flow().paragraphs(), 1);
-    assert_eq!(changed.work().paint().paragraphs(), 1);
-    assert_eq!(changed.work().reused_paragraphs(), 63);
+    assert_eq!(changed.work.shape.paragraphs, 1);
+    assert_eq!(changed.work.flow.paragraphs, 1);
+    assert_eq!(changed.work.paint.paragraphs, 1);
+    assert_eq!(changed.work.reused_paragraphs, 63);
     assert_eq!(
         changed
             .region_transcript()
@@ -343,15 +337,15 @@ fn localized_region_edit_stops_when_the_cursor_converges() {
     );
     assert!(
         changed
-            .trace()
+            .trace
             .expect("trace exists")
-            .memory()
-            .scene_output_capacity_bytes()
+            .memory
+            .scene_output_capacity_bytes
             < cold
-                .trace()
+                .trace
                 .expect("trace exists")
-                .memory()
-                .scene_output_capacity_bytes(),
+                .memory
+                .scene_output_capacity_bytes,
         "localized publication must retain the unchanged region-scene paths"
     );
 }
@@ -380,11 +374,11 @@ fn changing_only_region_geometry_reuses_analysis_and_canonical_shaping() {
         .prepare(&document.snapshot(), &request(&narrow))
         .expect("narrow region prepares");
 
-    assert_eq!(changed.work().analysis().paragraphs(), 0);
-    assert_eq!(changed.work().itemization().paragraphs(), 0);
-    assert_eq!(changed.work().font_selection().paragraphs(), 0);
-    assert_eq!(changed.work().shape().paragraphs(), 0);
-    assert_eq!(changed.work().flow().paragraphs(), 1);
+    assert_eq!(changed.work.analysis.paragraphs, 0);
+    assert_eq!(changed.work.itemization.paragraphs, 0);
+    assert_eq!(changed.work.font_selection.paragraphs, 0);
+    assert_eq!(changed.work.shape.paragraphs, 0);
+    assert_eq!(changed.work.flow.paragraphs, 1);
 }
 
 #[test]
@@ -413,10 +407,10 @@ fn empty_paragraph_consumes_height_without_fabricating_text() {
     assert_eq!(attempts[0].outcome(), RegionAttemptOutcome::HeightRejected);
     assert_eq!(attempts[1].outcome(), RegionAttemptOutcome::Accepted);
     assert!(attempts[1].source().is_empty());
-    assert!(output.scene().lines().is_empty());
-    assert_eq!(output.scene().metrics().size().height, 20.0);
+    assert!(output.scene.lines().is_empty());
+    assert_eq!(output.scene.metrics().size.height, 20.0);
     let editing = output
-        .scene()
+        .scene
         .editing()
         .expect("fixture retains editable scene data");
     let hit = editing
@@ -424,9 +418,9 @@ fn empty_paragraph_consumes_height_without_fabricating_text() {
         .expect("empty paragraph keeps its represented caret");
     assert_eq!(
         editing
-            .caret(hit.position())
+            .caret(&hit.position)
             .expect("empty caret resolves")
-            .bounds()
+            .bounds
             .x0,
         100.0
     );
@@ -452,10 +446,7 @@ fn line_height_change_retries_regions_without_reshaping() {
     let compact = engine
         .prepare(&document.snapshot(), &compact_request)
         .expect("compact line fits first region");
-    assert_eq!(
-        compact.scene().line(0).expect("line exists").bounds().x0,
-        0.0
-    );
+    assert_eq!(compact.scene.line(0).expect("line exists").bounds().x0, 0.0);
 
     let spacious_request = editable_scene_request(
         TextConstraint::Wrap(FiniteWidth::new(120.0).expect("fallback width is valid")),
@@ -467,13 +458,13 @@ fn line_height_change_retries_regions_without_reshaping() {
         .prepare(&document.snapshot(), &spacious_request)
         .expect("spacious line retries second region");
     assert_eq!(
-        spacious.scene().line(0).expect("line exists").bounds().x0,
+        spacious.scene.line(0).expect("line exists").bounds().x0,
         140.0
     );
-    assert_eq!(spacious.work().analysis().paragraphs(), 0);
-    assert_eq!(spacious.work().shape().paragraphs(), 0);
-    assert_eq!(spacious.work().line_shape().paragraphs(), 0);
-    assert!(spacious.work().rejected_line_candidates() >= 1);
+    assert_eq!(spacious.work.analysis.paragraphs, 0);
+    assert_eq!(spacious.work.shape.paragraphs, 0);
+    assert_eq!(spacious.work.line_shape.paragraphs, 0);
+    assert!(spacious.work.rejected_line_candidates >= 1);
 }
 
 #[test]
@@ -505,8 +496,8 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
             .with_region_flow(&flow),
         )
         .expect("region bidi text prepares");
-    let plain_scene = plain.scene();
-    let shifted_scene = shifted.scene();
+    let plain_scene = plain.scene;
+    let shifted_scene = shifted.scene;
 
     assert_eq!(plain_scene.lines().len(), shifted_scene.lines().len());
     assert_eq!(
@@ -532,8 +523,8 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
             .collect::<Vec<_>>()
     );
 
-    let plain_hits = scan_line_hits(plain_scene, 0);
-    let shifted_hits = scan_line_hits(shifted_scene, 0);
+    let plain_hits = scan_line_hits(&plain_scene, 0);
+    let shifted_hits = scan_line_hits(&shifted_scene, 0);
     assert_eq!(
         plain_hits
             .iter()
@@ -561,42 +552,42 @@ fn region_offsets_move_mixed_bidi_hits_carets_and_selections_together() {
     let shifted_editing = shifted_scene
         .editing()
         .expect("fixture retains editable scene data");
-    let anchor = *plain_editing
+    let anchor = plain_editing
         .hit_test_closest(Point::new(
             plain_scene.line(0).expect("line exists").bounds().x0,
             y,
         ))
         .expect("plain start resolves")
-        .position();
-    let extent = *plain_editing
+        .position;
+    let extent = plain_editing
         .hit_test_closest(Point::new(
             plain_scene.line(0).expect("line exists").bounds().x1,
             y,
         ))
         .expect("plain end resolves")
-        .position();
+        .position;
     let selection = plain_editing
-        .selection_between(&anchor, &extent, TextSelectionMode::Visual)
+        .between(&anchor, &extent, TextSelectionMode::Visual)
         .expect("visual selection is valid");
     let plain_geometry = plain_editing
-        .selection_geometry(
+        .geometry(
             &plain_editing
-                .selection_set([selection.clone()])
+                .set([selection.clone()])
                 .expect("plain selection set is valid"),
         )
         .expect("plain selection geometry resolves");
     let shifted_geometry = shifted_editing
-        .selection_geometry(
+        .geometry(
             &shifted_editing
-                .selection_set([selection])
+                .set([selection])
                 .expect("shifted selection set is valid"),
         )
         .expect("shifted selection geometry resolves");
     assert_eq!(plain_geometry.len(), shifted_geometry.len());
     for (plain, shifted) in plain_geometry.iter().zip(&shifted_geometry) {
-        assert_eq!(plain.bidi_level(), shifted.bidi_level());
-        assert_eq!(shifted.bounds().x0 - plain.bounds().x0, 80.0);
-        assert_eq!(shifted.bounds().y0 - plain.bounds().y0, 40.0);
+        assert_eq!(plain.bidi_level, shifted.bidi_level);
+        assert_eq!(shifted.bounds.x0 - plain.bounds.x0, 80.0);
+        assert_eq!(shifted.bounds.y0 - plain.bounds.y0, 40.0);
     }
 }
 
@@ -616,17 +607,17 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
         .prepare(&snapshot, &request)
         .expect("committed region scene prepares");
     let editing = committed
-        .scene()
+        .scene
         .editing()
         .expect("fixture retains editable scene data");
-    let line = &committed.scene().line(0).expect("line exists");
-    let end = *editing
+    let line = &committed.scene.line(0).expect("line exists");
+    let end = editing
         .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
         .expect("line end resolves")
-        .position();
+        .position;
     let selections = editing
-        .selection_set([editing
-            .collapsed_selection(&end)
+        .set([editing
+            .collapsed(&end)
             .expect("insertion selection is valid")])
         .expect("selection set is valid");
     let mut session = editing
@@ -654,12 +645,12 @@ fn composition_projection_flows_through_the_same_exact_region_transcript() {
     );
     assert!(
         transient
-            .scene()
+            .scene
             .lines()
             .iter()
             .all(|line| line.bounds().x0 >= 40.0 && line.bounds().y0 >= 20.0)
     );
-    assert!(transient.scene().fragments().iter().any(|fragment| {
+    assert!(transient.scene.fragments().iter().any(|fragment| {
         fragment
             .sources()
             .expect("fragment belongs to source scene")

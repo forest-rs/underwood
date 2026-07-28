@@ -59,7 +59,7 @@ fn paragraph_style_direction_invalidates_analysis_and_reaches_the_scene() {
         )
         .expect("automatic direction prepares");
     assert!(
-        auto.scene()
+        auto.scene
             .fragments()
             .iter()
             .all(|fragment| fragment.bidi_level().is_multiple_of(2))
@@ -71,10 +71,10 @@ fn paragraph_style_direction_invalidates_analysis_and_reaches_the_scene() {
             &editable_scene_request(constraint, &rtl_styles, &paint),
         )
         .expect("explicit RTL direction prepares");
-    assert_eq!(rtl.work().analysis().paragraphs(), 1);
-    assert_eq!(rtl.work().shape().paragraphs(), 1);
+    assert_eq!(rtl.work.analysis.paragraphs, 1);
+    assert_eq!(rtl.work.shape.paragraphs, 1);
     assert!(
-        rtl.scene()
+        rtl.scene
             .fragments()
             .iter()
             .any(|fragment| !fragment.bidi_level().is_multiple_of(2))
@@ -117,7 +117,7 @@ fn word_break_is_range_projected_and_invalidates_from_analysis() {
         )
         .expect("normal word breaking prepares");
     assert_eq!(
-        normal.scene().lines().len(),
+        normal.scene.lines().len(),
         1,
         "an ordinary Latin word has no internal soft wrap opportunity"
     );
@@ -128,10 +128,10 @@ fn word_break_is_range_projected_and_invalidates_from_analysis() {
             &editable_scene_request(constraint, &break_all_styles, &paint),
         )
         .expect("break-all word breaking prepares");
-    assert_eq!(broken.work().analysis().paragraphs(), 1);
-    assert_eq!(broken.work().shape().paragraphs(), 1);
+    assert_eq!(broken.work.analysis.paragraphs, 1);
+    assert_eq!(broken.work.shape.paragraphs, 1);
     assert!(
-        broken.scene().lines().len() > 1,
+        broken.scene.lines().len() > 1,
         "the leaf-local analysis run must expose break-all opportunities"
     );
 }
@@ -227,30 +227,30 @@ fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
         let output = LayoutEngine::new(AnalysisCursorProof, CacheBudget::new(32))
             .prepare(&document.snapshot(), &request)
             .expect("Parley analysis boundaries must prepare through the public scene path");
-        let scene = output.scene();
+        let scene = output.scene;
         let editing = scene
             .editing()
             .expect("fixture retains editable scene data");
         let y = scene.line(0).expect("line exists").bounds().center().y;
-        let start = *editing
+        let start = editing
             .hit_test_closest(Point::new(-100.0, y))
             .expect("the unit start must resolve")
-            .position();
-        let end = *editing
+            .position;
+        let end = editing
             .hit_test_closest(Point::new(100.0, y))
             .expect("the unit end must resolve")
-            .position();
+            .position;
         let forward = editing
-            .selection_set([editing
-                .collapsed_selection(&start)
+            .set([editing
+                .collapsed(&start)
                 .expect("the unit start must be a caret")])
             .and_then(|selection| {
                 editing.move_selections(&selection, TextMovement::NextLogical, true)
             })
             .expect("the unit must expose one forward logical selection");
         let backward = editing
-            .selection_set([editing
-                .collapsed_selection(&end)
+            .set([editing
+                .collapsed(&end)
                 .expect("the unit end must be a caret")])
             .and_then(|selection| {
                 editing.move_selections(&selection, TextMovement::PreviousLogical, true)
@@ -440,12 +440,11 @@ fn control_only_paragraph_emits_no_phantom_glyph() {
         .prepare(published.snapshot(), &request)
         .expect("control-only source must prepare without a phantom glyph");
     assert!(
-        output.scene().fragments().is_empty(),
+        output.scene.fragments().is_empty(),
         "newline shaping must not manufacture renderable glyphs"
     );
     assert_eq!(
-        output.work().shape().records(),
-        0,
+        output.work.shape.records, 0,
         "shape work must report the renderable glyph count"
     );
 }

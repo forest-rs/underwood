@@ -393,11 +393,12 @@ impl ShowcaseContent {
         .with_preparation_trace();
         let output = self.layout.prepare(&self.document.snapshot(), &request)?;
         Ok(PreparedDocumentFrame {
-            line_count: output.scene().lines().len(),
-            scene: output.scene().clone(),
-            work: output.work().clone(),
+            line_count: output.scene.lines().len(),
+            scene: output.scene.clone(),
+            work: output.work.clone(),
             trace: output
-                .trace()
+                .trace
+                .as_deref()
                 .expect("the showcase requests preparation tracing")
                 .clone(),
             region_transcript: output
@@ -431,11 +432,12 @@ impl ShowcaseContent {
             self.layout
                 .prepare_composition(&self.document.snapshot(), &request, composition)?;
         Ok(PreparedCompositionFrame {
-            line_count: output.scene().lines().len(),
-            scene: output.scene().clone(),
-            work: output.work().clone(),
+            line_count: output.scene.lines().len(),
+            scene: output.scene.clone(),
+            work: output.work.clone(),
             trace: output
-                .trace()
+                .trace
+                .as_deref()
                 .expect("the showcase requests preparation tracing")
                 .clone(),
             region_transcript: output
@@ -832,13 +834,13 @@ mod tests {
                     .any(|source| source.text() == content.leaves.title)
             })
             .expect("showcase title must form a line");
-        assert_eq!(title.adjustment().alignment(), TextAlignment::Center);
-        assert!(title.adjustment().inline_offset() > 0.0);
+        assert_eq!(title.adjustment().alignment, TextAlignment::Center);
+        assert!(title.adjustment().inline_offset > 0.0);
 
         assert!(
             frame.scene.lines().iter().any(|line| {
-                line.adjustment().alignment() == TextAlignment::Justify
-                    && line.adjustment().expanded_opportunities() > 0
+                line.adjustment().alignment == TextAlignment::Justify
+                    && line.adjustment().expanded_opportunities > 0
             }),
             "a soft-wrapped mixed-direction line must expand eligible Western spaces"
         );
@@ -1010,15 +1012,15 @@ mod tests {
                 ],
             )
         );
-        assert_eq!(narrow.work.shape().paragraphs(), 0);
-        assert!(narrow.work.flow().paragraphs() > 0);
+        assert_eq!(narrow.work.shape.paragraphs, 0);
+        assert!(narrow.work.flow.paragraphs > 0);
     }
 
     #[test]
     fn local_edit_reshapes_only_its_paragraph() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let initial = content.prepare(760.0, 0.5).expect("initial must prepare");
-        let paragraph_count = initial.trace.reuse().paragraphs();
+        let paragraph_count = initial.trace.reuse.paragraphs;
         let editable = [
             content.leaves.editable,
             content.leaves.editable_mark,
@@ -1038,8 +1040,8 @@ mod tests {
             .collect();
         content.toggle_edit();
         let edited = content.prepare(760.0, 0.5).expect("edit must prepare");
-        assert_eq!(edited.work.shape().paragraphs(), 1);
-        assert_eq!(edited.work.reused_paragraphs(), paragraph_count - 1);
+        assert_eq!(edited.work.shape.paragraphs, 1);
+        assert_eq!(edited.work.reused_paragraphs, paragraph_count - 1);
         let edited_sibling_ids: Vec<_> = edited
             .scene
             .fragments()
@@ -1061,15 +1063,15 @@ mod tests {
         let initial = content.prepare(760.0, 0.5).expect("initial must prepare");
         content.toggle_paint();
         let painted = content.prepare(760.0, 0.5).expect("paint must prepare");
-        assert_eq!(painted.work.analysis().paragraphs(), 0);
-        assert_eq!(painted.work.shape().paragraphs(), 0);
-        assert_eq!(painted.work.flow().paragraphs(), 0);
-        assert_eq!(painted.work.geometry().paragraphs(), 0);
+        assert_eq!(painted.work.analysis.paragraphs, 0);
+        assert_eq!(painted.work.shape.paragraphs, 0);
+        assert_eq!(painted.work.flow.paragraphs, 0);
+        assert_eq!(painted.work.geometry.paragraphs, 0);
         assert_eq!(
-            painted.work.reused_paragraphs(),
-            initial.trace.reuse().paragraphs()
+            painted.work.reused_paragraphs,
+            initial.trace.reuse.paragraphs
         );
-        assert!(painted.work.paint().paragraphs() > 0);
+        assert!(painted.work.paint.paragraphs > 0);
     }
 
     #[test]
@@ -1100,20 +1102,20 @@ mod tests {
     fn axis_motion_is_isolated_to_the_heading_paragraph() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let first = content.prepare(760.0, 0.1).expect("initial must prepare");
-        let paragraph_count = first.trace.reuse().paragraphs();
+        let paragraph_count = first.trace.reuse.paragraphs;
         let title = title_fragment_coords(&first.scene, content.leaves.title);
         let moved = content.prepare(760.0, 0.9).expect("axis must prepare");
         let moved_title = title_fragment_coords(&moved.scene, content.leaves.title);
         assert_ne!(title, moved_title);
         assert!((moved.axis_weight - 820.0).abs() < f32::EPSILON);
-        assert_eq!(moved.work.shape().paragraphs(), 1);
-        assert_eq!(moved.work.reused_paragraphs(), paragraph_count - 1);
+        assert_eq!(moved.work.shape.paragraphs, 1);
+        assert_eq!(moved.work.reused_paragraphs, paragraph_count - 1);
 
         content.toggle_edit();
         content.toggle_paint();
         content.reset();
         let reset = content.prepare(760.0, 0.9).expect("reset must prepare");
-        assert_eq!(reset.work.shape().paragraphs(), paragraph_count);
+        assert_eq!(reset.work.shape.paragraphs, paragraph_count);
         assert_eq!(content.editable_value(), ORIGINAL_EDIT_TEXT);
     }
 
@@ -1193,15 +1195,15 @@ mod tests {
             .scene
             .editing()
             .expect("showcase scene retains editable data");
-        let position = *editing
+        let position = editing
             .hit_test_closest(point)
             .expect("Arabic glyph must expose a caret")
-            .position();
+            .position;
         let caret = editing
-            .collapsed_selection(&position)
+            .collapsed(&position)
             .expect("Arabic caret must validate");
         let selections = editing
-            .selection_set([caret])
+            .set([caret])
             .expect("Arabic selection must validate");
         content
             .replace_selections(&selections, "Latin ")
@@ -1288,9 +1290,9 @@ mod tests {
             while x <= bounds.x1 {
                 let point = Point::new(x, y);
                 if interaction.hit_test(point).is_some_and(|hit| {
-                    hit.position().text() == text
-                        && hit.position().byte() > source.start
-                        && hit.position().byte() < source.end
+                    hit.position.text() == text
+                        && hit.position.byte() > source.start
+                        && hit.position.byte() < source.end
                 }) {
                     return point;
                 }

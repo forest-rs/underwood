@@ -60,13 +60,13 @@ pub use scene::{
     ProjectedSceneEditing, ProjectedSceneFragmentView, ProjectedSceneFragments,
     ProjectedSceneGlyphView, ProjectedSceneGlyphs, ProjectedSceneInteraction,
     ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources, ProjectedTextPosition,
-    ProjectedTextRange, ProjectedTextSource, ProjectedTextUnitView, SceneCaret,
+    ProjectedTextRange, ProjectedTextSource, ProjectedTextUnitView, Scene, SceneCaret,
     SceneCompositionRect, SceneEditing, SceneFragmentId, SceneFragmentView, SceneFragments,
     SceneGlyphInstanceId, SceneGlyphView, SceneGlyphs, SceneInteraction, SceneLineView, SceneLines,
-    SceneOutput, SceneParagraphResidencies, SceneRegionAttempts, SceneRegionTranscript,
-    SceneResidency, SceneResidencyBytes, SceneSelection, SceneSelectionRect, SceneSemantics,
-    SemanticFragmentView, SnapshotSources, SnapshotTextUnitView, StageWork, TextHit, TextMetrics,
-    TextScene, WorkReport,
+    SceneOutput, SceneRegionTranscript, SceneResidency, SceneResidencyBytes, SceneSelection,
+    SceneSelectionRect, SceneSemantics, SemanticFragmentView, SnapshotSources,
+    SnapshotTextUnitView, StageWork, TextHit, TextMetrics, TextScene, TextSources, TextUnitView,
+    WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

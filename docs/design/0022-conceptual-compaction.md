@@ -516,6 +516,22 @@ Changed scene surface:
 - capability-session hot operations keep their current nonallocating result
   shapes.
 
+The implemented convergence also makes result and diagnostic records ordinary
+documented data:
+
+- `SceneOutput`, `CompositionSceneOutput`, `WorkReport`, preparation traces,
+  cache diagnostics, residency observations, and scene records expose named
+  fields instead of duplicating them with trivial getters;
+- positional constructors for work and cache-counter records disappear;
+- editing inherits selection and interaction operations from the capability
+  lattice rather than forwarding them again;
+- `SceneRegionAttempts` and `SceneParagraphResidencies` disappear in favor of
+  opaque standard iterators returned by their owning observations;
+- standard iterator operations (`next`, `nth`, and `last`) replace redundant
+  convenience methods where no indexed data structure is being exposed;
+- `ParagraphInput` is a non-exhaustive, readable record whose ordered UTF-8
+  coverage and style-index invariants are established by `LayoutEngine`.
+
 There is no deprecated alias or hidden compatibility implementation.
 
 ## Deletion gates

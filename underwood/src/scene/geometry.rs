@@ -558,7 +558,7 @@ pub(super) fn build_geometry(
         0,
         empty_slot_size,
     )?;
-    let empty_inline_start = empty_slot_start + empty_adjustment.inline_offset();
+    let empty_inline_start = empty_slot_start + empty_adjustment.inline_offset;
     let empty_block_start = empty_slot.map_or(0.0, crate::LineSlot::block_start);
     let empty_bounds = Rect::new(
         empty_inline_start,
@@ -614,9 +614,9 @@ pub(super) fn build_geometry(
             line.western_justification_opportunities(),
             slot_size,
         )?;
-        let inline_start = slot_start + adjustment.inline_offset();
+        let inline_start = slot_start + adjustment.inline_offset;
         let current_line_top = line.slot().map_or(line_top, crate::LineSlot::block_start);
-        let expansion = adjustment.opportunity_expansion();
+        let expansion = adjustment.opportunity_expansion;
         let opportunity_sources: Vec<_> = if expansion > 0.0 {
             line.western_justification_opportunity_sources().collect()
         } else {
@@ -907,7 +907,7 @@ fn build_paint_fragments(
     let mut fragments: Vec<CachedFragment> = Vec::new();
     let mut instance = 0_usize;
     for (line_index, (line, cached_line)) in prepared.lines().zip(lines).enumerate() {
-        let expansion = cached_line.adjustment.opportunity_expansion();
+        let expansion = cached_line.adjustment.opportunity_expansion;
         let opportunity_sources: Vec<_> = if expansion > 0.0 {
             line.western_justification_opportunity_sources().collect()
         } else {

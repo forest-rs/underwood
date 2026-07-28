@@ -963,40 +963,40 @@ pub(super) fn validate_resolved_direction(
 }
 
 pub(super) fn record_formation_work(report: &mut WorkReport, work: FormationWork) {
-    if work.analyzed() {
+    if work.analyzed {
         report.analysis.add_paragraph(1);
     }
-    if work.itemized() {
+    if work.itemized {
         report.itemization.add_paragraph(1);
     }
-    if work.selected_clusters() > 0 {
+    if work.selected_clusters > 0 {
         report.font_selection.paragraphs += 1;
-        report.font_selection.records += work.selected_clusters() as usize;
+        report.font_selection.records += work.selected_clusters as usize;
     }
-    if work.shaped_runs() > 0 {
+    if work.shaped_runs > 0 {
         report.shape.paragraphs += 1;
-        report.shape.records += work.shaped_glyphs() as usize;
+        report.shape.records += work.shaped_glyphs as usize;
     }
-    if work.line_resolved_clusters() > 0 {
+    if work.line_shaping.resolved_clusters > 0 {
         report.line_font_resolution.paragraphs += 1;
-        report.line_font_resolution.records += work.line_resolved_clusters() as usize;
+        report.line_font_resolution.records += work.line_shaping.resolved_clusters as usize;
     }
-    if work.line_shaped_runs() > 0 {
+    if work.line_shaping.shaped_runs > 0 {
         report.line_shape.paragraphs += 1;
-        report.line_shape.records += work.line_shaped_glyphs() as usize;
+        report.line_shape.records += work.line_shaping.shaped_glyphs as usize;
     }
-    if work.formed_lines() > 0 {
+    if work.formed_lines > 0 {
         report.flow.paragraphs += 1;
-        report.flow.records += work.formed_lines() as usize;
+        report.flow.records += work.formed_lines as usize;
     }
-    report.line_reshapes += work.line_reshapes() as usize;
+    report.line_reshapes += work.line_shaping.attempts as usize;
     report.line_candidates = report
         .line_candidates
-        .saturating_add(work.line_candidates());
+        .saturating_add(work.line_shaping.candidates);
     report.rejected_line_candidates = report
         .rejected_line_candidates
-        .saturating_add(work.rejected_line_candidates());
+        .saturating_add(work.line_shaping.rejected_candidates);
     report.line_checkpoint_restores = report
         .line_checkpoint_restores
-        .saturating_add(work.line_checkpoint_restores());
+        .saturating_add(work.line_shaping.checkpoint_restores);
 }

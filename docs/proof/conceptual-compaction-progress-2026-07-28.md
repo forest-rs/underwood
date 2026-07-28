@@ -233,3 +233,92 @@ The current 64-label churn median is 11,254 ns against the 10,059 ns campaign
 baseline. This slice does not touch churn-side algorithms and the operation is
 short enough to be host-noisy, but the final campaign must reproduce or beat
 the baseline with the full sample count; the gate remains open.
+
+## Slice 4: one typed scene vocabulary
+
+The fourth slice converges committed and composition display traversal behind
+one generic implementation while preserving distinct authored and projected
+source types:
+
+- `Scene<T, Identity>` owns the common scene root; `TextScene` and
+  `CompositionScene` remain public semantic aliases;
+- `SceneLines`, `SceneLineView`, `SceneFragments`, `SceneFragmentView`,
+  `SceneGlyphs`, `SceneGlyphView`, `TextSources`, and `TextUnitView` provide
+  the common traversal algorithms;
+- the projected names remain aliases that make generated provenance explicit
+  at call sites;
+- selection contains interaction, and editing contains selection, so the
+  capability lattice no longer repeats inherited operation forwarding.
+
+Diagnostic and output records now expose their documented fields directly.
+The migration removes trivial getter and positional-constructor thickets from
+`FormationWork`, `LineShapingWork`, cache diagnostics, preparation traces,
+residency observations, scene records, and scene outputs. Named struct fields
+make counter wiring visible instead of accepting long runs of adjacent
+booleans and integers.
+
+A reproducible random-source sample then found two more complete deletion
+targets:
+
+- `underwood_parley::validation` repeated UTF-8 coverage and style-index
+  checks over projection tables constructed and validated by `LayoutEngine`.
+  `ParagraphInput` is now `#[non_exhaustive]` and documents that backend
+  contract; the redundant 123-line adapter module is gone.
+- `SceneRegionAttempts` and `SceneParagraphResidencies` merely forwarded
+  existing exact-size iterators. Their methods now return opaque standard
+  iterators directly. Redundant iterator convenience methods likewise defer
+  to ordinary `next`, `nth`, and `last`.
+
+Common preparation publication now passes through one `finish_scene` boundary
+for summary, region binding, trace construction, and scene-core construction.
+This is a control-flow convergence, not a second scene representation.
+
+### Public migration
+
+```rust,ignore
+// Observation records are ordinary data.
+let shaped = output.work.shape.paragraphs;
+let scene = &output.scene;
+
+// Capability sessions inherit their prerequisite operations.
+let editing = scene.editing()?;
+let hit = editing.hit_test(point);
+let selection = editing.between(anchor, extent)?;
+
+// Forwarding iterator containers are ordinary opaque iterators.
+let first_attempt = output.region_transcript().and_then(|trace| trace.attempts().next());
+let second_source = hit.source.sources().nth(1);
+```
+
+The old getter methods, positional diagnostic constructors,
+`SceneRegionAttempts`, and `SceneParagraphResidencies` have no compatibility
+aliases. `ParagraphInput` fields remain readable by third-party formation
+backends, but external code cannot construct the validated record with a
+struct literal.
+
+### Source ratchet
+
+| State | Physical lines | Rust code lines |
+|---|---:|---:|
+| Baseline | 21,366 | 18,407 |
+| After slice 3 | 19,457 | 17,823 |
+| After slice 4 | 18,845 | 16,483 |
+| Deleted since baseline | 2,521 | 1,924 |
+
+`tokei` and `scc` agree on 16,483 Rust code lines. The implementation is below
+the accepted design's 17,000 requirement and 16,500 stretch gate. The
+aspirational 16,000 target remains a review prompt rather than a reason to
+compress meaningful algorithms.
+
+### Product gates
+
+- all workspace tests and doc-tests pass;
+- strict all-target/all-feature Clippy and formatting pass;
+- no dependency or `unsafe` was added;
+- the committed/projected public distinction, sparse capability residency,
+  source completeness, bidi interaction, regions, PDF, showcase, and visual
+  snapshots remain covered by the unchanged executable suites.
+
+Final allocation, residency, latency, Rust 1.88, `no_std`, wasm, rustdoc, and
+repository-policy measurements belong to the closure slice after the
+scalpel review.

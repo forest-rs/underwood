@@ -132,8 +132,8 @@ mod tests {
             Some(100.0),
         )
         .expect("finite adjustment is valid");
-        assert_eq!(ltr.inline_offset(), 60.0);
-        assert_eq!(rtl.inline_offset(), -10.0);
+        assert_eq!(ltr.inline_offset, 60.0);
+        assert_eq!(rtl.inline_offset, -10.0);
     }
 
     #[test]
@@ -158,7 +158,7 @@ mod tests {
             Some(100.0),
         )
         .expect("overflow adjustment is valid");
-        assert_eq!(ltr.inline_offset(), 0.0);
-        assert_eq!(rtl.inline_offset(), -20.0);
+        assert_eq!(ltr.inline_offset, 0.0);
+        assert_eq!(rtl.inline_offset, -20.0);
     }
 }

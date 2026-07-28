@@ -390,11 +390,11 @@ fn exact_action(
     let scene = scene?;
     let hit = interaction(scene).hit_test(point)?;
     registry
-        .action(scene.revision(), hit.semantic_id())
+        .action(scene.revision(), hit.semantic_id)
         .map(|action| ActionHit {
-            semantic: hit.semantic_id(),
+            semantic: hit.semantic_id,
             action,
-            position: *hit.position(),
+            position: hit.position,
         })
 }
 
@@ -409,10 +409,7 @@ fn pointer_affordance(
     let Some(hit) = interaction(scene).hit_test(point) else {
         return PointerAffordance::Arrow;
     };
-    if registry
-        .action(scene.revision(), hit.semantic_id())
-        .is_some()
-    {
+    if registry.action(scene.revision(), hit.semantic_id).is_some() {
         PointerAffordance::Action
     } else {
         PointerAffordance::Text
@@ -565,19 +562,19 @@ impl EditorState {
             return EditorOverlay::default();
         };
         let editing = editing(scene);
-        let selection_geometry = editing.selection_geometry(selections).unwrap_or_default();
+        let selection_geometry = editing.geometry(selections).unwrap_or_default();
         let carets = selections
             .selections()
             .iter()
             .filter_map(|selection| editing.caret(selection.extent()))
-            .map(|caret| caret.bounds())
+            .map(|caret| caret.bounds)
             .collect();
         EditorOverlay {
             selections: selection_geometry
                 .into_iter()
                 .map(|rect| SelectionOverlay {
-                    bounds: rect.bounds(),
-                    selection: rect.selection(),
+                    bounds: rect.bounds,
+                    selection: rect.selection,
                 })
                 .collect(),
             carets,
@@ -601,13 +598,13 @@ impl EditorState {
             .composition_geometry(composition)
             .unwrap_or_default()
             .into_iter()
-            .map(|rect| rect.bounds())
+            .map(|rect| rect.bounds)
             .collect();
         let preedit_selection = editing
             .composition_selection_geometry(composition)
             .unwrap_or_default()
             .into_iter()
-            .map(|rect| rect.bounds())
+            .map(|rect| rect.bounds)
             .collect();
         let carets = composition_caret(content, scene, composition)
             .into_iter()
@@ -635,7 +632,7 @@ impl EditorState {
         let primary = self.selections.as_ref()?.primary()?;
         editing(scene)
             .caret(primary.extent())
-            .map(|caret| caret.bounds())
+            .map(|caret| caret.bounds)
     }
 
     fn pointer_pressed(
@@ -651,7 +648,7 @@ impl EditorState {
         let hit = editing
             .hit_test_closest(point)
             .ok_or_else(|| String::from("no selectable text at pointer"))?;
-        let position = *hit.position();
+        let position = hit.position;
         let mut siblings = self
             .current_selections(scene)
             .map(|selections| selections.selections().to_vec())
@@ -662,7 +659,7 @@ impl EditorState {
                 .first()
                 .map_or(position, |selection| *selection.anchor());
             let selection = editing
-                .selection_between(&anchor, &position, TextSelectionMode::Visual)
+                .between(&anchor, &position, TextSelectionMode::Visual)
                 .map_err(|error| format!("visual extension rejected: {error}"))?;
             if siblings.is_empty() {
                 siblings.push(selection.clone());
@@ -672,7 +669,7 @@ impl EditorState {
             selection
         } else {
             editing
-                .collapsed_selection(&position)
+                .collapsed(&position)
                 .map_err(|error| format!("caret placement rejected: {error}"))?
         };
 
@@ -686,7 +683,7 @@ impl EditorState {
         }
         self.selections = Some(
             editing
-                .selection_set(siblings)
+                .set(siblings)
                 .map_err(|error| format!("independent caret rejected: {error}"))?,
         );
         self.drag = Some(DragSelection {
@@ -706,11 +703,11 @@ impl EditorState {
             .editing()
             .map_err(|error| format!("scene is not editable: {error}"))?;
         let selection = editing
-            .collapsed_selection(&anchor)
+            .collapsed(&anchor)
             .map_err(|error| format!("action drag anchor rejected: {error}"))?;
         self.selections = Some(
             editing
-                .selection_set([selection])
+                .set([selection])
                 .map_err(|error| format!("action drag selection rejected: {error}"))?,
         );
         self.drag = Some(DragSelection { anchor });
@@ -744,7 +741,7 @@ impl EditorState {
             .hit_test_closest(point)
             .ok_or_else(|| String::from("drag left selectable text"))?;
         let primary = editing
-            .selection_between(&anchor, hit.position(), TextSelectionMode::Visual)
+            .between(&anchor, &hit.position, TextSelectionMode::Visual)
             .map_err(|error| format!("visual drag rejected: {error}"))?;
         let mut selections = self
             .current_selections(scene)
@@ -757,7 +754,7 @@ impl EditorState {
         }
         self.selections = Some(
             editing
-                .selection_set(selections)
+                .set(selections)
                 .map_err(|error| format!("visual drag overlaps another caret: {error}"))?,
         );
         self.describe_selection("visual drag");
@@ -840,7 +837,7 @@ impl EditorState {
         for selection in selections.selections() {
             if selection.is_collapsed() {
                 let single = editing
-                    .selection_set([selection.clone()])
+                    .set([selection.clone()])
                     .map_err(|error| format!("deletion source rejected: {error}"))?;
                 let extended = editing
                     .move_selections(&single, movement, true)
@@ -851,7 +848,7 @@ impl EditorState {
             }
         }
         let deletion = editing
-            .selection_set(deletion)
+            .set(deletion)
             .map_err(|error| format!("combined deletion rejected: {error}"))?;
         let applied = content
             .replace_selections(&deletion, "")
@@ -1073,9 +1070,9 @@ mod tests {
         let hovered = content
             .prepare(300.0, 0.5)
             .expect("hover paint must prepare without repeating text preparation");
-        assert_eq!(hovered.work.shape().paragraphs(), 0);
-        assert_eq!(hovered.work.flow().paragraphs(), 0);
-        assert!(hovered.work.paint().paragraphs() > 0);
+        assert_eq!(hovered.work.shape.paragraphs, 0);
+        assert_eq!(hovered.work.flow.paragraphs, 0);
+        assert!(hovered.work.paint.paragraphs > 0);
     }
 
     #[test]
@@ -1154,7 +1151,7 @@ mod tests {
                         .interaction()
                         .expect("showcase scene retains hit-testing data")
                         .hit_test(*point)
-                        .is_some_and(|hit| hit.bidi_level() & 1 == 0)
+                        .is_some_and(|hit| hit.bidi_level & 1 == 0)
             })
             .copied()
             .expect("action must expose its leading Latin caret");
@@ -1166,7 +1163,7 @@ mod tests {
                     .interaction()
                     .expect("showcase scene retains hit-testing data")
                     .hit_test(*point)
-                    .is_none_or(|hit| hit.bidi_level() & 1 != 1)
+                    .is_none_or(|hit| hit.bidi_level & 1 != 1)
                 {
                     return false;
                 }
@@ -1174,7 +1171,7 @@ mod tests {
                     .scene
                     .editing()
                     .expect("showcase scene retains editable data")
-                    .selection_between(
+                    .between(
                         position,
                         &start_position,
                         underwood::TextSelectionMode::Visual,
@@ -1184,16 +1181,16 @@ mod tests {
                             .scene
                             .editing()
                             .expect("showcase scene retains editable data")
-                            .selection_set([selection])
+                            .set([selection])
                     })
                     .and_then(|selections| {
                         initial
                             .scene
                             .editing()
                             .expect("showcase scene retains editable data")
-                            .selection_geometry(&selections)
+                            .geometry(&selections)
                     })
-                    .is_ok_and(|geometry| geometry.iter().any(|rect| rect.bidi_level() & 1 == 1))
+                    .is_ok_and(|geometry| geometry.iter().any(|rect| rect.bidi_level & 1 == 1))
             })
             .map(|(point, _)| *point)
             .expect("action must expose an Arabic selection interior");
@@ -1234,10 +1231,10 @@ mod tests {
             .scene
             .editing()
             .expect("showcase scene retains editable data")
-            .selection_geometry(selections)
+            .geometry(selections)
             .expect("selection geometry must resolve");
         assert!(
-            geometry.iter().any(|rect| rect.bidi_level() & 1 == 1),
+            geometry.iter().any(|rect| rect.bidi_level & 1 == 1),
             "the drag must highlight the Arabic run: {geometry:?}; selection={selections:?}; status={}",
             editor.status()
         );
@@ -1247,7 +1244,7 @@ mod tests {
     fn two_pointer_carets_publish_one_atomic_insertion() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let initial = content.prepare(760.0, 0.5).expect("scene must prepare");
-        let paragraph_count = initial.trace.reuse().paragraphs();
+        let paragraph_count = initial.trace.reuse.paragraphs;
         let (first, second) = two_points_in_text_leaf(&initial.scene, content.editable_text());
         let mut editor = EditorState::default();
         editor.handle(
@@ -1286,8 +1283,8 @@ mod tests {
         let edited = content
             .prepare(760.0, 0.5)
             .expect("edited scene must prepare");
-        assert_eq!(edited.work.shape().paragraphs(), 1);
-        assert_eq!(edited.work.reused_paragraphs(), paragraph_count - 1);
+        assert_eq!(edited.work.shape.paragraphs, 1);
+        assert_eq!(edited.work.reused_paragraphs, paragraph_count - 1);
     }
 
     #[test]
@@ -1503,7 +1500,7 @@ mod tests {
     fn preedit_is_transient_and_commit_publishes_once() {
         let mut content = ShowcaseContent::new_deterministic().expect("showcase must initialize");
         let committed = content.prepare(760.0, 0.5).expect("scene must prepare");
-        let paragraph_count = committed.trace.reuse().paragraphs();
+        let paragraph_count = committed.trace.reuse.paragraphs;
         let point = two_points_in_text_leaf(&committed.scene, content.editable_text()).0;
         let mut editor = EditorState::default();
         editor.handle(
@@ -1543,8 +1540,8 @@ mod tests {
         let cancelled = content
             .prepare(760.0, 0.5)
             .expect("cancelled preedit must return to committed formation");
-        assert_eq!(cancelled.work.shape().paragraphs(), 0);
-        assert_eq!(cancelled.work.reused_paragraphs(), paragraph_count);
+        assert_eq!(cancelled.work.shape.paragraphs, 0);
+        assert_eq!(cancelled.work.reused_paragraphs, paragraph_count);
 
         editor.handle(
             EditorEvent::Ime(ImeInput::Preedit {
@@ -1566,8 +1563,8 @@ mod tests {
         let committed = content
             .prepare(760.0, 0.5)
             .expect("committed preedit must form");
-        assert!(committed.work.shape().paragraphs() <= 1);
-        assert!(committed.work.reused_paragraphs() >= paragraph_count - 1);
+        assert!(committed.work.shape.paragraphs <= 1);
+        assert!(committed.work.reused_paragraphs >= paragraph_count - 1);
         assert!(content.editable_value().contains("مرحبا"));
     }
 
@@ -1669,12 +1666,12 @@ mod tests {
             while x <= line.bounds().x1 {
                 let point = Point::new(x, y);
                 if let Some(hit) = interaction.hit_test(point)
-                    && hit.position().text() == text
+                    && hit.position.text() == text
                     && !hits.iter().any(|(existing_line, level, _)| {
-                        *existing_line == line_index && *level == hit.bidi_level()
+                        *existing_line == line_index && *level == hit.bidi_level
                     })
                 {
-                    hits.push((line_index, hit.bidi_level(), point));
+                    hits.push((line_index, hit.bidi_level, point));
                 }
                 x += 0.5;
             }
@@ -1692,7 +1689,7 @@ mod tests {
                 if scene
                     .editing()
                     .expect("showcase scene retains editable data")
-                    .selection_between(
+                    .between(
                         first_position,
                         second_position,
                         underwood::TextSelectionMode::Visual,
@@ -1722,17 +1719,17 @@ mod tests {
             while x <= bounds.x1 {
                 let point = Point::new(x, bounds.center().y);
                 if let Some(hit) = interaction.hit_test(point) {
-                    let sources = hit.source().sources();
+                    let mut sources = hit.source.sources();
                     if sources.len() != 2
-                        || sources.get(0).is_none_or(|source| source.text() != base)
-                        || sources.get(1).is_none_or(|source| source.text() != mark)
+                        || sources.next().is_none_or(|source| source.text() != base)
+                        || sources.next().is_none_or(|source| source.text() != mark)
                     {
                         x += 0.25;
                         continue;
                     }
-                    if hit.position().text() == base {
+                    if hit.position.text() == base {
                         leading = Some(point);
-                    } else if hit.position().text() == mark && hit.position().byte() == 2 {
+                    } else if hit.position.text() == mark && hit.position.byte() == 2 {
                         trailing = Some(point);
                     }
                 }
@@ -1787,9 +1784,9 @@ mod tests {
             while x <= end {
                 let point = Point::new(x, y);
                 if let Some(hit) = interaction.hit_test(point)
-                    && hit.semantic_id() == semantic_id
+                    && hit.semantic_id == semantic_id
                 {
-                    let position = *hit.position();
+                    let position = hit.position;
                     if points.iter().all(|(_, existing)| *existing != position) {
                         points.push((point, position));
                     }
@@ -1800,8 +1797,8 @@ mod tests {
                 let point = Point::new((point.x + 0.25).min(end), y);
                 let Some(position) = interaction
                     .hit_test_closest(point)
-                    .filter(|hit| hit.semantic_id() == semantic_id)
-                    .map(|hit| *hit.position())
+                    .filter(|hit| hit.semantic_id == semantic_id)
+                    .map(|hit| hit.position)
                 else {
                     continue;
                 };

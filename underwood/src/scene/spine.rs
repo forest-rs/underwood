@@ -125,11 +125,8 @@ impl SceneSummary {
         for (line, prepared) in geometry.lines.iter().zip(geometry.artifact.lines()) {
             min_x = min_x.min(line.bounds.x0);
             let advance = prepared.advance()
-                + line.adjustment.opportunity_expansion()
-                    * f64::from(
-                        u32::try_from(line.adjustment.expanded_opportunities())
-                            .expect("validated line adjustment opportunity count fits u32"),
-                    );
+                + line.adjustment.opportunity_expansion
+                    * f64::from(line.adjustment.expanded_opportunities);
             max_x = max_x.max(line.bounds.x0 + advance);
             min_y = min_y.min(line.bounds.y0);
             max_y = max_y.max(line.bounds.y1);

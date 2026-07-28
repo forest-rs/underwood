@@ -4,6 +4,7 @@
 //! Positioned public views over persistent paragraph-local scene records.
 
 use super::*;
+use core::marker::PhantomData;
 
 fn source_map<'a>(
     requested: &SceneFeaturePolicy,
@@ -29,16 +30,17 @@ fn source_map<'a>(
 
 /// Allocation-free view of visual lines in one committed scene.
 #[derive(Clone, Debug)]
-pub struct SceneLines<'a> {
+pub struct SceneLines<'a, T = SnapshotTextRange> {
     revision: DocumentRevision,
     core: &'a SceneCore,
     requested: &'a SceneFeaturePolicy,
     segments: SpineSegments<'a>,
     current: Option<(PositionedSegment<'a>, usize)>,
     remaining: usize,
+    source: PhantomData<fn() -> T>,
 }
 
-impl<'a> SceneLines<'a> {
+impl<'a, T> SceneLines<'a, T> {
     pub(super) fn new(
         revision: DocumentRevision,
         core: &'a SceneCore,
@@ -51,6 +53,7 @@ impl<'a> SceneLines<'a> {
             segments: core.spine.segments(),
             current: None,
             remaining: core.spine.summary().lines,
+            source: PhantomData,
         }
     }
 
@@ -74,7 +77,7 @@ impl<'a> SceneLines<'a> {
 
     /// Returns a positioned line by global visual index.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<SceneLineView<'a>> {
+    pub fn get(&self, index: usize) -> Option<SceneLineView<'a, T>> {
         self.core
             .spine
             .positioned_line(index)
@@ -83,21 +86,13 @@ impl<'a> SceneLines<'a> {
 
     /// Returns the first visual line.
     #[must_use]
-    pub fn first(&self) -> Option<SceneLineView<'a>> {
+    pub fn first(&self) -> Option<SceneLineView<'a, T>> {
         self.get(0)
-    }
-
-    /// Returns the final visual line.
-    #[must_use]
-    pub fn last(&self) -> Option<SceneLineView<'a>> {
-        self.remaining
-            .checked_sub(1)
-            .and_then(|index| self.get(index))
     }
 }
 
-impl<'a> Iterator for SceneLines<'a> {
-    type Item = SceneLineView<'a>;
+impl<'a, T> Iterator for SceneLines<'a, T> {
+    type Item = SceneLineView<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -122,167 +117,30 @@ impl<'a> Iterator for SceneLines<'a> {
     }
 }
 
-impl ExactSizeIterator for SceneLines<'_> {}
+impl<T> ExactSizeIterator for SceneLines<'_, T> {}
 
-impl<'a> IntoIterator for &'a SceneLines<'a> {
-    type Item = SceneLineView<'a>;
-    type IntoIter = SceneLines<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-/// Allocation-free view of visual lines in one transient projected scene.
-#[derive(Clone, Debug)]
-pub struct ProjectedSceneLines<'a> {
-    inner: SceneLines<'a>,
-}
-
-impl<'a> ProjectedSceneLines<'a> {
-    pub(super) fn new(
-        revision: DocumentRevision,
-        core: &'a SceneCore,
-        requested: &'a SceneFeaturePolicy,
-    ) -> Self {
-        Self {
-            inner: SceneLines::new(revision, core, requested),
-        }
-    }
-
-    /// Returns a fresh iterator over every line.
-    #[must_use]
-    pub fn iter(&self) -> Self {
-        Self {
-            inner: self.inner.iter(),
-        }
-    }
-
-    /// Returns the number of visual lines.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Returns whether the scene contains no visual line.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    /// Returns a positioned line by global visual index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<ProjectedSceneLineView<'a>> {
-        self.inner.get(index).map(ProjectedSceneLineView::new)
-    }
-
-    /// Returns the first visual line.
-    #[must_use]
-    pub fn first(&self) -> Option<ProjectedSceneLineView<'a>> {
-        self.get(0)
-    }
-
-    /// Returns the final visual line.
-    #[must_use]
-    pub fn last(&self) -> Option<ProjectedSceneLineView<'a>> {
-        self.len().checked_sub(1).and_then(|index| self.get(index))
-    }
-}
-
-impl<'a> Iterator for ProjectedSceneLines<'a> {
-    type Item = ProjectedSceneLineView<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(ProjectedSceneLineView::new)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for ProjectedSceneLines<'_> {}
-
-/// One transient visual line with scene placement applied lazily.
-#[derive(Clone, Copy, Debug)]
-pub struct ProjectedSceneLineView<'a> {
-    inner: SceneLineView<'a>,
-}
-
-impl<'a> ProjectedSceneLineView<'a> {
-    fn new(inner: SceneLineView<'a>) -> Self {
-        Self { inner }
-    }
-
-    /// Returns scene-space line bounds.
-    #[must_use]
-    pub fn bounds(self) -> Rect {
-        self.inner.bounds()
-    }
-
-    /// Returns the actual inline advance, including trailing whitespace.
-    #[must_use]
-    pub fn advance(self) -> f64 {
-        self.inner.advance()
-    }
-
-    /// Iterates authored and generated source slices represented by the line.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
-    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
-        self.inner.projected_sources()
-    }
-
-    /// Returns the global scene-fragment range painted by this line.
-    #[must_use]
-    pub fn fragment_range(self) -> Range<usize> {
-        self.inner.fragment_range()
-    }
-
-    /// Returns why this line ended.
-    #[must_use]
-    pub fn break_reason(self) -> LineBreakReason {
-        self.inner.break_reason()
-    }
-
-    /// Returns the scene-space baseline.
-    #[must_use]
-    pub fn baseline(self) -> f64 {
-        self.inner.baseline()
-    }
-
-    /// Returns the maximum font ascent contributing to this line.
-    #[must_use]
-    pub fn content_ascent(self) -> f64 {
-        self.inner.content_ascent()
-    }
-
-    /// Returns the maximum font descent contributing to this line.
-    #[must_use]
-    pub fn content_descent(self) -> f64 {
-        self.inner.content_descent()
-    }
-
-    /// Returns immutable post-formation placement and expansion evidence.
-    #[must_use]
-    pub fn adjustment(self) -> LineAdjustment {
-        self.inner.adjustment()
-    }
-}
+/// Allocation-free visual-line traversal for a transient projected scene.
+pub type ProjectedSceneLines<'a> = SceneLines<'a, ProjectedTextSource>;
 
 /// One visual line with scene origin, ordinals, and revision applied lazily.
-#[derive(Clone, Copy, Debug)]
-pub struct SceneLineView<'a> {
+#[derive(Debug)]
+pub struct SceneLineView<'a, T = SnapshotTextRange> {
     revision: DocumentRevision,
     requested: &'a SceneFeaturePolicy,
     positioned: PositionedLine<'a>,
+    source: PhantomData<fn() -> T>,
 }
 
-impl<'a> SceneLineView<'a> {
-    fn new(
+impl<T> Copy for SceneLineView<'_, T> {}
+
+impl<T> Clone for SceneLineView<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> SceneLineView<'a, T> {
+    pub(super) fn new(
         revision: DocumentRevision,
         requested: &'a SceneFeaturePolicy,
         positioned: PositionedLine<'a>,
@@ -291,6 +149,7 @@ impl<'a> SceneLineView<'a> {
             revision,
             requested,
             positioned,
+            source: PhantomData,
         }
     }
 
@@ -318,25 +177,8 @@ impl<'a> SceneLineView<'a> {
     #[must_use]
     pub fn advance(self) -> f64 {
         self.prepared().advance()
-            + self.local().adjustment.opportunity_expansion()
-                * f64::from(
-                    u32::try_from(self.local().adjustment.expanded_opportunities())
-                        .expect("validated line adjustment opportunity count fits u32"),
-                )
-    }
-
-    /// Iterates source-complete snapshot slices represented by the line.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
-    pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
-        Ok(SnapshotSources::new(
-            self.revision,
-            source_map(self.requested, self.positioned.position)?,
-            SourceReference::Projected(self.prepared().source().into()),
-        ))
+            + self.local().adjustment.opportunity_expansion
+                * f64::from(self.local().adjustment.expanded_opportunities)
     }
 
     /// Returns the global scene-fragment range painted by this line.
@@ -386,8 +228,32 @@ impl<'a> SceneLineView<'a> {
     fn translate(self) -> Vec2 {
         Vec2::new(0.0, self.positioned.position.position.block_origin)
     }
+}
 
-    fn projected_sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
+impl<'a> SceneLineView<'a> {
+    /// Iterates source-complete snapshot slices represented by the line.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
+        Ok(SnapshotSources::new(
+            self.revision,
+            source_map(self.requested, self.positioned.position)?,
+            SourceReference::Projected(self.prepared().source().into()),
+        ))
+    }
+}
+
+impl<'a> SceneLineView<'a, ProjectedTextSource> {
+    /// Iterates authored and generated source slices represented by the line.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MissingSceneCapability`] when provenance was not retained for
+    /// this paragraph.
+    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
         Ok(ProjectedSources::new(
             self.revision,
             source_map(self.requested, self.positioned.position)?,
@@ -396,18 +262,22 @@ impl<'a> SceneLineView<'a> {
     }
 }
 
+/// One transient visual line with scene placement applied lazily.
+pub type ProjectedSceneLineView<'a> = SceneLineView<'a, ProjectedTextSource>;
+
 /// Allocation-free view of paint-homogeneous fragments in one committed scene.
 #[derive(Clone, Debug)]
-pub struct SceneFragments<'a> {
+pub struct SceneFragments<'a, T = SnapshotTextRange> {
     revision: DocumentRevision,
     core: &'a SceneCore,
     requested: &'a SceneFeaturePolicy,
     segments: SpineSegments<'a>,
     current: Option<(PositionedSegment<'a>, usize)>,
     remaining: usize,
+    source: PhantomData<fn() -> T>,
 }
 
-impl<'a> SceneFragments<'a> {
+impl<'a, T> SceneFragments<'a, T> {
     pub(super) fn new(
         revision: DocumentRevision,
         core: &'a SceneCore,
@@ -420,6 +290,7 @@ impl<'a> SceneFragments<'a> {
             segments: core.spine.segments(),
             current: None,
             remaining: core.spine.summary().fragments,
+            source: PhantomData,
         }
     }
 
@@ -443,30 +314,16 @@ impl<'a> SceneFragments<'a> {
 
     /// Returns a fragment by global visual index.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<SceneFragmentView<'a>> {
+    pub fn get(&self, index: usize) -> Option<SceneFragmentView<'a, T>> {
         self.core
             .spine
             .positioned_fragment(index)
             .map(|fragment| SceneFragmentView::new(self.revision, self.requested, fragment))
     }
-
-    /// Returns the first fragment.
-    #[must_use]
-    pub fn first(&self) -> Option<SceneFragmentView<'a>> {
-        self.get(0)
-    }
-
-    /// Returns the final fragment.
-    #[must_use]
-    pub fn last(&self) -> Option<SceneFragmentView<'a>> {
-        self.remaining
-            .checked_sub(1)
-            .and_then(|index| self.get(index))
-    }
 }
 
-impl<'a> Iterator for SceneFragments<'a> {
-    type Item = SceneFragmentView<'a>;
+impl<'a, T> Iterator for SceneFragments<'a, T> {
+    type Item = SceneFragmentView<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
@@ -495,201 +352,30 @@ impl<'a> Iterator for SceneFragments<'a> {
     }
 }
 
-impl ExactSizeIterator for SceneFragments<'_> {}
+impl<T> ExactSizeIterator for SceneFragments<'_, T> {}
 
-impl<'a> IntoIterator for &'a SceneFragments<'a> {
-    type Item = SceneFragmentView<'a>;
-    type IntoIter = SceneFragments<'a>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-/// Allocation-free view of fragments in one transient projected scene.
-#[derive(Clone, Debug)]
-pub struct ProjectedSceneFragments<'a> {
-    inner: SceneFragments<'a>,
-}
-
-impl<'a> ProjectedSceneFragments<'a> {
-    pub(super) fn new(
-        revision: DocumentRevision,
-        core: &'a SceneCore,
-        requested: &'a SceneFeaturePolicy,
-    ) -> Self {
-        Self {
-            inner: SceneFragments::new(revision, core, requested),
-        }
-    }
-
-    /// Returns a fresh iterator over every fragment.
-    #[must_use]
-    pub fn iter(&self) -> Self {
-        Self {
-            inner: self.inner.iter(),
-        }
-    }
-
-    /// Returns the number of fragments.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Returns whether the scene contains no painted fragment.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    /// Returns a fragment by global visual index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<ProjectedSceneFragmentView<'a>> {
-        self.inner.get(index).map(ProjectedSceneFragmentView::new)
-    }
-
-    /// Returns the first fragment.
-    #[must_use]
-    pub fn first(&self) -> Option<ProjectedSceneFragmentView<'a>> {
-        self.get(0)
-    }
-
-    /// Returns the final fragment.
-    #[must_use]
-    pub fn last(&self) -> Option<ProjectedSceneFragmentView<'a>> {
-        self.len().checked_sub(1).and_then(|index| self.get(index))
-    }
-}
-
-impl<'a> Iterator for ProjectedSceneFragments<'a> {
-    type Item = ProjectedSceneFragmentView<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(ProjectedSceneFragmentView::new)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for ProjectedSceneFragments<'_> {}
-
-/// One transient paint fragment positioned in scene space.
-#[derive(Clone, Copy, Debug)]
-pub struct ProjectedSceneFragmentView<'a> {
-    inner: SceneFragmentView<'a>,
-}
-
-impl<'a> ProjectedSceneFragmentView<'a> {
-    fn new(inner: SceneFragmentView<'a>) -> Self {
-        Self { inner }
-    }
-
-    /// Returns the retained fragment identity.
-    #[must_use]
-    pub fn id(self) -> SceneFragmentId {
-        self.inner.id()
-    }
-
-    /// Returns positioned shaped glyph observations.
-    #[must_use]
-    pub fn glyphs(self) -> ProjectedSceneGlyphs<'a> {
-        ProjectedSceneGlyphs {
-            inner: self.inner.glyphs(),
-        }
-    }
-
-    /// Returns the paint slot.
-    #[must_use]
-    pub fn paint(self) -> PaintSlot {
-        self.inner.paint()
-    }
-
-    /// Returns the fragment transform.
-    #[must_use]
-    pub fn transform(self) -> Affine {
-        self.inner.transform()
-    }
-
-    /// Returns the first authored or generated source slice.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
-    pub fn source(self) -> Result<Option<ProjectedTextSource>, MissingSceneCapability> {
-        Ok(self.sources()?.next())
-    }
-
-    /// Iterates every authored and generated source slice.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
-    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
-        Ok(ProjectedSources::from_fragment(
-            self.inner.revision,
-            source_map(self.inner.requested, self.inner.positioned.position)?,
-            self.inner,
-        ))
-    }
-
-    /// Returns an explicit scene-space partial-paint clip.
-    #[must_use]
-    pub fn paint_clip(self) -> Option<Rect> {
-        self.inner.paint_clip()
-    }
-
-    /// Returns exact font bytes and face index.
-    #[must_use]
-    pub fn font(self) -> &'a FontData {
-        self.inner.font()
-    }
-
-    /// Returns the scene-unit font size.
-    #[must_use]
-    pub fn font_size(self) -> f32 {
-        self.inner.font_size()
-    }
-
-    /// Returns synthesis suggestions.
-    #[must_use]
-    pub fn synthesis(self) -> &'a FontSynthesis {
-        self.inner.synthesis()
-    }
-
-    /// Returns normalized variation coordinates.
-    #[must_use]
-    pub fn normalized_coords(self) -> &'a [i16] {
-        self.inner.normalized_coords()
-    }
-
-    /// Returns the resolved Unicode bidi level.
-    #[must_use]
-    pub fn bidi_level(self) -> u8 {
-        self.inner.bidi_level()
-    }
-
-    /// Returns the resolved ISO 15924 script tag.
-    #[must_use]
-    pub fn script(self) -> [u8; 4] {
-        self.inner.script()
-    }
-}
+/// Allocation-free fragment traversal for a transient projected scene.
+pub type ProjectedSceneFragments<'a> = SceneFragments<'a, ProjectedTextSource>;
 
 /// One paint-homogeneous fragment positioned in scene space.
-#[derive(Clone, Copy, Debug)]
-pub struct SceneFragmentView<'a> {
+#[derive(Debug)]
+pub struct SceneFragmentView<'a, T = SnapshotTextRange> {
     revision: DocumentRevision,
     requested: &'a SceneFeaturePolicy,
     positioned: PositionedFragment<'a>,
+    source: PhantomData<fn() -> T>,
 }
 
-impl<'a> SceneFragmentView<'a> {
-    fn new(
+impl<T> Copy for SceneFragmentView<'_, T> {}
+
+impl<T> Clone for SceneFragmentView<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> SceneFragmentView<'a, T> {
+    pub(super) fn new(
         revision: DocumentRevision,
         requested: &'a SceneFeaturePolicy,
         positioned: PositionedFragment<'a>,
@@ -698,6 +384,7 @@ impl<'a> SceneFragmentView<'a> {
             revision,
             requested,
             positioned,
+            source: PhantomData,
         }
     }
 
@@ -754,7 +441,7 @@ impl<'a> SceneFragmentView<'a> {
     }
 
     fn inline_advance_adjustment(self, glyph: PreparedGlyphView<'_>) -> f64 {
-        let expansion = self.cached_line().adjustment.opportunity_expansion();
+        let expansion = self.cached_line().adjustment.opportunity_expansion;
         if expansion > 0.0
             && self
                 .prepared_line()
@@ -767,7 +454,7 @@ impl<'a> SceneFragmentView<'a> {
         }
     }
 
-    fn observe_glyph(self, local: usize, inline_origin: f64) -> SceneGlyphView<'a> {
+    fn observe_glyph(self, local: usize, inline_origin: f64) -> SceneGlyphView<'a, T> {
         let inline_advance_adjustment = self.inline_advance_adjustment(self.prepared_glyph(local));
         SceneGlyphView {
             revision: self.revision,
@@ -775,6 +462,7 @@ impl<'a> SceneFragmentView<'a> {
             local,
             inline_origin,
             inline_advance_adjustment,
+            source: PhantomData,
         }
     }
 
@@ -805,7 +493,7 @@ impl<'a> SceneFragmentView<'a> {
 
     /// Returns positioned shaped glyph observations.
     #[must_use]
-    pub fn glyphs(self) -> SceneGlyphs<'a> {
+    pub fn glyphs(self) -> SceneGlyphs<'a, T> {
         let glyphs = self.local().glyphs.clone();
         SceneGlyphs {
             revision: self.revision,
@@ -827,30 +515,6 @@ impl<'a> SceneFragmentView<'a> {
     #[must_use]
     pub fn transform(self) -> Affine {
         Affine::IDENTITY
-    }
-
-    /// Returns the first source slice covered by this fragment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
-    pub fn source(self) -> Result<Option<SnapshotTextRange>, MissingSceneCapability> {
-        Ok(self.sources()?.next())
-    }
-
-    /// Iterates every source slice covered by this fragment.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
-    pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
-        Ok(SnapshotSources::from_fragment(
-            self.revision,
-            source_map(self.requested, self.positioned.position)?,
-            self,
-        ))
     }
 
     /// Returns an explicit scene-space partial-paint clip.
@@ -900,18 +564,53 @@ impl<'a> SceneFragmentView<'a> {
     }
 }
 
+impl<'a> SceneFragmentView<'a> {
+    /// Returns the first source slice covered by this fragment.
+    pub fn source(self) -> Result<Option<SnapshotTextRange>, MissingSceneCapability> {
+        Ok(self.sources()?.next())
+    }
+
+    /// Iterates every source slice covered by this fragment.
+    pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
+        Ok(SnapshotSources::from_fragment(
+            self.revision,
+            source_map(self.requested, self.positioned.position)?,
+            self,
+        ))
+    }
+}
+
+impl<'a> SceneFragmentView<'a, ProjectedTextSource> {
+    /// Returns the first authored or generated source slice.
+    pub fn source(self) -> Result<Option<ProjectedTextSource>, MissingSceneCapability> {
+        Ok(self.sources()?.next())
+    }
+
+    /// Iterates every authored and generated source slice.
+    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
+        Ok(ProjectedSources::from_fragment(
+            self.revision,
+            source_map(self.requested, self.positioned.position)?,
+            self,
+        ))
+    }
+}
+
+/// One transient paint fragment positioned in scene space.
+pub type ProjectedSceneFragmentView<'a> = SceneFragmentView<'a, ProjectedTextSource>;
+
 /// Allocation-free shaped glyph views inside one fragment.
 #[derive(Clone, Debug)]
-pub struct SceneGlyphs<'a> {
+pub struct SceneGlyphs<'a, T = SnapshotTextRange> {
     revision: DocumentRevision,
-    fragment: SceneFragmentView<'a>,
+    fragment: SceneFragmentView<'a, T>,
     front: usize,
     back: usize,
     front_inline: f64,
     back_inline: Option<f64>,
 }
 
-impl<'a> SceneGlyphs<'a> {
+impl<'a, T> SceneGlyphs<'a, T> {
     /// Returns a fresh iterator over every glyph observation.
     #[must_use]
     pub fn iter(&self) -> Self {
@@ -932,7 +631,7 @@ impl<'a> SceneGlyphs<'a> {
 
     /// Returns a glyph by fragment-local index.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<SceneGlyphView<'a>> {
+    pub fn get(&self, index: usize) -> Option<SceneGlyphView<'a, T>> {
         let glyphs = self.fragment.local().glyphs.clone();
         (index < glyphs.len()).then(|| {
             let local = glyphs.start as usize + index;
@@ -943,13 +642,13 @@ impl<'a> SceneGlyphs<'a> {
 
     /// Returns the first glyph.
     #[must_use]
-    pub fn first(&self) -> Option<SceneGlyphView<'a>> {
+    pub fn first(&self) -> Option<SceneGlyphView<'a, T>> {
         self.get(0)
     }
 }
 
-impl<'a> Iterator for SceneGlyphs<'a> {
-    type Item = SceneGlyphView<'a>;
+impl<'a, T> Iterator for SceneGlyphs<'a, T> {
+    type Item = SceneGlyphView<'a, T>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.front == self.back {
@@ -968,7 +667,7 @@ impl<'a> Iterator for SceneGlyphs<'a> {
     }
 }
 
-impl DoubleEndedIterator for SceneGlyphs<'_> {
+impl<T> DoubleEndedIterator for SceneGlyphs<'_, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.front == self.back {
             return None;
@@ -989,136 +688,36 @@ impl DoubleEndedIterator for SceneGlyphs<'_> {
             local: self.back,
             inline_origin,
             inline_advance_adjustment,
+            source: PhantomData,
         })
     }
 }
 
-impl ExactSizeIterator for SceneGlyphs<'_> {}
+impl<T> ExactSizeIterator for SceneGlyphs<'_, T> {}
 
 /// Allocation-free shaped glyph views inside one transient fragment.
-#[derive(Clone, Debug)]
-pub struct ProjectedSceneGlyphs<'a> {
-    inner: SceneGlyphs<'a>,
-}
-
-impl<'a> ProjectedSceneGlyphs<'a> {
-    /// Returns a fresh iterator over every glyph observation.
-    #[must_use]
-    pub fn iter(&self) -> Self {
-        Self {
-            inner: self.inner.iter(),
-        }
-    }
-
-    /// Returns the number of glyph observations.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.inner.len()
-    }
-
-    /// Returns whether the fragment has no glyph observation.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.inner.is_empty()
-    }
-
-    /// Returns a glyph by fragment-local index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<ProjectedSceneGlyphView<'a>> {
-        self.inner.get(index).map(ProjectedSceneGlyphView::new)
-    }
-
-    /// Returns the first glyph.
-    #[must_use]
-    pub fn first(&self) -> Option<ProjectedSceneGlyphView<'a>> {
-        self.get(0)
-    }
-}
-
-impl<'a> Iterator for ProjectedSceneGlyphs<'a> {
-    type Item = ProjectedSceneGlyphView<'a>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(ProjectedSceneGlyphView::new)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl DoubleEndedIterator for ProjectedSceneGlyphs<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.inner.next_back().map(ProjectedSceneGlyphView::new)
-    }
-}
-
-impl ExactSizeIterator for ProjectedSceneGlyphs<'_> {}
-
-/// One transient shaped glyph observation positioned in scene space.
-#[derive(Clone, Copy, Debug)]
-pub struct ProjectedSceneGlyphView<'a> {
-    inner: SceneGlyphView<'a>,
-}
-
-impl<'a> ProjectedSceneGlyphView<'a> {
-    fn new(inner: SceneGlyphView<'a>) -> Self {
-        Self { inner }
-    }
-
-    /// Returns the identity shared by split-paint observations.
-    #[must_use]
-    pub fn instance_id(self) -> SceneGlyphInstanceId {
-        self.inner.instance_id()
-    }
-
-    /// Returns the backend glyph identifier.
-    #[must_use]
-    pub fn id(self) -> u32 {
-        self.inner.id()
-    }
-
-    /// Returns the scene-space glyph origin.
-    #[must_use]
-    pub fn position(self) -> Point {
-        self.inner.position()
-    }
-
-    /// Returns the shaped advance.
-    #[must_use]
-    pub fn advance(self) -> Vec2 {
-        self.inner.advance()
-    }
-
-    /// Iterates source-complete authored and generated provenance.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
-    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
-        Ok(ProjectedSources::new(
-            self.inner.revision,
-            source_map(
-                self.inner.fragment.requested,
-                self.inner.fragment.positioned.position,
-            )?,
-            self.inner.fragment.source_reference(self.inner.local),
-        ))
-    }
-}
+pub type ProjectedSceneGlyphs<'a> = SceneGlyphs<'a, ProjectedTextSource>;
 
 /// One shaped glyph observation positioned in scene space.
-#[derive(Clone, Copy, Debug)]
-pub struct SceneGlyphView<'a> {
+#[derive(Debug)]
+pub struct SceneGlyphView<'a, T = SnapshotTextRange> {
     revision: DocumentRevision,
-    fragment: SceneFragmentView<'a>,
+    fragment: SceneFragmentView<'a, T>,
     local: usize,
     inline_origin: f64,
     inline_advance_adjustment: f64,
+    source: PhantomData<fn() -> T>,
 }
 
-impl<'a> SceneGlyphView<'a> {
+impl<T> Copy for SceneGlyphView<'_, T> {}
+
+impl<T> Clone for SceneGlyphView<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> SceneGlyphView<'a, T> {
     fn prepared(self) -> PreparedGlyphView<'a> {
         self.fragment.prepared_glyph(self.local)
     }
@@ -1155,13 +754,10 @@ impl<'a> SceneGlyphView<'a> {
         let advance = self.prepared().advance();
         Vec2::new(advance.x + self.inline_advance_adjustment, advance.y)
     }
+}
 
+impl<'a> SceneGlyphView<'a> {
     /// Iterates source-complete glyph provenance.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`MissingSceneCapability`] when provenance was not retained for
-    /// this paragraph.
     pub fn sources(self) -> Result<SnapshotSources<'a>, MissingSceneCapability> {
         Ok(SnapshotSources::new(
             self.revision,
@@ -1171,14 +767,29 @@ impl<'a> SceneGlyphView<'a> {
     }
 }
 
-/// Iterator that stamps paragraph-local committed ranges with a scene revision.
-#[derive(Clone, Debug)]
-pub struct SnapshotSources<'a> {
-    revision: DocumentRevision,
-    ranges: SourceRangeSequence<'a>,
+impl<'a> SceneGlyphView<'a, ProjectedTextSource> {
+    /// Iterates source-complete authored and generated provenance.
+    pub fn sources(self) -> Result<ProjectedSources<'a>, MissingSceneCapability> {
+        Ok(ProjectedSources::new(
+            self.revision,
+            source_map(self.fragment.requested, self.fragment.positioned.position)?,
+            self.fragment.source_reference(self.local),
+        ))
+    }
 }
 
-impl<'a> SnapshotSources<'a> {
+/// One transient shaped glyph observation positioned in scene space.
+pub type ProjectedSceneGlyphView<'a> = SceneGlyphView<'a, ProjectedTextSource>;
+
+/// Typed source iterator over paragraph-local provenance.
+#[derive(Clone, Debug)]
+pub struct TextSources<'a, T> {
+    revision: DocumentRevision,
+    ranges: SourceRangeSequence<'a>,
+    source: PhantomData<fn() -> T>,
+}
+
+impl<'a, T> TextSources<'a, T> {
     fn new(
         revision: DocumentRevision,
         map: &'a ParagraphSourceMap,
@@ -1187,13 +798,14 @@ impl<'a> SnapshotSources<'a> {
         Self {
             revision,
             ranges: SourceRangeSequence::new(map, SourceReferences::One(source)),
+            source: PhantomData,
         }
     }
 
     fn from_fragment(
         revision: DocumentRevision,
         map: &'a ParagraphSourceMap,
-        fragment: SceneFragmentView<'a>,
+        fragment: SceneFragmentView<'a, T>,
     ) -> Self {
         let glyphs = fragment.local().glyphs.clone();
         Self {
@@ -1208,6 +820,7 @@ impl<'a> SnapshotSources<'a> {
                         .then_some(fragment.local().segment as usize),
                 },
             ),
+            source: PhantomData,
         }
     }
 
@@ -1217,21 +830,13 @@ impl<'a> SnapshotSources<'a> {
         Self {
             revision: self.revision,
             ranges: self.ranges.clone(),
+            source: PhantomData,
         }
     }
-
-    /// Returns one source range by observation-local index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<SnapshotTextRange> {
-        self.iter().nth(index)
-    }
-
-    /// Returns the first source range.
-    #[must_use]
-    pub fn first(&self) -> Option<SnapshotTextRange> {
-        self.get(0)
-    }
 }
+
+/// Iterator that stamps paragraph-local committed ranges with a scene revision.
+pub type SnapshotSources<'a> = TextSources<'a, SnapshotTextRange>;
 
 impl Iterator for SnapshotSources<'_> {
     type Item = SnapshotTextRange;
@@ -1258,66 +863,7 @@ impl DoubleEndedIterator for SnapshotSources<'_> {
 impl ExactSizeIterator for SnapshotSources<'_> {}
 
 /// Iterator over authored and generated source slices in a transient scene.
-#[derive(Clone, Debug)]
-pub struct ProjectedSources<'a> {
-    revision: DocumentRevision,
-    ranges: SourceRangeSequence<'a>,
-}
-
-impl<'a> ProjectedSources<'a> {
-    fn new(
-        revision: DocumentRevision,
-        map: &'a ParagraphSourceMap,
-        source: SourceReference,
-    ) -> Self {
-        Self {
-            revision,
-            ranges: SourceRangeSequence::new(map, SourceReferences::One(source)),
-        }
-    }
-
-    fn from_fragment(
-        revision: DocumentRevision,
-        map: &'a ParagraphSourceMap,
-        fragment: SceneFragmentView<'a>,
-    ) -> Self {
-        let glyphs = fragment.local().glyphs.clone();
-        Self {
-            revision,
-            ranges: SourceRangeSequence::new(
-                map,
-                SourceReferences::Glyphs {
-                    run: fragment.prepared_run(),
-                    start: glyphs.start as usize,
-                    end: glyphs.end as usize,
-                    segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
-                        .then_some(fragment.local().segment as usize),
-                },
-            ),
-        }
-    }
-
-    /// Returns a fresh iterator over every source range.
-    #[must_use]
-    pub fn iter(&self) -> Self {
-        Self {
-            revision: self.revision,
-            ranges: self.ranges.clone(),
-        }
-    }
-
-    /// Returns one source range by observation-local index.
-    #[must_use]
-    pub fn get(&self, index: usize) -> Option<ProjectedTextSource> {
-        self.iter().nth(index)
-    }
-
-    /// Returns the first source range.
-    #[must_use]
-    pub fn first(&self) -> Option<ProjectedTextSource> {
-        self.get(0)
-    }
-}
+pub type ProjectedSources<'a> = TextSources<'a, ProjectedTextSource>;
 
 impl Iterator for ProjectedSources<'_> {
     type Item = ProjectedTextSource;
@@ -1343,19 +889,28 @@ impl DoubleEndedIterator for ProjectedSources<'_> {
 
 impl ExactSizeIterator for ProjectedSources<'_> {}
 
-/// Borrowed source-complete interaction unit in one immutable snapshot.
+/// Borrowed source-complete interaction unit.
 ///
 /// The view retains no per-hit allocation. Its source iterator resolves the
 /// paragraph-local relation map lazily and stamps the current scene revision
 /// at observation time.
-#[derive(Clone, Copy, Debug)]
-pub struct SnapshotTextUnitView<'a> {
+#[derive(Debug)]
+pub struct TextUnitView<'a, T = SnapshotTextRange> {
     revision: DocumentRevision,
     source_map: &'a ParagraphSourceMap,
     source: SourceSpan,
+    output: PhantomData<fn() -> T>,
 }
 
-impl<'a> SnapshotTextUnitView<'a> {
+impl<T> Copy for TextUnitView<'_, T> {}
+
+impl<T> Clone for TextUnitView<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, T> TextUnitView<'a, T> {
     pub(super) const fn new(
         revision: DocumentRevision,
         source_map: &'a ParagraphSourceMap,
@@ -1365,9 +920,15 @@ impl<'a> SnapshotTextUnitView<'a> {
             revision,
             source_map,
             source,
+            output: PhantomData,
         }
     }
+}
 
+/// Borrowed source-complete interaction unit in one immutable snapshot.
+pub type SnapshotTextUnitView<'a> = TextUnitView<'a>;
+
+impl<'a> TextUnitView<'a> {
     /// Iterates every ordered leaf-local source range without allocating.
     #[must_use]
     pub fn sources(self) -> SnapshotSources<'a> {
@@ -1386,26 +947,9 @@ impl<'a> SnapshotTextUnitView<'a> {
 }
 
 /// Borrowed source-complete interaction unit in a composition scene.
-#[derive(Clone, Copy, Debug)]
-pub struct ProjectedTextUnitView<'a> {
-    revision: DocumentRevision,
-    source_map: &'a ParagraphSourceMap,
-    source: SourceSpan,
-}
+pub type ProjectedTextUnitView<'a> = TextUnitView<'a, ProjectedTextSource>;
 
-impl<'a> ProjectedTextUnitView<'a> {
-    pub(super) const fn new(
-        revision: DocumentRevision,
-        source_map: &'a ParagraphSourceMap,
-        source: SourceSpan,
-    ) -> Self {
-        Self {
-            revision,
-            source_map,
-            source,
-        }
-    }
-
+impl<'a> TextUnitView<'a, ProjectedTextSource> {
     /// Iterates ordered authored and generated provenance without allocating.
     #[must_use]
     pub fn sources(self) -> ProjectedSources<'a> {

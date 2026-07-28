@@ -337,7 +337,7 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
             .line(0)
             .expect("first mixed-direction line")
             .adjustment()
-            .alignment(),
+            .alignment,
         TextAlignment::Justify,
         "the mixed-direction specimen must use public paragraph alignment"
     );
@@ -346,13 +346,13 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
             .line(0)
             .expect("first mixed-direction line")
             .adjustment()
-            .expanded_opportunities()
+            .expanded_opportunities
             > 0
             && mixed_direction
                 .line(0)
                 .expect("first mixed-direction line")
                 .adjustment()
-                .opportunity_expansion()
+                .opportunity_expansion
                 > 0.0,
         "the regular line must visibly fill its exact slot through Western space expansion"
     );
@@ -515,12 +515,12 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     );
     let initial = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
-        glyph_count(initial.scene(), suffix),
+        glyph_count(&initial.scene, suffix),
         4,
         "retained proof must execute real ffi substitution without splitting its paint"
     );
     assert!(
-        initial.scene().fragments().iter().any(|fragment| {
+        initial.scene.fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
                 let source = glyph
                     .sources()
@@ -538,13 +538,11 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     let changed = edit.commit()?;
     let edited = layout.prepare(changed.snapshot(), &request)?;
     assert_eq!(
-        edited.work().shape().paragraphs(),
-        1,
+        edited.work.shape.paragraphs, 1,
         "only the edited paragraph may be reshaped"
     );
     assert_eq!(
-        edited.work().reused_paragraphs(),
-        1,
+        edited.work.reused_paragraphs, 1,
         "the unchanged sibling must be retained"
     );
 
@@ -556,25 +554,22 @@ fn retained_proof(layout: &mut LayoutEngine) -> Result<RetainedProof, AnyError> 
     );
     let paint_only = layout.prepare(changed.snapshot(), &paint_request)?;
     assert_eq!(
-        paint_only.work().analysis().paragraphs(),
-        0,
+        paint_only.work.analysis.paragraphs, 0,
         "paint-only work must not repeat analysis"
     );
     assert_eq!(
-        paint_only.work().shape().paragraphs(),
-        0,
+        paint_only.work.shape.paragraphs, 0,
         "paint-only work must not repeat shaping"
     );
     assert_eq!(
-        paint_only.work().flow().paragraphs(),
-        0,
+        paint_only.work.flow.paragraphs, 0,
         "paint-only work must not repeat flow"
     );
 
     Ok(RetainedProof {
-        reshaped: edited.work().shape().paragraphs(),
-        reused: edited.work().reused_paragraphs(),
-        paint_reshaped: paint_only.work().shape().paragraphs(),
+        reshaped: edited.work.shape.paragraphs,
+        reused: edited.work.reused_paragraphs,
+        paint_reshaped: paint_only.work.shape.paragraphs,
     })
 }
 
@@ -677,7 +672,7 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         &paints,
     );
     let output = layout.prepare(published.snapshot(), &request)?;
-    let scene = output.scene();
+    let scene = output.scene;
 
     assert_eq!(
         scene.lines().len(),
@@ -685,12 +680,12 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         "the computed-style specimen must remain one three-line document"
     );
     assert_eq!(
-        glyph_count(scene, ligatures_on),
+        glyph_count(&scene, ligatures_on),
         4,
         "explicit liga-on office must substitute ffi"
     );
     assert_eq!(
-        glyph_count(scene, ligatures_off),
+        glyph_count(&scene, ligatures_off),
         6,
         "explicit liga-off office must preserve six glyphs"
     );
@@ -714,9 +709,9 @@ fn computed_style_specimen(layout: &mut LayoutEngine) -> Result<TextScene, AnyEr
         Some(14.0),
         "the specimen must retain Fontique's synthetic oblique evidence"
     );
-    let light_coords = coordinates(scene, light_text);
-    let regular_coords = coordinates(scene, regular_text);
-    let black_coords = coordinates(scene, black_text);
+    let light_coords = coordinates(&scene, light_text);
+    let regular_coords = coordinates(&scene, regular_text);
+    let black_coords = coordinates(&scene, black_text);
     assert!(
         !light_coords.is_empty(),
         "the variable specimen must retain normalized coordinates"
@@ -862,7 +857,7 @@ fn layout_scene_aligned(
         &paints,
     );
     let output = layout.prepare(published.snapshot(), &request)?;
-    Ok(output.scene().clone())
+    Ok(output.scene.clone())
 }
 
 fn poster_paints() -> PaintTable {

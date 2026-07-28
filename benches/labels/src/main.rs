@@ -83,11 +83,10 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .expect("cold unique label must prepare");
             assert_eq!(
-                output.work().shape().paragraphs(),
-                1,
+                output.work.shape.paragraphs, 1,
                 "a cold stable identity must shape exactly one paragraph"
             );
-            black_box(output.scene().metrics());
+            black_box(output.scene.metrics());
         }
     });
     assert_residency(&layout, LABELS);
@@ -101,14 +100,14 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .expect("retained unique label must prepare");
             assert_no_preparation_work(&output);
-            black_box(output.scene().fragments().len());
+            black_box(output.scene.fragments().len());
         }
     });
 
     let mut constrained_line_reshapes = 0_usize;
     let mut constrained_line_paragraphs = 0_usize;
-    let mut constrained_line_candidates = 0_usize;
-    let mut constrained_rejected_candidates = 0_usize;
+    let mut constrained_line_candidates = 0_u32;
+    let mut constrained_rejected_candidates = 0_u32;
     let constrained_unique = measure(|| {
         for label in &labels {
             let output = layout
@@ -118,39 +117,34 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .expect("constrained unique label must prepare");
             assert_eq!(
-                output.work().analysis().paragraphs(),
-                0,
+                output.work.analysis.paragraphs, 0,
                 "constraint changes must reuse analysis"
             );
             assert_eq!(
-                output.work().itemization().paragraphs(),
-                0,
+                output.work.itemization.paragraphs, 0,
                 "constraint changes must reuse itemization"
             );
             assert_eq!(
-                output.work().font_selection().paragraphs(),
-                0,
+                output.work.font_selection.paragraphs, 0,
                 "constraint changes must reuse font selection"
             );
             assert_eq!(
-                output.work().shape().paragraphs(),
-                0,
+                output.work.shape.paragraphs, 0,
                 "constraint changes must reuse canonical shaping"
             );
             assert_eq!(
-                output.work().flow().paragraphs(),
-                1,
+                output.work.flow.paragraphs, 1,
                 "constraint changes must reform exactly one paragraph"
             );
             constrained_line_reshapes =
-                constrained_line_reshapes.saturating_add(output.work().line_reshapes());
+                constrained_line_reshapes.saturating_add(output.work.line_reshapes);
             constrained_line_paragraphs =
-                constrained_line_paragraphs.saturating_add(output.work().line_shape().paragraphs());
+                constrained_line_paragraphs.saturating_add(output.work.line_shape.paragraphs);
             constrained_line_candidates =
-                constrained_line_candidates.saturating_add(output.work().line_candidates());
+                constrained_line_candidates.saturating_add(output.work.line_candidates);
             constrained_rejected_candidates = constrained_rejected_candidates
-                .saturating_add(output.work().rejected_line_candidates());
-            black_box(output.scene().lines().len());
+                .saturating_add(output.work.rejected_line_candidates);
+            black_box(output.scene.lines().len());
         }
     });
 
@@ -164,16 +158,14 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             )
             .expect("localized edit must prepare");
         assert_eq!(
-            output.work().analysis().paragraphs(),
-            1,
+            output.work.analysis.paragraphs, 1,
             "one edited block must analyze exactly one paragraph"
         );
         assert_eq!(
-            output.work().shape().paragraphs(),
-            1,
+            output.work.shape.paragraphs, 1,
             "one edited block must shape exactly one paragraph"
         );
-        black_box(output.scene().metrics());
+        black_box(output.scene.metrics());
     });
 
     let sample = &labels[1];
@@ -186,19 +178,19 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
         &BlockRequest::new(TextConstraint::MaxContent, &style, &paint),
     )?;
     assert!(
-        min.scene().metrics().size().width <= max.scene().metrics().size().width,
+        min.scene.metrics().size.width <= max.scene.metrics().size.width,
         "min-content width cannot exceed max-content width"
     );
     assert!(
-        min.scene().metrics().size().height >= max.scene().metrics().size().height,
+        min.scene.metrics().size.height >= max.scene.metrics().size.height,
         "taking every legal break cannot reduce block height"
     );
     assert!(
-        max.scene().metrics().first_baseline().is_some(),
+        max.scene.metrics().first_baseline.is_some(),
         "non-empty max-content text must expose a first baseline"
     );
     assert!(
-        max.scene().metrics().last_baseline().is_some(),
+        max.scene.metrics().last_baseline.is_some(),
         "non-empty max-content text must expose a last baseline"
     );
 
@@ -209,7 +201,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     });
     assert_residency(&layout, 0);
     assert_eq!(
-        layout.cache_diagnostics().releases(),
+        layout.cache_diagnostics().releases,
         LABELS,
         "every explicitly discarded block must record one geometry release"
     );
@@ -228,11 +220,10 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .expect("identity-local repeated text must prepare");
             assert_eq!(
-                output.work().shape().paragraphs(),
-                1,
+                output.work.shape.paragraphs, 1,
                 "distinct identities do not imply a cross-paragraph shaping cache"
             );
-            black_box(output.scene().metrics());
+            black_box(output.scene.metrics());
         }
     });
     let retained_identical = measure(|| {
@@ -274,8 +265,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
                 )
                 .expect("churn label must prepare");
             assert_eq!(
-                output.work().shape().paragraphs(),
-                1,
+                output.work.shape.paragraphs, 1,
                 "each new churn identity must shape once"
             );
             assert!(
@@ -285,11 +275,11 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             assert!(
                 churn_layout
                     .cache_diagnostics()
-                    .adapter_facts()
-                    .is_some_and(|facts| facts.entries() == 0),
+                    .adapter_facts
+                    .is_some_and(|facts| facts.entries == 0),
                 "the default zero adapter-fact budget must keep churn display-only"
             );
-            black_box(output.scene().fragments().len());
+            black_box(output.scene.fragments().len());
         }
     });
     let churn_cache = churn_layout.cache_diagnostics();
@@ -299,17 +289,17 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
         "geometry residency must settle at the configured budget"
     );
     assert_eq!(
-        churn_cache.adapter_facts().map(|facts| facts.entries()),
+        churn_cache.adapter_facts.map(|facts| facts.entries),
         Some(0),
         "published display geometry must not imply adapter-fact residency"
     );
     assert_eq!(
-        churn_cache.evictions(),
+        churn_cache.evictions,
         LABELS - CHURN_BUDGET,
         "every identity beyond the budget must be evicted"
     );
     assert_eq!(
-        churn_cache.peak_entries(),
+        churn_cache.peak_entries,
         CHURN_BUDGET + 1,
         "one newly materializing entry is the only allowed transient excess"
     );
@@ -329,8 +319,7 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
     report("text_block_budget_churn", LABELS, churn);
     println!(
         "cache_proof\tbudget={CHURN_BUDGET}\tevictions={}\tpeak={}\tfinal_geometry=0\tfinal_backend=0",
-        churn_cache.evictions(),
-        churn_cache.peak_entries()
+        churn_cache.evictions, churn_cache.peak_entries
     );
     Ok(())
 }
@@ -699,8 +688,7 @@ fn profile_shared_hit(
             &BlockRequest::new(TextConstraint::MaxContent, style, paint),
         )?;
         assert_eq!(
-            seed.work().shape().paragraphs(),
-            1,
+            seed.work.shape.paragraphs, 1,
             "each cleared round must seed one fresh prepared value"
         );
         elapsed += measure(|| {
@@ -712,26 +700,22 @@ fn profile_shared_hit(
                     )
                     .expect("eligible identical identity must share preparation");
                 assert_eq!(
-                    output.work().shared_preparations(),
-                    1,
+                    output.work.shared_preparations, 1,
                     "every non-seed identical identity must hit shared preparation"
                 );
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    0,
+                    output.work.shape.paragraphs, 0,
                     "a shared hit must perform no canonical shaping"
                 );
                 assert_eq!(
-                    output.work().flow().paragraphs(),
-                    0,
+                    output.work.flow.paragraphs, 0,
                     "a shared hit must perform no line formation"
                 );
                 assert_eq!(
-                    output.work().geometry().paragraphs(),
-                    1,
+                    output.work.geometry.paragraphs, 1,
                     "each consumer must still build its own geometry"
                 );
-                black_box(output.scene().metrics());
+                black_box(output.scene.metrics());
             }
         });
     }
@@ -743,11 +727,11 @@ fn profile_shared_hit(
         let cache = layout.cache_diagnostics();
         println!(
             "shared-hit_work\toperations={operations}\thits={}\tmisses={}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
-            cache.shared_preparation_hits(),
-            cache.shared_preparation_misses(),
-            cache.shared_preparation_entries(),
-            cache.shared_preparation_resident_bytes(),
-            cache.shared_preparation_peak_bytes()
+            cache.shared_preparation_hits,
+            cache.shared_preparation_misses,
+            cache.shared_preparation_entries,
+            cache.shared_preparation_resident_bytes,
+            cache.shared_preparation_peak_bytes
         );
     }
     Ok(())
@@ -898,18 +882,17 @@ fn profile_cold_capability(
                     )
                     .expect("cold identical label must prepare");
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    1,
+                    output.work.shape.paragraphs, 1,
                     "cleared identities must shape exactly once"
                 );
-                black_box(output.scene().metrics());
+                black_box(output.scene.metrics());
             }
         }
     });
     report_profile(name, rounds, label_count, elapsed);
     report_residency(
         name,
-        layout.cache_diagnostics().scene_cache_residency(),
+        layout.cache_diagnostics().scene_cache_residency,
         label_count,
     );
     Ok(())
@@ -942,7 +925,7 @@ fn profile_hit_query(
         measure(|| {
             for _ in 0..rounds {
                 for output in &outputs {
-                    let scene = output.scene();
+                    let scene = &output.scene;
                     let point = scene
                         .lines()
                         .first()
@@ -954,8 +937,8 @@ fn profile_hit_query(
                         .expect("selectable fixture retains hit testing")
                         .hit_test(point)
                         .expect("line center intersects an interaction unit");
-                    black_box(hit.source().sources().len());
-                    black_box(hit.position());
+                    black_box(hit.source.sources().len());
+                    black_box(hit.position);
                 }
             }
         })
@@ -985,7 +968,7 @@ fn profile_scaled_interaction_query(
         &BlockRequest::new(TextConstraint::Wrap(FiniteWidth::new(240.0)?), style, paint)
             .with_features(SceneFeatures::EDITABLE),
     )?;
-    let scene = output.scene();
+    let scene = &output.scene;
     let line_count = scene.lines().len();
     let target = scene
         .lines()
@@ -1062,37 +1045,32 @@ fn profile_capability_upgrade(
                 )
                 .expect("warm capability upgrade must prepare");
             assert_eq!(
-                output.work().analysis().paragraphs(),
-                0,
+                output.work.analysis.paragraphs, 0,
                 "warm capability upgrade must retain analysis"
             );
             assert_eq!(
-                output.work().font_selection().paragraphs(),
-                0,
+                output.work.font_selection.paragraphs, 0,
                 "warm capability upgrade must retain selected fonts"
             );
             assert_eq!(
-                output.work().shape().paragraphs(),
-                0,
+                output.work.shape.paragraphs, 0,
                 "warm capability upgrade must retain shaping"
             );
             assert_eq!(
-                output.work().flow().paragraphs(),
-                0,
+                output.work.flow.paragraphs, 0,
                 "warm capability upgrade must retain line formation"
             );
             assert_eq!(
-                output.work().geometry().paragraphs(),
-                1,
+                output.work.geometry.paragraphs, 1,
                 "upgrade must build only the missing paragraph sidecars"
             );
-            black_box(output.scene().residency());
+            black_box(output.scene.residency());
         }
     });
     report_profile(name, rounds, label_count, elapsed);
     report_residency(
         name,
-        layout.cache_diagnostics().scene_cache_residency(),
+        layout.cache_diagnostics().scene_cache_residency,
         operations,
     );
     Ok(())
@@ -1129,27 +1107,27 @@ fn profile_editable_to_display(
                 .expect("editable segment must satisfy display request");
             assert_no_preparation_work(&output);
             let paragraph = output
-                .scene()
+                .scene
                 .paragraph_residencies()
                 .next()
                 .expect("block scene has one paragraph");
             assert_eq!(
-                paragraph.requested(),
+                paragraph.requested,
                 SceneFeatures::DISPLAY,
                 "the smaller handle must preserve its display-only request"
             );
             assert_eq!(
-                paragraph.resident(),
+                paragraph.resident,
                 SceneFeatures::EDITABLE,
                 "a capability subset must reuse the editable resident segment"
             );
-            black_box(paragraph.bytes());
+            black_box(paragraph.bytes);
         }
     });
     report_profile("editable-to-display", rounds, label_count, elapsed);
     report_residency(
         "editable-to-display",
-        layout.cache_diagnostics().scene_cache_residency(),
+        layout.cache_diagnostics().scene_cache_residency,
         operations,
     );
     Ok(())
@@ -1208,28 +1186,25 @@ fn profile_mixed_upgrade(
             .prepare(&fixture.document.snapshot(), &request)
             .expect("mixed capability upgrade must prepare");
         assert_eq!(
-            output.work().shape().paragraphs(),
-            0,
+            output.work.shape.paragraphs, 0,
             "mixed warm upgrade must retain shaping"
         );
         assert_eq!(
-            output.work().flow().paragraphs(),
-            0,
+            output.work.flow.paragraphs, 0,
             "mixed warm upgrade must retain line formation"
         );
         assert_eq!(
-            output.work().geometry().paragraphs(),
-            1,
+            output.work.geometry.paragraphs, 1,
             "only the editor paragraph may gain sidecars"
         );
         prepared = Some(output);
     });
     let output = prepared.expect("measured upgrade publishes one output");
-    assert_mixed_residency(output.scene(), paragraph_count, fixture.editor_paragraph);
+    assert_mixed_residency(&output.scene, paragraph_count, fixture.editor_paragraph);
     report_document_profile("mixed-upgrade", rounds, paragraph_count, elapsed);
     report_residency(
         "mixed-upgrade",
-        output.scene().residency().bytes(),
+        output.scene.residency().bytes,
         paragraph_count,
     );
     Ok(())
@@ -1253,15 +1228,15 @@ fn profile_mixed_repeat(
                 .prepare(&fixture.document.snapshot(), &request)
                 .expect("mixed exact repeat must prepare");
             assert_no_preparation_work(&output);
-            black_box(output.scene().metrics());
+            black_box(output.scene.metrics());
         }
     });
     let output = layout.prepare(&fixture.document.snapshot(), &request)?;
-    assert_mixed_residency(output.scene(), paragraph_count, fixture.editor_paragraph);
+    assert_mixed_residency(&output.scene, paragraph_count, fixture.editor_paragraph);
     report_document_profile("mixed-repeat", rounds, paragraph_count, elapsed);
     report_residency(
         "mixed-repeat",
-        output.scene().residency().bytes(),
+        output.scene.residency().bytes,
         paragraph_count,
     );
     Ok(())
@@ -1296,29 +1271,26 @@ fn profile_mixed_typing(
                 .prepare(&fixture.document.snapshot(), &request)
                 .expect("mixed typing must prepare");
             assert_eq!(
-                output.work().analysis().paragraphs(),
-                1,
+                output.work.analysis.paragraphs, 1,
                 "typing must analyze only the edited paragraph"
             );
             assert_eq!(
-                output.work().shape().paragraphs(),
-                1,
+                output.work.shape.paragraphs, 1,
                 "typing must shape only the edited paragraph"
             );
             assert_eq!(
-                output.work().geometry().paragraphs(),
-                1,
+                output.work.geometry.paragraphs, 1,
                 "typing must lower only the edited paragraph"
             );
-            black_box(output.scene().metrics());
+            black_box(output.scene.metrics());
         }
     });
     let output = layout.prepare(&fixture.document.snapshot(), &request)?;
-    assert_mixed_residency(output.scene(), paragraph_count, fixture.editor_paragraph);
+    assert_mixed_residency(&output.scene, paragraph_count, fixture.editor_paragraph);
     report_document_profile("mixed-typing", rounds, paragraph_count, elapsed);
     report_residency(
         "mixed-typing",
-        output.scene().residency().bytes(),
+        output.scene.residency().bytes,
         paragraph_count,
     );
     Ok(())
@@ -1383,23 +1355,21 @@ fn profile_editable_typing(
                     )
                     .expect("editable block typing must prepare");
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    1,
+                    output.work.shape.paragraphs, 1,
                     "one editable block operation must shape one paragraph"
                 );
                 assert_eq!(
-                    output.work().geometry().paragraphs(),
-                    1,
+                    output.work.geometry.paragraphs, 1,
                     "one editable block operation must lower one paragraph"
                 );
-                black_box(output.scene().metrics());
+                black_box(output.scene.metrics());
             }
         }
     });
     report_profile("editable-typing", rounds, label_count, elapsed);
     report_residency(
         "editable-typing",
-        layout.cache_diagnostics().scene_cache_residency(),
+        layout.cache_diagnostics().scene_cache_residency,
         label_count,
     );
     Ok(())
@@ -1436,11 +1406,11 @@ fn profile_cross_identity(
                         &BlockRequest::new(TextConstraint::MaxContent, style, paint),
                     )
                     .expect("cross-identity label must prepare");
-                analyzed += output.work().analysis().paragraphs();
-                shaped += output.work().shape().paragraphs();
-                formed += output.work().flow().paragraphs();
-                shared += output.work().shared_preparations();
-                black_box(output.scene().metrics());
+                analyzed += output.work.analysis.paragraphs;
+                shaped += output.work.shape.paragraphs;
+                formed += output.work.flow.paragraphs;
+                shared += output.work.shared_preparations;
+                black_box(output.scene.metrics());
             }
         }
     });
@@ -1465,9 +1435,9 @@ fn profile_cross_identity(
         let cache = layout.cache_diagnostics();
         println!(
             "{name}_work\toperations={operations}\tanalyzed={analyzed}\tshaped={shaped}\tformed={formed}\tshared={shared}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
-            cache.shared_preparation_entries(),
-            cache.shared_preparation_resident_bytes(),
-            cache.shared_preparation_peak_bytes()
+            cache.shared_preparation_entries,
+            cache.shared_preparation_resident_bytes,
+            cache.shared_preparation_peak_bytes
         );
     }
     Ok(())
@@ -1500,7 +1470,7 @@ fn profile_retained_identical(
                     )
                     .expect("retained identical label must prepare");
                 assert_no_preparation_work(&output);
-                black_box(output.scene().metrics());
+                black_box(output.scene.metrics());
             }
         }
     });
@@ -1540,12 +1510,12 @@ fn profile_traced_retained(
                     )
                     .expect("traced retained label must prepare");
                 assert_no_preparation_work(&output);
-                let trace = output.trace().expect("trace was requested");
-                exact_reuses = exact_reuses.saturating_add(trace.reuse().exact_geometry_reuses());
-                last_scene_bytes = trace.memory().scene_output_capacity_bytes();
-                last_cache_bytes = trace.memory().cache_after().scene_cache_accounted_bytes();
-                last_scratch_bytes = trace.memory().scratch_capacity_after();
-                black_box(output.scene().metrics());
+                let trace = output.trace.expect("trace was requested");
+                exact_reuses = exact_reuses.saturating_add(trace.reuse.exact_geometry_reuses);
+                last_scene_bytes = trace.memory.scene_output_capacity_bytes;
+                last_cache_bytes = trace.memory.cache_after.scene_cache_accounted_bytes;
+                last_scratch_bytes = trace.memory.scratch_capacity_after;
+                black_box(output.scene.metrics());
             }
         }
     });
@@ -1594,7 +1564,7 @@ fn profile_retained_adjustment(
                     )
                     .expect("retained adjustment fixture must prepare");
                 assert_no_preparation_work(&output);
-                black_box(output.scene().metrics());
+                black_box(output.scene.metrics());
             }
         }
     });
@@ -1636,7 +1606,7 @@ fn profile_paint_change(
                     )
                     .expect("paint-only label must prepare");
                 assert_no_preparation_work(&output);
-                black_box(output.scene().fragments().len());
+                black_box(output.scene.fragments().len());
             }
         }
     });
@@ -1680,33 +1650,28 @@ fn profile_paint_slot_churn(
                     )
                     .expect("paint-slot-only label must prepare");
                 assert_eq!(
-                    output.work().analysis().paragraphs(),
-                    0,
+                    output.work.analysis.paragraphs, 0,
                     "paint-slot churn must retain analysis"
                 );
                 assert_eq!(
-                    output.work().font_selection().paragraphs(),
-                    0,
+                    output.work.font_selection.paragraphs, 0,
                     "paint-slot churn must retain font selection"
                 );
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    0,
+                    output.work.shape.paragraphs, 0,
                     "paint-slot churn must retain shaping"
                 );
                 assert_eq!(
-                    output.work().flow().paragraphs(),
-                    0,
+                    output.work.flow.paragraphs, 0,
                     "paint-slot churn must retain line formation"
                 );
                 assert_eq!(
-                    output.work().paint().paragraphs(),
-                    1,
+                    output.work.paint.paragraphs, 1,
                     "paint-slot churn must re-slot exactly one paragraph"
                 );
                 assert!(
                     output
-                        .scene()
+                        .scene
                         .fragments()
                         .iter()
                         .all(|fragment| fragment.paint() == current.paint()),
@@ -1765,16 +1730,16 @@ fn profile_alignment_churn(
                 if alignment == TextAlignment::Justify {
                     assert!(
                         output
-                            .scene()
+                            .scene
                             .line(0)
                             .expect("justified label has a line")
                             .adjustment()
-                            .opportunity_expansion()
+                            .opportunity_expansion
                             > 0.0,
                         "the wind tunnel must execute real Western justification"
                     );
                 }
-                black_box(output.scene().metrics());
+                black_box(output.scene.metrics());
             }
         }
     });
@@ -1824,11 +1789,10 @@ fn profile_localized_edit(
                     )
                     .expect("edited label must prepare");
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    1,
+                    output.work.shape.paragraphs, 1,
                     "each changed label must reshape exactly once"
                 );
-                black_box(output.scene().metrics());
+                black_box(output.scene.metrics());
             }
         }
     });
@@ -1866,17 +1830,15 @@ fn profile_width_churn(
                     )
                     .expect("width-churn label must prepare");
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    0,
+                    output.work.shape.paragraphs, 0,
                     "width churn must retain canonical shaping"
                 );
                 assert_eq!(
-                    output.work().line_candidates(),
-                    output.work().accepted_line_candidates()
-                        + output.work().rejected_line_candidates(),
+                    output.work.line_candidates,
+                    output.work.accepted_line_candidates() + output.work.rejected_line_candidates,
                     "every proposed line candidate must be accepted or visibly rejected"
                 );
-                black_box(output.scene().lines().len());
+                black_box(output.scene.lines().len());
             }
         }
     });
@@ -1914,23 +1876,19 @@ fn profile_region_churn(
                     )
                     .expect("region-churn label must prepare");
                 assert_eq!(
-                    output.work().analysis().paragraphs(),
-                    0,
+                    output.work.analysis.paragraphs, 0,
                     "region churn must retain analysis"
                 );
                 assert_eq!(
-                    output.work().font_selection().paragraphs(),
-                    0,
+                    output.work.font_selection.paragraphs, 0,
                     "region churn must retain selected fonts"
                 );
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    0,
+                    output.work.shape.paragraphs, 0,
                     "region churn must retain canonical shaping"
                 );
                 assert_eq!(
-                    output.work().flow().paragraphs(),
-                    1,
+                    output.work.flow.paragraphs, 1,
                     "region churn must reform exactly one paragraph"
                 );
                 let transcript = output
@@ -1943,7 +1901,7 @@ fn profile_region_churn(
                     transcript.end(),
                     "replay must reach the recorded cursor"
                 );
-                black_box((output.scene().lines().len(), transcript.attempts().len()));
+                black_box((output.scene.lines().len(), transcript.attempts().len()));
             }
         }
     });
@@ -1979,15 +1937,14 @@ fn profile_identity_churn(
                     )
                     .expect("identity-churn label must prepare");
                 assert_eq!(
-                    output.work().shape().paragraphs(),
-                    1,
+                    output.work.shape.paragraphs, 1,
                     "each new identity must shape once before shared reuse exists"
                 );
                 assert!(
                     layout.cache_diagnostics().current_entries() <= CHURN_BUDGET,
                     "identity churn must remain within the retained budget"
                 );
-                black_box(output.scene().fragments().len());
+                black_box(output.scene.fragments().len());
             }
         }
     });
@@ -2042,15 +1999,15 @@ fn report_residency(name: &str, bytes: SceneResidencyBytes, paragraphs: usize) {
     println!(
         "{name}_residency\tparagraphs={paragraphs}\ttotal={}\tstructure={}\tlayout={}\tpaint={}\tsources={}\tsemantics={}\thit_testing={}\tselection={}\tnavigation={}\tnative_text_input={}",
         bytes.total(),
-        bytes.structure(),
-        bytes.layout(),
-        bytes.paint(),
-        bytes.sources(),
-        bytes.semantics(),
-        bytes.hit_testing(),
-        bytes.selection(),
-        bytes.navigation(),
-        bytes.native_text_input(),
+        bytes.structure,
+        bytes.layout,
+        bytes.paint,
+        bytes.sources,
+        bytes.semantics,
+        bytes.hit_testing,
+        bytes.selection,
+        bytes.navigation,
+        bytes.native_text_input,
     );
 }
 
@@ -2180,40 +2137,38 @@ fn assert_mixed_residency(
     editor: ParagraphId,
 ) {
     assert_eq!(
-        scene.residency().paragraphs(),
+        scene.residency().paragraphs,
         paragraph_count,
         "mixed residency must report every represented paragraph"
     );
     let mut display_paragraphs = 0_usize;
     let mut editable_paragraphs = 0_usize;
     for paragraph in scene.paragraph_residencies() {
-        if paragraph.paragraph() == editor {
+        if paragraph.paragraph == editor {
             editable_paragraphs += 1;
             assert_eq!(
-                paragraph.requested(),
+                paragraph.requested,
                 SceneFeatures::EDITABLE,
                 "the target paragraph must request the editing closure"
             );
             assert!(
-                paragraph.resident().contains(SceneFeatures::EDITABLE),
+                paragraph.resident.contains(SceneFeatures::EDITABLE),
                 "the target paragraph must retain the editing closure"
             );
             assert!(
-                paragraph.bytes().sources() > 0,
+                paragraph.bytes.sources > 0,
                 "the editor must retain source provenance"
             );
             assert!(
-                paragraph.bytes().hit_testing() > 0,
+                paragraph.bytes.hit_testing > 0,
                 "the editor must retain hit-testing facts"
             );
             assert_eq!(
-                paragraph.bytes().selection(),
-                0,
+                paragraph.bytes.selection, 0,
                 "selection must derive from the shared interaction artifact"
             );
             assert_eq!(
-                paragraph.bytes().navigation(),
-                0,
+                paragraph.bytes.navigation, 0,
                 "navigation must derive from the shared interaction artifact"
             );
             scene
@@ -2225,33 +2180,29 @@ fn assert_mixed_residency(
         } else {
             display_paragraphs += 1;
             assert_eq!(
-                paragraph.requested(),
+                paragraph.requested,
                 SceneFeatures::DISPLAY,
                 "an unrelated sibling must remain display-only"
             );
             assert_eq!(
-                paragraph.resident(),
+                paragraph.resident,
                 SceneFeatures::DISPLAY,
                 "an unrelated sibling must not be promoted"
             );
             assert_eq!(
-                paragraph.bytes().sources(),
-                0,
+                paragraph.bytes.sources, 0,
                 "display siblings must omit sources"
             );
             assert_eq!(
-                paragraph.bytes().hit_testing(),
-                0,
+                paragraph.bytes.hit_testing, 0,
                 "display siblings must omit hit testing"
             );
             assert_eq!(
-                paragraph.bytes().selection(),
-                0,
+                paragraph.bytes.selection, 0,
                 "display siblings must omit selection"
             );
             assert_eq!(
-                paragraph.bytes().navigation(),
-                0,
+                paragraph.bytes.navigation, 0,
                 "display siblings must omit navigation"
             );
         }
@@ -2312,86 +2263,70 @@ fn adjustment_flow() -> Result<RegionFlow, Box<dyn std::error::Error>> {
 
 fn assert_adjustment_only(output: &SceneOutput) {
     assert_eq!(
-        output.work().analysis().paragraphs(),
-        0,
+        output.work.analysis.paragraphs, 0,
         "adjustment-only work must retain analysis"
     );
     assert_eq!(
-        output.work().itemization().paragraphs(),
-        0,
+        output.work.itemization.paragraphs, 0,
         "adjustment-only work must retain itemization"
     );
     assert_eq!(
-        output.work().font_selection().paragraphs(),
-        0,
+        output.work.font_selection.paragraphs, 0,
         "adjustment-only work must retain font selection"
     );
     assert_eq!(
-        output.work().shape().paragraphs(),
-        0,
+        output.work.shape.paragraphs, 0,
         "adjustment-only work must retain canonical shaping"
     );
     assert_eq!(
-        output.work().line_shape().paragraphs(),
-        0,
+        output.work.line_shape.paragraphs, 0,
         "adjustment-only work must retain accepted line shaping"
     );
     assert_eq!(
-        output.work().flow().paragraphs(),
-        0,
+        output.work.flow.paragraphs, 0,
         "adjustment-only work must retain formation"
     );
     assert_eq!(
-        output.work().adjustment().paragraphs(),
-        1,
+        output.work.adjustment.paragraphs, 1,
         "adjustment-only work must replace one accepted-slot adjustment"
     );
     assert_eq!(
-        output.work().geometry().paragraphs(),
-        1,
+        output.work.geometry.paragraphs, 1,
         "adjustment-only work must rebuild one geometry projection"
     );
 }
 
 fn assert_no_preparation_work(output: &SceneOutput) {
     assert_eq!(
-        output.work().analysis().paragraphs(),
-        0,
+        output.work.analysis.paragraphs, 0,
         "retained text must reuse analysis"
     );
     assert_eq!(
-        output.work().itemization().paragraphs(),
-        0,
+        output.work.itemization.paragraphs, 0,
         "retained text must reuse itemization"
     );
     assert_eq!(
-        output.work().font_selection().paragraphs(),
-        0,
+        output.work.font_selection.paragraphs, 0,
         "retained text must reuse font selection"
     );
     assert_eq!(
-        output.work().shape().paragraphs(),
-        0,
+        output.work.shape.paragraphs, 0,
         "retained text must reuse canonical shaping"
     );
     assert_eq!(
-        output.work().line_shape().paragraphs(),
-        0,
+        output.work.line_shape.paragraphs, 0,
         "retained text must reuse accepted line shaping"
     );
     assert_eq!(
-        output.work().flow().paragraphs(),
-        0,
+        output.work.flow.paragraphs, 0,
         "retained text must reuse formation"
     );
     assert_eq!(
-        output.work().adjustment().paragraphs(),
-        0,
+        output.work.adjustment.paragraphs, 0,
         "retained text must reuse accepted-slot adjustment"
     );
     assert_eq!(
-        output.work().geometry().paragraphs(),
-        0,
+        output.work.geometry.paragraphs, 0,
         "retained text must reuse geometry"
     );
 }
@@ -2404,7 +2339,7 @@ fn assert_residency(layout: &LayoutEngine, expected: usize) {
         "geometry residency must match the expected lifecycle state"
     );
     assert_eq!(
-        cache.adapter_facts().map(|facts| facts.entries()),
+        cache.adapter_facts.map(|facts| facts.entries),
         Some(0),
         "the default zero adapter-fact budget must remain independent from geometry"
     );

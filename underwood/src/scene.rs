@@ -47,19 +47,17 @@ mod spine;
 mod views;
 
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
-pub use interaction::{CompositionScene, TextScene};
+pub use interaction::{CompositionScene, Scene, TextScene};
 pub use output::{
     CompositionSceneOutput, PreparationMemory, PreparationReuse, PreparationTrace,
     ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneOutput,
-    SceneRegionAttempts, SceneRegionTranscript, StageWork, TextMetrics, WorkReport,
+    SceneRegionTranscript, StageWork, TextMetrics, WorkReport,
 };
 pub use records::{
     LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneGlyphInstanceId,
     SceneSelectionRect, TextHit,
 };
-pub use residency::{
-    ParagraphSceneResidency, SceneParagraphResidencies, SceneResidency, SceneResidencyBytes,
-};
+pub use residency::{ParagraphSceneResidency, SceneResidency, SceneResidencyBytes};
 pub use sessions::{
     ProjectedSceneEditing, ProjectedSceneInteraction, SceneEditing, SceneInteraction,
     SceneSelection,
@@ -69,7 +67,7 @@ pub use views::{
     ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources,
     ProjectedTextUnitView, SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs,
     SceneLineView, SceneLines, SceneSemantics, SemanticFragmentView, SnapshotSources,
-    SnapshotTextUnitView,
+    SnapshotTextUnitView, TextSources, TextUnitView,
 };
 
 use adjustment::*;
@@ -77,6 +75,7 @@ use cursor::*;
 use geometry::*;
 use interaction::{SceneCore, SceneCursorStep};
 use projection::*;
+use residency::paragraph_residencies;
 use shared_cache::*;
 use source_map::*;
 use spine::*;
