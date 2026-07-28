@@ -86,7 +86,11 @@ impl ParagraphFormation for EchoAdapter {
         );
         let start = PreparedClusterSide::new(0, TextAffinity::Downstream);
         let end = PreparedClusterSide::new(text_len, TextAffinity::Upstream);
-        let (slices, units) = if self.interior_cursor {
+        let retains_interaction =
+            input.features.has_semantics() || input.features.has_hit_testing();
+        let (slices, units) = if !retains_interaction {
+            (Vec::new(), Vec::new())
+        } else if self.interior_cursor {
             (
                 vec![
                     PreparedInteractionSlice::try_new(0..1, 5.0)?,
@@ -131,7 +135,8 @@ impl ParagraphFormation for EchoAdapter {
             line_height,
             f64::from(font_size) * 0.75,
             f64::from(font_size) * 0.25,
-        )?;
+        )?
+        .with_inline_metrics(10.0, text_len, 0.0)?;
         let mut data = PreparedParagraphData::with_capacity(1, 1, glyphs.len(), units.len(), 0);
         let units_start = data.unit_count();
         for unit in units {

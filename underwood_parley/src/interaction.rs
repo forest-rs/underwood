@@ -67,7 +67,6 @@ struct VisualInteractionSlice {
     source: Range<u32>,
     advance: f64,
     bidi_level: u8,
-    script: [u8; 4],
     boundary: Boundary,
     whitespace: Whitespace,
 }
@@ -182,7 +181,6 @@ fn lower_visual_slice(
         source: source_range(&(start..end)),
         advance: f64::from(cluster.advance),
         bidi_level: run.bidi_level,
-        script: run.script.to_bytes(),
         boundary: cluster.info.boundary(),
         whitespace: cluster.info.whitespace(),
     })
@@ -222,11 +220,6 @@ fn lower_prepared_unit(
     {
         whitespace = Whitespace::Newline;
     }
-    let source_text = text
-        .get(source.clone())
-        .ok_or_else(PreparationError::invalid_output)?;
-    let western_justification_opportunity =
-        source_text == " " && matches!(&logical_first.script, b"Latn" | b"Grek" | b"Cyrl");
     let source = source_range(source);
     let (left, right) = if bidi_level & 1 == 1 {
         (
@@ -239,7 +232,7 @@ fn lower_prepared_unit(
             PreparedClusterSide::new(source.end, TextAffinity::Upstream),
         )
     };
-    let unit = PreparedInteractionUnit::try_new_with_justification(
+    let unit = PreparedInteractionUnit::try_new(
         source,
         bidi_level,
         match boundary {
@@ -255,7 +248,6 @@ fn lower_prepared_unit(
             Whitespace::Tab => ClusterWhitespace::Tab,
             Whitespace::Newline => ClusterWhitespace::Newline,
         },
-        western_justification_opportunity,
         left,
         right,
     )?;

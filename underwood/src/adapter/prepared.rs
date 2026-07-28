@@ -106,6 +106,7 @@ pub struct PreparedLine {
     advance: f64,
     trailing_whitespace_start: u32,
     trailing_whitespace_advance: f64,
+    inline_metrics: bool,
     baseline: f64,
     height: f64,
     content_ascent: f64,
@@ -167,6 +168,7 @@ impl PreparedLine {
             advance: 0.0,
             trailing_whitespace_start: source_end,
             trailing_whitespace_advance: 0.0,
+            inline_metrics: false,
             baseline,
             height,
             content_ascent,
@@ -175,6 +177,35 @@ impl PreparedLine {
             source_order: TableRange::EMPTY,
             runs: TableRange::EMPTY,
         })
+    }
+
+    /// Supplies full and trailing inline metrics for a line without retained
+    /// interaction units.
+    ///
+    /// Backends that append interaction units may leave the constructor's
+    /// zero metrics in place; [`PreparedParagraphData::push_line`] derives and
+    /// checks them from the complete unit partition.
+    pub fn with_inline_metrics(
+        mut self,
+        advance: f64,
+        trailing_whitespace_start: u32,
+        trailing_whitespace_advance: f64,
+    ) -> Result<Self, PreparationError> {
+        if !advance.is_finite()
+            || advance < 0.0
+            || trailing_whitespace_start < self.source.start
+            || trailing_whitespace_start > self.source.end
+            || !trailing_whitespace_advance.is_finite()
+            || trailing_whitespace_advance < 0.0
+            || trailing_whitespace_advance > advance
+        {
+            return Err(PreparationError::invalid_output());
+        }
+        self.advance = advance;
+        self.trailing_whitespace_start = trailing_whitespace_start;
+        self.trailing_whitespace_advance = trailing_whitespace_advance;
+        self.inline_metrics = true;
+        Ok(self)
     }
 }
 
@@ -244,7 +275,7 @@ impl PreparedGlyphRecord {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 struct TableRange {
     start: u32,
     end: u32,
@@ -296,7 +327,7 @@ impl PreparedParagraph {
         features: SceneFeatures,
         data: PreparedParagraphData,
     ) -> Result<Self, PreparationError> {
-        data.validate_topology(text_len)?;
+        data.validate_topology(text_len, features)?;
         let PreparedParagraphData {
             lines,
             runs,
@@ -687,42 +718,50 @@ impl PreparedParagraphData {
                 }
             };
         let ordered = &self.source_order[source_order.as_usize()];
-        let mut covered = line.source.start;
-        for rank in 0..unit_records.len() {
-            let index = ordered.get(rank).map_or(rank, |&index| index as usize);
-            let range = unit_records[index].source();
-            if range.start != covered || range.end > line.source.end {
+        if unit_records.is_empty() {
+            if !line.source.is_empty() && !line.inline_metrics {
                 self.source_order.truncate(source_order_start);
                 return Err(PreparationError::invalid_output());
             }
-            covered = range.end;
-        }
-        if covered != line.source.end {
-            self.source_order.truncate(source_order_start);
-            return Err(PreparationError::invalid_output());
-        }
+        } else {
+            let mut covered = line.source.start;
+            for rank in 0..unit_records.len() {
+                let index = ordered.get(rank).map_or(rank, |&index| index as usize);
+                let range = unit_records[index].source();
+                if range.start != covered || range.end > line.source.end {
+                    self.source_order.truncate(source_order_start);
+                    return Err(PreparationError::invalid_output());
+                }
+                covered = range.end;
+            }
+            if covered != line.source.end {
+                self.source_order.truncate(source_order_start);
+                return Err(PreparationError::invalid_output());
+            }
 
-        let mut trailing_start = line.source.end;
-        let mut trailing_advance = 0.0;
-        for rank in (0..unit_records.len()).rev() {
-            let index = ordered.get(rank).map_or(rank, |&index| index as usize);
-            let unit = &unit_records[index];
-            if unit.source().end != trailing_start {
-                self.source_order.truncate(source_order_start);
-                return Err(PreparationError::invalid_output());
+            let mut trailing_start = line.source.end;
+            let mut trailing_advance = 0.0;
+            for rank in (0..unit_records.len()).rev() {
+                let index = ordered.get(rank).map_or(rank, |&index| index as usize);
+                let unit = &unit_records[index];
+                if unit.source().end != trailing_start {
+                    self.source_order.truncate(source_order_start);
+                    return Err(PreparationError::invalid_output());
+                }
+                if unit.whitespace() == ClusterWhitespace::None {
+                    break;
+                }
+                trailing_advance += unit.retained_advance();
+                trailing_start = unit.source().start;
             }
-            if unit.whitespace() == ClusterWhitespace::None {
-                break;
-            }
-            trailing_advance += unit.retained_advance();
-            trailing_start = unit.source().start;
+            line.advance = unit_records
+                .iter()
+                .map(PreparedInteractionUnit::retained_advance)
+                .sum::<f64>();
+            line.trailing_whitespace_start = trailing_start;
+            line.trailing_whitespace_advance = trailing_advance;
+            line.inline_metrics = true;
         }
-        line.advance = unit_records
-            .iter()
-            .map(PreparedInteractionUnit::retained_advance)
-            .sum::<f64>();
-        line.trailing_whitespace_start = trailing_start;
-        line.trailing_whitespace_advance = trailing_advance;
         line.units = units;
         line.source_order = source_order;
         line.runs = runs;
@@ -730,7 +769,11 @@ impl PreparedParagraphData {
         Ok(())
     }
 
-    fn validate_topology(&self, text_len: u32) -> Result<(), PreparationError> {
+    fn validate_topology(
+        &self,
+        text_len: u32,
+        features: SceneFeatures,
+    ) -> Result<(), PreparationError> {
         let contiguous_lines = self.lines.iter().try_fold(0_u32, |previous_end, line| {
             (line.source.start == previous_end && line.source.end <= text_len)
                 .then_some(line.source.end)
@@ -764,6 +807,15 @@ impl PreparedParagraphData {
                 self.interaction_slices.len(),
             ),
         ];
+        let retains_interaction = features.has_semantics() || features.has_hit_testing();
+        let interaction_complete = self
+            .lines
+            .iter()
+            .all(|line| line.source.is_empty() || !line.units.as_usize().is_empty());
+        let interaction_empty = self.interaction_slices.is_empty()
+            && self.interaction_slice_spills.is_empty()
+            && self.interaction_units.is_empty()
+            && self.source_order.is_empty();
         let spills_valid =
             self.interaction_slice_spills
                 .iter()
@@ -775,7 +827,12 @@ impl PreparedParagraphData {
                         && (index == 0
                             || self.interaction_slice_spills[index - 1].unit < spill.unit)
                 });
-        if !contiguous_lines || partitions.contains(&false) || !spills_valid {
+        if !contiguous_lines
+            || partitions.contains(&false)
+            || !spills_valid
+            || retains_interaction && !interaction_complete
+            || !retains_interaction && !interaction_empty
+        {
             return Err(PreparationError::invalid_output());
         }
         Ok(())
@@ -931,23 +988,8 @@ impl<'a> PreparedLineView<'a> {
         self.record().trailing_whitespace_advance
     }
 
-    /// Returns the number of explicit Western inter-word opportunities.
-    #[must_use]
-    pub fn western_justification_opportunities(self) -> usize {
-        self.western_justification_opportunity_sources().count()
-    }
-
-    /// Returns source ranges for non-trailing eligible Western spaces.
-    pub fn western_justification_opportunity_sources(
-        self,
-    ) -> impl Iterator<Item = Range<u32>> + 'a {
-        let trailing_whitespace_start = self.record().trailing_whitespace_start;
-        self.units()
-            .filter(move |unit| {
-                unit.is_western_justification_opportunity()
-                    && unit.source().end <= trailing_whitespace_start
-            })
-            .map(|unit| unit.source())
+    pub(crate) fn trailing_whitespace_start(self) -> u32 {
+        self.record().trailing_whitespace_start
     }
 
     /// Returns the baseline offset from the top of the line box.

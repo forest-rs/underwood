@@ -32,6 +32,7 @@ pub(crate) struct LinePlan {
     pub(crate) clusters: Range<usize>,
     pub(crate) source: Range<usize>,
     pub(crate) reason: LineBreakReason,
+    pub(crate) trailing_whitespace_start: u32,
     pub(crate) advance: f64,
     pub(crate) baseline: f64,
     pub(crate) height: f64,
@@ -882,6 +883,8 @@ fn make_line_plan(
             clusters: shaped_text.clusters().len()..shaped_text.clusters().len(),
             source: at..at,
             reason,
+            trailing_whitespace_start: u32::try_from(at)
+                .map_err(|_| PreparationError::invalid_output())?,
             advance,
             baseline: metrics.baseline,
             height: metrics.height,
@@ -897,6 +900,13 @@ fn make_line_plan(
     let last = clusters
         .get(logical_range.end - 1)
         .ok_or_else(PreparationError::invalid_output)?;
+    let mut trailing_whitespace_start = last.source.end;
+    for cluster in clusters[logical_range.clone()].iter().rev() {
+        if cluster.whitespace == Whitespace::None {
+            break;
+        }
+        trailing_whitespace_start = cluster.source.start;
+    }
     let mut above = 0.0_f64;
     let mut below = 0.0_f64;
     let mut content_ascent = 0.0_f64;
@@ -928,6 +938,8 @@ fn make_line_plan(
         clusters: first.index..last.index + 1,
         source: first.source.start..last.source.end,
         reason,
+        trailing_whitespace_start: u32::try_from(trailing_whitespace_start)
+            .map_err(|_| PreparationError::invalid_output())?,
         advance,
         baseline: above,
         height: above + below,
@@ -1005,4 +1017,37 @@ pub(crate) fn reorder_visual_pieces(shaped_text: &ShapedText, pieces: &mut [RunP
             start = end;
         }
     }
+}
+
+pub(crate) fn trailing_whitespace_advance(
+    shaped_text: &ShapedText,
+    pieces: &[RunPiece],
+    trailing_start: u32,
+) -> Result<f64, PreparationError> {
+    let trailing_start =
+        usize::try_from(trailing_start).map_err(|_| PreparationError::invalid_output())?;
+    let mut advance = 0.0;
+    for piece in pieces {
+        let run = shaped_text
+            .runs()
+            .get(piece.run)
+            .ok_or_else(PreparationError::invalid_output)?;
+        for cluster in shaped_text
+            .clusters()
+            .get(piece.clusters.clone())
+            .ok_or_else(PreparationError::invalid_output)?
+        {
+            let source_end = run
+                .range
+                .byte_range
+                .start
+                .checked_add(usize::from(cluster.text_offset))
+                .and_then(|start| start.checked_add(usize::from(cluster.text_len)))
+                .ok_or_else(PreparationError::invalid_output)?;
+            if source_end > trailing_start {
+                advance += f64::from(cluster.advance);
+            }
+        }
+    }
+    Ok(advance)
 }

@@ -350,6 +350,10 @@ fn cursor_derivation_adds_no_adapter_graph_during_warm_editable_upgrade() {
     let first_observed = observed.borrow();
     assert_eq!(first_observed.len(), 1);
     assert_eq!(first_observed[0].features(), SceneFeatures::DISPLAY);
+    assert!(
+        first_observed[0].lines().all(|line| line.unit_count() == 0),
+        "display preparation must not retain interaction units"
+    );
     let display_bytes = first_observed[0].accounted_owned_bytes();
     drop(first_observed);
 
@@ -373,10 +377,13 @@ fn cursor_derivation_adds_no_adapter_graph_during_warm_editable_upgrade() {
     let observed = observed.borrow();
     assert_eq!(observed.len(), 2);
     assert!(observed[1].features().contains(SceneFeatures::EDITABLE));
-    assert_eq!(
-        observed[1].accounted_owned_bytes(),
-        display_bytes,
-        "editable cursor policy derives from the same formed facts"
+    assert!(
+        observed[1].lines().any(|line| line.unit_count() != 0),
+        "editable preparation retains its exact grapheme units"
+    );
+    assert!(
+        observed[1].accounted_owned_bytes() > display_bytes,
+        "display output must physically omit editable interaction facts"
     );
     drop(observed);
 

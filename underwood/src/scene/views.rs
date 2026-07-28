@@ -426,13 +426,14 @@ impl<'a, T> SceneFragmentView<'a, T> {
         SourceReference::Projected(self.prepared_glyph(glyph).source().into())
     }
 
-    fn inline_advance_adjustment(self, glyph: PreparedGlyphView<'_>) -> f64 {
+    fn inline_advance_adjustment(self, glyph: usize) -> f64 {
         let expansion = self.cached_line().adjustment.opportunity_expansion;
         if expansion > 0.0
-            && self
-                .prepared_line()
-                .western_justification_opportunity_sources()
-                .any(|source| source == glyph.source())
+            && self.positioned.position.segment.paint.expands(
+                self.local().line,
+                self.local().run,
+                u32::try_from(glyph).expect("retained glyph indexes fit in u32"),
+            )
         {
             expansion
         } else {
@@ -441,7 +442,7 @@ impl<'a, T> SceneFragmentView<'a, T> {
     }
 
     fn observe_glyph(self, local: usize, inline_origin: f64) -> SceneGlyphView<'a, T> {
-        let inline_advance_adjustment = self.inline_advance_adjustment(self.prepared_glyph(local));
+        let inline_advance_adjustment = self.inline_advance_adjustment(local);
         SceneGlyphView {
             revision: self.revision,
             fragment: self,
@@ -454,7 +455,7 @@ impl<'a, T> SceneFragmentView<'a, T> {
 
     fn advance_inline(self, local: usize, inline_origin: f64) -> f64 {
         let glyph = self.prepared_glyph(local);
-        inline_origin + glyph.advance().x + self.inline_advance_adjustment(glyph)
+        inline_origin + glyph.advance().x + self.inline_advance_adjustment(local)
     }
 
     fn inline_origin_for(self, local: usize) -> f64 {
@@ -653,7 +654,7 @@ impl<T> DoubleEndedIterator for SceneGlyphs<'_, T> {
         });
         self.back -= 1;
         let glyph = self.fragment.prepared_glyph(self.back);
-        let inline_advance_adjustment = self.fragment.inline_advance_adjustment(glyph);
+        let inline_advance_adjustment = self.fragment.inline_advance_adjustment(self.back);
         let inline_origin = end - glyph.advance().x - inline_advance_adjustment;
         self.back_inline = Some(inline_origin);
         Some(SceneGlyphView {

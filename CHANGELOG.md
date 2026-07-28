@@ -63,6 +63,17 @@ Underwood does not yet make compatibility promises.
   `PreparedInteractionSlice` remains a read-only prepared observation; callers
   no longer construct it before the paragraph data validates and compacts the
   same fields.
+- Display- and source-only paragraph preparation no longer constructs or
+  retains grapheme interaction units. Adapters that omit interaction units
+  supply line advance and trailing-whitespace metrics with
+  `PreparedLine::with_inline_metrics`; semantic and hit-testable output still
+  supplies the complete checked unit partition. Western justification is now
+  derived from prepared run script and glyph source facts, so
+  `PreparedInteractionUnit::try_new_with_justification`,
+  `is_western_justification_opportunity`, and the corresponding
+  `PreparedLineView` opportunity accessors are removed. Adapter migrations use
+  `PreparedInteractionUnit::try_new` and leave paragraph alignment policy to
+  scene preparation.
 - Added `FontSynthesis::skew_transform` as the canonical `no_std` affine used
   by coverage adapters and renderers. Existing callers may replace local
   degree-to-shear math with this method; `skew_degrees` remains available.
