@@ -634,3 +634,42 @@ not denser spelling of the same checks.
   iterator container survives under a renamed wrapper. The two final review
   corrections make paint-only artifact reuse genuinely adapter-free and give
   equal-source logical clusters a deterministic order.
+
+## Follow-up scalpel: one preparation kernel
+
+Committed and composition scenes previously carried separate complete document
+traversals. Localized normal flow, append-only preparation, localized region
+flow, and `TextBlock` preparation also repeated the same projection, cache
+preflight, adapter call, recycling, and retained-scene publication mechanics.
+Those copies were not independent capabilities: they differed only in the
+paragraph source, region cursor, cache kind, and publication inputs.
+
+`LayoutEngine` now has one full-document traversal, one committed-paragraph
+preparation kernel, and one retained publication finish. Composition selects a
+transient cache for its target paragraph inside that traversal; localized
+paths retain their narrow invalidation decisions but use the same preparation
+and publication mechanics once a paragraph is selected. This removes parallel
+control flow whose predicates could drift while preserving the persistent
+scene spine and O(change) localized traversal.
+
+The adapter construction boundary is flatter too:
+
+```rust
+data.push_glyph(id, source, advance, offset)?;
+data.push_unit(unit, [(source, advance)])?;
+```
+
+The former `PreparedGlyph` owner and public
+`PreparedInteractionSlice::try_new` step validated fields immediately before
+`PreparedParagraphData` validated and compacted them again. Construction now
+crosses one checked boundary. `PreparedGlyphView` and
+`PreparedInteractionSlice` remain the read-only observations of accepted
+output.
+
+This slice moves the calibrated tree from 15,679 to 15,466 Rust code lines.
+Seven matched release samples at 512 paragraphs preserve byte-identical
+residency and improve every affected median: localized edit 4,880→4,644 ns,
+editable typing 4,676→4,540 ns, width churn 2,022→1,939 ns, region churn
+2,536→2,419 ns, and mixed retained repeat 39→38 ns. The source reduction comes
+from deleting duplicate document traversal and transient input owners, not
+from denser spelling.

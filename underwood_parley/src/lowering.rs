@@ -12,7 +12,7 @@ use core::ops::Range;
 
 use fontique::Synthesis;
 use parley_engine::{Analysis, ShapedText, shape::ClusterData};
-use underwood::adapter::{FontSynthesis, PreparationError, PreparedGlyph, PreparedParagraphData};
+use underwood::adapter::{FontSynthesis, PreparationError, PreparedParagraphData};
 use underwood::{FontVariation, Tag, Vec2};
 
 pub(crate) fn lower_glyphs_into(
@@ -58,12 +58,12 @@ pub(crate) fn lower_glyphs_into(
         }
         lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
             let advance = Vec2::new(f64::from(glyph.advance), 0.0);
-            output.push_glyph(PreparedGlyph::try_new(
+            output.push_glyph(
                 glyph.id,
                 source.clone(),
                 advance,
                 Vec2::new(f64::from(glyph.x), -f64::from(glyph.y)),
-            )?)
+            )
         })
     };
     if run.bidi_level & 1 == 1 {

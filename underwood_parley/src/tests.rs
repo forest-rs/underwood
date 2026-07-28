@@ -13,8 +13,8 @@ use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork,
     LineBreakReason as TestLineBreakReason, LineShapingWork, ParagraphConstraints,
     ParagraphFormation, ParagraphFormationCacheDiagnostics, ParagraphFormationOutput,
-    PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
-    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphData, PreparedRun,
+    PreparationErrorKind, PreparedClusterSide, PreparedInteractionUnit, PreparedLine,
+    PreparedParagraph, PreparedParagraphData, PreparedRun,
 };
 use underwood::{
     AnalysisStyle, BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId,
@@ -153,7 +153,7 @@ impl ParagraphFormation for AnalysisCursorProof {
                 PreparedClusterSide::new(source.start, TextAffinity::Downstream),
                 PreparedClusterSide::new(source.end, TextAffinity::Upstream),
             )?;
-            data.push_unit(unit, [PreparedInteractionSlice::try_new(source, 1.0)?])?;
+            data.push_unit(unit, [(source, 1.0)])?;
         }
         let run = PreparedRun::try_new(
             source.clone(),
@@ -167,12 +167,12 @@ impl ParagraphFormation for AnalysisCursorProof {
         let glyphs_start = data.glyph_count();
         for (id, source) in units.iter().enumerate() {
             let source = source_range(source);
-            data.push_glyph(PreparedGlyph::try_new(
+            data.push_glyph(
                 u32::try_from(id).unwrap_or(u32::MAX),
                 source,
                 Vec2::new(1.0, 0.0),
                 Vec2::ZERO,
-            )?)?;
+            )?;
         }
         data.push_run(run, 0..0, 0..0, glyphs_start..data.glyph_count())?;
         data.push_line(

@@ -286,7 +286,7 @@ fn lower_prepared_unit(
         unit_parts.push((cursor..next, 0.0));
         cursor = next;
     }
-    output.push_unit_parts(unit, unit_parts.drain(..))
+    output.push_unit(unit, unit_parts.drain(..))
 }
 
 /// Resolves one atomic grapheme's caret direction without requiring all shaped
