@@ -37,16 +37,27 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
     let repainted = engine
         .prepare(
             &document.snapshot(),
-            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint)
+                .with_preparation_trace(),
         )
         .expect("paint-slot change prepares");
-    assert_eq!(repainted.work().analysis().paragraphs(), 0);
-    assert_eq!(repainted.work().font_selection().paragraphs(), 0);
-    assert_eq!(repainted.work().shape().paragraphs(), 0);
-    assert_eq!(repainted.work().flow().paragraphs(), 0);
+    assert_eq!(repainted.work.analysis.paragraphs, 0);
+    assert_eq!(repainted.work.font_selection.paragraphs, 0);
+    assert_eq!(repainted.work.shape.paragraphs, 0);
+    assert_eq!(repainted.work.flow.paragraphs, 0);
+    assert_eq!(
+        repainted
+            .trace
+            .as_ref()
+            .expect("trace was requested")
+            .reuse
+            .adapter_calls,
+        0,
+        "paint-only changes reuse the retained paint-independent artifact"
+    );
     assert!(
         repainted
-            .scene()
+            .scene
             .fragments()
             .iter()
             .all(|fragment| fragment.paint() == PaintSlot::new(1))
@@ -66,7 +77,7 @@ fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
         .prepare(&document.snapshot(), &request)
         .expect("Arabic mark shaping must form a scene");
     let mark = output
-        .scene()
+        .scene
         .fragments()
         .iter()
         .find(|fragment| {
@@ -81,15 +92,10 @@ fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
         })
         .expect("Noto Kufi beh must expose its zero-advance dot glyph");
     assert_eq!(mark.paint(), PaintSlot::new(0));
-    assert_eq!(
-        mark.paint_clip(),
-        None,
-        "ordinary zero-advance marks must let the font rasterizer paint the complete glyph"
-    );
 }
 
 #[test]
-fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
+fn ordinary_glyphs_do_not_require_outline_metrics() {
     let (document, styles, paint) = fixture_document("j office ب", 1.2);
     let mut engine = fixture_engine();
     let request = editable_scene_request(
@@ -101,18 +107,10 @@ fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
         .prepare(&document.snapshot(), &request)
         .expect("ordinary glyph shaping must not require outline metrics");
     assert!(
-        !output.scene().fragments().is_empty(),
+        !output.scene.fragments().is_empty(),
         "the mixed fixture must produce renderable glyphs"
     );
-    assert!(
-        output
-            .scene()
-            .fragments()
-            .iter()
-            .all(|fragment| fragment.paint_clip().is_none()),
-        "single-paint glyphs must be complete unclipped draws"
-    );
-    let fragments = output.scene().fragments();
+    let fragments = output.scene.fragments();
     let glyphs: usize = fragments
         .iter()
         .map(|fragment| fragment.glyphs().len())
@@ -145,7 +143,7 @@ fn synthetic_embolden_prepares_without_outline_metrics() {
     ));
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid")
+        Font::from_bytes(ARABIC_FONT).expect("Arabic fixture font is valid")
     ])
     .expect("fixture catalog is valid");
     let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
@@ -158,13 +156,13 @@ fn synthetic_embolden_prepares_without_outline_metrics() {
         .prepare(&document.snapshot(), &request)
         .expect("synthetic emboldening must not require outline bounds to prepare");
 
-    assert!(!output.scene().fragments().is_empty());
+    assert!(!output.scene.fragments().is_empty());
     assert!(
         output
-            .scene()
+            .scene
             .fragments()
             .iter()
-            .all(|fragment| { fragment.synthesis().embolden() && fragment.paint_clip().is_none() })
+            .all(|fragment| fragment.synthesis().embolden())
     );
 }
 
@@ -188,7 +186,7 @@ fn system_font_fallback_prepares_han_without_outline_metrics() {
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid")
     ])
     .expect("fixture catalog is valid")
     .with_system_fonts();
@@ -202,15 +200,13 @@ fn system_font_fallback_prepares_han_without_outline_metrics() {
         .prepare(&document.snapshot(), &request)
         .expect("Han source must prepare through the native fallback catalog");
 
-    assert!(output.scene().fragments().iter().any(|fragment| {
-        fragment.script() == *b"Hani"
-            && fragment.font().data.as_ref() != LATIN_FONT
-            && fragment.paint_clip().is_none()
+    assert!(output.scene.fragments().iter().any(|fragment| {
+        fragment.script() == *b"Hani" && fragment.font().data.as_ref() != LATIN_FONT
     }));
 }
 
 #[test]
-fn split_paint_ligature_without_component_geometry_fails_explicitly() {
+fn glyph_crossing_paint_runs_fails_explicitly() {
     let mut document = Document::new(DocumentId::from_bytes(*b"paint-ligature01"));
     let mut edit = document.edit();
     let paragraph = edit
@@ -243,7 +239,7 @@ fn split_paint_ligature_without_component_geometry_fails_explicitly() {
     );
     let error = fixture_engine()
         .prepare(&document.snapshot(), &request)
-        .expect_err("Roboto Flex has no GDEF ligature carets for an exact paint split");
+        .expect_err("one shaped glyph cannot carry two complete paints");
     assert_eq!(
         error.preparation(),
         Some(PreparationErrorKind::UnsupportedPaintCoverage)
@@ -263,11 +259,13 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("bidi format controls must not become phantom glyphs or source gaps");
-    let sources = scene_sources(output.scene());
-    assert_eq!(output.scene().lines().len(), 1);
+    assert_eq!(output.scene.lines().len(), 1);
     assert_eq!(
-        sources
-            .for_line(output.scene().line(0).expect("line exists"))
+        output
+            .scene
+            .line(0)
+            .expect("line exists")
+            .sources()
             .expect("line belongs to source scene")
             .iter()
             .next()
@@ -279,11 +277,12 @@ fn bidi_format_controls_remain_source_complete_without_phantom_glyphs() {
         u32::try_from(text.find('\u{2067}').expect("isolate exists")).expect("fixture range fits");
     let pop = u32::try_from(text.find('\u{2069}').expect("pop isolate exists"))
         .expect("fixture range fits");
-    assert!(output.scene().fragments().iter().all(|fragment| {
+    assert!(output.scene.fragments().iter().all(|fragment| {
         fragment.glyphs().iter().all(|glyph| {
-            let source = sources
-                .first_for_glyph(glyph)
+            let source = glyph
+                .sources()
                 .expect("glyph belongs to source scene")
+                .next()
                 .expect("source-aware glyph retains source")
                 .bytes();
             !((source.start <= isolate && source.end >= isolate + 3)

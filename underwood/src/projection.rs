@@ -10,7 +10,6 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ops::Range;
-use core::slice;
 use core::{fmt, mem};
 
 use crate::TextAffinity;
@@ -52,45 +51,6 @@ pub struct ProjectionSegment {
     source: Range<u32>,
     projected: Range<u32>,
 }
-
-/// Iterator over complete ordered projection relation runs.
-///
-/// Identity projection yields one synthesized run without allocating storage.
-#[derive(Clone, Debug)]
-pub struct ProjectionSegments<'a> {
-    identity: Option<ProjectionSegment>,
-    runs: slice::Iter<'a, ProjectionSegment>,
-}
-
-impl Iterator for ProjectionSegments<'_> {
-    type Item = ProjectionSegment;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.identity.take().or_else(|| self.runs.next().cloned())
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
-    }
-}
-
-impl DoubleEndedIterator for ProjectionSegments<'_> {
-    fn next_back(&mut self) -> Option<Self::Item> {
-        self.runs
-            .next_back()
-            .cloned()
-            .or_else(|| self.identity.take())
-    }
-}
-
-impl ExactSizeIterator for ProjectionSegments<'_> {
-    fn len(&self) -> usize {
-        usize::from(self.identity.is_some()) + self.runs.len()
-    }
-}
-
-impl core::iter::FusedIterator for ProjectionSegments<'_> {}
 
 impl ProjectionSegment {
     /// Returns the relationship represented by this run.
@@ -352,7 +312,13 @@ impl ProjectedText {
 
     /// Returns the complete ordered relation runs.
     #[must_use]
-    pub fn segments(&self) -> ProjectionSegments<'_> {
+    pub fn segments(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = ProjectionSegment>
+    + ExactSizeIterator
+    + core::iter::FusedIterator
+    + Clone
+    + '_ {
         let identity = (self.projected.is_none() && !self.source.is_empty()).then(|| {
             let len = self.source_len();
             ProjectionSegment {
@@ -361,10 +327,14 @@ impl ProjectedText {
                 projected: 0..len,
             }
         });
-        ProjectionSegments {
-            identity,
-            runs: self.segments.iter(),
-        }
+        let identity_len = usize::from(identity.is_some());
+        (0..identity_len + self.segments.len()).map(move |index| {
+            identity
+                .as_ref()
+                .filter(|_| index == 0)
+                .cloned()
+                .unwrap_or_else(|| self.segments[index - identity_len].clone())
+        })
     }
 
     /// Returns whether presentation text is exactly the authored allocation.

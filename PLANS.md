@@ -221,8 +221,8 @@ work, and all local and protected remote gates are green.
 
 ## Retained O(change) preparation and scene lifecycle
 
-**Status:** Active — Designs 0017, 0018, and 0021 approved; compact-artifact
-residency gates green, changed-paragraph CPU/allocation gates in progress
+**Status:** Complete — Designs 0017, 0018, and 0021 landed; numeric,
+correctness, portability, and deletion gates green
 
 **Beads:** `und-oh0.13.17` and its dependency-ordered children
 
@@ -509,6 +509,129 @@ protected-remote gates pass. The final representation passes the Design-0021
 residency, edit, allocation, query, churn, and named-owner deletion gates. The
 larger construction source surface is explicitly carried by `und-0re` rather
 than being mislabeled as complete conceptual simplification.
+
+## Conceptual compaction after Design-0021
+
+**Status:** Active — Design-0022 accepted; direct scene traversal,
+prepared-iterator deletion, and flat checked adapter ingestion are complete on
+the campaign branch; committed/projected convergence and numeric closure remain
+
+**Beads:** `und-0re` and its dependency-ordered children. The separate
+authoring campaign is `und-oh0.18`; its golden call sites inform this work but
+its implementation does not expand this epic.
+
+### Goal
+
+Make the compact runtime representation correspond to an equally compact
+construction and traversal model. Delete whole layers of metadata mirroring,
+forwarding views, and redundant validation from the prepared-paragraph,
+Parley-adapter, scene-facade, and block seams while preserving the behavior and
+measured gains earned by Designs 0017–0021.
+
+### Fence
+
+The portable adapter contract owns the checked, backend-neutral paragraph
+artifact and the minimum facts needed to consume it; it explicitly does not
+own scene publication, document identity, or a second object model for every
+record. The Parley adapter owns conversion from Parley Engine facts into that
+artifact; it explicitly does not reconstruct a parallel final representation.
+Scene code owns document-space placement, capability checks, and public query
+semantics; it explicitly does not mirror paragraph facts through forwarding
+types whose only behavior is field access.
+
+### Invariants
+
+- One immutable paragraph artifact remains the sole retained owner of prepared
+  layout, source, paint, and requested interaction facts.
+- Public adapter input remains checked. Trusted crate-internal construction may
+  cross a single validation boundary, but it may not make malformed external
+  output sound.
+- Correctness evidence lives in tests, benchmarks, design records, and optional
+  diagnostics—not in duplicate retained runtime records. No production value
+  exists merely to prove another production value valid.
+- Once the checked ingestion boundary has established canonical-table
+  invariants, internal traversal trusts them. Cheap derived observations are
+  recalculated when needed unless measurement proves retention is faster and
+  worth its residency.
+- Display-only residency stays at or below 1.25× matched Parley; localized edit
+  latency stays at or below 2×; exact repeats and current queries remain
+  allocation-free.
+- Source completeness, mixed bidi interaction, region flow, capability
+  omission and upgrade, Rust 1.88, and `no_std + alloc` remain blocking.
+- No new dependency, `unsafe`, private Parley fork, or requested `ShapedText`
+  API is introduced.
+- Source reduction must materially improve the reproducible 18,407 `tokei` /
+  `scc` Rust-code baseline (21,366 physical lines) and delete at least one
+  complete construction or forwarding concept. Renaming, relocating, or
+  hiding the same state machine does not count.
+
+### Options
+
+1. Polish the existing builder, metadata records, and facade families. This
+   risks improving names while retaining the same state machines and is not
+   sufficient.
+2. Keep one checked portable artifact boundary, replace public streaming
+   construction ceremony with the smallest batch/trusted-internal seam the
+   measurements permit, and collapse mechanical scene forwarding onto borrowed
+   indexed views. Validation ends at ingestion; this is the working direction.
+3. Merge Parley lowering, portable facts, and scene publication into one
+   engine-specific structure. This could remove types quickly but destroys the
+   reusable backend boundary and is rejected.
+
+### Execution
+
+1. Reproduce the current source, allocation, residency, edit, and query
+   baselines; inventory every builder phase, metadata mirror, validation pass,
+   facade, and view by owner and consumer.
+2. Write Design-0022 with before/after adapter and query call sites, named
+   deletion targets, a precise checked-ingestion/trusted-runtime boundary, a
+   public migration note, and explicit non-goals. Rook-audit it before
+   implementation.
+3. Land the smallest vertical deletion slice across core and
+   `underwood_parley`; do not preserve a compatibility shim unless it is
+   measurably necessary.
+4. Continue deleting complete redundant concepts in independently green,
+   coherent commits. Recalculate affected production lines after every slice
+   and reject indirection that merely moves code.
+5. Rerun the matched residency/edit/query wind tunnels plus source-heavy, bidi,
+   capability-upgrade, region, Rust 1.88, bare-metal, wasm, rustdoc, fmt,
+   strict Clippy, and workspace tests.
+6. Perform a final Alder/Cedar/Rook/Stoat audit, land the campaign, and leave a
+   measured engineering ledger that distinguishes architectural deletion from
+   runtime wins.
+
+### Progress
+
+- Slice 1 deleted the non-operational display/source/semantic facade taxonomy
+  and made successful capability-session acquisition O(1).
+- Slice 2 deleted the four prepared line/run/glyph/unit traversal containers
+  in favor of direct indexed views and ordinary opaque iterators.
+- Slice 3 deleted the nested paragraph/line/run construction state machines,
+  their poisoning protocol, the capacity-counting lowering pass, and the
+  separate line/run/interaction record mirrors. One flat
+  `PreparedParagraphData` now crosses one final checked ingestion boundary.
+- The affected production screen is 17,823 Rust code lines, down from 18,407.
+  The 17,000-line floor and the 16,000-line working target remain open; the
+  next deletion target is committed/projected scene-query duplication.
+- Slice 3 preserves the immediately preceding localized-edit allocation shape
+  at 15 actual calls / 2,886 bytes and keeps repeat/query operations
+  allocation-free. The final full-sample churn, latency, residency,
+  portability, and source matrix remains blocking.
+
+### Risks and controls
+
+- **Mask theater:** a smaller public builder is not compaction if the Parley
+  adapter still constructs the same hidden intermediate state.
+- **Runtime prover:** invariant checking, evidence records, or “safe” facades
+  can quietly become a second product. Validate untrusted adapter output once;
+  test it aggressively outside the hot representation; trust the canonical
+  artifact internally.
+- **Facade whiplash:** fewer facade types must not weaken capability errors,
+  sparse-residency behavior, or revision coherence.
+- **Line-count gaming:** generated code, tests, and moved modules are reported
+  separately; the ledger names deleted concepts and their former owners.
+- **Authoring scope creep:** `und-oh0.18` owns rich construction and structural
+  editing. This epic only uses those call sites to reject hostile core seams.
 
 ## Module boundaries and Parley Engine convergence
 

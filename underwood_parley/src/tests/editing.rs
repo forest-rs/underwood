@@ -20,7 +20,7 @@ fn empty_text_block_exposes_one_stable_scene_position() {
     let output = fixture_engine()
         .prepare_block(&snapshot, &request)
         .expect("empty block must prepare");
-    let scene = output.scene();
+    let scene = output.scene;
     let editing = scene
         .editing()
         .expect("fixture retains editable scene data");
@@ -53,7 +53,7 @@ fn text_block_replacement_returns_selections_for_the_published_revision() {
     let first = engine
         .prepare_block(&first_snapshot, &request)
         .expect("fixture block must prepare");
-    let scene = first.scene();
+    let scene = first.scene;
     let editing = scene
         .editing()
         .expect("fixture retains editable scene data");
@@ -64,8 +64,8 @@ fn text_block_replacement_returns_selections_for_the_published_revision() {
         .position_at(text, 5)
         .expect("alpha end is represented");
     let selected = editing
-        .selection_between(&alpha_start, &alpha_end, TextSelectionMode::Logical)
-        .and_then(|selection| editing.selection_set([selection]))
+        .between(&alpha_start, &alpha_end, TextSelectionMode::Logical)
+        .and_then(|selection| editing.set([selection]))
         .expect("alpha forms one valid selection");
 
     let rebound = block
@@ -87,10 +87,10 @@ fn text_block_replacement_returns_selections_for_the_published_revision() {
     let current = engine
         .prepare_block(&block.snapshot(), &request)
         .expect("published replacement must prepare");
-    assert_eq!(current.scene().revision(), rebound.revision());
+    assert_eq!(current.scene.revision(), rebound.revision());
     assert!(
         current
-            .scene()
+            .scene
             .editing()
             .expect("current fixture retains editable scene data")
             .caret(primary.extent())
@@ -117,11 +117,11 @@ fn visual_bidi_selection_retains_disjoint_ranges_and_set_ownership() {
     let output = engine
         .prepare(&document.snapshot(), &request)
         .expect("mixed-bidi interaction must prepare");
-    let scene = output.scene();
+    let scene = output.scene;
     let editing = scene
         .editing()
         .expect("fixture retains editable scene data");
-    let hits = scan_line_hits(scene, 0);
+    let hits = scan_line_hits(&scene, 0);
     let arabic: Vec<_> = hits
         .iter()
         .filter(|hit| hit.source.start >= arabic_start && hit.source.end <= arabic_end)
@@ -134,19 +134,19 @@ fn visual_bidi_selection_retains_disjoint_ranges_and_set_ownership() {
         .expect("trailing Latin cluster is visible");
     let prefix_hit = hits.first().expect("prefix cluster is visible");
     let y = scene.line(0).expect("line exists").bounds().center().y;
-    let anchor = *editing
+    let anchor = editing
         .hit_test(Point::new(anchor_hit.min_x + 0.01, y))
         .expect("Arabic anchor must hit")
-        .position();
-    let extent = *editing
+        .position;
+    let extent = editing
         .hit_test(Point::new(extent_hit.max_x - 0.01, y))
         .expect("Latin extent must hit")
-        .position();
+        .position;
     let visual = editing
-        .selection_between(&anchor, &extent, TextSelectionMode::Visual)
+        .between(&anchor, &extent, TextSelectionMode::Visual)
         .expect("visual caret path must select");
     let reverse = editing
-        .selection_between(&extent, &anchor, TextSelectionMode::Visual)
+        .between(&extent, &anchor, TextSelectionMode::Visual)
         .expect("the reverse visual caret path must select");
     assert_eq!(
         visual.ranges(),
@@ -170,50 +170,48 @@ fn visual_bidi_selection_retains_disjoint_ranges_and_set_ownership() {
         visual.ranges()
     );
 
-    let prefix_start = *editing
+    let prefix_start = editing
         .hit_test(Point::new(prefix_hit.min_x + 0.01, y))
         .expect("prefix start must hit")
-        .position();
-    let prefix_end = *editing
+        .position;
+    let prefix_end = editing
         .hit_test(Point::new(prefix_hit.max_x - 0.01, y))
         .expect("prefix end must hit")
-        .position();
+        .position;
     let prefix = editing
-        .selection_between(&prefix_start, &prefix_end, TextSelectionMode::Logical)
+        .between(&prefix_start, &prefix_end, TextSelectionMode::Logical)
         .expect("prefix selection must form");
     let selections = editing
-        .selection_set([visual, prefix])
+        .set([visual, prefix])
         .expect("nonoverlapping insertion points form one set");
     assert_eq!(selections.selections().len(), 2);
     let geometry = editing
-        .selection_geometry(&selections)
+        .geometry(&selections)
         .expect("the complete selection set has geometry");
     assert!(
-        geometry.iter().any(|rect| rect.selection() == 0)
-            && geometry.iter().any(|rect| rect.selection() == 1),
+        geometry.iter().any(|rect| rect.selection == 0)
+            && geometry.iter().any(|rect| rect.selection == 1),
         "geometry must preserve independent selection ownership: {geometry:?}"
     );
     assert!(
-        geometry.iter().any(|rect| rect.range() > 0),
+        geometry.iter().any(|rect| rect.range > 0),
         "visual selection geometry must preserve disjoint-range ownership"
     );
 
     let carets = editing
-        .selection_set([
+        .set([
             editing
-                .collapsed_selection(&prefix_start)
+                .collapsed(&prefix_start)
                 .expect("prefix caret is valid"),
-            editing
-                .collapsed_selection(&anchor)
-                .expect("Arabic caret is valid"),
+            editing.collapsed(&anchor).expect("Arabic caret is valid"),
         ])
         .expect("two independent carets form one set");
     let duplicate = editing
-        .collapsed_selection(&prefix_start)
+        .collapsed(&prefix_start)
         .expect("prefix caret is valid");
     assert_eq!(
         editing
-            .selection_set([duplicate.clone(), duplicate])
+            .set([duplicate.clone(), duplicate])
             .expect_err("duplicate insertion points must fail as one set")
             .kind(),
         SelectionErrorKind::OverlappingSelections
@@ -289,7 +287,7 @@ fn logical_delete_and_backspace_remove_one_extended_grapheme() {
         let output = engine
             .prepare(&document.snapshot(), &request)
             .expect("grapheme interaction must prepare");
-        let scene = output.scene();
+        let scene = output.scene;
         let editing = scene
             .editing()
             .expect("fixture retains editable scene data");
@@ -299,16 +297,16 @@ fn logical_delete_and_backspace_remove_one_extended_grapheme() {
             scene.lines().first()
         }
         .expect("the fixture must expose a line");
-        let position = *editing
+        let position = editing
             .hit_test_closest(Point::new(
                 if at_end { 10_000.0 } else { -10_000.0 },
                 line.bounds().center().y,
             ))
             .expect("line edge must resolve")
-            .position();
+            .position;
         let carets = editing
-            .selection_set([editing
-                .collapsed_selection(&position)
+            .set([editing
+                .collapsed(&position)
                 .expect("line-edge caret is valid")])
             .expect("one caret forms a set");
         let deletion = editing
@@ -368,33 +366,29 @@ fn multi_paragraph_selection_edit_reshapes_only_affected_paragraphs() {
     let initial = engine
         .prepare(&document.snapshot(), &request)
         .expect("initial document must prepare");
-    assert_eq!(initial.work().shape().paragraphs(), 3);
-    let scene = initial.scene();
+    assert_eq!(initial.work.shape.paragraphs, 3);
+    let scene = initial.scene;
     let editing = scene
         .editing()
         .expect("fixture retains editable scene data");
-    let first = *editing
+    let first = editing
         .hit_test_closest(Point::new(
             10_000.0,
             scene.line(0).expect("line exists").bounds().center().y,
         ))
         .expect("first paragraph end resolves")
-        .position();
-    let last = *editing
+        .position;
+    let last = editing
         .hit_test_closest(Point::new(
             10_000.0,
             scene.line(2).expect("line exists").bounds().center().y,
         ))
         .expect("last paragraph end resolves")
-        .position();
+        .position;
     let selections = editing
-        .selection_set([
-            editing
-                .collapsed_selection(&first)
-                .expect("first caret is valid"),
-            editing
-                .collapsed_selection(&last)
-                .expect("last caret is valid"),
+        .set([
+            editing.collapsed(&first).expect("first caret is valid"),
+            editing.collapsed(&last).expect("last caret is valid"),
         ])
         .expect("two paragraph-local carets form one set");
     let replacement = document
@@ -408,16 +402,14 @@ fn multi_paragraph_selection_edit_reshapes_only_affected_paragraphs() {
     let updated = engine
         .prepare(replacement.publication().snapshot(), &request)
         .expect("updated document must prepare");
-    assert_eq!(updated.work().shape().paragraphs(), 2);
-    assert_eq!(updated.work().reused_paragraphs(), 1);
+    assert_eq!(updated.work.shape.paragraphs, 2);
+    assert_eq!(updated.work.reused_paragraphs, 1);
     assert_eq!(
-        updated.work().analysis().paragraphs(),
-        2,
+        updated.work.analysis.paragraphs, 2,
         "only changed paragraphs return to Unicode analysis"
     );
     assert_eq!(
-        updated.work().geometry().paragraphs(),
-        2,
+        updated.work.geometry.paragraphs, 2,
         "the unchanged middle paragraph must retain its geometry"
     );
 }
@@ -460,27 +452,27 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     let committed = engine
         .prepare(&snapshot, &request)
         .expect("committed scene must prepare");
-    let scene = committed.scene();
+    let scene = committed.scene;
     let editing = scene
         .editing()
         .expect("fixture retains editable scene data");
     let first_y = scene.line(0).expect("line exists").bounds().center().y;
     let last_y = scene.line(2).expect("line exists").bounds().center().y;
-    let start = *editing
+    let start = editing
         .hit_test_closest(Point::new(-100.0, first_y))
         .expect("paragraph start must resolve")
-        .position();
-    let end = *editing
+        .position;
+    let end = editing
         .hit_test_closest(Point::new(10_000.0, last_y))
         .expect("paragraph end must resolve")
-        .position();
+        .position;
     let selections = editing
-        .selection_set([
+        .set([
             editing
-                .collapsed_selection(&start)
+                .collapsed(&start)
                 .expect("primary caret must be valid"),
             editing
-                .collapsed_selection(&end)
+                .collapsed(&end)
                 .expect("secondary caret must be valid"),
         ])
         .expect("two independent carets must form one set");
@@ -509,13 +501,12 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     let transient = engine
         .prepare_composition(&snapshot, &request, &session)
         .expect("Arabic preedit must shape through Parley");
-    let projected_sources = projected_scene_sources(transient.scene());
-    assert_eq!(transient.work().shape().paragraphs(), 1);
-    assert_eq!(transient.work().reused_paragraphs(), 2);
-    assert!(transient.scene().fragments().iter().any(|fragment| {
+    assert_eq!(transient.work.shape.paragraphs, 1);
+    assert_eq!(transient.work.reused_paragraphs, 2);
+    assert!(transient.scene.fragments().iter().any(|fragment| {
         fragment.script() == *b"Arab"
-            && projected_sources
-                .for_fragment(fragment)
+            && fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| {
                     matches!(source, ProjectedTextSource::Composition(range)
@@ -527,9 +518,9 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
     let cancelled = engine
         .prepare(&snapshot, &request)
         .expect("ending the feed without commit must reveal committed scene");
-    assert_eq!(cancelled.work().shape().paragraphs(), 0);
-    assert_eq!(cancelled.work().geometry().paragraphs(), 0);
-    assert_eq!(cancelled.work().reused_paragraphs(), 3);
+    assert_eq!(cancelled.work.shape.paragraphs, 0);
+    assert_eq!(cancelled.work.geometry.paragraphs, 0);
+    assert_eq!(cancelled.work.reused_paragraphs, 3);
 
     let replacement = session
         .commit(&mut document, "مرحبا")
@@ -548,12 +539,11 @@ fn event_feed_composition_normalizes_multi_selection_and_retains_committed_work(
         .prepare(replacement.publication().snapshot(), &request)
         .expect("one IME commit must retain unaffected siblings");
     assert_eq!(
-        committed_update.work().shape().paragraphs(),
-        0,
+        committed_update.work.shape.paragraphs, 0,
         "the committed publication can reuse preparation already formed for the identical preedit"
     );
-    assert_eq!(committed_update.work().geometry().paragraphs(), 1);
-    assert_eq!(committed_update.work().reused_paragraphs(), 2);
+    assert_eq!(committed_update.work.geometry.paragraphs, 1);
+    assert_eq!(committed_update.work.reused_paragraphs, 2);
 }
 
 #[test]
@@ -569,24 +559,22 @@ fn host_driven_queries_share_the_exact_parley_composition_epoch() {
     let committed = engine
         .prepare(&snapshot, &request)
         .expect("committed host surface must prepare");
-    let scene = committed.scene();
+    let scene = committed.scene;
     let editing = scene
         .editing()
         .expect("fixture retains editable scene data");
     let y = scene.line(0).expect("line exists").bounds().center().y;
-    let end = *editing
+    let end = editing
         .hit_test_closest(Point::new(10_000.0, y))
         .expect("host insertion point must resolve")
-        .position();
+        .position;
     let selections = editing
-        .selection_set([editing
-            .collapsed_selection(&end)
-            .expect("host caret must be valid")])
+        .set([editing.collapsed(&end).expect("host caret must be valid")])
         .expect("host selection set must validate");
     let surface = EditableSurface::new(&snapshot, [EditableSurfaceElement::text(end.text())])
         .expect("host chooses one explicit semantic surface");
     let committed_host = surface
-        .bind(scene, &selections)
+        .bind(&scene, &selections)
         .expect("host selection and committed geometry must bind atomically");
     let replacement = committed_host
         .replacement_selection(1..3)
@@ -609,11 +597,11 @@ fn host_driven_queries_share_the_exact_parley_composition_epoch() {
         .prepare_composition(&snapshot, &request, &session)
         .expect("host marked text must shape through Parley");
     let transient_editing = transient
-        .scene()
+        .scene
         .editing()
         .expect("composition retains native-input data");
     let host = surface
-        .bind_composition(transient.scene(), &session)
+        .bind_composition(&transient.scene, &session)
         .expect("text and geometry must bind to the same epoch");
 
     assert_eq!(host.composition(), Some((session.id(), session.epoch())));
@@ -656,12 +644,12 @@ fn host_driven_queries_share_the_exact_parley_composition_epoch() {
         .offset_for_point(marked_rect.center())
         .expect("point hit must map back to the same surface");
     assert!((1..=6).contains(&hit_offset));
-    let line = transient.scene().line(0).expect("line exists").bounds();
+    let line = transient.scene.line(0).expect("line exists").bounds();
     let mut x = line.x0;
     let mut generated_step = None;
     while x <= line.x1 && generated_step.is_none() {
         if let Some(hit) = transient_editing.hit_test(Point::new(x, line.center().y)) {
-            let position = *hit.position();
+            let position = hit.position;
             if matches!(position, ProjectedTextPosition::Composition(_)) {
                 generated_step = [TextMovement::PreviousLogical, TextMovement::NextLogical]
                     .into_iter()
@@ -690,19 +678,17 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
     let committed = engine
         .prepare(&snapshot, &request)
         .expect("committed base must prepare");
-    let scene = committed.scene();
+    let scene = committed.scene;
     let editing = scene
         .editing()
         .expect("fixture retains editable scene data");
     let y = scene.line(0).expect("line exists").bounds().center().y;
-    let start = *editing
+    let start = editing
         .hit_test_closest(Point::new(-100.0, y))
         .expect("base start must resolve")
-        .position();
+        .position;
     let caret = editing
-        .selection_set([editing
-            .collapsed_selection(&start)
-            .expect("base caret must be valid")])
+        .set([editing.collapsed(&start).expect("base caret must be valid")])
         .expect("one caret forms a set");
     let after_base = editing
         .move_selections(&caret, TextMovement::NextLogical, false)
@@ -728,9 +714,8 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
     let transient = engine
         .prepare_composition(&snapshot, &request, &session)
         .expect("generated combining mark must shape through Parley");
-    let projected_sources = projected_scene_sources(transient.scene());
     let transient_editing = transient
-        .scene()
+        .scene
         .editing()
         .expect("composition retains native-input data");
 
@@ -743,14 +728,14 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
     let authored_scene = fixture_engine()
         .prepare(&authored.snapshot(), &authored_request)
         .expect("authored comparison must shape")
-        .scene()
+        .scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .map(|glyph| (glyph.id(), glyph.position(), glyph.advance()))
         .collect::<Vec<_>>();
     let projected_scene = transient
-        .scene()
+        .scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
@@ -760,32 +745,32 @@ fn generated_combining_mark_shapes_identically_without_authored_provenance() {
         projected_scene, authored_scene,
         "generated provenance must not split the shaping run or change glyph geometry"
     );
-    assert!(transient.scene().fragments().iter().any(|fragment| {
-        projected_sources
-            .for_fragment(fragment)
+    assert!(transient.scene.fragments().iter().any(|fragment| {
+        fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .any(|source| matches!(source, ProjectedTextSource::Composition(_)))
     }));
-    let line = transient.scene().line(0).expect("line exists").bounds();
+    let line = transient.scene.line(0).expect("line exists").bounds();
     let mut unit_source = None;
     let mut unit_positions = Vec::new();
     let mut x = line.x0;
     while x <= line.x1 {
         if let Some(hit) = transient_editing.hit_test(Point::new(x, line.center().y)) {
             let has_snapshot = hit
-                .source()
+                .source
                 .sources()
                 .iter()
                 .any(|source| matches!(source, ProjectedTextSource::Snapshot(_)));
             let has_generated = hit
-                .source()
+                .source
                 .sources()
                 .iter()
                 .any(|source| matches!(source, ProjectedTextSource::Composition(_)));
             if has_snapshot && has_generated {
-                unit_source.get_or_insert(*hit.source());
-                if !unit_positions.contains(hit.position()) {
-                    unit_positions.push(*hit.position());
+                unit_source.get_or_insert(hit.source);
+                if !unit_positions.contains(&hit.position) {
+                    unit_positions.push(hit.position);
                 }
             }
         }

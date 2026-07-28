@@ -17,8 +17,8 @@ use parley_engine::{Analysis, Analyzer, ShapedText, Shaper};
 use underwood::adapter::{
     FormationWork, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphFormationReuse,
-    ParagraphInput, ParagraphPreparationId, PreparationError, PreparedLine,
-    PreparedParagraphBuilder, PreparedParagraphCapacity, PreparedRun,
+    ParagraphInput, ParagraphPreparationId, PreparationError, PreparedLine, PreparedParagraph,
+    PreparedParagraphData, PreparedRun,
 };
 use underwood::{RegionAttempt, RegionTranscript, ResolvedDirection};
 
@@ -31,7 +31,7 @@ use crate::line_break::{
 };
 use crate::lowering::{
     append_unrendered_source, checked_source_range, index_char_starts, lower_glyphs_into,
-    lowered_glyph_count, portable_synthesis,
+    portable_synthesis,
 };
 use crate::shaping::{
     analyze_text_with_styles_into, prepare_inline_flow_indices,
@@ -39,9 +39,6 @@ use crate::shaping::{
 };
 use crate::spacing::{
     apply_spacing, capture_base_advances, collect_joining_units, restore_base_advances,
-};
-use crate::validation::{
-    validate_inline_flow_runs, validate_input_runs, validate_paint_runs, validate_shaping_runs,
 };
 
 /// Retained Parley Engine paragraph adapter.
@@ -155,8 +152,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
         input: ParagraphInput<'_>,
         constraints: ParagraphConstraints,
     ) -> Result<ParagraphFormationOutput, PreparationError> {
-        let preparation_id = input.preparation();
-        let change = input.change();
+        let preparation_id = input.preparation;
+        let change = input.change;
         let retained = self.cache.contains_key(&preparation_id);
         let formation_reuse = if retained {
             self.retention_work.hits = self.retention_work.hits.saturating_add(1);
@@ -166,20 +163,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             ParagraphFormationReuse::Cold
         };
         let text_len =
-            u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
-        if !retained || change.analysis_changed() {
-            validate_input_runs(&input)?;
-        } else {
-            if change.font_selection_changed() {
-                validate_shaping_runs(&input, text_len)?;
-            }
-            if change.inline_flow_projection_changed() {
-                validate_inline_flow_runs(&input, text_len)?;
-            }
-            if change.paint_changed() {
-                validate_paint_runs(&input, text_len)?;
-            }
-        }
+            u32::try_from(input.text.len()).map_err(|_| PreparationError::invalid_output())?;
         if !retained {
             self.cache.insert(
                 preparation_id,
@@ -188,7 +172,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     .unwrap_or_else(PreparationCache::empty),
             );
         }
-        let analyzed = !retained || change.analysis_changed();
+        let analyzed = !retained || change.analysis;
         if analyzed {
             let cache = self
                 .cache
@@ -196,42 +180,38 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .ok_or_else(PreparationError::invalid_output)?;
             analyze_text_with_styles_into(
                 &mut self.analyzer,
-                input.text(),
-                input.paragraph_style().base_direction(),
-                input.analysis_styles(),
-                input.analysis_runs(),
+                input.text,
+                input.paragraph_style.base_direction(),
+                input.analysis_styles,
+                input.analysis_runs,
                 &mut cache.analysis,
             )?;
-            collect_analysis_units_into(
-                input.text(),
-                &cache.analysis,
-                &mut cache.interaction_units,
-            )?;
+            collect_analysis_units_into(input.text, &cache.analysis, &mut cache.interaction_units)?;
             collect_joining_units(
-                input.text(),
+                input.text,
                 &cache.analysis,
                 &cache.interaction_units,
                 &mut cache.joining_units,
             )?;
-            index_char_starts(input.text(), &mut cache.char_starts)?;
+            index_char_starts(input.text, &mut cache.char_starts)?;
             cache.style_indices.clear();
             cache.inline_flow_indices.clear();
             cache.shaped_text.clear();
             cache.base_cluster_advances.clear();
             cache.base_glyph_advances.clear();
             cache.logical_clusters.clear();
-            cache.shaped_glyphs = 0;
             cache.region_transcript = None;
         }
 
-        let font_queried = analyzed || change.font_selection_changed();
-        let flow_projection_changed = analyzed || change.inline_flow_projection_changed();
-        let ligature_policy_changed = !retained || change.ligature_policy_changed();
-        let spacing_changed = !retained || change.spacing_changed();
-        let line_height_changed = !retained || change.line_metrics_changed();
-        let break_policy_changed = !retained || change.break_policy_changed();
+        let font_queried = analyzed || change.font_selection;
+        let flow_projection_changed = analyzed || change.inline_flow_projection;
+        let ligature_policy_changed = !retained || change.ligature_policy;
+        let spacing_changed = !retained || change.spacing;
+        let line_height_changed = !retained || change.line_metrics;
+        let break_policy_changed = !retained || change.break_policy;
         let shaped = font_queried || ligature_policy_changed;
         let mut selected_clusters = 0_u32;
+        let mut shaped_glyphs = 0_u32;
         if shaped {
             let cache = self
                 .cache
@@ -242,11 +222,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     &mut self.shaper,
                     &cache.analysis,
                     &mut self.fonts,
-                    input.text(),
-                    input.shaping_styles(),
-                    input.shaping_runs(),
-                    input.inline_flow_styles(),
-                    input.inline_flow_runs(),
+                    input.text,
+                    input.shaping_styles,
+                    input.shaping_runs,
+                    input.inline_flow_styles,
+                    input.inline_flow_runs,
                     &mut cache.shaped_text,
                     &mut cache.style_indices,
                     &mut cache.inline_flow_indices,
@@ -257,18 +237,18 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     &mut self.shaper,
                     &cache.analysis,
                     &cache.shaped_text,
-                    input.text(),
-                    input.shaping_styles(),
-                    input.shaping_runs(),
-                    input.inline_flow_styles(),
-                    input.inline_flow_runs(),
+                    input.text,
+                    input.shaping_styles,
+                    input.shaping_runs,
+                    input.inline_flow_styles,
+                    input.inline_flow_runs,
                     &mut self.reshape_scratch,
                     &mut cache.style_indices,
                     &mut cache.inline_flow_indices,
                 )?;
                 mem::swap(&mut cache.shaped_text, &mut self.reshape_scratch);
             }
-            cache.shaped_glyphs = shaped_glyph_count(&cache.shaped_text);
+            shaped_glyphs = shaped_glyph_count(&cache.shaped_text);
             capture_base_advances(
                 &cache.shaped_text,
                 &mut cache.base_cluster_advances,
@@ -280,8 +260,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .get_mut(&preparation_id)
                 .ok_or_else(PreparationError::invalid_output)?;
             prepare_inline_flow_indices(
-                input.text(),
-                input.inline_flow_runs(),
+                input.text,
+                input.inline_flow_runs,
                 &mut cache.inline_flow_indices,
             )?;
         }
@@ -300,15 +280,19 @@ impl ParagraphFormation for ParleyParagraphEngine {
             }
             apply_spacing(
                 &mut cache.shaped_text,
-                input.inline_flow_styles(),
-                input.inline_flow_runs(),
+                input.inline_flow_styles,
+                input.inline_flow_runs,
                 &cache.interaction_units,
                 &cache.joining_units,
             )?;
             collect_logical_clusters_into(
-                input.text(),
+                input.text,
                 &cache.shaped_text,
                 &mut cache.logical_clusters,
+            )?;
+            crate::line_break::cover_interaction_units(
+                &mut cache.logical_clusters,
+                &cache.interaction_units,
             )?;
             cache.region_transcript = None;
         }
@@ -319,12 +303,12 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .ok_or_else(PreparationError::invalid_output)?;
             apply_wrap_policy(
                 &mut cache.logical_clusters,
-                input.inline_flow_styles(),
-                input.inline_flow_runs(),
+                input.inline_flow_styles,
+                input.inline_flow_runs,
             )?;
         }
 
-        let constraints_match = retained && !change.constraints_changed();
+        let constraints_match = retained && !change.constraints;
         let needs_formation = shaped
             || spacing_changed
             || line_height_changed
@@ -343,11 +327,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 && constraints_match
             {
                 update_line_metrics(
-                    input.text(),
+                    input.text,
                     &cache.shaped_text,
                     &mut cache.formed_lines,
-                    input.inline_flow_styles(),
-                    input.inline_flow_runs(),
+                    input.inline_flow_styles,
+                    input.inline_flow_runs,
                 )?;
             } else {
                 let analysis = &cache.analysis;
@@ -359,12 +343,13 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 let joining_units = &cache.joining_units;
                 let formed_lines = &mut cache.formed_lines;
                 let (work, transcript) = form_lines(
-                    input.paragraph(),
-                    input.text(),
+                    input.paragraph,
+                    input.text,
                     canonical_text,
                     logical_clusters,
-                    input.inline_flow_styles(),
-                    input.inline_flow_runs(),
+                    interaction_units,
+                    input.inline_flow_styles,
+                    input.inline_flow_runs,
                     &constraints,
                     formed_lines,
                     &mut self.line_scratch,
@@ -373,18 +358,18 @@ impl ParagraphFormation for ParleyParagraphEngine {
                             &mut self.shaper,
                             analysis,
                             canonical_text,
-                            input.text(),
-                            input.shaping_styles(),
+                            input.text,
+                            input.shaping_styles,
                             style_indices,
-                            input.inline_flow_styles(),
+                            input.inline_flow_styles,
                             inline_flow_indices,
                             source,
                             line_text,
                         )?;
                         apply_spacing(
                             line_text,
-                            input.inline_flow_styles(),
-                            input.inline_flow_runs(),
+                            input.inline_flow_styles,
+                            input.inline_flow_runs,
                             interaction_units,
                             joining_units,
                         )?;
@@ -400,66 +385,83 @@ impl ParagraphFormation for ParleyParagraphEngine {
             .cache
             .get(&preparation_id)
             .ok_or_else(PreparationError::invalid_output)?;
-        let work = FormationWork::new(
+        let work = FormationWork {
             analyzed,
-            shaped,
+            itemized: shaped,
             selected_clusters,
-            if shaped {
+            shaped_runs: if shaped {
                 u32::try_from(preparation.shaped_text.runs().len()).unwrap_or(u32::MAX)
             } else {
                 0
             },
-            if shaped { preparation.shaped_glyphs } else { 0 },
-            if needs_formation {
+            shaped_glyphs,
+            formed_lines: if needs_formation {
                 u32::try_from(preparation.formed_lines.len()).unwrap_or(u32::MAX)
             } else {
                 0
             },
-            if needs_formation {
-                LineShapingWork::new(
-                    line_work.reshapes,
-                    line_work.resolved_clusters,
-                    line_work.shaped_runs,
-                    line_work.shaped_glyphs,
-                )
-                .with_formation(
-                    line_work.candidates,
-                    line_work.rejected_candidates,
-                    line_work.checkpoint_restores,
-                )
+            line_shaping: if needs_formation {
+                LineShapingWork {
+                    attempts: line_work.reshapes,
+                    resolved_clusters: line_work.resolved_clusters,
+                    shaped_runs: line_work.shaped_runs,
+                    shaped_glyphs: line_work.shaped_glyphs,
+                    candidates: line_work.candidates,
+                    rejected_candidates: line_work.rejected_candidates,
+                }
             } else {
                 LineShapingWork::default()
             },
-        );
+        };
         let resolved_direction = if preparation.analysis.is_rtl() {
             ResolvedDirection::Rtl
         } else {
             ResolvedDirection::Ltr
         };
-        let mut paragraph = PreparedParagraphBuilder::with_features(
-            input.paragraph(),
-            text_len,
-            resolved_direction,
-            input.features(),
+        let formed_line_count = preparation.formed_lines.len();
+        let (run_capacity, normalized_coord_capacity, reshaped_glyph_capacity) =
+            preparation.formed_lines.iter().fold(
+                (0_usize, 0_usize, 0_usize),
+                |(run_count, coord_count, glyph_count), formed| {
+                    let (runs, coords, glyphs) =
+                        formed.prepared_table_capacity(&preparation.shaped_text);
+                    (
+                        run_count.saturating_add(runs),
+                        coord_count.saturating_add(coords),
+                        glyph_count.saturating_add(glyphs),
+                    )
+                },
+            );
+        let glyph_capacity = preparation
+            .analysis
+            .char_info()
+            .len()
+            .saturating_add(preparation.shaped_text.glyphs().len())
+            .saturating_add(reshaped_glyph_capacity);
+        let mut data = PreparedParagraphData::with_capacity(
+            formed_line_count,
+            run_capacity,
+            glyph_capacity,
+            preparation.interaction_units.len(),
+            normalized_coord_capacity,
         );
-        paragraph.reserve_exact(prepared_capacity(input.text(), preparation)?);
         for formed in &preparation.formed_lines {
             let plan = &formed.plan;
             let shaped_text = formed.shaping(&preparation.shaped_text);
             line_run_pieces_into(shaped_text, plan.clusters.clone(), &mut self.run_pieces)?;
             reorder_visual_pieces(shaped_text, &mut self.run_pieces);
-            let mut line = paragraph.begin_line(PreparedLine::try_new_in_slot(
+            let line = PreparedLine::try_new_in_slot(
                 plan.slot,
                 checked_source_range(&plan.source)?,
                 plan.reason,
-                plan.advance,
                 plan.baseline,
                 plan.height,
                 plan.content_ascent,
                 plan.content_descent,
-            )?)?;
+            )?;
+            let units_start = data.unit_count();
             lower_visual_units(
-                input.text(),
+                input.text,
                 &preparation.analysis,
                 &preparation.char_starts,
                 shaped_text,
@@ -468,8 +470,9 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 &plan.source,
                 plan.reason == LineBreakReason::Mandatory,
                 &mut self.interaction_scratch,
-                &mut line,
+                &mut data,
             )?;
+            let runs_start = data.run_count();
             for piece in &self.run_pieces {
                 let run = shaped_text
                     .runs()
@@ -498,39 +501,58 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         + usize::from(last.text_offset)
                         + usize::from(last.text_len);
                 let synthesis = portable_synthesis(font.synthesis)?;
-                let mut prepared_run = line.begin_run(PreparedRun::try_new(
+                let prepared_run = PreparedRun::try_new(
                     checked_source_range(&source)?,
                     run.bidi_level,
                     run.script.to_bytes(),
                     font.font.clone(),
                     run.font_size,
                     synthesis,
-                )?);
-                prepared_run.extend_normalized_coords(
+                )?;
+                let normalized_coords_start = data.normalized_coord_count();
+                data.extend_normalized_coords(
                     normalized_coords.iter().map(|coord| coord.to_bits()),
                 );
+                let glyphs_start = data.glyph_count();
                 lower_glyphs_into(
-                    input.text(),
+                    input.text,
                     &preparation.analysis,
                     &preparation.char_starts,
                     shaped_text,
                     run,
                     piece.clusters.clone(),
-                    input.paint_runs(),
-                    &mut prepared_run,
+                    &mut data,
                 )?;
+                let glyphs_end = data.glyph_count();
+                let unrendered_source_start = data.unrendered_source_count();
                 append_unrendered_source(
-                    input.text(),
+                    input.text,
                     &preparation.analysis,
                     &preparation.char_starts,
                     source.clone(),
-                    &mut prepared_run,
+                    glyphs_start..glyphs_end,
+                    &mut data,
                 )?;
-                prepared_run.finish()?;
+                data.push_run(
+                    prepared_run,
+                    normalized_coords_start..data.normalized_coord_count(),
+                    unrendered_source_start..data.unrendered_source_count(),
+                    glyphs_start..glyphs_end,
+                )?;
             }
-            line.finish()?;
+            data.push_line(
+                line,
+                units_start..data.unit_count(),
+                runs_start..data.run_count(),
+            )?;
         }
-        let paragraph = paragraph.finish()?;
+        let paragraph = PreparedParagraph::try_from_data(
+            input.paragraph,
+            text_len,
+            resolved_direction,
+            input.features,
+            data,
+        )?;
         let region_transcript = preparation.region_transcript.clone();
         match region_transcript {
             Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
@@ -577,10 +599,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .resident_bytes
                 .saturating_add(cache.accounted_bytes);
         }
-        self.retention_work.peak_bytes = self
-            .retention_work
-            .peak_bytes
-            .max(self.retention_work.resident_bytes);
         self.enforce_retention_budget();
     }
 
@@ -589,17 +607,16 @@ impl ParagraphFormation for ParleyParagraphEngine {
     }
 
     fn retained_facts(&self) -> Option<ParagraphFormationCacheDiagnostics> {
-        Some(ParagraphFormationCacheDiagnostics::new(
-            self.retention_budget,
-            self.cache.len(),
-            self.retention_work.resident_bytes,
-            self.retention_work.peak_bytes,
-            self.scratch_accounted_bytes(),
-            self.retention_work.hits,
-            self.retention_work.misses,
-            self.retention_work.evictions,
-            self.retention_work.releases,
-        ))
+        Some(ParagraphFormationCacheDiagnostics {
+            budget_bytes: self.retention_budget,
+            entries: self.cache.len(),
+            resident_bytes: self.retention_work.resident_bytes,
+            scratch_bytes: self.scratch_accounted_bytes(),
+            hits: self.retention_work.hits,
+            misses: self.retention_work.misses,
+            evictions: self.retention_work.evictions,
+            releases: self.retention_work.releases,
+        })
     }
 }
 
@@ -615,47 +632,10 @@ struct PreparationCache {
     base_cluster_advances: Vec<f32>,
     base_glyph_advances: Vec<f32>,
     logical_clusters: Vec<LogicalCluster>,
-    shaped_glyphs: u32,
     formed_lines: Vec<FormedLine>,
     region_transcript: Option<RegionTranscript>,
     last_used: u64,
     accounted_bytes: usize,
-}
-
-fn prepared_capacity(
-    text: &str,
-    preparation: &PreparationCache,
-) -> Result<PreparedParagraphCapacity, PreparationError> {
-    let mut runs = 0_usize;
-    let mut glyphs = 0_usize;
-    let mut normalized_coords = 0_usize;
-    for formed in &preparation.formed_lines {
-        let shaped_text = formed.shaping(&preparation.shaped_text);
-        for run in shaped_text.runs() {
-            let start = run.clusters_range.start.max(formed.plan.clusters.start);
-            let end = run.clusters_range.end.min(formed.plan.clusters.end);
-            if start < end {
-                runs = runs.saturating_add(1);
-                normalized_coords =
-                    normalized_coords.saturating_add(run.normalized_coords_range.len());
-                glyphs = glyphs.saturating_add(lowered_glyph_count(
-                    text,
-                    &preparation.analysis,
-                    &preparation.char_starts,
-                    shaped_text,
-                    run,
-                    start..end,
-                )?);
-            }
-        }
-    }
-    Ok(PreparedParagraphCapacity::new(
-        preparation.formed_lines.len(),
-        runs,
-        glyphs,
-        preparation.interaction_units.len(),
-    )
-    .with_normalized_coords(normalized_coords))
 }
 
 impl PreparationCache {
@@ -671,7 +651,6 @@ impl PreparationCache {
             base_cluster_advances: Vec::new(),
             base_glyph_advances: Vec::new(),
             logical_clusters: Vec::new(),
-            shaped_glyphs: 0,
             formed_lines: Vec::new(),
             region_transcript: None,
             last_used: 0,
@@ -710,7 +689,6 @@ impl PreparationCache {
 #[derive(Clone, Copy, Debug, Default)]
 struct RetentionWork {
     resident_bytes: usize,
-    peak_bytes: usize,
     hits: usize,
     misses: usize,
     evictions: usize,

@@ -52,8 +52,7 @@ impl<'a> ParagraphCursor<'a> {
         let units = self
             .facts
             .lines()
-            .iter()
-            .map(|line| line.units().len())
+            .map(PreparedLineView::unit_count)
             .sum::<usize>();
         if units == 0 {
             1
@@ -177,18 +176,20 @@ impl<'a> ParagraphCursor<'a> {
     }
 
     fn upstream_cluster(self, offset: u32) -> Option<CursorCluster> {
-        let lines = self.facts.lines();
-        let line_index = lines.partition_point(|line| line.source().end < offset);
-        let line = lines.get(line_index)?;
+        let line_index = self
+            .facts
+            .line_partition_point(|line| line.source().end < offset);
+        let line = self.facts.line(line_index)?;
         (line.source().start < offset && offset <= line.source().end)
             .then(|| self.find_unit(line, line_index, offset, true))
             .flatten()
     }
 
     fn downstream_cluster(self, offset: u32) -> Option<CursorCluster> {
-        let lines = self.facts.lines();
-        let line_index = lines.partition_point(|line| line.source().end <= offset);
-        let line = lines.get(line_index)?;
+        let line_index = self
+            .facts
+            .line_partition_point(|line| line.source().end <= offset);
+        let line = self.facts.line(line_index)?;
         (line.source().start <= offset && offset < line.source().end)
             .then(|| self.find_unit(line, line_index, offset, false))
             .flatten()
@@ -236,22 +237,20 @@ impl<'a> ParagraphCursor<'a> {
     fn first_cluster(self) -> Option<CursorCluster> {
         self.facts
             .lines()
-            .iter()
             .enumerate()
-            .find(|(_, line)| !line.units().is_empty())
+            .find(|(_, line)| line.unit_count() != 0)
             .map(|(line, _)| CursorCluster { line, unit: 0 })
     }
 
     fn last_cluster(self) -> Option<CursorCluster> {
         self.facts
             .lines()
-            .iter()
             .enumerate()
             .rev()
-            .find(|(_, line)| !line.units().is_empty())
+            .find(|(_, line)| line.unit_count() != 0)
             .map(|(line, prepared)| CursorCluster {
                 line,
-                unit: prepared.units().len() - 1,
+                unit: prepared.unit_count() - 1,
             })
     }
 
@@ -264,20 +263,19 @@ impl<'a> ParagraphCursor<'a> {
         }
         self.facts
             .lines()
-            .iter()
             .enumerate()
             .take(cluster.line)
             .rev()
-            .find(|(_, line)| !line.units().is_empty())
+            .find(|(_, line)| line.unit_count() != 0)
             .map(|(line, prepared)| CursorCluster {
                 line,
-                unit: prepared.units().len() - 1,
+                unit: prepared.unit_count() - 1,
             })
     }
 
     fn next_cluster(self, cluster: CursorCluster) -> Option<CursorCluster> {
-        let line = self.facts.lines().get(cluster.line)?;
-        if cluster.unit + 1 < line.units().len() {
+        let line = self.facts.line(cluster.line)?;
+        if cluster.unit + 1 < line.unit_count() {
             return Some(CursorCluster {
                 line: cluster.line,
                 unit: cluster.unit + 1,
@@ -285,19 +283,14 @@ impl<'a> ParagraphCursor<'a> {
         }
         self.facts
             .lines()
-            .iter()
             .enumerate()
             .skip(cluster.line + 1)
-            .find(|(_, line)| !line.units().is_empty())
+            .find(|(_, line)| line.unit_count() != 0)
             .map(|(line, _)| CursorCluster { line, unit: 0 })
     }
 
     fn unit(self, cluster: CursorCluster) -> Option<PreparedInteractionUnitView<'a>> {
-        self.facts
-            .lines()
-            .get(cluster.line)?
-            .units()
-            .nth(cluster.unit)
+        self.facts.line(cluster.line)?.unit(cluster.unit)
     }
 
     fn is_rtl(self, cluster: CursorCluster) -> bool {
@@ -307,17 +300,15 @@ impl<'a> ParagraphCursor<'a> {
 
     fn is_end_of_line(self, cluster: CursorCluster) -> bool {
         self.facts
-            .lines()
-            .get(cluster.line)
-            .is_some_and(|line| cluster.unit + 1 == line.units().len())
+            .line(cluster.line)
+            .is_some_and(|line| cluster.unit + 1 == line.unit_count())
     }
 
     fn is_soft_line_end(self, cluster: CursorCluster) -> bool {
         self.is_end_of_line(cluster)
             && self
                 .facts
-                .lines()
-                .get(cluster.line)
+                .line(cluster.line)
                 .is_some_and(|line| line.break_reason() == LineBreakReason::Regular)
     }
 
@@ -325,8 +316,7 @@ impl<'a> ParagraphCursor<'a> {
         self.is_end_of_line(cluster)
             && self
                 .facts
-                .lines()
-                .get(cluster.line)
+                .line(cluster.line)
                 .is_some_and(|line| line.break_reason() == LineBreakReason::Mandatory)
     }
 }

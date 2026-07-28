@@ -193,8 +193,8 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         Brush::Solid(Color::from_rgb8(0x6c, 0x78, 0x89)),
     ]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin-default", LATIN_FONT_BYTES)?,
-        Font::from_bytes("arabic-static", ARABIC_FONT_BYTES)?,
+        Font::from_bytes(LATIN_FONT_BYTES)?,
+        Font::from_bytes(ARABIC_FONT_BYTES)?,
     ])?
     .with_generic_families(GenericFamily::SansSerif, ["Roboto Flex"])?
     .with_fallbacks(
@@ -211,10 +211,7 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     )
     .with_features(SceneFeatures::DISPLAY.with_sources());
     let output = layout.prepare(&snapshot, &request)?;
-    let scene = output.scene().clone();
-    let sources = scene
-        .sources()
-        .expect("the PDF proof requests source provenance");
+    let scene = output.scene.clone();
 
     assert!(
         scene
@@ -226,8 +223,8 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     assert!(
         scene.fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                sources
-                    .for_glyph(glyph)
+                glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
                     .count()
                     > 1
@@ -240,8 +237,8 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter(|glyph| {
-            sources
-                .for_glyph(*glyph)
+            glyph
+                .sources()
                 .expect("glyph belongs to source scene")
                 .any(|source| {
                     let bytes = source.bytes();
@@ -266,14 +263,14 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
     );
     assert!(
         scene.lines().iter().any(|line| {
-            line.adjustment().alignment() == TextAlignment::Center
-                && line.adjustment().inline_offset() > 0.0
+            line.adjustment().alignment == TextAlignment::Center
+                && line.adjustment().inline_offset > 0.0
         }) && scene.lines().iter().any(|line| {
-            line.adjustment().alignment() == TextAlignment::Justify
-                && line.adjustment().expanded_opportunities() > 0
+            line.adjustment().alignment == TextAlignment::Justify
+                && line.adjustment().expanded_opportunities > 0
         }) && scene.lines().iter().any(|line| {
-            line.adjustment().alignment() == TextAlignment::End
-                && line.adjustment().inline_offset() > 0.0
+            line.adjustment().alignment == TextAlignment::End
+                && line.adjustment().inline_offset > 0.0
         }),
         "the exported scene must carry real centered, justified, and end-aligned PDF geometry"
     );
@@ -346,19 +343,19 @@ mod tests {
             .lines()
             .iter()
             .find(|line| {
-                line.adjustment().alignment() == TextAlignment::Justify
-                    && line.adjustment().expanded_opportunities() > 0
+                line.adjustment().alignment == TextAlignment::Justify
+                    && line.adjustment().expanded_opportunities > 0
             })
             .expect("the specimen must contain a genuinely justified soft line");
         let end_aligned = scene
             .lines()
             .iter()
-            .find(|line| line.adjustment().alignment() == TextAlignment::End)
+            .find(|line| line.adjustment().alignment == TextAlignment::End)
             .expect("the specimen must contain an end-aligned line");
         let justified_right =
-            justified.bounds().x1 - justified.adjustment().trailing_whitespace_advance();
+            justified.bounds().x1 - justified.adjustment().trailing_whitespace_advance;
         let end_right =
-            end_aligned.bounds().x1 - end_aligned.adjustment().trailing_whitespace_advance();
+            end_aligned.bounds().x1 - end_aligned.adjustment().trailing_whitespace_advance;
 
         assert!(
             (justified_right - end_right).abs() <= 1.0e-6,

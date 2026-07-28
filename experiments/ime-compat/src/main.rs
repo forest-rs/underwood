@@ -54,22 +54,19 @@ fn main() -> Result<(), AnyError> {
     )
     .with_features(SceneFeatures::EDITABLE);
     let committed = fixture.layout.prepare(&snapshot, &request)?;
-    let scene = committed.scene();
+    let scene = committed.scene;
     let editing = scene.editing()?;
     let first_line = scene.line(0).expect("first paragraph has a line");
     let last_line = scene.line(2).expect("last paragraph has a line");
-    let primary = *editing
+    let primary = editing
         .hit_test_closest(Point::new(-100.0, first_line.bounds().center().y))
         .expect("first paragraph has a primary insertion point")
-        .position();
-    let secondary = *editing
+        .position;
+    let secondary = editing
         .hit_test_closest(Point::new(10_000.0, last_line.bounds().center().y))
         .expect("last paragraph has a secondary insertion point")
-        .position();
-    let selections = editing.selection_set([
-        editing.collapsed_selection(&primary)?,
-        editing.collapsed_selection(&secondary)?,
-    ])?;
+        .position;
+    let selections = editing.set([editing.collapsed(&primary)?, editing.collapsed(&secondary)?])?;
     let start =
         editing.begin_composition(&selections, CompositionId::from_bytes(*b"ime-compat-epoch"))?;
     assert!(
@@ -85,7 +82,7 @@ fn main() -> Result<(), AnyError> {
         &snapshot,
         [EditableSurfaceElement::text(fixture.first_text)],
     )?;
-    let host_base = scope.bind(scene, start.selections())?;
+    let host_base = scope.bind(&scene, start.selections())?;
     let explicit_replacement = host_base.replacement_selection(0..5)?;
     assert_eq!(
         explicit_replacement
@@ -116,25 +113,23 @@ fn main() -> Result<(), AnyError> {
         .layout
         .prepare_composition(&snapshot, &request, &feed.session)?;
     assert_eq!(
-        projected.work().shape().paragraphs(),
-        1,
+        projected.work.shape.paragraphs, 1,
         "only the composition paragraph may reshape"
     );
     assert_eq!(
-        projected.work().reused_paragraphs(),
-        2,
+        projected.work.reused_paragraphs, 2,
         "both unaffected paragraphs must remain retained"
     );
     println!(
         "feed.preedit epoch={} shape={} geometry={} reused={} committed_revision={:?}",
         feed.session.epoch().get(),
-        projected.work().shape().paragraphs(),
-        projected.work().geometry().paragraphs(),
-        projected.work().reused_paragraphs(),
+        projected.work.shape.paragraphs,
+        projected.work.geometry.paragraphs,
+        projected.work.reused_paragraphs,
         snapshot.revision()
     );
 
-    let host = scope.bind_composition(projected.scene(), &feed.session)?;
+    let host = scope.bind_composition(&projected.scene, &feed.session)?;
     let marked = host.marked_range().expect("preedit has a marked range");
     let utf16 = host.range_in_encoding(marked.clone(), SurfaceTextEncoding::Utf16)?;
     let caret = host.caret_rect().expect("host caret geometry is present");
@@ -180,40 +175,36 @@ fn main() -> Result<(), AnyError> {
         .layout
         .prepare_composition(&snapshot, &request, &feed.session)?;
     assert_eq!(
-        selection_only.work().shape().paragraphs(),
-        0,
+        selection_only.work.shape.paragraphs, 0,
         "moving only the preedit selection must not reshape"
     );
     assert_eq!(
-        selection_only.work().geometry().paragraphs(),
-        0,
+        selection_only.work.geometry.paragraphs, 0,
         "moving only the preedit selection must retain geometry"
     );
     println!(
         "feed.selection epoch={} shape={} geometry={} reused={}",
         feed.session.epoch().get(),
-        selection_only.work().shape().paragraphs(),
-        selection_only.work().geometry().paragraphs(),
-        selection_only.work().reused_paragraphs()
+        selection_only.work.shape.paragraphs,
+        selection_only.work.geometry.paragraphs,
+        selection_only.work.reused_paragraphs
     );
 
     let cancelled_selection: SnapshotTextSelectionSet = feed.session.clone().cancel();
     let cancelled = fixture.layout.prepare(&snapshot, &request)?;
     assert_eq!(
-        cancelled.work().shape().paragraphs(),
-        0,
+        cancelled.work.shape.paragraphs, 0,
         "cancel must reveal committed shaping without recomputation"
     );
     assert_eq!(
-        cancelled.work().reused_paragraphs(),
-        3,
+        cancelled.work.reused_paragraphs, 3,
         "cancel must reveal every committed paragraph from cache"
     );
     println!(
         "feed.cancel publications=0 shape={} geometry={} reused={} selection_count={}",
-        cancelled.work().shape().paragraphs(),
-        cancelled.work().geometry().paragraphs(),
-        cancelled.work().reused_paragraphs(),
+        cancelled.work.shape.paragraphs,
+        cancelled.work.geometry.paragraphs,
+        cancelled.work.reused_paragraphs,
         cancelled_selection.selections().len()
     );
 
@@ -227,17 +218,16 @@ fn main() -> Result<(), AnyError> {
         .layout
         .prepare(publication.publication().snapshot(), &request)?;
     assert_eq!(
-        committed_update.work().reused_paragraphs(),
-        2,
+        committed_update.work.reused_paragraphs, 2,
         "commit must retain both unaffected siblings"
     );
     println!(
         "feed.commit revision={:?} changed={} shape={} geometry={} reused={}",
         publication.publication().snapshot().revision(),
         publication.publication().changes().paragraphs().len(),
-        committed_update.work().shape().paragraphs(),
-        committed_update.work().geometry().paragraphs(),
-        committed_update.work().reused_paragraphs()
+        committed_update.work.shape.paragraphs,
+        committed_update.work.geometry.paragraphs,
+        committed_update.work.reused_paragraphs
     );
     Ok(())
 }
@@ -261,8 +251,8 @@ fn fixture() -> Result<Fixture, AnyError> {
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT)?,
-        Font::from_bytes("arabic", ARABIC_FONT)?,
+        Font::from_bytes(LATIN_FONT)?,
+        Font::from_bytes(ARABIC_FONT)?,
     ])?
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?;
     let layout = LayoutEngine::new(

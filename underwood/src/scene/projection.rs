@@ -15,6 +15,26 @@ mod styles;
 
 use styles::project_style_runs;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PaintRun {
+    bytes: Range<u32>,
+    slot: PaintSlot,
+}
+
+impl PaintRun {
+    const fn new(bytes: Range<u32>, slot: PaintSlot) -> Self {
+        Self { bytes, slot }
+    }
+
+    fn bytes(&self) -> Range<u32> {
+        self.bytes.clone()
+    }
+
+    const fn slot(&self) -> PaintSlot {
+        self.slot
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ParagraphSource<'a> {
     Document(&'a Paragraph),
@@ -580,53 +600,6 @@ impl Projection {
             .then(|| paint.slot())
     }
 
-    pub(super) fn validate_source_range(&self, paragraph: Range<u32>) -> Result<(), SceneError> {
-        let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
-            SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph.clone(),
-            )
-        })?;
-        if source.is_empty() {
-            let span = span_for_position(&self.spans, source.start, TextAffinity::Upstream)
-                .ok_or_else(|| {
-                    SceneError::for_source(
-                        SceneErrorKind::SourceCoverage,
-                        self.paragraph,
-                        paragraph.clone(),
-                    )
-                })?;
-            let _ = span;
-            return Ok(());
-        }
-
-        let mut covered = source.start;
-        for span in &self.spans {
-            let start = source.start.max(span.paragraph.start);
-            let end = source.end.min(span.paragraph.end);
-            if start >= end {
-                continue;
-            }
-            if start != covered {
-                return Err(SceneError::for_source(
-                    SceneErrorKind::SourceCoverage,
-                    self.paragraph,
-                    paragraph.clone(),
-                ));
-            }
-            covered = end;
-        }
-        if covered != source.end {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph,
-            ));
-        }
-        Ok(())
-    }
-
     pub(super) fn source_position(
         &self,
         paragraph_offset: u32,
@@ -963,40 +936,37 @@ pub(super) fn validate_resolved_direction(
 }
 
 pub(super) fn record_formation_work(report: &mut WorkReport, work: FormationWork) {
-    if work.analyzed() {
+    if work.analyzed {
         report.analysis.add_paragraph(1);
     }
-    if work.itemized() {
+    if work.itemized {
         report.itemization.add_paragraph(1);
     }
-    if work.selected_clusters() > 0 {
+    if work.selected_clusters > 0 {
         report.font_selection.paragraphs += 1;
-        report.font_selection.records += work.selected_clusters() as usize;
+        report.font_selection.records += work.selected_clusters as usize;
     }
-    if work.shaped_runs() > 0 {
+    if work.shaped_runs > 0 {
         report.shape.paragraphs += 1;
-        report.shape.records += work.shaped_glyphs() as usize;
+        report.shape.records += work.shaped_glyphs as usize;
     }
-    if work.line_resolved_clusters() > 0 {
+    if work.line_shaping.resolved_clusters > 0 {
         report.line_font_resolution.paragraphs += 1;
-        report.line_font_resolution.records += work.line_resolved_clusters() as usize;
+        report.line_font_resolution.records += work.line_shaping.resolved_clusters as usize;
     }
-    if work.line_shaped_runs() > 0 {
+    if work.line_shaping.shaped_runs > 0 {
         report.line_shape.paragraphs += 1;
-        report.line_shape.records += work.line_shaped_glyphs() as usize;
+        report.line_shape.records += work.line_shaping.shaped_glyphs as usize;
     }
-    if work.formed_lines() > 0 {
+    if work.formed_lines > 0 {
         report.flow.paragraphs += 1;
-        report.flow.records += work.formed_lines() as usize;
+        report.flow.records += work.formed_lines as usize;
     }
-    report.line_reshapes += work.line_reshapes() as usize;
+    report.line_reshapes += work.line_shaping.attempts as usize;
     report.line_candidates = report
         .line_candidates
-        .saturating_add(work.line_candidates());
+        .saturating_add(work.line_shaping.candidates);
     report.rejected_line_candidates = report
         .rejected_line_candidates
-        .saturating_add(work.rejected_line_candidates());
-    report.line_checkpoint_restores = report
-        .line_checkpoint_restores
-        .saturating_add(work.line_checkpoint_restores());
+        .saturating_add(work.line_shaping.rejected_candidates);
 }

@@ -6,22 +6,21 @@
 //! Successful outputs own every retained font, coordinate, and glyph record.
 //! No backend-specific type crosses this boundary.
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
-use alloc::{boxed::Box, sync::Arc};
 use core::fmt;
 use core::mem::size_of;
 use core::ops::Range;
 
 use crate::{
-    Affine, AnalysisStyle, FontData, FontVariation, InlineFlowStyle, PaintSlot, ParagraphId,
-    ParagraphStyle, Rect, RegionCursor, RegionFlow, RegionTranscript, ResolvedDirection,
-    SceneFeatures, ShapingStyle, TextConstraint, Vec2,
+    Affine, AnalysisStyle, FontData, FontVariation, InlineFlowStyle, ParagraphId, ParagraphStyle,
+    RegionCursor, RegionFlow, RegionTranscript, ResolvedDirection, SceneFeatures, ShapingStyle,
+    TextConstraint, Vec2,
 };
 
 mod error;
 mod formation;
 mod interaction;
-mod paint;
 mod prepared;
 
 #[expect(
@@ -36,24 +35,19 @@ fn compact_shaping_coordinate(value: f64) -> Option<f32> {
 pub use error::{PreparationError, PreparationErrorKind};
 pub use formation::{
     AnalysisRun, AnalysisStyleId, FormationWork, InlineFlowRun, InlineFlowStyleId, LineShapingWork,
-    PaintRun, ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
+    ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
     ParagraphFormationChange, ParagraphFormationOutput, ParagraphFormationReuse, ParagraphInput,
     ParagraphPreparationId, ShapingRun, ShapingStyleId,
 };
 pub use interaction::{
     ClusterBoundary, ClusterWhitespace, LineBreakReason, PreparedClusterSide,
-    PreparedInteractionSlice, PreparedInteractionSlices, PreparedInteractionUnit,
-    PreparedInteractionUnitView, PreparedInteractionUnits, TextAffinity,
+    PreparedInteractionSlice, PreparedInteractionUnit, PreparedInteractionUnitView, TextAffinity,
 };
-pub(crate) use interaction::{PreparedInteractionSliceSpill, PreparedInteractionUnitRecord};
-pub(crate) use paint::whole_glyph_paint;
-pub use paint::{GlyphPaintCoverage, GlyphPaintSegment};
+pub(crate) use interaction::{PreparedInteractionSliceSpill, prepared_interaction_unit_view};
 pub(crate) use prepared::PreparedParagraphFacts;
 pub use prepared::{
-    FontSynthesis, PreparedGlyph, PreparedGlyphView, PreparedGlyphs, PreparedLine,
-    PreparedLineBuilder, PreparedLineView, PreparedLines, PreparedParagraph,
-    PreparedParagraphBuilder, PreparedParagraphCapacity, PreparedRun, PreparedRunBuilder,
-    PreparedRunView, PreparedRuns,
+    FontSynthesis, PreparedGlyph, PreparedGlyphView, PreparedLine, PreparedLineView,
+    PreparedParagraph, PreparedParagraphData, PreparedRun, PreparedRunView,
 };
 
 #[cfg(test)]

@@ -86,11 +86,10 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             .prepare(&snapshot, &request)
             .expect("cold public-path preparation must succeed");
         assert_eq!(
-            output.work().shape().paragraphs(),
-            PARAGRAPHS,
+            output.work.shape.paragraphs, PARAGRAPHS,
             "cold preparation must shape every paragraph"
         );
-        black_box(output.scene().fragments().len());
+        black_box(output.scene.fragments().len());
     });
 
     let fixture = document_fixture()?;
@@ -106,21 +105,18 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             .prepare(&snapshot, &request)
             .expect("retained public-path preparation must succeed");
         assert_eq!(
-            output.work().analysis().paragraphs(),
-            0,
+            output.work.analysis.paragraphs, 0,
             "unchanged preparation must reuse analysis"
         );
         assert_eq!(
-            output.work().shape().paragraphs(),
-            0,
+            output.work.shape.paragraphs, 0,
             "unchanged preparation must reuse shaping"
         );
         assert_eq!(
-            output.work().flow().paragraphs(),
-            0,
+            output.work.flow.paragraphs, 0,
             "unchanged preparation must reuse flow"
         );
-        black_box(output.scene().fragments().len());
+        black_box(output.scene.fragments().len());
     });
 
     let fixture = document_fixture()?;
@@ -144,16 +140,14 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             .prepare(&snapshot, &request)
             .expect("paint-only public-path preparation must succeed");
         assert_eq!(
-            output.work().shape().paragraphs(),
-            0,
+            output.work.shape.paragraphs, 0,
             "paint values must reuse shaping"
         );
         assert_eq!(
-            output.work().flow().paragraphs(),
-            0,
+            output.work.flow.paragraphs, 0,
             "paint values must reuse flow"
         );
-        black_box(output.scene().paint().len());
+        black_box(output.scene.paint().len());
     });
 
     let fixture = document_fixture()?;
@@ -177,25 +171,19 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
         let output = layout
             .prepare(&snapshot, &request)
             .expect("width-only public-path preparation must succeed");
+        assert_eq!(output.work.shape.paragraphs, 0, "width must reuse shaping");
         assert_eq!(
-            output.work().shape().paragraphs(),
-            0,
-            "width must reuse shaping"
-        );
-        assert_eq!(
-            output.work().flow().paragraphs(),
-            PARAGRAPHS,
+            output.work.flow.paragraphs, PARAGRAPHS,
             "an alternating width must reflow every paragraph"
         );
         if narrow_iteration {
             assert_eq!(
-                output.work().line_shape().paragraphs(),
-                0,
+                output.work.line_shape.paragraphs, 0,
                 "whitespace-separated wraps must borrow canonical shaping"
             );
         }
-        width_line_reshapes = width_line_reshapes.saturating_add(output.work().line_reshapes());
-        black_box(output.scene().lines().len());
+        width_line_reshapes = width_line_reshapes.saturating_add(output.work.line_reshapes);
+        black_box(output.scene.lines().len());
     });
 
     let mut fixture = document_fixture()?;
@@ -222,16 +210,15 @@ fn run_suite() -> Result<(), Box<dyn std::error::Error>> {
             .prepare(publication.snapshot(), &request)
             .expect("edited public-path preparation must succeed");
         assert_eq!(
-            output.work().shape().paragraphs(),
-            1,
+            output.work.shape.paragraphs, 1,
             "one edited paragraph must cause one paragraph of shaping"
         );
         assert_eq!(
-            output.work().reused_paragraphs(),
+            output.work.reused_paragraphs,
             PARAGRAPHS - 1,
             "all unchanged sibling paragraphs must be reused"
         );
-        black_box(output.scene().fragments().len());
+        black_box(output.scene.fragments().len());
     });
 
     let visible_space = line_fixture(
@@ -386,8 +373,7 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
     };
     let primed = layout.prepare(&snapshot, &request)?;
     assert_eq!(
-        primed.work().shape().paragraphs(),
-        paragraphs,
+        primed.work.shape.paragraphs, paragraphs,
         "the profile fixture must prime every paragraph"
     );
 
@@ -416,12 +402,11 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
                 measure_event(|| layout.prepare(&snapshot, &changed_request));
             let output = output?;
             assert_eq!(
-                output.work().shape().paragraphs(),
-                1,
+                output.work.shape.paragraphs, 1,
                 "one changed paragraph must reshape"
             );
             assert_eq!(
-                output.work().reused_paragraphs(),
+                output.work.reused_paragraphs,
                 paragraphs.saturating_sub(1),
                 "unchanged sibling paragraphs must be reused"
             );
@@ -437,13 +422,11 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
                 measure_event(|| layout.prepare(publication.snapshot(), &request));
             let output = output?;
             assert_eq!(
-                output.work().shape().paragraphs(),
-                1,
+                output.work.shape.paragraphs, 1,
                 "only the appended paragraph must shape"
             );
             assert_eq!(
-                output.work().reused_paragraphs(),
-                paragraphs,
+                output.work.reused_paragraphs, paragraphs,
                 "every pre-existing paragraph must be reused"
             );
             black_box((publication, output));
@@ -451,12 +434,12 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
         }
         "setup-edit" | "s1" | "edit-staging" | "d0" | "localized-prepare" | "p0"
         | "localized-edit" | "e0" | "localized-region" | "g0" => {
-            let editing = primed.scene().editing()?;
+            let editing = primed.scene.editing()?;
             let position = editing
                 .position_at(fixture.edited_text, 1)
                 .ok_or("the one-byte insertion point must be represented")?;
-            let selection = editing.collapsed_selection(&position)?;
-            let selections = editing.selection_set([selection])?;
+            let selection = editing.collapsed(&position)?;
+            let selections = editing.set([selection])?;
             match scenario {
                 "setup-edit" | "s1" => {
                     black_box(selections);
@@ -481,12 +464,11 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
                     });
                     let output = output?;
                     assert_eq!(
-                        output.work().shape().paragraphs(),
-                        1,
+                        output.work.shape.paragraphs, 1,
                         "one-byte insertion must reshape exactly one paragraph"
                     );
                     assert_eq!(
-                        output.work().reused_paragraphs(),
+                        output.work.reused_paragraphs,
                         paragraphs.saturating_sub(1),
                         "one-byte insertion must reuse every unchanged sibling"
                     );
@@ -502,12 +484,11 @@ fn run_profile(scenario: &str, paragraphs: usize) -> Result<(), Box<dyn std::err
                     });
                     let (replacement, output) = result?;
                     assert_eq!(
-                        output.work().shape().paragraphs(),
-                        1,
+                        output.work.shape.paragraphs, 1,
                         "one-byte insertion must reshape exactly one paragraph"
                     );
                     assert_eq!(
-                        output.work().reused_paragraphs(),
+                        output.work.reused_paragraphs,
                         paragraphs.saturating_sub(1),
                         "one-byte insertion must reuse every unchanged sibling"
                     );
@@ -585,23 +566,19 @@ fn report_profile_event(scenario: &str, paragraphs: usize, measurement: &EventMe
 
 fn assert_no_preparation_work(output: &underwood::SceneOutput, paragraphs: usize) {
     assert_eq!(
-        output.work().analysis().paragraphs(),
-        0,
+        output.work.analysis.paragraphs, 0,
         "unchanged preparation must reuse analysis"
     );
     assert_eq!(
-        output.work().shape().paragraphs(),
-        0,
+        output.work.shape.paragraphs, 0,
         "unchanged preparation must reuse shaping"
     );
     assert_eq!(
-        output.work().flow().paragraphs(),
-        0,
+        output.work.flow.paragraphs, 0,
         "unchanged preparation must reuse flow"
     );
     assert_eq!(
-        output.work().reused_paragraphs(),
-        paragraphs,
+        output.work.reused_paragraphs, paragraphs,
         "unchanged preparation must report every paragraph reused"
     );
 }
@@ -631,14 +608,12 @@ fn signal_profile_ready() -> Result<(), Box<dyn std::error::Error>> {
 
 fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {
     Ok(FontSet::try_from_fonts([
-        Font::from_bytes(
-            "latin",
-            include_bytes!("../../../examples/headless/fonts/RobotoFlex-VariableFont.ttf"),
-        )?,
-        Font::from_bytes(
-            "arabic",
-            include_bytes!("../../../examples/headless/fonts/NotoKufiArabic-Regular.otf"),
-        )?,
+        Font::from_bytes(include_bytes!(
+            "../../../examples/headless/fonts/RobotoFlex-VariableFont.ttf"
+        ))?,
+        Font::from_bytes(include_bytes!(
+            "../../../examples/headless/fonts/NotoKufiArabic-Regular.otf"
+        ))?,
     ])?
     .with_fallbacks(
         underwood::Script::from_bytes(*b"Arab"),
@@ -701,22 +676,19 @@ fn measure_line_churn(
             )
             .expect("line-formation churn must prepare");
         assert_eq!(
-            output.work().analysis().paragraphs(),
-            0,
+            output.work.analysis.paragraphs, 0,
             "width churn must retain canonical analysis"
         );
         assert_eq!(
-            output.work().shape().paragraphs(),
-            0,
+            output.work.shape.paragraphs, 0,
             "width churn must retain canonical shaping"
         );
         assert_eq!(
-            output.work().flow().paragraphs(),
-            PARAGRAPHS,
+            output.work.flow.paragraphs, PARAGRAPHS,
             "width churn must reform every paragraph"
         );
-        line_reshapes = line_reshapes.saturating_add(output.work().line_reshapes());
-        black_box(output.scene().lines().len());
+        line_reshapes = line_reshapes.saturating_add(output.work.line_reshapes);
+        black_box(output.scene.lines().len());
     });
     Ok((elapsed, line_reshapes))
 }

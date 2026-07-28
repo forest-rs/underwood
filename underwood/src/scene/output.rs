@@ -11,9 +11,12 @@ use super::*;
 /// Exact block metrics derived from actual formed line advances and extents.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct TextMetrics {
-    size: Size,
-    first_baseline: Option<f64>,
-    last_baseline: Option<f64>,
+    /// Request-space extent, including region offsets and gaps.
+    pub size: Size,
+    /// First prepared text baseline, when the scene has a text line.
+    pub first_baseline: Option<f64>,
+    /// Last prepared text baseline, when the scene has a text line.
+    pub last_baseline: Option<f64>,
 }
 
 impl TextMetrics {
@@ -23,24 +26,6 @@ impl TextMetrics {
             first_baseline: summary.first_baseline,
             last_baseline: summary.last_baseline,
         }
-    }
-
-    /// Returns the request-space extent, including region offsets and gaps.
-    #[must_use]
-    pub const fn size(self) -> Size {
-        self.size
-    }
-
-    /// Returns the first prepared text baseline, if the scene has a text line.
-    #[must_use]
-    pub const fn first_baseline(self) -> Option<f64> {
-        self.first_baseline
-    }
-
-    /// Returns the last prepared text baseline, if the scene has a text line.
-    #[must_use]
-    pub const fn last_baseline(self) -> Option<f64> {
-        self.last_baseline
     }
 }
 
@@ -60,7 +45,8 @@ pub enum ProjectedTextSource {
 /// prevents either provenance from being fabricated or discarded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProjectedTextRange {
-    sources: Arc<[ProjectedTextSource]>,
+    /// Ordered, source-complete provenance segments.
+    pub sources: Arc<[ProjectedTextSource]>,
 }
 
 impl ProjectedTextRange {
@@ -68,12 +54,6 @@ impl ProjectedTextRange {
         Self {
             sources: sources.into(),
         }
-    }
-
-    /// Returns ordered, source-complete provenance segments.
-    #[must_use]
-    pub fn sources(&self) -> &[ProjectedTextSource] {
-        &self.sources
     }
 }
 
@@ -89,17 +69,23 @@ pub enum ProjectedTextPosition {
 /// Immutable prepared scene and exact work report.
 #[derive(Clone, Debug)]
 pub struct SceneOutput {
-    pub(super) scene: TextScene,
-    pub(super) work: WorkReport,
-    pub(super) trace: Option<Arc<PreparationTrace>>,
+    /// Prepared scene.
+    pub scene: TextScene,
+    /// Actual work performed for this request.
+    pub work: WorkReport,
+    /// Requested preparation decisions, work, and memory accounting.
+    pub trace: Option<Arc<PreparationTrace>>,
 }
 
 /// Immutable transient scene for one exact composition epoch.
 #[derive(Clone, Debug)]
 pub struct CompositionSceneOutput {
-    pub(super) scene: CompositionScene,
-    pub(super) work: WorkReport,
-    pub(super) trace: Option<Arc<PreparationTrace>>,
+    /// Prepared transient scene.
+    pub scene: CompositionScene,
+    /// Actual work performed for this transient request.
+    pub work: WorkReport,
+    /// Requested preparation decisions, work, and memory accounting.
+    pub trace: Option<Arc<PreparationTrace>>,
 }
 
 /// Cheap immutable view of document-level region attempts retained in scene segments.
@@ -137,10 +123,8 @@ impl SceneRegionTranscript {
 
     /// Iterates exact attempts in paragraph and execution order.
     #[must_use]
-    pub fn attempts(&self) -> SceneRegionAttempts<'_> {
-        SceneRegionAttempts {
-            inner: self.core.spine.region_attempts(),
-        }
+    pub fn attempts(&self) -> impl ExactSizeIterator<Item = &crate::RegionAttempt> + Clone + '_ {
+        self.core.spine.region_attempts()
     }
 
     /// Replays every retained paragraph block against one region flow.
@@ -164,45 +148,7 @@ impl SceneRegionTranscript {
     }
 }
 
-/// Allocation-free iterator over region attempts retained by one scene.
-#[derive(Clone, Debug)]
-pub struct SceneRegionAttempts<'a> {
-    inner: SpineRegionAttempts<'a>,
-}
-
-impl<'a> Iterator for SceneRegionAttempts<'a> {
-    type Item = &'a crate::RegionAttempt;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl ExactSizeIterator for SceneRegionAttempts<'_> {}
-
 impl CompositionSceneOutput {
-    /// Returns the prepared transient scene.
-    #[must_use]
-    pub const fn scene(&self) -> &CompositionScene {
-        &self.scene
-    }
-
-    /// Returns actual work performed for this transient request.
-    #[must_use]
-    pub const fn work(&self) -> &WorkReport {
-        &self.work
-    }
-
-    /// Returns requested preparation decisions, work, and memory accounting.
-    #[must_use]
-    pub fn trace(&self) -> Option<&PreparationTrace> {
-        self.trace.as_deref()
-    }
-
     /// Returns replayable region attempts for this transient request.
     #[must_use]
     pub fn region_transcript(&self) -> Option<SceneRegionTranscript> {
@@ -211,24 +157,6 @@ impl CompositionSceneOutput {
 }
 
 impl SceneOutput {
-    /// Returns the prepared scene.
-    #[must_use]
-    pub const fn scene(&self) -> &TextScene {
-        &self.scene
-    }
-
-    /// Returns actual work performed for this request.
-    #[must_use]
-    pub const fn work(&self) -> &WorkReport {
-        &self.work
-    }
-
-    /// Returns requested preparation decisions, work, and memory accounting.
-    #[must_use]
-    pub fn trace(&self) -> Option<&PreparationTrace> {
-        self.trace.as_deref()
-    }
-
     /// Returns replayable region attempts for this request.
     #[must_use]
     pub fn region_transcript(&self) -> Option<SceneRegionTranscript> {
@@ -243,100 +171,32 @@ impl SceneOutput {
 /// calls are mutually exclusive outcomes for a paragraph.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreparationReuse {
-    pub(super) paragraphs: usize,
-    pub(super) cold_paragraphs: usize,
-    pub(super) preflight_reuses: usize,
-    pub(super) exact_geometry_reuses: usize,
-    pub(super) shared_preparation_reuses: usize,
-    pub(super) adapter_calls: usize,
-    pub(super) adapter_fact_hits: usize,
-    pub(super) adapter_fact_misses: usize,
-    pub(super) warm_capability_upgrades: usize,
-    pub(super) cold_capability_upgrades: usize,
-    pub(super) formation_invalidations: usize,
-    pub(super) adjustment_invalidations: usize,
-    pub(super) paint_invalidations: usize,
-}
-
-impl PreparationReuse {
-    /// Returns paragraphs considered by retained preparation.
-    #[must_use]
-    pub const fn paragraphs(self) -> usize {
-        self.paragraphs
-    }
-
-    /// Returns paragraphs with no identity-local geometry entry.
-    #[must_use]
-    pub const fn cold_paragraphs(self) -> usize {
-        self.cold_paragraphs
-    }
-
-    /// Returns paragraphs accepted from provenance before projection was built.
-    #[must_use]
-    pub const fn preflight_reuses(self) -> usize {
-        self.preflight_reuses
-    }
-
-    /// Returns paragraphs that reused exact identity-local geometry.
-    #[must_use]
-    pub const fn exact_geometry_reuses(self) -> usize {
-        self.exact_geometry_reuses
-    }
-
-    /// Returns paragraphs prepared from identity-free shared facts.
-    #[must_use]
-    pub const fn shared_preparation_reuses(self) -> usize {
-        self.shared_preparation_reuses
-    }
-
-    /// Returns paragraphs sent through the configured formation adapter.
-    #[must_use]
-    pub const fn adapter_calls(self) -> usize {
-        self.adapter_calls
-    }
-
-    /// Returns adapter calls that found identity-local retained facts.
-    #[must_use]
-    pub const fn adapter_fact_hits(self) -> usize {
-        self.adapter_fact_hits
-    }
-
-    /// Returns adapter calls that began without identity-local retained facts.
-    #[must_use]
-    pub const fn adapter_fact_misses(self) -> usize {
-        self.adapter_fact_misses
-    }
-
-    /// Returns capability upgrades built from resident adapter facts.
-    #[must_use]
-    pub const fn warm_capability_upgrades(self) -> usize {
-        self.warm_capability_upgrades
-    }
-
-    /// Returns capability upgrades that repeated formation after adapter-fact
-    /// release or eviction.
-    #[must_use]
-    pub const fn cold_capability_upgrades(self) -> usize {
-        self.cold_capability_upgrades
-    }
-
-    /// Returns cached paragraphs whose text, shaping, flow, or region key changed.
-    #[must_use]
-    pub const fn formation_invalidations(self) -> usize {
-        self.formation_invalidations
-    }
-
-    /// Returns cached paragraphs whose accepted-line adjustment changed.
-    #[must_use]
-    pub const fn adjustment_invalidations(self) -> usize {
-        self.adjustment_invalidations
-    }
-
-    /// Returns cached paragraphs whose paint assignment changed.
-    #[must_use]
-    pub const fn paint_invalidations(self) -> usize {
-        self.paint_invalidations
-    }
+    /// Paragraphs considered by retained preparation.
+    pub paragraphs: usize,
+    /// Paragraphs with no identity-local geometry entry.
+    pub cold_paragraphs: usize,
+    /// Paragraphs accepted from provenance before projection was built.
+    pub preflight_reuses: usize,
+    /// Paragraphs that reused exact identity-local geometry.
+    pub exact_geometry_reuses: usize,
+    /// Paragraphs prepared from identity-free shared facts.
+    pub shared_preparation_reuses: usize,
+    /// Paragraphs sent through the configured formation adapter.
+    pub adapter_calls: usize,
+    /// Adapter calls that found identity-local retained facts.
+    pub adapter_fact_hits: usize,
+    /// Adapter calls that began without identity-local retained facts.
+    pub adapter_fact_misses: usize,
+    /// Capability upgrades built from resident adapter facts.
+    pub warm_capability_upgrades: usize,
+    /// Capability upgrades that repeated formation after fact release.
+    pub cold_capability_upgrades: usize,
+    /// Cached paragraphs whose formation inputs changed.
+    pub formation_invalidations: usize,
+    /// Cached paragraphs whose accepted-line adjustment changed.
+    pub adjustment_invalidations: usize,
+    /// Cached paragraphs whose paint assignment changed.
+    pub paint_invalidations: usize,
 }
 
 /// Deterministic capacity and residency observations for one preparation.
@@ -346,49 +206,19 @@ impl PreparationReuse {
 /// wall-clock measurements.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PreparationMemory {
-    pub(super) cache_before: CacheDiagnostics,
-    pub(super) cache_after: CacheDiagnostics,
-    pub(super) scene_output_capacity_bytes: usize,
-    pub(super) scratch_capacity_before: usize,
-    pub(super) scratch_capacity_after: usize,
+    /// Retained-cache state before preparation.
+    pub cache_before: CacheDiagnostics,
+    /// Retained-cache state after preparation and budget enforcement.
+    pub cache_after: CacheDiagnostics,
+    /// Newly published scene-spine payload bytes relative to the prior spine.
+    pub scene_output_capacity_bytes: usize,
+    /// Reusable layout scratch capacity before preparation.
+    pub scratch_capacity_before: usize,
+    /// Reusable layout scratch capacity after preparation.
+    pub scratch_capacity_after: usize,
 }
 
 impl PreparationMemory {
-    /// Returns retained-cache state before preparation.
-    #[must_use]
-    pub const fn cache_before(self) -> CacheDiagnostics {
-        self.cache_before
-    }
-
-    /// Returns retained-cache state after preparation and budget enforcement.
-    #[must_use]
-    pub const fn cache_after(self) -> CacheDiagnostics {
-        self.cache_after
-    }
-
-    /// Returns the payload-byte charge for scene-spine nodes newly retained by
-    /// this publication relative to its reusable prior spine.
-    ///
-    /// Shared spine nodes contribute zero. Paragraph geometry and its owned
-    /// collection capacities are reported through the scene-cache diagnostics
-    /// instead.
-    #[must_use]
-    pub const fn scene_output_capacity_bytes(self) -> usize {
-        self.scene_output_capacity_bytes
-    }
-
-    /// Returns reusable layout scratch capacity before preparation.
-    #[must_use]
-    pub const fn scratch_capacity_before(self) -> usize {
-        self.scratch_capacity_before
-    }
-
-    /// Returns reusable layout scratch capacity after preparation.
-    #[must_use]
-    pub const fn scratch_capacity_after(self) -> usize {
-        self.scratch_capacity_after
-    }
-
     /// Returns reusable layout scratch growth during preparation.
     #[must_use]
     pub const fn scratch_growth_bytes(self) -> usize {
@@ -405,50 +235,25 @@ impl PreparationMemory {
 /// allocation counts intentionally remain outside this `no_std` core.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PreparationTrace {
-    pub(super) work: WorkReport,
-    pub(super) reuse: PreparationReuse,
-    pub(super) memory: PreparationMemory,
-    pub(super) region_attempts: usize,
-    pub(super) region_height_rejections: usize,
-}
-
-impl PreparationTrace {
-    /// Returns actual stage work performed by the request.
-    #[must_use]
-    pub const fn work(&self) -> &WorkReport {
-        &self.work
-    }
-
-    /// Returns retained reuse and invalidation decisions.
-    #[must_use]
-    pub const fn reuse(&self) -> PreparationReuse {
-        self.reuse
-    }
-
-    /// Returns deterministic capacity and cache-residency observations.
-    #[must_use]
-    pub const fn memory(&self) -> PreparationMemory {
-        self.memory
-    }
-
-    /// Returns exact-region slot attempts made during preparation.
-    #[must_use]
-    pub const fn region_attempts(&self) -> usize {
-        self.region_attempts
-    }
-
-    /// Returns region attempts rejected because the offered slot was too short.
-    #[must_use]
-    pub const fn region_height_rejections(&self) -> usize {
-        self.region_height_rejections
-    }
+    /// Actual stage work performed by the request.
+    pub work: WorkReport,
+    /// Retained reuse and invalidation decisions.
+    pub reuse: PreparationReuse,
+    /// Deterministic capacity and cache-residency observations.
+    pub memory: PreparationMemory,
+    /// Exact-region slot attempts made during preparation.
+    pub region_attempts: usize,
+    /// Region attempts rejected because the offered slot was too short.
+    pub region_height_rejections: usize,
 }
 
 /// Count of paragraphs and records processed by one stage.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StageWork {
-    pub(super) paragraphs: usize,
-    pub(super) records: usize,
+    /// Paragraphs processed rather than reused.
+    pub paragraphs: usize,
+    /// Stage-specific records processed.
+    pub records: usize,
 }
 
 impl StageWork {
@@ -456,143 +261,48 @@ impl StageWork {
         self.paragraphs += 1;
         self.records += records;
     }
-
-    /// Returns paragraphs processed rather than reused.
-    #[must_use]
-    pub const fn paragraphs(self) -> usize {
-        self.paragraphs
-    }
-
-    /// Returns stage-specific records processed.
-    #[must_use]
-    pub const fn records(self) -> usize {
-        self.records
-    }
 }
 
 /// Exact stage work performed for one scene request.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WorkReport {
-    pub(super) analysis: StageWork,
-    pub(super) itemization: StageWork,
-    pub(super) font_selection: StageWork,
-    pub(super) shape: StageWork,
-    pub(super) line_font_resolution: StageWork,
-    pub(super) line_shape: StageWork,
-    pub(super) flow: StageWork,
-    pub(super) adjustment: StageWork,
-    pub(super) geometry: StageWork,
-    pub(super) paint: StageWork,
-    pub(super) line_reshapes: usize,
-    pub(super) line_candidates: u32,
-    pub(super) rejected_line_candidates: u32,
-    pub(super) line_checkpoint_restores: u32,
-    pub(super) reused_paragraphs: usize,
-    pub(super) shared_preparations: usize,
+    /// Unicode analysis work.
+    pub analysis: StageWork,
+    /// Shaping itemization work.
+    pub itemization: StageWork,
+    /// Canonical paragraph font-selection work.
+    pub font_selection: StageWork,
+    /// Canonical paragraph shaping work.
+    pub shape: StageWork,
+    /// Retained-font resolution for line-final shaping.
+    pub line_font_resolution: StageWork,
+    /// Shaping of committed and rejected line candidates.
+    pub line_shape: StageWork,
+    /// Finite-width flow work.
+    pub flow: StageWork,
+    /// Accepted-slot alignment and justification work.
+    pub adjustment: StageWork,
+    /// Scene-geometry work.
+    pub geometry: StageWork,
+    /// Paint lowering work.
+    pub paint: StageWork,
+    /// Line-final shaping attempts, including rejected candidates.
+    pub line_reshapes: usize,
+    /// Proposed line candidates, including retries.
+    pub line_candidates: u32,
+    /// Line candidates rejected by final fit checks.
+    pub rejected_line_candidates: u32,
+    /// Paragraphs reused without calling the adapter.
+    pub reused_paragraphs: usize,
+    /// Paragraphs whose identity-free prepared facts were shared.
+    pub shared_preparations: usize,
 }
 
 impl WorkReport {
-    /// Returns Unicode analysis work.
-    #[must_use]
-    pub const fn analysis(&self) -> StageWork {
-        self.analysis
-    }
-
-    /// Returns shaping itemization work.
-    #[must_use]
-    pub const fn itemization(&self) -> StageWork {
-        self.itemization
-    }
-
-    /// Returns canonical paragraph font-selection work.
-    #[must_use]
-    pub const fn font_selection(&self) -> StageWork {
-        self.font_selection
-    }
-
-    /// Returns canonical paragraph shaping work.
-    #[must_use]
-    pub const fn shape(&self) -> StageWork {
-        self.shape
-    }
-
-    /// Returns retained-font resolution performed for line-final shaping.
-    #[must_use]
-    pub const fn line_font_resolution(&self) -> StageWork {
-        self.line_font_resolution
-    }
-
-    /// Returns shaping of committed and rejected line candidates.
-    #[must_use]
-    pub const fn line_shape(&self) -> StageWork {
-        self.line_shape
-    }
-
-    /// Returns finite-width flow work.
-    #[must_use]
-    pub const fn flow(&self) -> StageWork {
-        self.flow
-    }
-
-    /// Returns accepted-slot alignment and justification work.
-    #[must_use]
-    pub const fn adjustment(&self) -> StageWork {
-        self.adjustment
-    }
-
-    /// Returns scene-geometry work.
-    #[must_use]
-    pub const fn geometry(&self) -> StageWork {
-        self.geometry
-    }
-
-    /// Returns paint lowering work.
-    #[must_use]
-    pub const fn paint(&self) -> StageWork {
-        self.paint
-    }
-
-    /// Returns line-final shaping attempts, including rejected candidates.
-    #[must_use]
-    pub const fn line_reshapes(&self) -> usize {
-        self.line_reshapes
-    }
-
-    /// Returns proposed line candidates, including retry candidates.
-    #[must_use]
-    pub const fn line_candidates(&self) -> usize {
-        self.line_candidates as usize
-    }
-
-    /// Returns line candidates rejected by line-final fit checks.
-    #[must_use]
-    pub const fn rejected_line_candidates(&self) -> usize {
-        self.rejected_line_candidates as usize
-    }
-
     /// Returns line candidates committed to the current scene.
     #[must_use]
-    pub const fn accepted_line_candidates(&self) -> usize {
+    pub const fn accepted_line_candidates(&self) -> u32 {
         self.line_candidates
-            .saturating_sub(self.rejected_line_candidates) as usize
-    }
-
-    /// Returns restorations of line traversal and provisional output.
-    #[must_use]
-    pub const fn line_checkpoint_restores(&self) -> usize {
-        self.line_checkpoint_restores as usize
-    }
-
-    /// Returns paragraphs reused without calling the adapter.
-    #[must_use]
-    pub const fn reused_paragraphs(&self) -> usize {
-        self.reused_paragraphs
-    }
-
-    /// Returns paragraphs whose identity-free prepared facts were shared from
-    /// another consumer.
-    #[must_use]
-    pub const fn shared_preparations(&self) -> usize {
-        self.shared_preparations
+            .saturating_sub(self.rejected_line_candidates)
     }
 }

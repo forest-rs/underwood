@@ -134,16 +134,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let first_scene = layout.prepare(published.snapshot(), &request)?;
-    let sources = first_scene
-        .scene()
-        .sources()
-        .expect("full scene request includes sources");
     assert!(
-        first_scene.scene().lines().len() >= 4,
+        first_scene.scene.lines().len() >= 4,
         "four semantic paragraphs must produce at least four visual lines"
     );
     let fragment = first_scene
-        .scene()
+        .scene
         .fragment(0)
         .expect("the first real fragment exists");
     assert!(
@@ -151,8 +147,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "the first real Parley fragment must contain shaped glyphs"
     );
     assert!(
-        sources
-            .first_for_fragment(fragment)
+        fragment
+            .source()
             .expect("fragment belongs to source scene")
             .is_some(),
         "authored glyph fragments must retain snapshot source"
@@ -168,27 +164,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert!(
         first_scene
-            .scene()
-            .fragments()
-            .iter()
-            .all(|fragment| fragment.paint_clip().is_none()),
-        "ordinary whole-glyph paint must not manufacture outline-derived clips"
-    );
-    assert!(
-        first_scene
-            .scene()
+            .scene
             .fragments()
             .iter()
             .any(|fragment| fragment.script() == *b"Arab" && fragment.bidi_level() & 1 == 1),
         "the real scene must retain an itemized right-to-left Arabic run"
     );
     let arabic_fragment = first_scene
-        .scene()
+        .scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == first_arabic)
         })
@@ -203,34 +191,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(14.0),
         "the static fallback must retain Fontique's synthetic oblique evidence"
     );
-    let zero_advance_mark = first_scene
-        .scene()
-        .fragments()
-        .iter()
-        .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+    assert!(
+        first_scene.scene.fragments().iter().any(|fragment| {
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == first_arabic)
                 && fragment
                     .glyphs()
                     .iter()
                     .any(|glyph| glyph.advance().x == 0.0)
-        })
-        .expect("Noto Kufi must expose a zero-advance Arabic mark");
-    assert!(
-        zero_advance_mark.paint_clip().is_none(),
-        "a zero-advance Arabic glyph must reach the renderer without an ordinary paint clip"
+        }),
+        "Noto Kufi must expose a zero-advance Arabic mark"
     );
     let arabic_visual_sources: Vec<_> = first_scene
-        .scene()
+        .scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter_map(|glyph| {
-            let source = sources
-                .first_for_glyph(glyph)
+            let source = glyph
+                .sources()
                 .expect("glyph belongs to source scene")
+                .next()
                 .expect("glyph source exists");
             (source.text() == first_arabic).then(|| source.bytes())
         })
@@ -251,12 +234,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "RTL interaction units must lower in visual order while retaining logical source ranges: {arabic_visual_sources:?}"
     );
     let direct_arabic_fragment = first_scene
-        .scene()
+        .scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == direct_arabic)
         })
@@ -267,10 +250,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "a direct Noto Kufi family request must select the bundled resource"
     );
     let hit_point = first_scene
-        .scene()
+        .scene
         .semantics()
         .expect("scene request includes semantics")
-        .iter()
         .find(|semantic| {
             semantic
                 .source()
@@ -280,21 +262,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .bounds()
         .center();
     let editing = first_scene
-        .scene()
+        .scene
         .editing()
         .expect("scene request includes editing");
     let hit = editing
         .hit_test(hit_point)
         .expect("the first fragment must be hittable");
     let caret = editing
-        .caret(hit.position())
+        .caret(&hit.position)
         .expect("the hit position must resolve in its source scene");
     assert!(
-        caret.bounds().height() > 0.0,
+        caret.bounds.height() > 0.0,
         "a scene hit must produce visible caret geometry"
     );
     assert!(
-        hit.source()
+        hit.source
             .sources()
             .iter()
             .all(|source| source.revision() == published.snapshot().revision()),
@@ -302,38 +284,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert!(
         first_scene
-            .scene()
+            .scene
             .semantics()
             .expect("scene request includes semantics")
-            .iter()
             .any(|fragment| { fragment.inline_role() == Some(InlineRole::EMPHASIS) }),
         "inline emphasis must survive projection into scene semantics"
     );
     assert_eq!(
-        glyph_count(first_scene.scene(), ligatures_on),
+        glyph_count(&first_scene.scene, ligatures_on),
         4,
         "explicit liga-on office must substitute ffi to one glyph"
     );
     assert_eq!(
-        glyph_count(first_scene.scene(), ligatures_off),
+        glyph_count(&first_scene.scene, ligatures_off),
         6,
         "explicit liga-off office must preserve six glyphs"
     );
     assert!(
-        first_scene.scene().fragments().iter().any(|fragment| {
+        first_scene.scene.fragments().iter().any(|fragment| {
             fragment.glyphs().iter().any(|glyph| {
-                let source = sources
-                    .first_for_glyph(glyph)
+                let source = glyph
+                    .sources()
                     .expect("glyph belongs to source scene")
+                    .next()
                     .expect("glyph source exists");
                 source.text() == ligatures_on && source.bytes() == (1..4)
             })
         }),
         "the retained ffi glyph must own the full three-character source range"
     );
-    let light_coords = coordinates(first_scene.scene(), variable_light);
-    let black_coords = coordinates(first_scene.scene(), variable_black);
-    let override_coords = coordinates(first_scene.scene(), variable_override);
+    let light_coords = coordinates(&first_scene.scene, variable_light);
+    let black_coords = coordinates(&first_scene.scene, variable_black);
+    let override_coords = coordinates(&first_scene.scene, variable_override);
     assert!(
         !light_coords.is_empty(),
         "explicit axes must resolve coordinates"
@@ -347,13 +329,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "explicit wght must override Fontique's synthesized wght coordinate"
     );
     assert_ne!(
-        synthesis_variations(first_scene.scene(), variable_light),
-        synthesis_variations(first_scene.scene(), variable_override),
+        synthesis_variations(&first_scene.scene, variable_light),
+        synthesis_variations(&first_scene.scene, variable_override),
         "resolver evidence must retain the two different requested weights"
     );
     assert!(
         first_scene
-            .scene()
+            .scene
             .fragments()
             .iter()
             .any(|fragment| fragment.font_size() == 42.0),
@@ -371,18 +353,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let second_scene = layout.prepare(changed.snapshot(), &request)?;
     assert_eq!(
-        second_scene.work().analysis().paragraphs(),
-        1,
+        second_scene.work.analysis.paragraphs, 1,
         "only the edited paragraph may be reanalyzed"
     );
     assert_eq!(
-        second_scene.work().shape().paragraphs(),
-        1,
+        second_scene.work.shape.paragraphs, 1,
         "only the edited paragraph may be reshaped"
     );
     assert_eq!(
-        second_scene.work().reused_paragraphs(),
-        3,
+        second_scene.work.reused_paragraphs, 3,
         "all three unchanged sibling paragraphs must be reused"
     );
 
@@ -397,23 +376,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let paint_scene = layout.prepare(changed.snapshot(), &paint_request)?;
     assert_eq!(
-        paint_scene.work().analysis().paragraphs(),
-        0,
+        paint_scene.work.analysis.paragraphs, 0,
         "paint values must not invalidate analysis"
     );
     assert_eq!(
-        paint_scene.work().shape().paragraphs(),
-        0,
+        paint_scene.work.shape.paragraphs, 0,
         "paint values must not invalidate shaping"
     );
     assert_eq!(
-        paint_scene.work().flow().paragraphs(),
-        0,
+        paint_scene.work.flow.paragraphs, 0,
         "paint values must not invalidate flow"
     );
     assert_ne!(
-        second_scene.scene().paint(),
-        paint_scene.scene().paint(),
+        second_scene.scene.paint(),
+        paint_scene.scene.paint(),
         "paint-only updates must still reach the scene"
     );
 
@@ -425,28 +401,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &recolored,
     );
     let reassigned_scene = layout.prepare(changed.snapshot(), &reassigned_request)?;
-    let reassigned_sources = reassigned_scene
-        .scene()
-        .sources()
-        .expect("full scene request includes sources");
     assert_eq!(
-        reassigned_scene.work().shape().paragraphs(),
-        0,
+        reassigned_scene.work.shape.paragraphs, 0,
         "paint-slot assignment must not invalidate shaping"
     );
     assert_eq!(
-        reassigned_scene.work().flow().paragraphs(),
-        0,
+        reassigned_scene.work.flow.paragraphs, 0,
         "paint-slot assignment must retain flow geometry"
     );
     assert!(
         reassigned_scene
-            .scene()
+            .scene
             .fragments()
             .iter()
             .filter(|fragment| {
-                reassigned_sources
-                    .for_fragment(*fragment)
+                fragment
+                    .sources()
                     .expect("fragment belongs to source scene")
                     .any(|source| source.text() == first_suffix)
             })
@@ -463,18 +433,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let shaping_scene = layout.prepare(changed.snapshot(), &shaping_request)?;
     assert_eq!(
-        shaping_scene.work().analysis().paragraphs(),
-        0,
+        shaping_scene.work.analysis.paragraphs, 0,
         "feature changes must reuse Unicode analysis"
     );
     assert_eq!(
-        shaping_scene.work().itemization().paragraphs(),
-        1,
+        shaping_scene.work.itemization.paragraphs, 1,
         "only the feature-changed paragraph may be reitemized"
     );
     assert_eq!(
-        shaping_scene.work().shape().paragraphs(),
-        1,
+        shaping_scene.work.shape.paragraphs, 1,
         "only the feature-changed paragraph may be reshaped"
     );
 
@@ -490,28 +457,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let flow_scene = layout.prepare(changed.snapshot(), &flow_request)?;
     assert_eq!(
-        flow_scene.work().analysis().paragraphs(),
-        0,
+        flow_scene.work.analysis.paragraphs, 0,
         "line height must not invalidate analysis"
     );
     assert_eq!(
-        flow_scene.work().itemization().paragraphs(),
-        0,
+        flow_scene.work.itemization.paragraphs, 0,
         "line height must not invalidate itemization"
     );
     assert_eq!(
-        flow_scene.work().shape().paragraphs(),
-        0,
+        flow_scene.work.shape.paragraphs, 0,
         "line height must not invalidate shaping"
     );
     assert_eq!(
-        flow_scene.work().line_shape().paragraphs(),
-        0,
+        flow_scene.work.line_shape.paragraphs, 0,
         "line height must reuse accepted line glyphs"
     );
     assert_eq!(
-        flow_scene.work().flow().paragraphs(),
-        1,
+        flow_scene.work.flow.paragraphs, 1,
         "line height must rebuild only its paragraph geometry"
     );
 
@@ -522,27 +484,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let narrow_scene = layout.prepare(changed.snapshot(), &narrow_request)?;
     assert_eq!(
-        narrow_scene.work().analysis().paragraphs(),
-        0,
+        narrow_scene.work.analysis.paragraphs, 0,
         "width must not invalidate analysis"
     );
     assert_eq!(
-        narrow_scene.work().shape().paragraphs(),
-        0,
+        narrow_scene.work.shape.paragraphs, 0,
         "width must retain canonical shaping"
     );
     assert_eq!(
-        narrow_scene.work().line_shape().paragraphs(),
-        0,
+        narrow_scene.work.line_shape.paragraphs, 0,
         "whitespace-separated wrapped ranges must borrow canonical shaping"
     );
     assert_eq!(
-        narrow_scene.work().flow().paragraphs(),
-        4,
+        narrow_scene.work.flow.paragraphs, 4,
         "width must reflow all four paragraphs"
     );
     assert!(
-        narrow_scene.scene().lines().len() > paint_scene.scene().lines().len(),
+        narrow_scene.scene.lines().len() > paint_scene.scene.lines().len(),
         "narrow width must produce additional visual lines"
     );
 
@@ -550,9 +508,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "underwood scene: {} lines, {} fragments, {} paint slots",
-        first_scene.scene().lines().len(),
-        first_scene.scene().fragments().len(),
-        first_scene.scene().paint().len(),
+        first_scene.scene.lines().len(),
+        first_scene.scene.fragments().len(),
+        first_scene.scene.paint().len(),
     );
     Ok(())
 }
@@ -560,14 +518,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn font_catalog() -> Result<FontSet, Box<dyn std::error::Error>> {
     let arabic = Language::parse("ar")?;
     Ok(FontSet::try_from_fonts([
-        Font::from_bytes(
-            "latin",
-            include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"),
-        )?,
-        Font::from_bytes(
-            "arabic",
-            include_bytes!("../fonts/NotoKufiArabic-Regular.otf"),
-        )?,
+        Font::from_bytes(include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"))?,
+        Font::from_bytes(include_bytes!("../fonts/NotoKufiArabic-Regular.otf"))?,
     ])?
     .with_generic_families(GenericFamily::SansSerif, ["Roboto Flex"])?
     .with_fallbacks(
@@ -620,32 +572,27 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
     );
     let changed = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
-        changed.work().analysis().paragraphs(),
-        0,
+        changed.work.analysis.paragraphs, 0,
         "font requests must reuse Unicode analysis"
     );
     assert_eq!(
-        changed.work().itemization().paragraphs(),
-        1,
+        changed.work.itemization.paragraphs, 1,
         "only the request-changed paragraph may be reitemized"
     );
     assert_eq!(
-        changed.work().font_selection().paragraphs(),
-        1,
+        changed.work.font_selection.paragraphs, 1,
         "font selection must be reported for the affected paragraph"
     );
     assert!(
-        changed.work().font_selection().records() > 0,
+        changed.work.font_selection.records > 0,
         "font selection must report the clusters it resolved"
     );
     assert_eq!(
-        changed.work().shape().paragraphs(),
-        1,
+        changed.work.shape.paragraphs, 1,
         "only the request-changed paragraph may be reshaped"
     );
     assert_eq!(
-        changed.work().reused_paragraphs(),
-        1,
+        changed.work.reused_paragraphs, 1,
         "the unchanged sibling paragraph must remain reusable"
     );
 
@@ -676,9 +623,8 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
     );
     let recovered = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
-        recovered.work().shape().paragraphs(),
-        1,
-        "a paint-driven retry after failed shaping must rebuild invalidated retained text"
+        recovered.work.shape.paragraphs, 0,
+        "failed speculative shaping must not poison the retained published artifact used by a paint-only recovery"
     );
 
     missing_coverage_proof()?;
@@ -698,10 +644,9 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let fonts = FontSet::try_from_fonts([Font::from_bytes(
-        "latin",
-        include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"),
-    )?])?;
+    let fonts = FontSet::try_from_fonts([Font::from_bytes(include_bytes!(
+        "../fonts/RobotoFlex-VariableFont.ttf"
+    ))?])?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts),
         CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),
@@ -723,14 +668,13 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn glyph_count(scene: &TextScene, text: TextId) -> usize {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .filter(|glyph| {
-            sources
-                .for_glyph(*glyph)
+            glyph
+                .sources()
                 .expect("glyph belongs to source scene")
                 .any(|source| source.text() == text)
         })
@@ -738,13 +682,12 @@ fn glyph_count(scene: &TextScene, text: TextId) -> usize {
 }
 
 fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })
@@ -753,13 +696,12 @@ fn coordinates(scene: &TextScene, text: TextId) -> Vec<i16> {
 }
 
 fn synthesis_variations(scene: &TextScene, text: TextId) -> Vec<FontVariation> {
-    let sources = scene.sources().expect("proof scene includes sources");
     scene
         .fragments()
         .iter()
         .find(|fragment| {
-            sources
-                .for_fragment(*fragment)
+            fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .any(|source| source.text() == text)
         })

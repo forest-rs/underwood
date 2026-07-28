@@ -48,27 +48,24 @@ pub use parlance::{
 pub use peniko::{Brush, Color, FontData};
 pub use projection::{
     ProjectedText, ProjectionBuilder, ProjectionError, ProjectionErrorKind, ProjectionKind,
-    ProjectionSegment, ProjectionSegments, WhitespaceCollapse,
+    ProjectionSegment, WhitespaceCollapse,
 };
 pub use region::{
     FloatSide, FlowRegion, LineSlot, RegionAttempt, RegionAttemptOutcome, RegionCursor,
     RegionFloat, RegionFlow, RegionTranscript,
 };
 pub use scene::{
-    CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, ForeignSceneView,
-    LayoutEngine, LineAdjustment, ParagraphSceneResidency, PreparationMemory, PreparationReuse,
-    PreparationTrace, ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneFragmentView,
-    ProjectedSceneFragments, ProjectedSceneGlyphView, ProjectedSceneGlyphs,
-    ProjectedSceneInteraction, ProjectedSceneLineView, ProjectedSceneLines,
-    ProjectedSceneSemanticAccess, ProjectedSceneSourceAccess, ProjectedSources,
-    ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, ProjectedTextUnitView,
-    SceneCaret, SceneCompositionRect, SceneDisplay, SceneEditing, SceneFragmentId,
-    SceneFragmentView, SceneFragments, SceneGlyphInstanceId, SceneGlyphView, SceneGlyphs,
-    SceneInteraction, SceneLineView, SceneLines, SceneOutput, SceneParagraphResidencies,
-    SceneRegionAttempts, SceneRegionTranscript, SceneResidency, SceneResidencyBytes,
-    SceneSelection, SceneSelectionRect, SceneSemanticAccess, SceneSemantics, SceneSourceAccess,
-    SemanticFragmentView, SnapshotSources, SnapshotTextUnitView, StageWork, TextHit, TextMetrics,
-    TextScene, WorkReport,
+    CacheBudget, CacheDiagnostics, CompositionScene, CompositionSceneOutput, LayoutEngine,
+    LineAdjustment, ParagraphSceneResidency, PreparationMemory, PreparationReuse, PreparationTrace,
+    ProjectedSceneEditing, ProjectedSceneFragmentView, ProjectedSceneFragments,
+    ProjectedSceneGlyphView, ProjectedSceneGlyphs, ProjectedSceneInteraction,
+    ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources, ProjectedTextPosition,
+    ProjectedTextRange, ProjectedTextSource, ProjectedTextUnitView, Scene, SceneCaret,
+    SceneCompositionRect, SceneEditing, SceneFragmentId, SceneFragmentView, SceneFragments,
+    SceneGlyphView, SceneGlyphs, SceneInteraction, SceneLineView, SceneLines, SceneOutput,
+    SceneRegionTranscript, SceneResidency, SceneResidencyBytes, SceneSelection, SceneSelectionRect,
+    SceneSemantics, SemanticFragmentView, SnapshotSources, SnapshotTextUnitView, StageWork,
+    TextHit, TextMetrics, TextScene, TextSources, TextUnitView, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

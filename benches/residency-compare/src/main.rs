@@ -227,43 +227,41 @@ impl UnderwoodLabels {
 
     fn report(&self, scenario: &str) {
         let diagnostics = self.layout.cache_diagnostics();
-        let adapter = diagnostics.adapter_facts();
+        let adapter = diagnostics.adapter_facts;
         let mut lines = 0_usize;
         let mut fragments = 0_usize;
         let mut glyphs = 0_usize;
         let mut scene_handle_bytes = 0_usize;
         let mut scene_handle_structure_bytes = 0_usize;
         for output in &self.outputs {
-            lines = lines.saturating_add(output.scene().line_count());
-            fragments = fragments.saturating_add(output.scene().fragment_count());
+            lines = lines.saturating_add(output.scene.line_count());
+            fragments = fragments.saturating_add(output.scene.fragment_count());
             scene_handle_bytes =
-                scene_handle_bytes.saturating_add(output.scene().residency().bytes().total());
+                scene_handle_bytes.saturating_add(output.scene.residency().bytes.total());
             scene_handle_structure_bytes = scene_handle_structure_bytes
-                .saturating_add(output.scene().residency().bytes().structure());
+                .saturating_add(output.scene.residency().bytes.structure);
             glyphs = glyphs.saturating_add(
                 output
-                    .scene()
+                    .scene
                     .fragments()
                     .map(|fragment| fragment.glyphs().len())
                     .sum::<usize>(),
             );
         }
         println!(
-            "retained\tengine=underwood\tscenario={scenario}\tinstances={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={lines}\tfragments={fragments}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={scene_handle_bytes}\tscene_handle_structure_bytes={scene_handle_structure_bytes}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tscene_selection_bytes={}\tscene_navigation_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
+            "retained\tengine=underwood\tscenario={scenario}\tinstances={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={lines}\tfragments={fragments}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={scene_handle_bytes}\tscene_handle_structure_bytes={scene_handle_structure_bytes}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
             self.blocks.len(),
             self.source_bytes(),
             font_blob_bytes(),
-            diagnostics.scene_cache_accounted_bytes(),
-            diagnostics.scene_cache_residency().layout(),
-            diagnostics.scene_cache_residency().paint(),
-            diagnostics.scene_cache_residency().sources(),
-            diagnostics.scene_cache_residency().semantics(),
-            diagnostics.scene_cache_residency().hit_testing(),
-            diagnostics.scene_cache_residency().selection(),
-            diagnostics.scene_cache_residency().navigation(),
-            adapter.map_or(0, |facts| facts.resident_bytes()),
-            adapter.map_or(0, |facts| facts.scratch_bytes()),
-            diagnostics.shared_preparation_resident_bytes(),
+            diagnostics.scene_cache_accounted_bytes,
+            diagnostics.scene_cache_residency.layout,
+            diagnostics.scene_cache_residency.paint,
+            diagnostics.scene_cache_residency.sources,
+            diagnostics.scene_cache_residency.semantics,
+            diagnostics.scene_cache_residency.hit_testing,
+            adapter.map_or(0, |facts| facts.resident_bytes),
+            adapter.map_or(0, |facts| facts.scratch_bytes),
+            diagnostics.shared_preparation_resident_bytes,
         );
     }
 }
@@ -332,33 +330,31 @@ impl UnderwoodDocument {
 
     fn report(&self, scenario: &str) {
         let diagnostics = self.layout.cache_diagnostics();
-        let adapter = diagnostics.adapter_facts();
-        let scene = self.output.scene();
-        let scene_handle = scene.residency().bytes();
+        let adapter = diagnostics.adapter_facts;
+        let scene = &self.output.scene;
+        let scene_handle = scene.residency().bytes;
         let glyphs = scene
             .fragments()
             .map(|fragment| fragment.glyphs().len())
             .sum::<usize>();
         println!(
-            "retained\tengine=underwood\tscenario={scenario}\tinstances=1\tparagraphs={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={}\tfragments={}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={}\tscene_handle_structure_bytes={}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tscene_selection_bytes={}\tscene_navigation_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
-            scene.residency().paragraphs(),
+            "retained\tengine=underwood\tscenario={scenario}\tinstances=1\tparagraphs={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={}\tfragments={}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={}\tscene_handle_structure_bytes={}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
+            scene.residency().paragraphs,
             self.source_bytes,
             font_blob_bytes(),
             scene.line_count(),
             scene.fragment_count(),
-            diagnostics.scene_cache_accounted_bytes(),
+            diagnostics.scene_cache_accounted_bytes,
             scene_handle.total(),
-            scene_handle.structure(),
-            diagnostics.scene_cache_residency().layout(),
-            diagnostics.scene_cache_residency().paint(),
-            diagnostics.scene_cache_residency().sources(),
-            diagnostics.scene_cache_residency().semantics(),
-            diagnostics.scene_cache_residency().hit_testing(),
-            diagnostics.scene_cache_residency().selection(),
-            diagnostics.scene_cache_residency().navigation(),
-            adapter.map_or(0, |facts| facts.resident_bytes()),
-            adapter.map_or(0, |facts| facts.scratch_bytes()),
-            diagnostics.shared_preparation_resident_bytes(),
+            scene_handle.structure,
+            diagnostics.scene_cache_residency.layout,
+            diagnostics.scene_cache_residency.paint,
+            diagnostics.scene_cache_residency.sources,
+            diagnostics.scene_cache_residency.semantics,
+            diagnostics.scene_cache_residency.hit_testing,
+            adapter.map_or(0, |facts| facts.resident_bytes),
+            adapter.map_or(0, |facts| facts.scratch_bytes),
+            diagnostics.shared_preparation_resident_bytes,
         );
     }
 }
@@ -631,7 +627,7 @@ fn profile_underwood_hit(units: usize, rounds: usize, query: Query) -> Result<()
         &BlockRequest::new(TextConstraint::MaxContent, &style, &paint)
             .with_features(SceneFeatures::EDITABLE),
     )?;
-    let scene = output.scene();
+    let scene = &output.scene;
     let line = scene.lines().last().ok_or("hit fixture has no line")?;
     let point = Point::new(line.bounds().x1 - 0.25, line.bounds().center().y);
     let editing = scene.editing()?;
@@ -766,11 +762,11 @@ fn profile_underwood_churn(count: usize) -> Result<(), Error> {
         "churn\tengine=underwood\tcreated={count}\tretained={}\tcache_entries={}\tevictions={}\tscene_cache_bytes={}\tadapter_bytes={}",
         retained.len(),
         diagnostics.current_entries(),
-        diagnostics.evictions(),
-        diagnostics.scene_cache_accounted_bytes(),
+        diagnostics.evictions,
+        diagnostics.scene_cache_accounted_bytes,
         diagnostics
-            .adapter_facts()
-            .map_or(0, |facts| facts.resident_bytes()),
+            .adapter_facts
+            .map_or(0, |facts| facts.resident_bytes),
     );
     black_box((&style, &paint, &layout));
     hold_for_profiler(&retained)
@@ -950,8 +946,8 @@ fn paint() -> PaintTable {
 
 fn underwood_fonts() -> Result<FontSet, Error> {
     Ok(FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT)?,
-        Font::from_bytes("arabic", ARABIC_FONT)?,
+        Font::from_bytes(LATIN_FONT)?,
+        Font::from_bytes(ARABIC_FONT)?,
     ])?
     .with_fallbacks(
         underwood::Script::from_bytes(*b"Arab"),

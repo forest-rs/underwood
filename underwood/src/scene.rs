@@ -11,16 +11,15 @@ use core::ops::Range;
 
 use crate::adapter::{
     AnalysisRun, AnalysisStyleId, FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId,
-    LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationCacheDiagnostics, ParagraphFormationChange, ParagraphFormationReuse,
-    ParagraphInput, ParagraphPreparationId, PreparationErrorKind, PreparedClusterSide,
-    PreparedGlyphView, PreparedGlyphs, PreparedInteractionUnitView, PreparedLineView,
-    PreparedParagraph, PreparedParagraphFacts, PreparedRunView, ShapingRun, ShapingStyleId,
-    TextAffinity,
+    LineBreakReason, ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
+    ParagraphFormationChange, ParagraphFormationReuse, ParagraphInput, ParagraphPreparationId,
+    PreparationErrorKind, PreparedClusterSide, PreparedGlyphView, PreparedInteractionUnitView,
+    PreparedLineView, PreparedParagraph, PreparedParagraphFacts, PreparedRunView, ShapingRun,
+    ShapingStyleId, TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{
-    Affine, AnalysisStyle, BaseDirection, BlockRequest, CompositionError, CompositionErrorKind,
+    AnalysisStyle, BaseDirection, BlockRequest, CompositionError, CompositionErrorKind,
     CompositionId, CompositionSession, CompositionStart, ComputedInlineStyle, DocumentRevision,
     DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, MissingSceneCapability, PaintSlot,
     PaintTable, ParagraphId, ParagraphRole, ParagraphStyle, Point, ProjectedText as TextProjection,
@@ -35,43 +34,39 @@ use crate::{
 mod adjustment;
 mod cursor;
 mod engine;
-mod facades;
 mod geometry;
 mod interaction;
 mod output;
 mod projection;
 mod records;
 mod residency;
+mod sessions;
 mod shared_cache;
 mod source_map;
 mod spine;
 mod views;
 
 pub use engine::{CacheBudget, CacheDiagnostics, LayoutEngine};
-pub use facades::{
-    ForeignSceneView, ProjectedSceneDisplay, ProjectedSceneEditing, ProjectedSceneInteraction,
-    ProjectedSceneSemanticAccess, ProjectedSceneSourceAccess, SceneDisplay, SceneEditing,
-    SceneInteraction, SceneSelection, SceneSemanticAccess, SceneSourceAccess,
-};
-pub use interaction::{CompositionScene, TextScene};
+pub use interaction::{CompositionScene, Scene, TextScene};
 pub use output::{
     CompositionSceneOutput, PreparationMemory, PreparationReuse, PreparationTrace,
     ProjectedTextPosition, ProjectedTextRange, ProjectedTextSource, SceneOutput,
-    SceneRegionAttempts, SceneRegionTranscript, StageWork, TextMetrics, WorkReport,
+    SceneRegionTranscript, StageWork, TextMetrics, WorkReport,
 };
 pub use records::{
-    LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneGlyphInstanceId,
-    SceneSelectionRect, TextHit,
+    LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneSelectionRect, TextHit,
 };
-pub use residency::{
-    ParagraphSceneResidency, SceneParagraphResidencies, SceneResidency, SceneResidencyBytes,
+pub use residency::{ParagraphSceneResidency, SceneResidency, SceneResidencyBytes};
+pub use sessions::{
+    ProjectedSceneEditing, ProjectedSceneInteraction, SceneEditing, SceneInteraction,
+    SceneSelection,
 };
 pub use views::{
     ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,
     ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources,
     ProjectedTextUnitView, SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs,
     SceneLineView, SceneLines, SceneSemantics, SemanticFragmentView, SnapshotSources,
-    SnapshotTextUnitView,
+    SnapshotTextUnitView, TextSources, TextUnitView,
 };
 
 use adjustment::*;
@@ -79,9 +74,27 @@ use cursor::*;
 use geometry::*;
 use interaction::{SceneCore, SceneCursorStep};
 use projection::*;
+use residency::paragraph_residencies;
 use shared_cache::*;
 use source_map::*;
 use spine::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConstraintKey {
+    MinContent,
+    MaxContent,
+    Wrap(u64),
+}
+
+impl From<TextConstraint> for ConstraintKey {
+    fn from(constraint: TextConstraint) -> Self {
+        match constraint {
+            TextConstraint::MinContent => Self::MinContent,
+            TextConstraint::MaxContent => Self::MaxContent,
+            TextConstraint::Wrap(width) => Self::Wrap(width.0.to_bits()),
+        }
+    }
+}
 
 #[cfg(test)]
 use projection::{append_analysis_run, append_inline_flow_run, append_shaping_run};

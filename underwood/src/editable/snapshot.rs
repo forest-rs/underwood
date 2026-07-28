@@ -165,11 +165,11 @@ impl EditableSurfaceSnapshot<'_> {
         let position = self.source_position(selection.end, TextAffinity::Upstream)?;
         match (&self.scene, position) {
             (BoundScene::Committed(scene), BoundPosition::Snapshot(position)) => {
-                scene.caret(&position).map(|caret| caret.bounds())
+                scene.caret(&position).map(|caret| caret.bounds)
             }
-            (BoundScene::Composition(scene), position) => scene
-                .caret(&position.projected())
-                .map(|caret| caret.bounds()),
+            (BoundScene::Composition(scene), position) => {
+                scene.caret(&position.projected()).map(|caret| caret.bounds)
+            }
             _ => None,
         }
     }
@@ -182,11 +182,11 @@ impl EditableSurfaceSnapshot<'_> {
                 .ok_or_else(|| SurfaceError::new(SurfaceErrorKind::UnmappedRange))?;
             return Ok(match (&self.scene, position) {
                 (BoundScene::Committed(scene), BoundPosition::Snapshot(position)) => {
-                    scene.caret(&position).map(|caret| caret.bounds())
+                    scene.caret(&position).map(|caret| caret.bounds)
                 }
-                (BoundScene::Composition(scene), position) => scene
-                    .caret(&position.projected())
-                    .map(|caret| caret.bounds()),
+                (BoundScene::Composition(scene), position) => {
+                    scene.caret(&position.projected()).map(|caret| caret.bounds)
+                }
                 _ => None,
             });
         }
@@ -234,9 +234,9 @@ impl EditableSurfaceSnapshot<'_> {
     pub fn offset_for_point(&self, point: Point) -> Option<u32> {
         let position = match &self.scene {
             BoundScene::Committed(scene) => {
-                BoundPosition::Snapshot(*scene.hit_test_closest(point)?.position())
+                BoundPosition::Snapshot(scene.hit_test_closest(point)?.position)
             }
-            BoundScene::Composition(scene) => match *scene.hit_test_closest(point)?.position() {
+            BoundScene::Composition(scene) => match scene.hit_test_closest(point)?.position {
                 ProjectedTextPosition::Snapshot(position) => BoundPosition::Snapshot(position),
                 ProjectedTextPosition::Composition(position) => {
                     BoundPosition::Composition(position)

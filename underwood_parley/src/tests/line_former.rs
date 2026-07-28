@@ -63,7 +63,7 @@ fn checkpoint_restores_traversal_and_provisional_output_together() {
                 },
             )
             .expect("candidate commit succeeds"),
-        CommitOutcome::Accepted(CandidateOverflow::None)
+        CommitOutcome::Accepted
     );
     output.push("provisional");
 
@@ -78,7 +78,6 @@ fn checkpoint_restores_traversal_and_provisional_output_together() {
             .expect("candidate exists"),
         candidate
     );
-    assert_eq!(former.work().restores, 1);
 }
 
 #[test]
@@ -129,15 +128,13 @@ fn line_final_expansion_retries_the_previous_legal_boundary() {
                 },
             )
             .expect("retry commit succeeds"),
-        CommitOutcome::Accepted(CandidateOverflow::None)
+        CommitOutcome::Accepted
     );
     assert_eq!(
         former.work(),
         LineFormerWork {
             proposed: 2,
             rejected: 1,
-            accepted: 1,
-            restores: 0,
         }
     );
 }
@@ -245,7 +242,7 @@ fn height_rejection_retries_the_same_text_in_the_next_region_slot() {
                 },
             )
             .expect("retry evaluation succeeds"),
-        CommitOutcome::Accepted(CandidateOverflow::None)
+        CommitOutcome::Accepted
     );
     assert_eq!(output, ["earlier"]);
     assert!(former.is_done());
@@ -345,7 +342,7 @@ fn crlf_is_one_mandatory_candidate_and_requests_an_empty_terminal_line() {
                 LineLimits::default(),
             )
             .expect("candidate commit succeeds"),
-        CommitOutcome::Accepted(CandidateOverflow::None)
+        CommitOutcome::Accepted
     );
     assert!(former.needs_terminal_empty_line());
 }

@@ -97,167 +97,57 @@ impl CacheBudget {
 /// Snapshot of coordinated retained-cache state and cumulative activity.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CacheDiagnostics {
-    budget: usize,
-    composition_budget: usize,
-    committed_entries: usize,
-    composition_entries: usize,
-    adapter_facts: Option<ParagraphFormationCacheDiagnostics>,
-    scene_cache_accounted_bytes: usize,
-    scene_cache_residency: SceneResidencyBytes,
-    peak_entries: usize,
-    hits: usize,
-    misses: usize,
-    evictions: usize,
-    releases: usize,
-    shared_preparation_budget: usize,
-    shared_preparation_entries: usize,
-    shared_preparation_resident_bytes: usize,
-    shared_preparation_peak_bytes: usize,
-    shared_preparation_hits: usize,
-    shared_preparation_misses: usize,
-    shared_preparation_evictions: usize,
-    shared_preparation_oversized_non_retentions: usize,
+    /// Configured maximum retained committed geometry entries.
+    pub budget: usize,
+    /// Configured maximum retained transient-composition geometry entries.
+    pub composition_budget: usize,
+    /// Resident committed geometry entries.
+    pub committed_entries: usize,
+    /// Resident transient-composition geometry entries.
+    pub composition_entries: usize,
+    /// Retained paragraph-adapter facts, when the backend reports them.
+    pub adapter_facts: Option<ParagraphFormationCacheDiagnostics>,
+    /// Deterministic capacity charge for retained scene-cache data.
+    pub scene_cache_accounted_bytes: usize,
+    /// Capability-category charges for retained scene segments.
+    pub scene_cache_residency: SceneResidencyBytes,
+    /// Highest observed resident geometry entry count.
+    pub peak_entries: usize,
+    /// Paragraph lookups that found a resident geometry entry.
+    pub hits: usize,
+    /// Paragraph lookups that created a geometry entry.
+    pub misses: usize,
+    /// Entries removed to enforce a configured budget.
+    pub evictions: usize,
+    /// Entries removed by an explicit lifecycle operation.
+    pub releases: usize,
+    /// Configured shared-preparation byte budget.
+    pub shared_preparation_budget: usize,
+    /// Resident identity-free preparation entries.
+    pub shared_preparation_entries: usize,
+    /// Current deterministic shared-preparation charge.
+    pub shared_preparation_resident_bytes: usize,
+    /// Exact cross-identity prepared-fact cache hits.
+    pub shared_preparation_hits: usize,
+    /// Eligible shared-preparation lookups that missed.
+    pub shared_preparation_misses: usize,
+    /// Shared entries removed to enforce the byte budget.
+    pub shared_preparation_evictions: usize,
+    /// Prepared values served but too large to retain.
+    pub shared_preparation_oversized_non_retentions: usize,
 }
 
 impl CacheDiagnostics {
-    /// Returns the configured maximum retained committed geometry entries.
-    #[must_use]
-    pub const fn budget(self) -> usize {
-        self.budget
-    }
-
-    /// Returns the configured maximum retained composition geometry entries.
-    #[must_use]
-    pub const fn composition_budget(self) -> usize {
-        self.composition_budget
-    }
-
-    /// Returns resident committed geometry entries.
-    #[must_use]
-    pub const fn committed_entries(self) -> usize {
-        self.committed_entries
-    }
-
-    /// Returns resident transient-composition geometry entries.
-    #[must_use]
-    pub const fn composition_entries(self) -> usize {
-        self.composition_entries
-    }
-
     /// Returns all resident geometry entries across the independently
     /// budgeted committed and composition lanes.
     #[must_use]
     pub const fn current_entries(self) -> usize {
         self.committed_entries + self.composition_entries
     }
-
-    /// Returns retained paragraph-adapter facts, when the backend reports
-    /// deterministic accounting.
-    #[must_use]
-    pub const fn adapter_facts(self) -> Option<ParagraphFormationCacheDiagnostics> {
-        self.adapter_facts
-    }
-
-    /// Returns the deterministic capacity charge for retained scene-cache data.
-    ///
-    /// Shared font blobs, backend-private storage, and allocator overhead are
-    /// deliberately excluded.
-    #[must_use]
-    pub const fn scene_cache_accounted_bytes(self) -> usize {
-        self.scene_cache_accounted_bytes
-    }
-
-    /// Returns capability-category charges for retained scene segments.
-    ///
-    /// This is the scene-output subset of [`Self::scene_cache_accounted_bytes`];
-    /// cache keys and lookup metadata are included only in the latter.
-    #[must_use]
-    pub const fn scene_cache_residency(self) -> SceneResidencyBytes {
-        self.scene_cache_residency
-    }
-
-    /// Returns the highest observed resident geometry entry count.
-    #[must_use]
-    pub const fn peak_entries(self) -> usize {
-        self.peak_entries
-    }
-
-    /// Returns paragraph-identity lookups that found a resident geometry entry.
-    #[must_use]
-    pub const fn hits(self) -> usize {
-        self.hits
-    }
-
-    /// Returns paragraph-identity lookups that created a geometry entry.
-    #[must_use]
-    pub const fn misses(self) -> usize {
-        self.misses
-    }
-
-    /// Returns entries removed to enforce the configured budget.
-    #[must_use]
-    pub const fn evictions(self) -> usize {
-        self.evictions
-    }
-
-    /// Returns entries removed by explicit document or whole-cache release.
-    #[must_use]
-    pub const fn releases(self) -> usize {
-        self.releases
-    }
-
-    /// Returns the configured shared-preparation byte budget.
-    #[must_use]
-    pub const fn shared_preparation_budget(self) -> usize {
-        self.shared_preparation_budget
-    }
-
-    /// Returns resident identity-free preparation entries.
-    #[must_use]
-    pub const fn shared_preparation_entries(self) -> usize {
-        self.shared_preparation_entries
-    }
-
-    /// Returns the current deterministic shared-preparation accounting charge.
-    #[must_use]
-    pub const fn shared_preparation_resident_bytes(self) -> usize {
-        self.shared_preparation_resident_bytes
-    }
-
-    /// Returns the highest observed shared-preparation accounting charge.
-    #[must_use]
-    pub const fn shared_preparation_peak_bytes(self) -> usize {
-        self.shared_preparation_peak_bytes
-    }
-
-    /// Returns exact cross-identity prepared-fact cache hits.
-    #[must_use]
-    pub const fn shared_preparation_hits(self) -> usize {
-        self.shared_preparation_hits
-    }
-
-    /// Returns eligible shared-preparation lookups that missed.
-    #[must_use]
-    pub const fn shared_preparation_misses(self) -> usize {
-        self.shared_preparation_misses
-    }
-
-    /// Returns shared entries removed to enforce the byte budget.
-    #[must_use]
-    pub const fn shared_preparation_evictions(self) -> usize {
-        self.shared_preparation_evictions
-    }
-
-    /// Returns prepared values served but too large to retain.
-    #[must_use]
-    pub const fn shared_preparation_oversized_non_retentions(self) -> usize {
-        self.shared_preparation_oversized_non_retentions
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 struct CacheWork {
-    scene_cache_accounted_bytes: usize,
     peak_entries: usize,
     hits: usize,
     misses: usize,
@@ -276,6 +166,14 @@ impl PrepareScratch {
         vec_bytes::<Arc<ParagraphSceneSegment>>(self.region_segments.capacity())
             .saturating_add(self.projection.accounted_capacity_bytes())
     }
+}
+
+struct FinishedScene {
+    core: Arc<SceneCore>,
+    work: WorkReport,
+    trace: Option<Arc<PreparationTrace>>,
+    region_attempts: usize,
+    region_height_rejections: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -388,6 +286,133 @@ impl LayoutEngine {
         }
     }
 
+    fn trace_start(&self, enabled: bool) -> Option<(CacheDiagnostics, usize)> {
+        enabled.then(|| {
+            (
+                self.cache_diagnostics(),
+                self.scratch.accounted_capacity_bytes(),
+            )
+        })
+    }
+
+    fn reused_trace(
+        &self,
+        enabled: bool,
+        work: &WorkReport,
+        paragraph_count: usize,
+        region_attempts: usize,
+        region_height_rejections: usize,
+    ) -> Option<Arc<PreparationTrace>> {
+        enabled.then(|| {
+            let diagnostics = self.cache_diagnostics();
+            let scratch = self.scratch.accounted_capacity_bytes();
+            Arc::new(PreparationTrace {
+                work: work.clone(),
+                reuse: PreparationReuse {
+                    paragraphs: paragraph_count,
+                    preflight_reuses: paragraph_count,
+                    exact_geometry_reuses: paragraph_count,
+                    ..PreparationReuse::default()
+                },
+                memory: PreparationMemory {
+                    cache_before: diagnostics,
+                    cache_after: diagnostics,
+                    scene_output_capacity_bytes: 0,
+                    scratch_capacity_before: scratch,
+                    scratch_capacity_after: scratch,
+                },
+                region_attempts,
+                region_height_rejections,
+            })
+        })
+    }
+
+    fn publish_scene(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+        required_paint_slots: usize,
+        core: Arc<SceneCore>,
+        region_attempts: usize,
+        region_height_rejections: usize,
+    ) {
+        self.clock = self.clock.saturating_add(1);
+        self.published.insert(
+            snapshot.id(),
+            PublishedScene {
+                snapshot: snapshot.clone(),
+                styles: request.styles.clone(),
+                constraint: ConstraintKey::from(request.constraint),
+                region_flow: request.region_flow.cloned(),
+                last_used: self.clock,
+                required_paint_slots,
+                core,
+                region_attempts,
+                region_height_rejections,
+            },
+        );
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the complete scene-publication boundary"
+    )]
+    fn finish_scene(
+        &self,
+        paragraph_count: usize,
+        spine: SceneSpine,
+        previous_spine: Option<&SceneSpine>,
+        request: &SceneRequest<'_>,
+        region_start: Option<RegionCursor>,
+        region_end: Option<RegionCursor>,
+        default_features: SceneFeatures,
+        retained_core: Option<Arc<SceneCore>>,
+        work: WorkReport,
+        reuse: PreparationReuse,
+        trace_start: Option<(CacheDiagnostics, usize)>,
+    ) -> Result<FinishedScene, SceneError> {
+        let summary = spine.summary();
+        let region = scene_region_binding(
+            summary,
+            paragraph_count,
+            request.region_flow,
+            region_start,
+            region_end,
+        )?;
+        let region_attempts = region.map_or(0, |region| region.attempts);
+        let region_height_rejections = region.map_or(0, |region| region.height_rejections);
+        let trace = trace_start.map(|(cache_before, scratch_capacity_before)| {
+            Arc::new(PreparationTrace {
+                work: work.clone(),
+                reuse,
+                memory: PreparationMemory {
+                    cache_before,
+                    cache_after: self.cache_diagnostics(),
+                    scene_output_capacity_bytes: spine.unshared_node_bytes_from(previous_spine),
+                    scratch_capacity_before,
+                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
+                },
+                region_attempts,
+                region_height_rejections,
+            })
+        });
+        let core = retained_core.unwrap_or_else(|| {
+            Arc::new(scene_core(
+                spine,
+                TextMetrics::from_summary(summary),
+                region,
+                default_features,
+            ))
+        });
+        Ok(FinishedScene {
+            core,
+            work,
+            trace,
+            region_attempts,
+            region_height_rejections,
+        })
+    }
+
     /// Prepares an immutable scene without publishing partial results on failure.
     pub fn prepare(
         &mut self,
@@ -414,10 +439,7 @@ impl LayoutEngine {
             .is_none()
             .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
 
-        let cache_before = request.trace.then(|| self.cache_diagnostics());
-        let scratch_capacity_before = request
-            .trace
-            .then(|| self.scratch.accounted_capacity_bytes());
+        let trace_start = self.trace_start(request.trace);
         self.scratch.region_segments.clear();
         let mut work = WorkReport::default();
         let mut reuse = PreparationReuse::default();
@@ -510,48 +532,35 @@ impl LayoutEngine {
             paragraphs: snapshot.paragraphs().len(),
             records: summary.fragments,
         };
-        let metrics = TextMetrics::from_summary(summary);
-        let region = scene_region_binding(
-            summary,
+        let finished = self.finish_scene(
             snapshot.paragraphs().len(),
-            request.region_flow,
+            spine,
+            previous_spine.as_ref(),
+            request,
             region_start,
             region_cursor,
+            request.features.default_features(),
+            None,
+            work,
+            reuse,
+            trace_start,
         )?;
-        let region_attempts = region.map_or(0, |region| region.attempts);
-        let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| {
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse,
-                memory: PreparationMemory {
-                    cache_before: cache_before.expect("traced request records initial cache state"),
-                    cache_after: self.cache_diagnostics(),
-                    scene_output_capacity_bytes: spine
-                        .unshared_node_bytes_from(previous_spine.as_ref()),
-                    scratch_capacity_before: scratch_capacity_before
-                        .expect("traced request records initial scratch state"),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts,
-                region_height_rejections,
-            })
-        });
-        let core = Arc::new(SceneCore {
-            paragraph_count: snapshot.paragraphs().len(),
-            resident: resident_feature_policy(&spine, request.features.default_features()),
-            spine,
-            metrics,
-            region,
-        });
+        let FinishedScene {
+            core,
+            work,
+            trace,
+            region_attempts,
+            region_height_rejections,
+        } = finished;
         let output = SceneOutput {
-            scene: TextScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                paint: request.paint.clone(),
-                requested: request.features.clone(),
-                core: Arc::clone(&core),
-            },
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                request.features.clone(),
+                Arc::clone(&core),
+                (),
+            ),
             work,
             trace,
         };
@@ -560,20 +569,13 @@ impl LayoutEngine {
             .iter()
             .all(|paragraph| self.cache.contains_key(&paragraph.id))
         {
-            self.clock = self.clock.saturating_add(1);
-            self.published.insert(
-                snapshot.id(),
-                PublishedScene {
-                    snapshot: snapshot.clone(),
-                    styles: request.styles.clone(),
-                    constraint: ConstraintKey::from(request.constraint),
-                    region_flow: request.region_flow.cloned(),
-                    last_used: self.clock,
-                    required_paint_slots,
-                    core,
-                    region_attempts,
-                    region_height_rejections,
-                },
+            self.publish_scene(
+                snapshot,
+                request,
+                required_paint_slots,
+                core,
+                region_attempts,
+                region_height_rejections,
             );
         } else {
             self.published.remove(&snapshot.id());
@@ -646,10 +648,7 @@ impl LayoutEngine {
             .published_blocks
             .get(&snapshot.id())
             .map(|published| published.core.spine.clone());
-        let cache_before = request.trace.then(|| self.cache_diagnostics());
-        let scratch_capacity_before = request
-            .trace
-            .then(|| self.scratch.accounted_capacity_bytes());
+        let trace_start = self.trace_start(request.trace);
         let mut work = WorkReport::default();
         let mut reuse = PreparationReuse::default();
         let region_start = request.region_flow.map(RegionFlow::cursor);
@@ -696,43 +695,34 @@ impl LayoutEngine {
             paragraphs: 1,
             records: summary.fragments,
         };
-        let metrics = TextMetrics::from_summary(summary);
-        let region =
-            scene_region_binding(summary, 1, request.region_flow, region_start, region_end)?;
-        let region_attempts = region.map_or(0, |region| region.attempts);
-        let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| {
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse,
-                memory: PreparationMemory {
-                    cache_before: cache_before.expect("traced request records initial cache state"),
-                    cache_after: self.cache_diagnostics(),
-                    scene_output_capacity_bytes: spine
-                        .unshared_node_bytes_from(previous_spine.as_ref()),
-                    scratch_capacity_before: scratch_capacity_before
-                        .expect("traced request records initial scratch state"),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts,
-                region_height_rejections,
-            })
-        });
-        let core = Arc::new(SceneCore {
-            paragraph_count: 1,
-            resident: resident_feature_policy(&spine, request.features.default_features()),
+        let FinishedScene {
+            core,
+            work,
+            trace,
+            region_attempts,
+            region_height_rejections,
+        } = self.finish_scene(
+            1,
             spine,
-            metrics,
-            region,
-        });
+            previous_spine.as_ref(),
+            request,
+            region_start,
+            region_end,
+            request.features.default_features(),
+            None,
+            work,
+            reuse,
+            trace_start,
+        )?;
         let output = SceneOutput {
-            scene: TextScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                paint: request.paint.clone(),
-                requested: request.features.clone(),
-                core: Arc::clone(&core),
-            },
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                request.features.clone(),
+                Arc::clone(&core),
+                (),
+            ),
             work,
             trace,
         };
@@ -794,10 +784,7 @@ impl LayoutEngine {
             .is_none()
             .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
 
-        let cache_before = request.trace.then(|| self.cache_diagnostics());
-        let scratch_capacity_before = request
-            .trace
-            .then(|| self.scratch.accounted_capacity_bytes());
+        let trace_start = self.trace_start(request.trace);
         self.scratch.region_segments.clear();
         let mut work = WorkReport::default();
         let mut reuse = PreparationReuse::default();
@@ -944,33 +931,6 @@ impl LayoutEngine {
             paragraphs: snapshot.paragraphs().len(),
             records: summary.fragments,
         };
-        let metrics = TextMetrics::from_summary(summary);
-        let region = scene_region_binding(
-            summary,
-            snapshot.paragraphs().len(),
-            request.region_flow,
-            region_start,
-            region_cursor,
-        )?;
-        let region_attempts = region.map_or(0, |region| region.attempts);
-        let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| {
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse,
-                memory: PreparationMemory {
-                    cache_before: cache_before.expect("traced request records initial cache state"),
-                    cache_after: self.cache_diagnostics(),
-                    scene_output_capacity_bytes: spine
-                        .unshared_node_bytes_from(previous_spine.as_ref()),
-                    scratch_capacity_before: scratch_capacity_before
-                        .expect("traced request records initial scratch state"),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts,
-                region_height_rejections,
-            })
-        });
         let effective_features = request.features.clone().with_paragraph(
             target_paragraph,
             request
@@ -978,23 +938,34 @@ impl LayoutEngine {
                 .features_for(target_paragraph)
                 .with_native_text_input(),
         );
-        let core = Arc::new(SceneCore {
-            paragraph_count: snapshot.paragraphs().len(),
-            resident: resident_feature_policy(&spine, effective_features.default_features()),
+        let FinishedScene {
+            core,
+            work,
+            trace,
+            region_attempts,
+            region_height_rejections,
+        } = self.finish_scene(
+            snapshot.paragraphs().len(),
             spine,
-            metrics,
-            region,
-        });
+            previous_spine.as_ref(),
+            request,
+            region_start,
+            region_cursor,
+            effective_features.default_features(),
+            None,
+            work,
+            reuse,
+            trace_start,
+        )?;
         let output = CompositionSceneOutput {
-            scene: CompositionScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                composition: composition.id(),
-                epoch: composition.epoch(),
-                paint: request.paint.clone(),
-                requested: effective_features,
-                core: Arc::clone(&core),
-            },
+            scene: CompositionScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                effective_features,
+                Arc::clone(&core),
+                (composition.id(), composition.epoch()),
+            ),
             work,
             trace,
         };
@@ -1040,10 +1011,6 @@ impl LayoutEngine {
                     return true;
                 }
                 preparations.push(entry.preparation);
-                self.cache_work.scene_cache_accounted_bytes = self
-                    .cache_work
-                    .scene_cache_accounted_bytes
-                    .saturating_sub(entry.accounted_bytes);
                 self.cache_work.releases = self.cache_work.releases.saturating_add(1);
                 false
             });
@@ -1064,7 +1031,6 @@ impl LayoutEngine {
         self.block_styles = None;
         self.shared_preparation.clear();
         self.paragraphs.clear();
-        self.cache_work.scene_cache_accounted_bytes = 0;
     }
 
     /// Drops reusable adapter facts without invalidating retained or
@@ -1090,7 +1056,7 @@ impl LayoutEngine {
             committed_entries: self.cache.len(),
             composition_entries: self.composition_cache.len(),
             adapter_facts: self.paragraphs.retained_facts(),
-            scene_cache_accounted_bytes: self.cache_work.scene_cache_accounted_bytes,
+            scene_cache_accounted_bytes: scene_cache_residency.total(),
             scene_cache_residency,
             peak_entries: self.cache_work.peak_entries,
             hits: self.cache_work.hits,
@@ -1100,7 +1066,6 @@ impl LayoutEngine {
             shared_preparation_budget: shared.budget,
             shared_preparation_entries: shared.entries,
             shared_preparation_resident_bytes: shared.resident_bytes,
-            shared_preparation_peak_bytes: shared.peak_bytes,
             shared_preparation_hits: shared.hits,
             shared_preparation_misses: shared.misses,
             shared_preparation_evictions: shared.evictions,
@@ -1156,40 +1121,27 @@ impl LayoutEngine {
             .published
             .get(&snapshot.id())
             .expect("the refreshed published scene remains present");
-        let paragraph_count = published.core.paragraph_count;
+        let paragraph_count = published.core.spine.paragraph_count();
         let work = WorkReport {
             reused_paragraphs: paragraph_count,
             ..WorkReport::default()
         };
-        let trace = request.trace.then(|| {
-            let diagnostics = self.cache_diagnostics();
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse: PreparationReuse {
-                    paragraphs: paragraph_count,
-                    preflight_reuses: paragraph_count,
-                    exact_geometry_reuses: paragraph_count,
-                    ..PreparationReuse::default()
-                },
-                memory: PreparationMemory {
-                    cache_before: diagnostics,
-                    cache_after: diagnostics,
-                    scene_output_capacity_bytes: 0,
-                    scratch_capacity_before: self.scratch.accounted_capacity_bytes(),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts: published.region_attempts,
-                region_height_rejections: published.region_height_rejections,
-            })
-        });
+        let trace = self.reused_trace(
+            request.trace,
+            &work,
+            paragraph_count,
+            published.region_attempts,
+            published.region_height_rejections,
+        );
         Some(SceneOutput {
-            scene: TextScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                paint: request.paint.clone(),
-                requested: request.features.clone(),
-                core: Arc::clone(&published.core),
-            },
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                request.features.clone(),
+                Arc::clone(&published.core),
+                (),
+            ),
             work,
             trace,
         })
@@ -1206,7 +1158,7 @@ impl LayoutEngine {
         let preflight = &cache.preflight_key;
         let region_cursor = request.region_flow.map(RegionFlow::cursor);
         if !published.snapshot.shares_state_with(snapshot)
-            || published.core.paragraph_count != 1
+            || published.core.spine.paragraph_count() != 1
             || !cache.segment.geometry.features.contains(request.features)
             || preflight.version != snapshot.revision().0
             || preflight.styles.default_style() != request.style
@@ -1233,35 +1185,22 @@ impl LayoutEngine {
             reused_paragraphs: 1,
             ..WorkReport::default()
         };
-        let trace = request.trace.then(|| {
-            let diagnostics = self.cache_diagnostics();
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse: PreparationReuse {
-                    paragraphs: 1,
-                    preflight_reuses: 1,
-                    exact_geometry_reuses: 1,
-                    ..PreparationReuse::default()
-                },
-                memory: PreparationMemory {
-                    cache_before: diagnostics,
-                    cache_after: diagnostics,
-                    scene_output_capacity_bytes: 0,
-                    scratch_capacity_before: self.scratch.accounted_capacity_bytes(),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts: published.region_attempts,
-                region_height_rejections: published.region_height_rejections,
-            })
-        });
+        let trace = self.reused_trace(
+            request.trace,
+            &work,
+            1,
+            published.region_attempts,
+            published.region_height_rejections,
+        );
         Some(SceneOutput {
-            scene: TextScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                paint: request.paint.clone(),
-                requested: SceneFeaturePolicy::uniform(request.features),
-                core: Arc::clone(&published.core),
-            },
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                SceneFeaturePolicy::uniform(request.features),
+                Arc::clone(&published.core),
+                (),
+            ),
             work,
             trace,
         })
@@ -1279,7 +1218,7 @@ impl LayoutEngine {
             || published.region_flow.is_some()
             || request.region_flow.is_some()
             || !published.core.resident.contains_policy(&request.features)
-            || published.core.paragraph_count != snapshot.paragraphs().len()
+            || published.core.spine.paragraph_count() != snapshot.paragraphs().len()
             || request.paint.len() < published.required_paint_slots
         {
             return Ok(None);
@@ -1314,10 +1253,7 @@ impl LayoutEngine {
         }
 
         let mut spine = published.core.spine.clone();
-        let cache_before = request.trace.then(|| self.cache_diagnostics());
-        let scratch_capacity_before = request
-            .trace
-            .then(|| self.scratch.accounted_capacity_bytes());
+        let trace_start = self.trace_start(request.trace);
         let mut work = WorkReport::default();
         let mut reuse = PreparationReuse::default();
         let mut changed_count = 0_usize;
@@ -1387,65 +1323,38 @@ impl LayoutEngine {
         reuse.paragraphs = reuse.paragraphs.saturating_add(unchanged);
         reuse.preflight_reuses = reuse.preflight_reuses.saturating_add(unchanged);
         reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(unchanged);
-        let summary = spine.summary();
         work.paint = StageWork {
             paragraphs: changed_count,
             records: paint_records,
         };
-        let trace = request.trace.then(|| {
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse,
-                memory: PreparationMemory {
-                    cache_before: cache_before.expect("traced request records initial cache state"),
-                    cache_after: self.cache_diagnostics(),
-                    scene_output_capacity_bytes: spine
-                        .unshared_node_bytes_from(Some(&previous_core.spine)),
-                    scratch_capacity_before: scratch_capacity_before
-                        .expect("traced request records initial scratch state"),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts: 0,
-                region_height_rejections: 0,
-            })
-        });
-        let core = if changed_count == 0 {
-            previous_core
-        } else {
-            Arc::new(SceneCore {
-                paragraph_count,
-                metrics: TextMetrics::from_summary(summary),
-                resident: resident_feature_policy(&spine, request.features.default_features()),
-                spine,
-                region: None,
-            })
-        };
+        let FinishedScene {
+            core, work, trace, ..
+        } = self.finish_scene(
+            paragraph_count,
+            spine,
+            Some(&previous_core.spine),
+            request,
+            None,
+            None,
+            request.features.default_features(),
+            (changed_count == 0).then(|| Arc::clone(&previous_core)),
+            work,
+            reuse,
+            trace_start,
+        )?;
         let output = SceneOutput {
-            scene: TextScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                paint: request.paint.clone(),
-                requested: request.features.clone(),
-                core: Arc::clone(&core),
-            },
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                request.features.clone(),
+                Arc::clone(&core),
+                (),
+            ),
             work,
             trace,
         };
-        self.clock = self.clock.saturating_add(1);
-        self.published.insert(
-            snapshot.id(),
-            PublishedScene {
-                snapshot: snapshot.clone(),
-                styles: request.styles.clone(),
-                constraint: ConstraintKey::from(request.constraint),
-                region_flow: None,
-                last_used: self.clock,
-                required_paint_slots,
-                core,
-                region_attempts: 0,
-                region_height_rejections: 0,
-            },
-        );
+        self.publish_scene(snapshot, request, required_paint_slots, core, 0, 0);
         Ok(Some(output))
     }
 
@@ -1486,10 +1395,7 @@ impl LayoutEngine {
             return Ok(None);
         }
 
-        let cache_before = request.trace.then(|| self.cache_diagnostics());
-        let scratch_capacity_before = request
-            .trace
-            .then(|| self.scratch.accounted_capacity_bytes());
+        let trace_start = self.trace_start(request.trace);
         let previous_count = previous.paragraphs().len();
         let mut spine = previous_core.spine.clone();
         let mut work = WorkReport {
@@ -1567,69 +1473,48 @@ impl LayoutEngine {
             self.enforce_budget();
         }
 
-        let summary = spine.summary();
         work.paint = StageWork {
             paragraphs: appended.len(),
             records: paint_records,
         };
-        let region = scene_region_binding(
-            summary,
+        let FinishedScene {
+            core,
+            work,
+            trace,
+            region_attempts,
+            region_height_rejections,
+        } = self.finish_scene(
             snapshot.paragraphs().len(),
-            request.region_flow,
+            spine,
+            Some(&previous_core.spine),
+            request,
             region_start,
             region_cursor,
+            request.features.default_features(),
+            None,
+            work,
+            reuse,
+            trace_start,
         )?;
-        let region_attempts = region.map_or(0, |region| region.attempts);
-        let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| {
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse,
-                memory: PreparationMemory {
-                    cache_before: cache_before.expect("traced request records initial cache state"),
-                    cache_after: self.cache_diagnostics(),
-                    scene_output_capacity_bytes: spine
-                        .unshared_node_bytes_from(Some(&previous_core.spine)),
-                    scratch_capacity_before: scratch_capacity_before
-                        .expect("traced request records initial scratch state"),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts,
-                region_height_rejections,
-            })
-        });
-        let core = Arc::new(SceneCore {
-            paragraph_count: snapshot.paragraphs().len(),
-            metrics: TextMetrics::from_summary(summary),
-            resident: resident_feature_policy(&spine, request.features.default_features()),
-            spine,
-            region,
-        });
         let output = SceneOutput {
-            scene: TextScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                paint: request.paint.clone(),
-                requested: request.features.clone(),
-                core: Arc::clone(&core),
-            },
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                request.features.clone(),
+                Arc::clone(&core),
+                (),
+            ),
             work,
             trace,
         };
-        self.clock = self.clock.saturating_add(1);
-        self.published.insert(
-            snapshot.id(),
-            PublishedScene {
-                snapshot: snapshot.clone(),
-                styles: request.styles.clone(),
-                constraint: ConstraintKey::from(request.constraint),
-                region_flow: request.region_flow.cloned(),
-                last_used: self.clock,
-                required_paint_slots,
-                core,
-                region_attempts,
-                region_height_rejections,
-            },
+        self.publish_scene(
+            snapshot,
+            request,
+            required_paint_slots,
+            core,
+            region_attempts,
+            region_height_rejections,
         );
         Ok(Some(output))
     }
@@ -1650,7 +1535,7 @@ impl LayoutEngine {
         };
         if published.constraint != ConstraintKey::from(request.constraint)
             || !region_provenance_matches(published.region_flow.as_ref(), Some(region_flow))
-            || published.core.paragraph_count != snapshot.paragraphs().len()
+            || published.core.spine.paragraph_count() != snapshot.paragraphs().len()
             || request.paint.len() < published.required_paint_slots
         {
             return Ok(None);
@@ -1697,10 +1582,7 @@ impl LayoutEngine {
             )?);
         }
 
-        let cache_before = request.trace.then(|| self.cache_diagnostics());
-        let scratch_capacity_before = request
-            .trace
-            .then(|| self.scratch.accounted_capacity_bytes());
+        let trace_start = self.trace_start(request.trace);
         let mut spine = previous_core.spine.clone();
         let mut work = WorkReport::default();
         let mut reuse = PreparationReuse::default();
@@ -1820,68 +1702,44 @@ impl LayoutEngine {
         } else {
             summary.region_end
         };
-        let region = scene_region_binding(
-            summary,
+        let FinishedScene {
+            core,
+            work,
+            trace,
+            region_attempts,
+            region_height_rejections,
+        } = self.finish_scene(
             paragraph_count,
-            Some(region_flow),
+            spine,
+            Some(&previous_core.spine),
+            request,
             Some(region_flow.cursor()),
             region_end,
+            request.features.default_features(),
+            (processed == 0).then(|| Arc::clone(&previous_core)),
+            work,
+            reuse,
+            trace_start,
         )?;
-        let region_attempts = region.map_or(0, |region| region.attempts);
-        let region_height_rejections = region.map_or(0, |region| region.height_rejections);
-        let trace = request.trace.then(|| {
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse,
-                memory: PreparationMemory {
-                    cache_before: cache_before.expect("traced request records initial cache state"),
-                    cache_after: self.cache_diagnostics(),
-                    scene_output_capacity_bytes: spine
-                        .unshared_node_bytes_from(Some(&previous_core.spine)),
-                    scratch_capacity_before: scratch_capacity_before
-                        .expect("traced request records initial scratch state"),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts,
-                region_height_rejections,
-            })
-        });
-        let core = if processed == 0 {
-            previous_core
-        } else {
-            Arc::new(SceneCore {
-                paragraph_count,
-                metrics: TextMetrics::from_summary(summary),
-                resident: resident_feature_policy(&spine, request.features.default_features()),
-                spine,
-                region,
-            })
-        };
         let output = SceneOutput {
-            scene: TextScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                paint: request.paint.clone(),
-                requested: request.features.clone(),
-                core: Arc::clone(&core),
-            },
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                request.features.clone(),
+                Arc::clone(&core),
+                (),
+            ),
             work,
             trace,
         };
-        self.clock = self.clock.saturating_add(1);
-        self.published.insert(
-            snapshot.id(),
-            PublishedScene {
-                snapshot: snapshot.clone(),
-                styles: request.styles.clone(),
-                constraint: ConstraintKey::from(request.constraint),
-                region_flow: Some(region_flow.clone()),
-                last_used: self.clock,
-                required_paint_slots,
-                core,
-                region_attempts,
-                region_height_rejections,
-            },
+        self.publish_scene(
+            snapshot,
+            request,
+            required_paint_slots,
+            core,
+            region_attempts,
+            region_height_rejections,
         );
         Ok(Some(output))
     }
@@ -1896,7 +1754,7 @@ impl LayoutEngine {
             && published.constraint == ConstraintKey::from(request.constraint)
             && region_provenance_matches(published.region_flow.as_ref(), request.region_flow)
             && published.core.resident.contains_policy(&request.features)
-            && published.core.paragraph_count == snapshot.paragraphs().len())
+            && published.core.spine.paragraph_count() == snapshot.paragraphs().len())
         .then(|| published.core.spine.clone())
     }
 
@@ -1927,42 +1785,27 @@ impl LayoutEngine {
             .published_compositions
             .get(&snapshot.id())
             .expect("the refreshed published composition remains present");
-        let paragraph_count = published.core.paragraph_count;
+        let paragraph_count = published.core.spine.paragraph_count();
         let work = WorkReport {
             reused_paragraphs: paragraph_count,
             ..WorkReport::default()
         };
-        let trace = request.trace.then(|| {
-            let diagnostics = self.cache_diagnostics();
-            Arc::new(PreparationTrace {
-                work: work.clone(),
-                reuse: PreparationReuse {
-                    paragraphs: paragraph_count,
-                    preflight_reuses: paragraph_count,
-                    exact_geometry_reuses: paragraph_count,
-                    ..PreparationReuse::default()
-                },
-                memory: PreparationMemory {
-                    cache_before: diagnostics,
-                    cache_after: diagnostics,
-                    scene_output_capacity_bytes: 0,
-                    scratch_capacity_before: self.scratch.accounted_capacity_bytes(),
-                    scratch_capacity_after: self.scratch.accounted_capacity_bytes(),
-                },
-                region_attempts: published.region_attempts,
-                region_height_rejections: published.region_height_rejections,
-            })
-        });
+        let trace = self.reused_trace(
+            request.trace,
+            &work,
+            paragraph_count,
+            published.region_attempts,
+            published.region_height_rejections,
+        );
         Some(CompositionSceneOutput {
-            scene: CompositionScene {
-                document: snapshot.id(),
-                revision: snapshot.revision(),
-                composition: composition.id(),
-                epoch: composition.epoch(),
-                paint: request.paint.clone(),
-                requested: effective_features,
-                core: Arc::clone(&published.core),
-            },
+            scene: CompositionScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                effective_features,
+                Arc::clone(&published.core),
+                (composition.id(), composition.epoch()),
+            ),
             work,
             trace,
         })
@@ -1989,7 +1832,7 @@ impl LayoutEngine {
                         request.region_flow,
                     )
                     && published.core.resident.contains_policy(&effective_features)
-                    && published.core.paragraph_count == snapshot.paragraphs().len()
+                    && published.core.spine.paragraph_count() == snapshot.paragraphs().len()
             })
             .map(|published| published.core.spine.clone())
             .or_else(|| {
@@ -2003,19 +1846,12 @@ impl LayoutEngine {
                         request.region_flow,
                     )
                     && published.core.resident.contains_policy(&effective_features)
-                    && published.core.paragraph_count == snapshot.paragraphs().len())
+                    && published.core.spine.paragraph_count() == snapshot.paragraphs().len())
                 .then(|| published.core.spine.clone())
             })
     }
 
     fn record_access(&mut self, access: &CacheAccess) {
-        if access.previous_accounted_bytes != access.current_accounted_bytes {
-            self.cache_work.scene_cache_accounted_bytes = self
-                .cache_work
-                .scene_cache_accounted_bytes
-                .saturating_sub(access.previous_accounted_bytes)
-                .saturating_add(access.current_accounted_bytes);
-        }
         if access.previous_use.is_some() {
             self.cache_work.hits += 1;
         } else {
@@ -2082,10 +1918,6 @@ impl LayoutEngine {
             };
             if let Some(entry) = removed {
                 self.paragraphs.release(entry.preparation);
-                self.cache_work.scene_cache_accounted_bytes = self
-                    .cache_work
-                    .scene_cache_accounted_bytes
-                    .saturating_sub(entry.accounted_bytes);
             }
             self.cache_work.evictions += 1;
         }
@@ -2166,8 +1998,6 @@ fn validate_paragraph_styles(
 #[derive(Clone, Debug)]
 struct CacheAccess {
     previous_use: Option<u64>,
-    previous_accounted_bytes: usize,
-    current_accounted_bytes: usize,
     region_transcript: Option<RegionTranscript>,
 }
 
@@ -2201,8 +2031,6 @@ fn reuse_paragraph_geometry(
     work.reused_paragraphs = work.reused_paragraphs.saturating_add(1);
     Some(CacheAccess {
         previous_use,
-        previous_accounted_bytes: entry.accounted_bytes,
-        current_accounted_bytes: entry.accounted_bytes,
         region_transcript: entry.segment.region_transcript.clone(),
     })
 }
@@ -2252,6 +2080,10 @@ fn prepare_paragraph_geometry(
             .preflight_key
             .adjustment_matches(&preflight_key, paragraph_id)
     });
+    let exact_geometry_matches = cache.get(&paragraph_id).is_some_and(|entry| {
+        entry.preflight_key.matches_key(&preflight_key, paragraph)
+            && entry.segment.geometry.features.contains(features)
+    });
     let retained_layout = (formation_matches && adjustment_matches).then(|| {
         Arc::clone(
             &cache
@@ -2295,13 +2127,7 @@ fn prepare_paragraph_geometry(
             reuse.paint_invalidations = reuse.paint_invalidations.saturating_add(1);
         }
     }
-    if formation_matches
-        && paint_matches
-        && adjustment_matches
-        && cache
-            .get(&paragraph_id)
-            .is_some_and(|entry| entry.segment.geometry.features.contains(features))
-    {
+    if exact_geometry_matches {
         let entry = cache
             .get_mut(&paragraph_id)
             .expect("a reusable cache entry must exist");
@@ -2316,8 +2142,6 @@ fn prepare_paragraph_geometry(
         reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(1);
         return Ok(CacheAccess {
             previous_use,
-            previous_accounted_bytes: entry.accounted_bytes,
-            current_accounted_bytes: entry.accounted_bytes,
             region_transcript: entry.segment.region_transcript.clone(),
         });
     }
@@ -2339,7 +2163,7 @@ fn prepare_paragraph_geometry(
     let shared_hit = shared_query
         .as_ref()
         .and_then(|query| shared_preparation.lookup(query, current_use));
-    let retained_artifact = (formation_matches && paint_matches)
+    let retained_artifact = formation_matches
         .then(|| cache.get(&paragraph_id))
         .flatten()
         .filter(|entry| {
@@ -2359,14 +2183,11 @@ fn prepare_paragraph_geometry(
         .or_else(|| {
             alternate
                 .filter(|entry| {
-                    entry
-                        .preflight_key
-                        .alternate_adapter_change(
-                            &preflight_key,
-                            paragraph,
-                            projection.mapping.text(),
-                        )
-                        .is_unchanged()
+                    entry.preflight_key.alternate_adapter_change(
+                        &preflight_key,
+                        paragraph,
+                        projection.mapping.text(),
+                    ) == ParagraphFormationChange::default()
                         && entry
                             .segment
                             .geometry
@@ -2381,76 +2202,79 @@ fn prepare_paragraph_geometry(
                     )
                 })
         });
-    let (prepared, candidate_transcript, formation_reuse) = if let Some((facts, transcript)) =
-        retained_artifact
-    {
-        (
-            PreparedParagraph::from_shared_facts(paragraph_id, facts),
-            transcript,
-            None,
-        )
-    } else if let Some(hit) = shared_hit {
-        // The shared result may represent a state the identity-bound backend
-        // never observed. Drop any older lane-local facts so a later call
-        // cannot apply a relative change record to the wrong base.
-        paragraphs.release(preparation);
-        work.shared_preparations = work.shared_preparations.saturating_add(1);
-        reuse.shared_preparation_reuses = reuse.shared_preparation_reuses.saturating_add(1);
-        let transcript = hit.region_transcript(paragraph_id, region_flow)?;
-        (
-            PreparedParagraph::from_shared_facts(paragraph_id, hit.facts),
-            transcript,
-            None,
-        )
-    } else {
-        reuse.adapter_calls = reuse.adapter_calls.saturating_add(1);
-        let constraints = match (region_flow, region_cursor) {
-            (Some(flow), Some(cursor)) => ParagraphConstraints::in_regions(
-                constraint,
-                projection.empty_line_height(),
-                flow.clone(),
-                cursor,
-            ),
-            (None, None) => ParagraphConstraints::new(constraint, projection.empty_line_height()),
-            _ => {
-                return Err(SceneError::for_paragraph(
-                    SceneErrorKind::Flow,
+    let (prepared, candidate_transcript, formation_reuse, transcript_replayed) =
+        if let Some((facts, transcript)) = retained_artifact {
+            (
+                PreparedParagraph::from_shared_facts(paragraph_id, facts),
+                transcript,
+                None,
+                true,
+            )
+        } else if let Some(hit) = shared_hit {
+            // The shared result may represent a state the identity-bound backend
+            // never observed. Drop any older lane-local facts so a later call
+            // cannot apply a relative change record to the wrong base.
+            paragraphs.release(preparation);
+            work.shared_preparations = work.shared_preparations.saturating_add(1);
+            reuse.shared_preparation_reuses = reuse.shared_preparation_reuses.saturating_add(1);
+            let transcript = hit.region_transcript(paragraph_id, region_flow)?;
+            (
+                PreparedParagraph::from_shared_facts(paragraph_id, hit.facts),
+                transcript,
+                None,
+                true,
+            )
+        } else {
+            reuse.adapter_calls = reuse.adapter_calls.saturating_add(1);
+            let constraints = match (region_flow, region_cursor) {
+                (Some(flow), Some(cursor)) => ParagraphConstraints::in_regions(
+                    constraint,
+                    projection.empty_line_height(),
+                    flow.clone(),
+                    cursor,
+                ),
+                (None, None) => {
+                    ParagraphConstraints::new(constraint, projection.empty_line_height())
+                }
+                _ => {
+                    return Err(SceneError::for_paragraph(
+                        SceneErrorKind::Flow,
+                        paragraph_id,
+                    ));
+                }
+            };
+            let output = match paragraphs.form(
+                ParagraphInput::new(
+                    preparation,
+                    formation_change,
+                    features,
                     paragraph_id,
-                ));
-            }
+                    projection.paragraph_style,
+                    projection.mapping.text(),
+                    &projection.analysis_styles,
+                    &projection.analysis_runs,
+                    &projection.shaping_styles,
+                    &projection.shaping_runs,
+                    &projection.inline_flow_styles,
+                    &projection.inline_flow_runs,
+                ),
+                constraints,
+            ) {
+                Ok(output) => output,
+                Err(error) => {
+                    paragraphs.release(preparation);
+                    return Err(SceneError::from_preparation(paragraph_id, error.kind()));
+                }
+            };
+            let formation_reuse = output.reuse();
+            record_formation_work(work, output.work());
+            (
+                output.paragraph().clone(),
+                output.region_transcript().cloned(),
+                Some(formation_reuse),
+                false,
+            )
         };
-        let output = match paragraphs.form(
-            ParagraphInput::new(
-                preparation,
-                formation_change,
-                features,
-                paragraph_id,
-                projection.paragraph_style,
-                projection.mapping.text(),
-                &projection.analysis_styles,
-                &projection.analysis_runs,
-                &projection.shaping_styles,
-                &projection.shaping_runs,
-                &projection.inline_flow_styles,
-                &projection.inline_flow_runs,
-                &projection.paint_runs,
-            ),
-            constraints,
-        ) {
-            Ok(output) => output,
-            Err(error) => {
-                paragraphs.release(preparation);
-                return Err(SceneError::from_preparation(paragraph_id, error.kind()));
-            }
-        };
-        let formation_reuse = output.reuse();
-        record_formation_work(work, output.work());
-        (
-            output.paragraph().clone(),
-            output.region_transcript().cloned(),
-            Some(formation_reuse),
-        )
-    };
     let backend_called = formation_reuse.is_some();
     if let Some(formation_reuse) = formation_reuse {
         if formation_reuse.is_hit() {
@@ -2492,7 +2316,7 @@ fn prepare_paragraph_geometry(
     let region_transcript = match (region_flow, region_cursor, candidate_transcript) {
         (Some(flow), Some(cursor), Some(transcript))
             if transcript.start() == cursor
-                && transcript.replay(flow) == Ok(transcript.end())
+                && (transcript_replayed || transcript.replay(flow) == Ok(transcript.end()))
                 && region_output_matches(&prepared, &transcript, projection) =>
         {
             Some(transcript)
@@ -2510,7 +2334,6 @@ fn prepare_paragraph_geometry(
     };
     let slots_match = prepared
         .lines()
-        .iter()
         .all(|line| line.slot().is_some() == region_flow.is_some());
     if !slots_match {
         if backend_called {
@@ -2571,49 +2394,37 @@ fn prepare_paragraph_geometry(
         geometry.lines.len()
     });
     work.geometry.add_paragraph(paint.fragments.len());
-    let (previous_use, previous_accounted_bytes, current_accounted_bytes) =
-        if let Some(entry) = cache.get_mut(&paragraph_id) {
-            let previous_use = Some(entry.last_used);
-            let previous_accounted_bytes = entry.accounted_bytes;
-            entry.last_used = current_use;
-            entry.preflight_key = preflight_key;
-            entry.segment = Arc::new(ParagraphSceneSegment::new(
+    let previous_use = if let Some(entry) = cache.get_mut(&paragraph_id) {
+        let previous_use = Some(entry.last_used);
+        entry.last_used = current_use;
+        entry.preflight_key = preflight_key;
+        entry.segment = Arc::new(ParagraphSceneSegment::new(
+            paragraph_id,
+            geometry,
+            paint,
+            region_transcript.clone(),
+        ));
+        previous_use
+    } else {
+        let entry = ParagraphCache {
+            last_used: current_use,
+            preparation,
+            preflight_key,
+            segment: Arc::new(ParagraphSceneSegment::new(
                 paragraph_id,
                 geometry,
                 paint,
                 region_transcript.clone(),
-            ));
-            entry.accounted_bytes = entry.calculate_accounted_owned_bytes();
-            (
-                previous_use,
-                previous_accounted_bytes,
-                entry.accounted_bytes,
-            )
-        } else {
-            let mut entry = ParagraphCache {
-                last_used: current_use,
-                preparation,
-                preflight_key,
-                segment: Arc::new(ParagraphSceneSegment::new(
-                    paragraph_id,
-                    geometry,
-                    paint,
-                    region_transcript.clone(),
-                )),
-                accounted_bytes: 0,
-            };
-            entry.accounted_bytes = entry.calculate_accounted_owned_bytes();
-            let current_accounted_bytes = entry.accounted_bytes;
-            cache.insert(paragraph_id, entry);
-            (None, 0, current_accounted_bytes)
+            )),
         };
+        cache.insert(paragraph_id, entry);
+        None
+    };
     if backend_called {
         paragraphs.commit_preparation(preparation);
     }
     Ok(CacheAccess {
         previous_use,
-        previous_accounted_bytes,
-        current_accounted_bytes,
         region_transcript,
     })
 }
@@ -2651,19 +2462,54 @@ impl ParagraphPreflightKey {
         request: &SceneRequest<'_>,
         region_cursor: Option<RegionCursor>,
     ) -> bool {
-        let paragraph_id = paragraph.id();
-        self.version == paragraph.version()
-            && self.composition.is_none()
-            && self.constraint == ConstraintKey::from(request.constraint)
-            && self.region_cursor == region_cursor
-            && region_provenance_matches(self.region_flow.as_ref(), request.region_flow)
-            && (self.styles.shares_state_with(request.styles)
-                || (self.styles.default_style() == request.styles.default_style()
-                    && self.styles.paragraph_style_for(paragraph_id)
-                        == request.styles.paragraph_style_for(paragraph_id)
-                    && paragraph.leaves().all(|leaf| {
-                        self.styles.style_for(leaf.id()) == request.styles.style_for(leaf.id())
-                    })))
+        self.matches_state(
+            paragraph,
+            paragraph.version(),
+            None,
+            request.styles,
+            ConstraintKey::from(request.constraint),
+            request.region_flow,
+            region_cursor,
+        )
+    }
+
+    fn matches_key(&self, current: &Self, paragraph: ParagraphSource<'_>) -> bool {
+        self.matches_state(
+            paragraph,
+            current.version,
+            current.composition.as_deref(),
+            &current.styles,
+            current.constraint,
+            current.region_flow.as_ref(),
+            current.region_cursor,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one exact-reuse predicate covers both preflight and projected keys"
+    )]
+    fn matches_state(
+        &self,
+        paragraph: ParagraphSource<'_>,
+        version: u64,
+        composition: Option<&CompositionPreparationKey>,
+        styles: &StyleMap,
+        constraint: ConstraintKey,
+        region_flow: Option<&RegionFlow>,
+        region_cursor: Option<RegionCursor>,
+    ) -> bool {
+        let same_text = self.version == version && self.composition.as_deref() == composition;
+        self.adapter_change_with_text_identity(
+            paragraph,
+            styles,
+            constraint,
+            region_flow,
+            region_cursor,
+            same_text,
+        ) == ParagraphFormationChange::default()
+            && self.adjustment_matches_styles(styles, paragraph.id())
+            && self.paint_matches_styles(styles, paragraph, same_text)
     }
 
     fn adapter_change(
@@ -2672,8 +2518,11 @@ impl ParagraphPreflightKey {
         paragraph: ParagraphSource<'_>,
     ) -> ParagraphFormationChange {
         self.adapter_change_with_text_identity(
-            current,
             paragraph,
+            &current.styles,
+            current.constraint,
+            current.region_flow.as_ref(),
+            current.region_cursor,
             self.version == current.version && self.composition == current.composition,
         )
     }
@@ -2687,13 +2536,23 @@ impl ParagraphPreflightKey {
         let same_text = self.composition.as_ref().is_some_and(|composition| {
             composition.projected_text.as_ref() == current_projected_text
         });
-        self.adapter_change_with_text_identity(current, paragraph, same_text)
+        self.adapter_change_with_text_identity(
+            paragraph,
+            &current.styles,
+            current.constraint,
+            current.region_flow.as_ref(),
+            current.region_cursor,
+            same_text,
+        )
     }
 
     fn adapter_change_with_text_identity(
         &self,
-        current: &Self,
         paragraph: ParagraphSource<'_>,
+        current_styles: &StyleMap,
+        current_constraint: ConstraintKey,
+        current_region_flow: Option<&RegionFlow>,
+        current_region_cursor: Option<RegionCursor>,
         same_text: bool,
     ) -> ParagraphFormationChange {
         if !same_text {
@@ -2701,7 +2560,7 @@ impl ParagraphPreflightKey {
         }
         let paragraph_id = paragraph.id();
         let previous_paragraph = self.styles.paragraph_style_for(paragraph_id);
-        let current_paragraph = current.styles.paragraph_style_for(paragraph_id);
+        let current_paragraph = current_styles.paragraph_style_for(paragraph_id);
         if previous_paragraph.whitespace_collapse() != current_paragraph.whitespace_collapse() {
             return ParagraphFormationChange::all();
         }
@@ -2714,11 +2573,10 @@ impl ParagraphPreflightKey {
         let mut spacing = false;
         let mut line_metrics = false;
         let mut break_policy = false;
-        let mut paint = false;
         paragraph_inline_styles_match(
             paragraph,
             &self.styles,
-            &current.styles,
+            current_styles,
             |previous, current| {
                 analysis |= previous.analysis() != current.analysis();
                 font_selection |= previous.shaping() != current.shaping();
@@ -2731,16 +2589,15 @@ impl ParagraphPreflightKey {
                 line_metrics |= previous_flow.line_height() != current_flow.line_height();
                 break_policy |= previous_flow.overflow_wrap() != current_flow.overflow_wrap()
                     || previous_flow.text_wrap_mode() != current_flow.text_wrap_mode();
-                paint |= previous.paint() != current.paint();
                 true
             },
         );
         let empty = paragraph.is_empty();
-        let constraints = self.constraint != current.constraint
-            || !option_ref_eq(self.region_flow.as_ref(), current.region_flow.as_ref())
-            || self.region_cursor != current.region_cursor
+        let constraints = self.constraint != current_constraint
+            || self.region_flow.as_ref() != current_region_flow
+            || self.region_cursor != current_region_cursor
             || (empty && line_metrics);
-        ParagraphFormationChange::new(
+        ParagraphFormationChange {
             analysis,
             font_selection,
             ligature_policy,
@@ -2749,34 +2606,49 @@ impl ParagraphPreflightKey {
             line_metrics,
             break_policy,
             constraints,
-            paint,
-        )
+        }
     }
 
     fn formation_matches(&self, current: &Self, paragraph: ParagraphSource<'_>) -> bool {
         let change = self.adapter_change(current, paragraph);
-        !change.analysis_changed()
-            && !change.font_selection_changed()
-            && !change.ligature_policy_changed()
-            && !change.inline_flow_projection_changed()
-            && !change.spacing_changed()
-            && !change.line_metrics_changed()
-            && !change.break_policy_changed()
-            && !change.constraints_changed()
+        !change.analysis
+            && !change.font_selection
+            && !change.ligature_policy
+            && !change.inline_flow_projection
+            && !change.spacing
+            && !change.line_metrics
+            && !change.break_policy
+            && !change.constraints
     }
 
     fn adjustment_matches(&self, current: &Self, paragraph: ParagraphId) -> bool {
+        self.adjustment_matches_styles(&current.styles, paragraph)
+    }
+
+    fn adjustment_matches_styles(&self, current: &StyleMap, paragraph: ParagraphId) -> bool {
         self.styles.paragraph_style_for(paragraph).alignment()
-            == current.styles.paragraph_style_for(paragraph).alignment()
+            == current.paragraph_style_for(paragraph).alignment()
     }
 
     fn paint_matches(&self, current: &Self, paragraph: ParagraphSource<'_>) -> bool {
-        self.version == current.version
-            && self.composition == current.composition
+        self.paint_matches_styles(
+            &current.styles,
+            paragraph,
+            self.version == current.version && self.composition == current.composition,
+        )
+    }
+
+    fn paint_matches_styles(
+        &self,
+        current: &StyleMap,
+        paragraph: ParagraphSource<'_>,
+        same_text: bool,
+    ) -> bool {
+        same_text
             && paragraph_inline_styles_match(
                 paragraph,
                 &self.styles,
-                &current.styles,
+                current,
                 |previous, current| previous.paint() == current.paint(),
             )
     }
@@ -2811,30 +2683,12 @@ fn paragraph_inline_styles_match(
         .all(|leaf| matches(previous.style_for(leaf.id()), current.style_for(leaf.id())))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConstraintKey {
-    MinContent,
-    MaxContent,
-    Wrap(u64),
-}
-
-impl From<TextConstraint> for ConstraintKey {
-    fn from(constraint: TextConstraint) -> Self {
-        match constraint {
-            TextConstraint::MinContent => Self::MinContent,
-            TextConstraint::MaxContent => Self::MaxContent,
-            TextConstraint::Wrap(width) => Self::Wrap(width.0.to_bits()),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct ParagraphCache {
     last_used: u64,
     preparation: ParagraphPreparationId,
     preflight_key: ParagraphPreflightKey,
     segment: Arc<ParagraphSceneSegment>,
-    accounted_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -2912,32 +2766,8 @@ impl ParagraphCacheStore {
     }
 }
 
-impl ParagraphCache {
-    fn calculate_accounted_owned_bytes(&self) -> usize {
-        size_of::<Self>()
-            .saturating_add(
-                self.segment
-                    .region_transcript
-                    .as_ref()
-                    .map_or(0, |transcript| {
-                        vec_bytes::<crate::RegionAttempt>(transcript.attempts().len())
-                    }),
-            )
-            .saturating_add(self.segment.geometry.accounted_owned_bytes())
-            .saturating_add(self.segment.paint.residency_bytes())
-    }
-}
-
 const fn vec_bytes<T>(capacity: usize) -> usize {
     size_of::<T>().saturating_mul(capacity)
-}
-
-fn option_ref_eq<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => left == right,
-        (None, None) => true,
-        _ => false,
-    }
 }
 
 fn effective_composition_features(
@@ -2951,6 +2781,32 @@ fn effective_composition_features(
             .features_for(target)
             .with_native_text_input(),
     )
+}
+
+fn scene_core(
+    spine: SceneSpine,
+    metrics: TextMetrics,
+    region: Option<SceneRegionBinding>,
+    default_features: SceneFeatures,
+) -> SceneCore {
+    let mut segments = spine.segments();
+    let (resident_union, resident_intersection) = if let Some(positioned) = segments.next() {
+        let features = positioned.segment.geometry.features;
+        segments.fold((features, features), |(union, intersection), positioned| {
+            let features = positioned.segment.geometry.features;
+            (union.union(features), intersection.intersection(features))
+        })
+    } else {
+        (default_features, default_features)
+    };
+    SceneCore {
+        resident: resident_feature_policy(&spine, default_features),
+        spine,
+        metrics,
+        region,
+        resident_union,
+        resident_intersection,
+    }
 }
 
 fn resident_feature_policy(spine: &SceneSpine, default: SceneFeatures) -> SceneFeaturePolicy {
@@ -3024,7 +2880,7 @@ fn region_output_matches(
     }) {
         return false;
     }
-    if paragraph.lines().is_empty() {
+    if paragraph.line_count() == 0 {
         let mut accepted = transcript
             .attempts()
             .iter()
@@ -3040,7 +2896,7 @@ fn region_output_matches(
         .attempts()
         .iter()
         .filter(|attempt| attempt.outcome() == RegionAttemptOutcome::Accepted);
-    paragraph.lines().iter().all(|line| {
+    paragraph.lines().all(|line| {
         accepted.next().is_some_and(|attempt| {
             line.source() == attempt.source()
                 && line.slot() == Some(attempt.slot())

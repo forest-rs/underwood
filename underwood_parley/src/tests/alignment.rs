@@ -34,7 +34,7 @@ fn alignment_only_change_reuses_adapter_prepared_facts() {
             &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
         )
         .expect("alignment-only scene prepares");
-    assert_eq!(adjusted.work().flow().paragraphs(), 0);
+    assert_eq!(adjusted.work.flow.paragraphs, 0);
 
     assert_eq!(
         outputs.borrow().len(),
@@ -62,17 +62,17 @@ fn composition_preparation_does_not_displace_committed_adapter_facts() {
         .prepare(&snapshot, &request)
         .expect("initial committed scene prepares");
     let editing = committed
-        .scene()
+        .scene
         .editing()
         .expect("fixture retains editable scene data");
-    let line = committed.scene().line(0).expect("line exists");
-    let end = *editing
+    let line = committed.scene.line(0).expect("line exists");
+    let end = editing
         .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
         .expect("line end resolves")
-        .position();
+        .position;
     let selections = editing
-        .selection_set([editing
-            .collapsed_selection(&end)
+        .set([editing
+            .collapsed(&end)
             .expect("composition insertion point is valid")])
         .expect("composition selection set is valid");
     let mut composition = editing
@@ -99,7 +99,7 @@ fn composition_preparation_does_not_displace_committed_adapter_facts() {
             &editable_scene_request(TextConstraint::Wrap(width), &styles, &paint),
         )
         .expect("adjusted committed scene prepares");
-    assert_eq!(adjusted.work().flow().paragraphs(), 0);
+    assert_eq!(adjusted.work.flow.paragraphs, 0);
 
     let outputs = outputs.borrow();
     let [initial, composition] = outputs.as_slice() else {
@@ -135,9 +135,9 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
             .with_region_flow(&flow),
         )
         .expect("logical start alignment prepares");
-    let start_line = &start.scene().line(0).expect("line exists");
-    assert_eq!(start_line.adjustment().direction(), ResolvedDirection::Rtl);
-    assert_eq!(start_line.adjustment().alignment(), TextAlignment::Start);
+    let start_line = &start.scene.line(0).expect("line exists");
+    assert_eq!(start_line.adjustment().direction, ResolvedDirection::Rtl);
+    assert_eq!(start_line.adjustment().alignment, TextAlignment::Start);
     assert!((start_line.bounds().x1 - 340.0).abs() <= 1.0e-6);
 
     styles.set_paragraph_style(
@@ -155,17 +155,17 @@ fn auto_rtl_start_and_end_consume_the_analyzed_paragraph_direction() {
             .with_region_flow(&flow),
         )
         .expect("logical end alignment prepares");
-    let end_line = &end.scene().line(0).expect("line exists");
-    assert_eq!(end_line.adjustment().direction(), ResolvedDirection::Rtl);
+    let end_line = &end.scene.line(0).expect("line exists");
+    assert_eq!(end_line.adjustment().direction, ResolvedDirection::Rtl);
     assert!((end_line.bounds().x0 - 40.0).abs() <= 1.0e-6);
-    assert_eq!(end.work().analysis().paragraphs(), 0);
-    assert_eq!(end.work().itemization().paragraphs(), 0);
-    assert_eq!(end.work().font_selection().paragraphs(), 0);
-    assert_eq!(end.work().shape().paragraphs(), 0);
-    assert_eq!(end.work().line_shape().paragraphs(), 0);
-    assert_eq!(end.work().flow().paragraphs(), 0);
-    assert_eq!(end.work().adjustment().paragraphs(), 1);
-    assert_eq!(end.work().geometry().paragraphs(), 1);
+    assert_eq!(end.work.analysis.paragraphs, 0);
+    assert_eq!(end.work.itemization.paragraphs, 0);
+    assert_eq!(end.work.font_selection.paragraphs, 0);
+    assert_eq!(end.work.shape.paragraphs, 0);
+    assert_eq!(end.work.line_shape.paragraphs, 0);
+    assert_eq!(end.work.flow.paragraphs, 0);
+    assert_eq!(end.work.adjustment.paragraphs, 1);
+    assert_eq!(end.work.geometry.paragraphs, 1);
 }
 
 #[test]
@@ -191,14 +191,14 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
         )
         .expect("physical left alignment prepares");
     assert_eq!(
-        left.scene()
+        left.scene
             .line(0)
             .expect("line exists")
             .adjustment()
-            .direction(),
+            .direction,
         ResolvedDirection::Rtl
     );
-    assert!((left.scene().line(0).expect("line exists").bounds().x0 - 40.0).abs() <= 1.0e-6);
+    assert!((left.scene.line(0).expect("line exists").bounds().x0 - 40.0).abs() <= 1.0e-6);
 
     styles.set_paragraph_style(
         paragraph,
@@ -215,10 +215,10 @@ fn physical_left_and_right_ignore_rtl_logical_edges() {
             .with_region_flow(&flow),
         )
         .expect("physical right alignment prepares");
-    assert!((right.scene().line(0).expect("line exists").bounds().x1 - 340.0).abs() <= 1.0e-6);
-    assert_eq!(right.work().analysis().paragraphs(), 0);
-    assert_eq!(right.work().shape().paragraphs(), 0);
-    assert_eq!(right.work().flow().paragraphs(), 0);
+    assert!((right.scene.line(0).expect("line exists").bounds().x1 - 340.0).abs() <= 1.0e-6);
+    assert_eq!(right.work.analysis.paragraphs, 0);
+    assert_eq!(right.work.shape.paragraphs, 0);
+    assert_eq!(right.work.flow.paragraphs, 0);
 }
 
 #[test]
@@ -240,9 +240,9 @@ fn empty_explicit_rtl_paragraph_keeps_its_caret_on_logical_start() {
             .with_region_flow(&flow),
         )
         .expect("empty RTL paragraph prepares");
-    assert!(output.scene().lines().is_empty());
+    assert!(output.scene.lines().is_empty());
     let editing = output
-        .scene()
+        .scene
         .editing()
         .expect("fixture retains editable scene data");
     let hit = editing
@@ -250,9 +250,9 @@ fn empty_explicit_rtl_paragraph_keeps_its_caret_on_logical_start() {
         .expect("empty RTL paragraph retains a represented position");
     assert_eq!(
         editing
-            .caret(hit.position())
+            .caret(&hit.position)
             .expect("empty RTL caret resolves")
-            .bounds()
+            .bounds
             .x0,
         280.0
     );
@@ -271,17 +271,17 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
         )
         .expect("committed scene prepares");
     let editing = committed
-        .scene()
+        .scene
         .editing()
         .expect("fixture retains editable scene data");
-    let line = &committed.scene().line(0).expect("line exists");
-    let end = *editing
+    let line = &committed.scene.line(0).expect("line exists");
+    let end = editing
         .hit_test_closest(Point::new(line.bounds().x1, line.bounds().center().y))
         .expect("line end resolves")
-        .position();
+        .position;
     let selections = editing
-        .selection_set([editing
-            .collapsed_selection(&end)
+        .set([editing
+            .collapsed(&end)
             .expect("composition insertion point is valid")])
         .expect("composition selection set is valid");
     let mut session = editing
@@ -314,26 +314,26 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
         )
         .expect("centered composition prepares");
     let delta = centered
-        .scene()
+        .scene
         .line(0)
         .expect("line exists")
         .adjustment()
-        .inline_offset();
+        .inline_offset;
     assert!(delta > 0.0);
-    assert_eq!(centered.work().analysis().paragraphs(), 0);
-    assert_eq!(centered.work().font_selection().paragraphs(), 0);
-    assert_eq!(centered.work().shape().paragraphs(), 0);
-    assert_eq!(centered.work().flow().paragraphs(), 0);
-    assert_eq!(centered.work().adjustment().paragraphs(), 1);
+    assert_eq!(centered.work.analysis.paragraphs, 0);
+    assert_eq!(centered.work.font_selection.paragraphs, 0);
+    assert_eq!(centered.work.shape.paragraphs, 0);
+    assert_eq!(centered.work.flow.paragraphs, 0);
+    assert_eq!(centered.work.adjustment.paragraphs, 1);
 
     for (plain, shifted) in start
-        .scene()
+        .scene
         .fragments()
         .iter()
         .flat_map(|fragment| fragment.glyphs())
         .zip(
             centered
-                .scene()
+                .scene
                 .fragments()
                 .iter()
                 .flat_map(|fragment| fragment.glyphs()),
@@ -343,21 +343,21 @@ fn composition_projection_consumes_the_same_alignment_geometry() {
         assert_eq!(shifted.position().y, plain.position().y);
     }
     let plain_marked = start
-        .scene()
+        .scene
         .editing()
         .expect("composition retains native-input data")
         .composition_geometry(&session)
         .expect("start-aligned marked geometry resolves");
     let shifted_marked = centered
-        .scene()
+        .scene
         .editing()
         .expect("composition retains native-input data")
         .composition_geometry(&session)
         .expect("centered marked geometry resolves");
     assert_eq!(plain_marked.len(), shifted_marked.len());
     for (plain, shifted) in plain_marked.iter().zip(&shifted_marked) {
-        assert_eq!(shifted.bounds().x0 - plain.bounds().x0, delta);
-        assert_eq!(shifted.bounds().x1 - plain.bounds().x1, delta);
+        assert_eq!(shifted.bounds.x0 - plain.bounds.x0, delta);
+        assert_eq!(shifted.bounds.x1 - plain.bounds.x1, delta);
     }
 }
 
@@ -394,13 +394,13 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
             .with_region_flow(&flow),
         )
         .expect("centered scene prepares");
-    let start_scene = start.scene();
-    let centered_scene = centered.scene();
+    let start_scene = start.scene;
+    let centered_scene = centered.scene;
     let delta = centered_scene
         .line(0)
         .expect("line exists")
         .adjustment()
-        .inline_offset();
+        .inline_offset;
     assert!(delta > 0.0);
     assert_eq!(
         centered_scene.line(0).expect("line exists").bounds().x0
@@ -422,8 +422,8 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
         assert_eq!(shifted.position().y, plain.position().y);
     }
 
-    let start_hits = scan_line_hits(start_scene, 0);
-    let centered_hits = scan_line_hits(centered_scene, 0);
+    let start_hits = scan_line_hits(&start_scene, 0);
+    let centered_hits = scan_line_hits(&centered_scene, 0);
     assert_eq!(
         start_hits
             .iter()
@@ -451,64 +451,62 @@ fn center_moves_mixed_bidi_paint_hits_carets_selections_and_semantics_together()
     let centered_editing = centered_scene
         .editing()
         .expect("fixture retains editable scene data");
-    let anchor = *start_editing
+    let anchor = start_editing
         .hit_test_closest(Point::new(
             start_scene.line(0).expect("line exists").bounds().x0,
             y,
         ))
         .expect("line start resolves")
-        .position();
-    let extent = *start_editing
+        .position;
+    let extent = start_editing
         .hit_test_closest(Point::new(
             start_scene.line(0).expect("line exists").bounds().x1,
             y,
         ))
         .expect("line end resolves")
-        .position();
+        .position;
     assert_eq!(
         centered_editing
             .caret(&anchor)
             .expect("centered anchor caret exists")
-            .bounds()
+            .bounds
             .x0
             - start_editing
                 .caret(&anchor)
                 .expect("start anchor caret exists")
-                .bounds()
+                .bounds
                 .x0,
         delta
     );
     let selection = start_editing
-        .selection_between(&anchor, &extent, TextSelectionMode::Visual)
+        .between(&anchor, &extent, TextSelectionMode::Visual)
         .expect("mixed-bidi visual selection is valid");
     let plain_selection = start_editing
-        .selection_geometry(
+        .geometry(
             &start_editing
-                .selection_set([selection.clone()])
+                .set([selection.clone()])
                 .expect("plain selection set is valid"),
         )
         .expect("plain selection geometry resolves");
     let shifted_selection = centered_editing
-        .selection_geometry(
+        .geometry(
             &centered_editing
-                .selection_set([selection])
+                .set([selection])
                 .expect("centered selection set is valid"),
         )
         .expect("centered selection geometry resolves");
     for (plain, shifted) in plain_selection.iter().zip(&shifted_selection) {
-        assert_eq!(shifted.bidi_level(), plain.bidi_level());
-        assert_eq!(shifted.bounds().x0 - plain.bounds().x0, delta);
-        assert_eq!(shifted.bounds().x1 - plain.bounds().x1, delta);
+        assert_eq!(shifted.bidi_level, plain.bidi_level);
+        assert_eq!(shifted.bounds.x0 - plain.bounds.x0, delta);
+        assert_eq!(shifted.bounds.x1 - plain.bounds.x1, delta);
     }
     for (plain, shifted) in start_scene
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .zip(
             centered_scene
                 .semantics()
-                .expect("test scene requested semantics")
-                .iter(),
+                .expect("test scene requested semantics"),
         )
     {
         assert_eq!(shifted.bounds().x0 - plain.bounds().x0, delta);
@@ -537,7 +535,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
             .with_region_flow(&flow),
         )
         .expect("justified scene prepares");
-    let lines = justified.scene().lines();
+    let lines = justified.scene.lines();
     assert!(lines.len() >= 2);
     assert_eq!(
         lines.get(0).expect("line exists").break_reason(),
@@ -548,7 +546,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
             .get(0)
             .expect("line exists")
             .adjustment()
-            .opportunity_expansion()
+            .opportunity_expansion
             > 0.0
     );
     assert!(
@@ -556,7 +554,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
             .get(0)
             .expect("line exists")
             .adjustment()
-            .expanded_opportunities()
+            .expanded_opportunities
             > 0
     );
     assert!(
@@ -565,7 +563,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
                 .get(0)
                 .expect("line exists")
                 .adjustment()
-                .trailing_whitespace_advance()
+                .trailing_whitespace_advance
             - 150.0)
             .abs()
             <= 1.0e-6
@@ -582,7 +580,7 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
             .get(lines.len() - 1)
             .expect("final line exists")
             .adjustment()
-            .opportunity_expansion(),
+            .opportunity_expansion,
         0.0
     );
 
@@ -603,20 +601,16 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         )
         .expect("mandatory line prepares");
     assert_eq!(
-        mandatory
-            .scene()
-            .line(0)
-            .expect("line exists")
-            .break_reason(),
+        mandatory.scene.line(0).expect("line exists").break_reason(),
         TestLineBreakReason::Mandatory
     );
     assert_eq!(
         mandatory
-            .scene()
+            .scene
             .line(0)
             .expect("line exists")
             .adjustment()
-            .opportunity_expansion(),
+            .opportunity_expansion,
         0.0
     );
 
@@ -637,20 +631,20 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
         )
         .expect("Arabic paragraph prepares without borrowing Western justification");
     assert!(
-        arabic.scene().lines().len() >= 2,
+        arabic.scene.lines().len() >= 2,
         "fixture must expose a soft-wrapped Arabic line"
     );
     assert_eq!(
-        arabic.scene().line(0).expect("line exists").break_reason(),
+        arabic.scene.line(0).expect("line exists").break_reason(),
         TestLineBreakReason::Regular
     );
     assert_eq!(
         arabic
-            .scene()
+            .scene
             .line(0)
             .expect("line exists")
             .adjustment()
-            .expanded_opportunities(),
+            .expanded_opportunities,
         0,
         "Arabic expansion remains a separate strategy"
     );

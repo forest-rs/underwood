@@ -271,10 +271,10 @@ impl HostApplication for ShowcaseApp {
             self.editor.status(),
             line_count,
             axis_weight,
-            evidence.shape().paragraphs(),
-            evidence.flow().paragraphs(),
-            evidence.paint().paragraphs(),
-            evidence.reused_paragraphs(),
+            evidence.shape.paragraphs,
+            evidence.flow.paragraphs,
+            evidence.paint.paragraphs,
+            evidence.reused_paragraphs,
             prepare_ms,
             render_ms,
             if self.axis_animation.is_enabled() {
@@ -364,30 +364,30 @@ fn trace_diagnostics(mode: DiagnosticsMode, trace: &PreparationTrace) -> String 
     if mode == DiagnosticsMode::Off {
         return String::new();
     }
-    let reuse = trace.reuse();
-    let memory = trace.memory();
+    let reuse = trace.reuse;
+    let memory = trace.memory;
     format!(
         " · cause C{} F{} A{} P{} · slots {} · rejected {} · scene {} KiB · cache {} KiB · scratch +{} B",
-        reuse.cold_paragraphs(),
-        reuse.formation_invalidations(),
-        reuse.adjustment_invalidations(),
-        reuse.paint_invalidations(),
-        trace.region_attempts(),
-        trace.region_height_rejections(),
-        memory.scene_output_capacity_bytes() / 1024,
-        memory.cache_after().scene_cache_accounted_bytes() / 1024,
+        reuse.cold_paragraphs,
+        reuse.formation_invalidations,
+        reuse.adjustment_invalidations,
+        reuse.paint_invalidations,
+        trace.region_attempts,
+        trace.region_height_rejections,
+        memory.scene_output_capacity_bytes / 1024,
+        memory.cache_after.scene_cache_accounted_bytes / 1024,
         memory.scratch_growth_bytes(),
     )
 }
 
 fn has_text_preparation_work(work: &WorkReport) -> bool {
-    work.analysis().paragraphs() > 0
-        || work.font_selection().paragraphs() > 0
-        || work.shape().paragraphs() > 0
-        || work.line_font_resolution().paragraphs() > 0
-        || work.line_shape().paragraphs() > 0
-        || work.flow().paragraphs() > 0
-        || work.geometry().paragraphs() > 0
+    work.analysis.paragraphs > 0
+        || work.font_selection.paragraphs > 0
+        || work.shape.paragraphs > 0
+        || work.line_font_resolution.paragraphs > 0
+        || work.line_shape.paragraphs > 0
+        || work.flow.paragraphs > 0
+        || work.geometry.paragraphs > 0
 }
 
 const AXIS_RADIANS_PER_SECOND: f64 = 0.42;

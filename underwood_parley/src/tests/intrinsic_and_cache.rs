@@ -14,34 +14,34 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
             &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
         )
         .expect("max-content formation succeeds");
-    assert_eq!(max.scene().lines().len(), 2);
+    assert_eq!(max.scene.lines().len(), 2);
     assert_eq!(
-        max.scene().line(0).expect("line exists").break_reason(),
+        max.scene.line(0).expect("line exists").break_reason(),
         TestLineBreakReason::Mandatory
     );
     assert_eq!(
-        max.scene().line(1).expect("line exists").break_reason(),
+        max.scene.line(1).expect("line exists").break_reason(),
         TestLineBreakReason::End
     );
     assert_eq!(
-        max.scene().metrics().size().width,
-        max.scene()
+        max.scene.metrics().size.width,
+        max.scene
             .lines()
             .iter()
             .map(|line| line.advance())
             .fold(0.0_f64, f64::max)
     );
     assert_eq!(
-        max.scene().metrics().size().height,
-        max.scene().lines().last().expect("line exists").bounds().y1
+        max.scene.metrics().size.height,
+        max.scene.lines().last().expect("line exists").bounds().y1
     );
     assert_eq!(
-        max.scene().metrics().first_baseline(),
-        Some(max.scene().line(0).expect("line exists").baseline())
+        max.scene.metrics().first_baseline,
+        Some(max.scene.line(0).expect("line exists").baseline())
     );
     assert_eq!(
-        max.scene().metrics().last_baseline(),
-        Some(max.scene().line(1).expect("line exists").baseline())
+        max.scene.metrics().last_baseline,
+        Some(max.scene.line(1).expect("line exists").baseline())
     );
 
     let min = engine
@@ -50,12 +50,12 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
             &editable_scene_request(TextConstraint::MinContent, &styles, &paint),
         )
         .expect("min-content formation succeeds");
-    assert_eq!(min.work().analysis().paragraphs(), 0);
-    assert_eq!(min.work().shape().paragraphs(), 0);
-    assert_eq!(min.work().flow().paragraphs(), 1);
-    assert!(min.scene().lines().len() > max.scene().lines().len());
-    assert!(min.scene().metrics().size().width <= max.scene().metrics().size().width);
-    assert!(min.scene().metrics().size().height >= max.scene().metrics().size().height);
+    assert_eq!(min.work.analysis.paragraphs, 0);
+    assert_eq!(min.work.shape.paragraphs, 0);
+    assert_eq!(min.work.flow.paragraphs, 1);
+    assert!(min.scene.lines().len() > max.scene.lines().len());
+    assert!(min.scene.metrics().size.width <= max.scene.metrics().size.width);
+    assert!(min.scene.metrics().size.height >= max.scene.metrics().size.height);
 
     let wrapped = engine
         .prepare(
@@ -69,10 +69,10 @@ fn intrinsic_constraints_honor_mandatory_breaks_and_report_exact_metrics() {
             ),
         )
         .expect("constrained formation succeeds");
-    assert_eq!(wrapped.work().shape().paragraphs(), 0);
+    assert_eq!(wrapped.work.shape.paragraphs, 0);
     assert!(
         wrapped
-            .scene()
+            .scene
             .lines()
             .iter()
             .all(|line| line.advance() <= 90.0)
@@ -89,7 +89,7 @@ fn hit_area_padding_does_not_inflate_zero_advance_intrinsic_width() {
         )
         .expect("mandatory break prepares");
     let max_advance = output
-        .scene()
+        .scene
         .lines()
         .iter()
         .map(|line| line.advance())
@@ -98,14 +98,14 @@ fn hit_area_padding_does_not_inflate_zero_advance_intrinsic_width() {
     assert_eq!(max_advance, 0.0);
     assert!(
         output
-            .scene()
+            .scene
             .lines()
             .iter()
             .all(|line| line.bounds().width() >= 1.0),
         "interaction geometry retains its minimum hit area"
     );
     assert_eq!(
-        output.scene().metrics().size().width,
+        output.scene.metrics().size.width,
         max_advance,
         "intrinsic measurement must use actual advance rather than padded bounds"
     );
@@ -132,18 +132,18 @@ fn text_block_matches_document_path_and_empty_metrics_are_explicit() {
         )
         .expect("block prepares");
     assert_eq!(
-        block_output.scene().metrics(),
-        document_output.scene().metrics()
+        block_output.scene.metrics(),
+        document_output.scene.metrics()
     );
     assert_eq!(
         block_output
-            .scene()
+            .scene
             .lines()
             .iter()
             .map(|line| (line.advance(), line.break_reason(), line.baseline()))
             .collect::<Vec<_>>(),
         document_output
-            .scene()
+            .scene
             .lines()
             .iter()
             .map(|line| (line.advance(), line.break_reason(), line.baseline()))
@@ -151,14 +151,14 @@ fn text_block_matches_document_path_and_empty_metrics_are_explicit() {
     );
     assert_eq!(
         block_output
-            .scene()
+            .scene
             .fragments()
             .iter()
             .flat_map(|fragment| fragment.glyphs())
             .map(|glyph| (glyph.id(), glyph.position(), glyph.advance()))
             .collect::<Vec<_>>(),
         document_output
-            .scene()
+            .scene
             .fragments()
             .iter()
             .flat_map(|fragment| fragment.glyphs())
@@ -174,14 +174,14 @@ fn text_block_matches_document_path_and_empty_metrics_are_explicit() {
             &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("empty block prepares");
-    assert_eq!(empty_output.scene().metrics().size().width, 0.0);
+    assert_eq!(empty_output.scene.metrics().size.width, 0.0);
     assert!(
-        (empty_output.scene().metrics().size().height - 24.0).abs() < 0.001,
+        (empty_output.scene.metrics().size.height - 24.0).abs() < 0.001,
         "empty height must be the resolved 20px × 1.2 line height"
     );
-    assert_eq!(empty_output.scene().metrics().first_baseline(), None);
-    assert_eq!(empty_output.scene().metrics().last_baseline(), None);
-    assert!(empty_output.scene().lines().is_empty());
+    assert_eq!(empty_output.scene.metrics().first_baseline, None);
+    assert_eq!(empty_output.scene.metrics().last_baseline, None);
+    assert!(empty_output.scene.lines().is_empty());
 }
 
 #[test]
@@ -204,22 +204,22 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
                 &editable_block_request(TextConstraint::MaxContent, &style, &paint),
             )
             .expect("block prepares");
-        assert_eq!(output.work().shape().paragraphs(), 1);
+        assert_eq!(output.work.shape.paragraphs, 1);
     }
     let after_churn = engine.cache_diagnostics();
     assert_eq!(after_churn.current_entries(), 2);
     assert_eq!(
         after_churn
-            .adapter_facts()
-            .map(ParagraphFormationCacheDiagnostics::entries),
+            .adapter_facts
+            .map(|diagnostics| diagnostics.entries),
         Some(2)
     );
-    assert_eq!(after_churn.evictions(), 1);
-    assert_eq!(after_churn.peak_entries(), 3);
-    assert_eq!(after_churn.budget(), 2);
-    assert_eq!(after_churn.misses(), 3);
-    assert_eq!(after_churn.hits(), 0);
-    assert!(after_churn.scene_cache_accounted_bytes() > 0);
+    assert_eq!(after_churn.evictions, 1);
+    assert_eq!(after_churn.peak_entries, 3);
+    assert_eq!(after_churn.budget, 2);
+    assert_eq!(after_churn.misses, 3);
+    assert_eq!(after_churn.hits, 0);
+    assert!(after_churn.scene_cache_accounted_bytes > 0);
 
     let retained = engine
         .prepare_block(
@@ -227,11 +227,11 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
             &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("resident block prepares");
-    assert_eq!(retained.work().analysis().paragraphs(), 0);
-    assert_eq!(retained.work().shape().paragraphs(), 0);
-    assert_eq!(retained.work().flow().paragraphs(), 0);
+    assert_eq!(retained.work.analysis.paragraphs, 0);
+    assert_eq!(retained.work.shape.paragraphs, 0);
+    assert_eq!(retained.work.flow.paragraphs, 0);
     assert_eq!(
-        engine.cache_diagnostics().hits(),
+        engine.cache_diagnostics().hits,
         0,
         "an exact published-root hit must not fabricate a paragraph lookup"
     );
@@ -241,14 +241,12 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
     assert_eq!(after_release.current_entries(), 1);
     assert_eq!(
         after_release
-            .adapter_facts()
-            .map(ParagraphFormationCacheDiagnostics::entries),
+            .adapter_facts
+            .map(|diagnostics| diagnostics.entries),
         Some(1)
     );
-    assert_eq!(after_release.releases(), 1);
-    assert!(
-        after_release.scene_cache_accounted_bytes() < after_churn.scene_cache_accounted_bytes()
-    );
+    assert_eq!(after_release.releases, 1);
+    assert!(after_release.scene_cache_accounted_bytes < after_churn.scene_cache_accounted_bytes);
 
     let reloaded = engine
         .prepare_block(
@@ -256,17 +254,17 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
             &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("evicted block prepares again");
-    assert_eq!(reloaded.work().shape().paragraphs(), 1);
+    assert_eq!(reloaded.work.shape.paragraphs, 1);
     engine.clear_cache();
     assert_eq!(engine.cache_diagnostics().current_entries(), 0);
     assert_eq!(
         engine
             .cache_diagnostics()
-            .adapter_facts()
-            .map(ParagraphFormationCacheDiagnostics::entries),
+            .adapter_facts
+            .map(|diagnostics| diagnostics.entries),
         Some(0)
     );
-    assert_eq!(engine.cache_diagnostics().scene_cache_accounted_bytes(), 0);
+    assert_eq!(engine.cache_diagnostics().scene_cache_accounted_bytes, 0);
 
     let mut zero = fixture_engine_with_budget(0);
     let owned = zero
@@ -275,16 +273,16 @@ fn cache_budget_and_explicit_release_coordinate_all_retained_layers() {
             &editable_block_request(TextConstraint::MaxContent, &style, &paint),
         )
         .expect("zero-budget output still materializes");
-    assert!(!owned.scene().fragments().is_empty());
+    assert!(!owned.scene.fragments().is_empty());
     assert_eq!(zero.cache_diagnostics().current_entries(), 0);
     assert_eq!(
         zero.cache_diagnostics()
-            .adapter_facts()
-            .map(ParagraphFormationCacheDiagnostics::entries),
+            .adapter_facts
+            .map(|diagnostics| diagnostics.entries),
         Some(0)
     );
-    assert_eq!(zero.cache_diagnostics().scene_cache_accounted_bytes(), 0);
-    assert_eq!(zero.cache_diagnostics().evictions(), 1);
+    assert_eq!(zero.cache_diagnostics().scene_cache_accounted_bytes, 0);
+    assert_eq!(zero.cache_diagnostics().evictions, 1);
 }
 
 #[test]
@@ -314,9 +312,9 @@ fn adapter_fact_budget_is_byte_bounded_and_eviction_degrades_only_the_target() {
         .expect("probe block prepares");
     let one_entry_bytes = probe
         .cache_diagnostics()
-        .adapter_facts()
+        .adapter_facts
         .expect("Parley reports adapter-fact accounting")
-        .resident_bytes();
+        .resident_bytes;
     assert!(
         one_entry_bytes > 0,
         "one retained Parley preparation must have a nonzero byte charge"
@@ -329,20 +327,20 @@ fn adapter_fact_budget_is_byte_bounded_and_eviction_degrades_only_the_target() {
     let first = bounded
         .prepare_block(&blocks[0].snapshot(), &display)
         .expect("first display block prepares")
-        .scene()
+        .scene
         .clone();
     let second = bounded
         .prepare_block(&blocks[1].snapshot(), &display)
         .expect("second display block prepares")
-        .scene()
+        .scene
         .clone();
     let facts = bounded
         .cache_diagnostics()
-        .adapter_facts()
+        .adapter_facts
         .expect("Parley reports adapter-fact accounting");
-    assert!(facts.resident_bytes() <= facts.budget_bytes());
-    assert_eq!(facts.entries(), 1);
-    assert_eq!(facts.evictions(), 1);
+    assert!(facts.resident_bytes <= facts.budget_bytes);
+    assert_eq!(facts.entries, 1);
+    assert_eq!(facts.evictions, 1);
     assert_eq!(first.fragment_count(), 1);
     assert_eq!(second.fragment_count(), 1);
 
@@ -354,9 +352,9 @@ fn adapter_fact_budget_is_byte_bounded_and_eviction_degrades_only_the_target() {
                 .with_preparation_trace(),
         )
         .expect("evicted target must upgrade through cold formation");
-    let reuse = upgraded.trace().expect("upgrade requested a trace").reuse();
-    assert_eq!(reuse.cold_capability_upgrades(), 1);
-    assert_eq!(reuse.warm_capability_upgrades(), 0);
+    let reuse = upgraded.trace.expect("upgrade requested a trace").reuse;
+    assert_eq!(reuse.cold_capability_upgrades, 1);
+    assert_eq!(reuse.warm_capability_upgrades, 0);
     assert_eq!(
         second.fragment_count(),
         1,
@@ -382,34 +380,32 @@ fn identical_blocks_share_only_identity_free_preparation() {
         .prepare_block(&second.snapshot(), &request)
         .expect("second block prepares from shared facts");
 
-    assert_eq!(first_output.work().analysis().paragraphs(), 1);
-    assert_eq!(first_output.work().shape().paragraphs(), 1);
-    assert_eq!(first_output.work().flow().paragraphs(), 1);
-    assert_eq!(first_output.work().shared_preparations(), 0);
-    assert_eq!(second_output.work().analysis().paragraphs(), 0);
-    assert_eq!(second_output.work().shape().paragraphs(), 0);
-    assert_eq!(second_output.work().flow().paragraphs(), 0);
-    assert_eq!(second_output.work().shared_preparations(), 1);
-    assert_eq!(second_output.work().geometry().paragraphs(), 1);
+    assert_eq!(first_output.work.analysis.paragraphs, 1);
+    assert_eq!(first_output.work.shape.paragraphs, 1);
+    assert_eq!(first_output.work.flow.paragraphs, 1);
+    assert_eq!(first_output.work.shared_preparations, 0);
+    assert_eq!(second_output.work.analysis.paragraphs, 0);
+    assert_eq!(second_output.work.shape.paragraphs, 0);
+    assert_eq!(second_output.work.flow.paragraphs, 0);
+    assert_eq!(second_output.work.shared_preparations, 1);
+    assert_eq!(second_output.work.geometry.paragraphs, 1);
     assert_ne!(
-        first_output.scene().document(),
-        second_output.scene().document(),
+        first_output.scene.document(),
+        second_output.scene.document(),
         "a shared hit must retain the consuming document identity"
     );
     assert_ne!(
         first_output
-            .scene()
+            .scene
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find_map(|semantic| semantic.source())
             .expect("first inline semantic has source")
             .text(),
         second_output
-            .scene()
+            .scene
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find_map(|semantic| semantic.source())
             .expect("second inline semantic has source")
             .text(),
@@ -417,18 +413,16 @@ fn identical_blocks_share_only_identity_free_preparation() {
     );
     assert_ne!(
         first_output
-            .scene()
+            .scene
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find(|semantic| semantic.inline_role().is_some())
             .expect("first inline semantic exists")
             .semantic_id(),
         second_output
-            .scene()
+            .scene
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .find(|semantic| semantic.inline_role().is_some())
             .expect("second inline semantic exists")
             .semantic_id(),
@@ -436,13 +430,13 @@ fn identical_blocks_share_only_identity_free_preparation() {
     );
 
     let diagnostics = layout.cache_diagnostics();
-    assert_eq!(diagnostics.shared_preparation_entries(), 1);
-    assert_eq!(diagnostics.shared_preparation_hits(), 1);
-    assert_eq!(diagnostics.shared_preparation_misses(), 1);
+    assert_eq!(diagnostics.shared_preparation_entries, 1);
+    assert_eq!(diagnostics.shared_preparation_hits, 1);
+    assert_eq!(diagnostics.shared_preparation_misses, 1);
     assert_eq!(
         diagnostics
-            .adapter_facts()
-            .map(ParagraphFormationCacheDiagnostics::entries),
+            .adapter_facts
+            .map(|diagnostics| diagnostics.entries),
         Some(1),
         "a shared consumer must not manufacture a backend identity entry"
     );
@@ -450,8 +444,8 @@ fn identical_blocks_share_only_identity_free_preparation() {
     let stable = layout
         .prepare_block(&second.snapshot(), &request)
         .expect("stable second block reuses retained geometry");
-    assert_eq!(stable.work().reused_paragraphs(), 1);
-    assert_eq!(stable.work().shared_preparations(), 0);
+    assert_eq!(stable.work.reused_paragraphs, 1);
+    assert_eq!(stable.work.shared_preparations, 0);
 
     layout.release_document(first.id());
     let third = TextBlock::plain(DocumentId::from_bytes(*b"shared-label-003"), "office مرحبا")
@@ -459,8 +453,8 @@ fn identical_blocks_share_only_identity_free_preparation() {
     let third_output = layout
         .prepare_block(&third.snapshot(), &request)
         .expect("shared facts survive release of their producing document");
-    assert_eq!(third_output.work().shared_preparations(), 1);
-    assert_eq!(layout.cache_diagnostics().shared_preparation_entries(), 1);
+    assert_eq!(third_output.work.shared_preparations, 1);
+    assert_eq!(layout.cache_diagnostics().shared_preparation_entries, 1);
 }
 
 #[test]
@@ -498,31 +492,28 @@ fn shared_preparation_rebuilds_distinct_leaf_and_semantic_topology() {
         .prepare(&second.snapshot(), &request)
         .expect("split semantic document shares preparation");
 
-    assert_eq!(second_output.work().shared_preparations(), 1);
-    assert_eq!(second_output.work().shape().paragraphs(), 0);
+    assert_eq!(second_output.work.shared_preparations, 1);
+    assert_eq!(second_output.work.shape.paragraphs, 0);
     assert_eq!(
         first_output
-            .scene()
+            .scene
             .semantics()
             .expect("test scene requested semantics")
-            .iter()
             .filter(|semantic| semantic.inline_role().is_some())
             .count(),
         1
     );
     let second_roles: Vec<_> = second_output
-        .scene()
+        .scene
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .filter_map(|semantic| semantic.inline_role())
         .collect();
     assert_eq!(second_roles, [InlineRole::TEXT, InlineRole::EMPHASIS]);
     let second_texts: Vec<_> = second_output
-        .scene()
+        .scene
         .semantics()
         .expect("test scene requested semantics")
-        .iter()
         .filter_map(|semantic| semantic.source().map(|source| source.text()))
         .collect();
     assert_eq!(second_texts.len(), 2);
@@ -564,40 +555,36 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
     let second_committed = layout
         .prepare(&second_snapshot, &request)
         .expect("second committed scene prepares");
-    let first_line = first_committed
-        .scene()
-        .line(0)
-        .expect("line exists")
-        .bounds();
+    let first_line = first_committed.scene.line(0).expect("line exists").bounds();
     let second_line = second_committed
-        .scene()
+        .scene
         .line(0)
         .expect("line exists")
         .bounds();
     let first_editing = first_committed
-        .scene()
+        .scene
         .editing()
         .expect("fixture retains editable scene data");
     let second_editing = second_committed
-        .scene()
+        .scene
         .editing()
         .expect("fixture retains editable scene data");
-    let first_end = *first_editing
+    let first_end = first_editing
         .hit_test_closest(Point::new(first_line.x1, first_line.center().y))
         .expect("first insertion point resolves")
-        .position();
-    let second_end = *second_editing
+        .position;
+    let second_end = second_editing
         .hit_test_closest(Point::new(second_line.x1, second_line.center().y))
         .expect("second insertion point resolves")
-        .position();
+        .position;
     let first_selections = first_editing
-        .selection_set([first_editing
-            .collapsed_selection(&first_end)
+        .set([first_editing
+            .collapsed(&first_end)
             .expect("first caret is valid")])
         .expect("first selection set is valid");
     let second_selections = second_editing
-        .selection_set([second_editing
-            .collapsed_selection(&second_end)
+        .set([second_editing
+            .collapsed(&second_end)
             .expect("second caret is valid")])
         .expect("second selection set is valid");
     let mut first_session = first_editing
@@ -633,20 +620,18 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
     let second_output = layout
         .prepare_composition(&second_snapshot, &request, &second_session)
         .expect("second composition shares preparation");
-    assert_eq!(first_output.work().shared_preparations(), 0);
-    assert_eq!(second_output.work().shared_preparations(), 1);
-    assert_eq!(second_output.work().shape().paragraphs(), 0);
-    assert_eq!(first_output.scene().composition(), first_session.id());
-    assert_eq!(second_output.scene().composition(), second_session.id());
+    assert_eq!(first_output.work.shared_preparations, 0);
+    assert_eq!(second_output.work.shared_preparations, 1);
+    assert_eq!(second_output.work.shape.paragraphs, 0);
+    assert_eq!(first_output.scene.composition(), first_session.id());
+    assert_eq!(second_output.scene.composition(), second_session.id());
     assert_ne!(
-        first_output.scene().composition(),
-        second_output.scene().composition()
+        first_output.scene.composition(),
+        second_output.scene.composition()
     );
-    let first_sources = projected_scene_sources(first_output.scene());
-    let second_sources = projected_scene_sources(second_output.scene());
-    assert!(first_output.scene().fragments().iter().any(|fragment| {
-        first_sources
-            .for_fragment(fragment)
+    assert!(first_output.scene.fragments().iter().any(|fragment| {
+        fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .any(|source| {
                 matches!(
@@ -657,9 +642,9 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
                 )
             })
     }));
-    assert!(second_output.scene().fragments().iter().any(|fragment| {
-        second_sources
-            .for_fragment(fragment)
+    assert!(second_output.scene.fragments().iter().any(|fragment| {
+        fragment
+            .sources()
             .expect("fragment belongs to source scene")
             .any(|source| {
                 matches!(
@@ -673,7 +658,7 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
 }
 
 #[test]
-fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
+fn shared_key_separates_formation_inputs_but_not_paint_or_alignment() {
     let (_, styles, paint) = fixture_document("fixture", 1.2);
     let style = styles.default_style().clone();
     let alternate_paint =
@@ -710,7 +695,7 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
     let brush_output = layout
         .prepare_block(&blocks[1].snapshot(), &brush_only)
         .expect("brush-only consumer prepares");
-    assert_eq!(brush_output.work().shared_preparations(), 1);
+    assert_eq!(brush_output.work.shared_preparations, 1);
 
     let centered = max.with_paragraph_style(
         ParagraphStyle::DEFAULT.with_alignment(underwood::TextAlignment::Center),
@@ -718,7 +703,7 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
     let centered_output = layout
         .prepare_block(&blocks[2].snapshot(), &centered)
         .expect("alignment-only consumer prepares");
-    assert_eq!(centered_output.work().shared_preparations(), 1);
+    assert_eq!(centered_output.work.shared_preparations, 1);
 
     let different_slot = editable_block_request(
         TextConstraint::MaxContent,
@@ -728,8 +713,15 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
     let slot_output = layout
         .prepare_block(&blocks[3].snapshot(), &different_slot)
         .expect("different paint coverage prepares");
-    assert_eq!(slot_output.work().shared_preparations(), 0);
-    assert_eq!(slot_output.work().shape().paragraphs(), 1);
+    assert_eq!(slot_output.work.shared_preparations, 1);
+    assert_eq!(slot_output.work.shape.paragraphs, 0);
+    assert!(
+        slot_output
+            .scene
+            .fragments()
+            .all(|fragment| fragment.paint() == PaintSlot::new(1)),
+        "shared prepared facts must resolve the consuming scene's paint"
+    );
 
     let wrapped = editable_block_request(
         TextConstraint::Wrap(FiniteWidth::new(200.0).expect("width is valid")),
@@ -739,13 +731,13 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
     let width_output = layout
         .prepare_block(&blocks[4].snapshot(), &wrapped)
         .expect("different width prepares");
-    assert_eq!(width_output.work().shared_preparations(), 0);
-    assert_eq!(width_output.work().flow().paragraphs(), 1);
+    assert_eq!(width_output.work.shared_preparations, 0);
+    assert_eq!(width_output.work.flow.paragraphs, 1);
 
     let diagnostics = layout.cache_diagnostics();
-    assert_eq!(diagnostics.shared_preparation_hits(), 2);
-    assert_eq!(diagnostics.shared_preparation_misses(), 3);
-    assert_eq!(diagnostics.shared_preparation_entries(), 3);
+    assert_eq!(diagnostics.shared_preparation_hits, 3);
+    assert_eq!(diagnostics.shared_preparation_misses, 2);
+    assert_eq!(diagnostics.shared_preparation_entries, 2);
 }
 
 #[test]
@@ -824,13 +816,11 @@ fn every_preparation_input_partition_invalidates_cross_identity_reuse() {
         ),
     ] {
         assert_eq!(
-            work.shared_preparations(),
-            0,
+            work.shared_preparations, 0,
             "{name} must be an exact shared-preparation key input"
         );
         assert_eq!(
-            work.shape().paragraphs(),
-            1,
+            work.shape.paragraphs, 1,
             "{name} must call the backend for a new paragraph identity"
         );
     }
@@ -849,8 +839,8 @@ fn every_preparation_input_partition_invalidates_cross_identity_reuse() {
         Some(&first_flow),
         Some(&second_flow),
     );
-    assert_eq!(work.shared_preparations(), 0);
-    assert_eq!(work.shape().paragraphs(), 1);
+    assert_eq!(work.shared_preparations, 0);
+    assert_eq!(work.shape.paragraphs, 1);
 }
 
 #[test]
@@ -879,7 +869,7 @@ fn shared_region_transcripts_rebind_the_consuming_paragraph() {
     let second_output = layout
         .prepare_block(&second.snapshot(), &request)
         .expect("second region block shares preparation");
-    assert_eq!(second_output.work().shared_preparations(), 1);
+    assert_eq!(second_output.work.shared_preparations, 1);
     let first_transcript = first_output
         .region_transcript()
         .expect("first transcript exists");
@@ -913,7 +903,7 @@ fn shared_preparation_budget_is_byte_bounded_lru_and_oversized_safe() {
         .expect("probe preparation succeeds");
     let one_entry_bytes = probe_layout
         .cache_diagnostics()
-        .shared_preparation_resident_bytes();
+        .shared_preparation_resident_bytes;
     assert!(one_entry_bytes > 1, "every shared entry has a fixed charge");
 
     let first = TextBlock::plain(DocumentId::from_bytes(*b"shared-size--002"), "aaaa")
@@ -937,26 +927,25 @@ fn shared_preparation_budget_is_byte_bounded_lru_and_oversized_safe() {
     let touched = layout
         .prepare_block(&first_again.snapshot(), &request)
         .expect("first key is touched through shared lookup");
-    assert_eq!(touched.work().shared_preparations(), 1);
+    assert_eq!(touched.work.shared_preparations, 1);
     layout
         .prepare_block(&third.snapshot(), &request)
         .expect("third key evicts the least recently used key");
     let after_eviction = layout.cache_diagnostics();
-    assert_eq!(after_eviction.shared_preparation_entries(), 2);
-    assert_eq!(after_eviction.shared_preparation_evictions(), 1);
+    assert_eq!(after_eviction.shared_preparation_entries, 2);
+    assert_eq!(after_eviction.shared_preparation_evictions, 1);
     assert!(
-        after_eviction.shared_preparation_resident_bytes()
-            <= after_eviction.shared_preparation_budget()
+        after_eviction.shared_preparation_resident_bytes
+            <= after_eviction.shared_preparation_budget
     );
     let evicted = layout
         .prepare_block(&second_again.snapshot(), &request)
         .expect("evicted key prepares again");
     assert_eq!(
-        evicted.work().shared_preparations(),
-        0,
+        evicted.work.shared_preparations, 0,
         "the untouched second key must be the first LRU victim"
     );
-    assert_eq!(evicted.work().shape().paragraphs(), 1);
+    assert_eq!(evicted.work.shape.paragraphs, 1);
 
     let oversized_first = TextBlock::plain(DocumentId::from_bytes(*b"shared-size--007"), "aaaa")
         .expect("oversized first block is valid");
@@ -969,12 +958,12 @@ fn shared_preparation_budget_is_byte_bounded_lru_and_oversized_safe() {
     let repeated = oversized
         .prepare_block(&oversized_second.snapshot(), &request)
         .expect("an unretained oversized value prepares again");
-    assert_eq!(repeated.work().shared_preparations(), 0);
-    assert_eq!(repeated.work().shape().paragraphs(), 1);
+    assert_eq!(repeated.work.shared_preparations, 0);
+    assert_eq!(repeated.work.shape.paragraphs, 1);
     let diagnostics = oversized.cache_diagnostics();
-    assert_eq!(diagnostics.shared_preparation_entries(), 0);
-    assert_eq!(diagnostics.shared_preparation_oversized_non_retentions(), 2);
-    assert_eq!(diagnostics.shared_preparation_resident_bytes(), 0);
+    assert_eq!(diagnostics.shared_preparation_entries, 0);
+    assert_eq!(diagnostics.shared_preparation_oversized_non_retentions, 2);
+    assert_eq!(diagnostics.shared_preparation_resident_bytes, 0);
 
     let mut disabled = fixture_engine_with_budgets(4, 0);
     disabled
@@ -984,16 +973,16 @@ fn shared_preparation_budget_is_byte_bounded_lru_and_oversized_safe() {
         .prepare_block(&oversized_second.snapshot(), &request)
         .expect("zero shared budget remains disabled");
     let diagnostics = disabled.cache_diagnostics();
-    assert_eq!(diagnostics.shared_preparation_entries(), 0);
-    assert_eq!(diagnostics.shared_preparation_hits(), 0);
-    assert_eq!(diagnostics.shared_preparation_misses(), 0);
+    assert_eq!(diagnostics.shared_preparation_entries, 0);
+    assert_eq!(diagnostics.shared_preparation_hits, 0);
+    assert_eq!(diagnostics.shared_preparation_misses, 0);
 }
 
 #[test]
 fn failed_first_preparation_releases_untracked_backend_state() {
     let (document, styles, paint) = fixture_document("中文", 1.2);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid")
     ])
     .expect("fixture catalog is valid");
     let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
@@ -1011,9 +1000,7 @@ fn failed_first_preparation_releases_untracked_backend_state() {
         "failed preparation must not create geometry residency"
     );
     assert_eq!(
-        cache
-            .adapter_facts()
-            .map(ParagraphFormationCacheDiagnostics::entries),
+        cache.adapter_facts.map(|diagnostics| diagnostics.entries),
         Some(0),
         "failed preparation must not strand untracked Parley preparation"
     );
@@ -1051,6 +1038,6 @@ fn cross_identity_second_work(
     layout
         .prepare_block(&second.snapshot(), &second_request)
         .expect("second input prepares")
-        .work()
+        .work
         .clone()
 }

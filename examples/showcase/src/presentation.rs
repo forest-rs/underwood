@@ -10,10 +10,9 @@ use imaging::{PaintSink, Painter, record};
 use underwood::{
     CompositionScene, FontData, InlineRole, PaintSlot, PaintTable, ParagraphRole, Point,
     ProjectedSceneFragmentView, ProjectedSceneFragments, ProjectedSceneGlyphView,
-    ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, ProjectedSceneSourceAccess,
-    RegionAttemptOutcome, SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs,
-    SceneLineView, SceneLines, SceneRegionTranscript, SceneSemantics, SceneSourceAccess,
-    SemanticFragmentView, TextScene, Vec2,
+    ProjectedSceneGlyphs, ProjectedSceneLineView, ProjectedSceneLines, RegionAttemptOutcome,
+    SceneFragmentView, SceneFragments, SceneGlyphView, SceneGlyphs, SceneLineView, SceneLines,
+    SceneRegionTranscript, SceneSemantics, SemanticFragmentView, TextScene, Vec2,
     adapter::{FontSynthesis, LineBreakReason},
 };
 
@@ -89,8 +88,8 @@ impl AnyLine<'_> {
 
 #[derive(Clone)]
 enum AnyFragments<'a> {
-    Committed(SceneFragments<'a>, SceneSourceAccess<'a>),
-    Projected(ProjectedSceneFragments<'a>, ProjectedSceneSourceAccess<'a>),
+    Committed(SceneFragments<'a>),
+    Projected(ProjectedSceneFragments<'a>),
 }
 
 impl<'a> Iterator for AnyFragments<'a> {
@@ -98,105 +97,84 @@ impl<'a> Iterator for AnyFragments<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Committed(fragments, sources) => fragments
-                .next()
-                .map(|fragment| AnyFragment::Committed(fragment, *sources)),
-            Self::Projected(fragments, sources) => fragments
-                .next()
-                .map(|fragment| AnyFragment::Projected(fragment, *sources)),
+            Self::Committed(fragments) => fragments.next().map(AnyFragment::Committed),
+            Self::Projected(fragments) => fragments.next().map(AnyFragment::Projected),
         }
     }
 }
 
 #[derive(Clone, Copy)]
 enum AnyFragment<'a> {
-    Committed(SceneFragmentView<'a>, SceneSourceAccess<'a>),
-    Projected(
-        ProjectedSceneFragmentView<'a>,
-        ProjectedSceneSourceAccess<'a>,
-    ),
+    Committed(SceneFragmentView<'a>),
+    Projected(ProjectedSceneFragmentView<'a>),
 }
 
 impl<'a> AnyFragment<'a> {
     fn glyphs(self) -> AnyGlyphs<'a> {
         match self {
-            Self::Committed(fragment, sources) => AnyGlyphs::Committed(fragment.glyphs(), sources),
-            Self::Projected(fragment, sources) => AnyGlyphs::Projected(fragment.glyphs(), sources),
+            Self::Committed(fragment) => AnyGlyphs::Committed(fragment.glyphs()),
+            Self::Projected(fragment) => AnyGlyphs::Projected(fragment.glyphs()),
         }
     }
 
     fn paint(self) -> PaintSlot {
         match self {
-            Self::Committed(fragment, _) => fragment.paint(),
-            Self::Projected(fragment, _) => fragment.paint(),
-        }
-    }
-
-    fn transform(self) -> Affine {
-        match self {
-            Self::Committed(fragment, _) => fragment.transform(),
-            Self::Projected(fragment, _) => fragment.transform(),
-        }
-    }
-
-    fn paint_clip(self) -> Option<Rect> {
-        match self {
-            Self::Committed(fragment, _) => fragment.paint_clip(),
-            Self::Projected(fragment, _) => fragment.paint_clip(),
+            Self::Committed(fragment) => fragment.paint(),
+            Self::Projected(fragment) => fragment.paint(),
         }
     }
 
     fn font(self) -> &'a FontData {
         match self {
-            Self::Committed(fragment, _) => fragment.font(),
-            Self::Projected(fragment, _) => fragment.font(),
+            Self::Committed(fragment) => fragment.font(),
+            Self::Projected(fragment) => fragment.font(),
         }
     }
 
     fn font_size(self) -> f32 {
         match self {
-            Self::Committed(fragment, _) => fragment.font_size(),
-            Self::Projected(fragment, _) => fragment.font_size(),
+            Self::Committed(fragment) => fragment.font_size(),
+            Self::Projected(fragment) => fragment.font_size(),
         }
     }
 
     fn synthesis(self) -> &'a FontSynthesis {
         match self {
-            Self::Committed(fragment, _) => fragment.synthesis(),
-            Self::Projected(fragment, _) => fragment.synthesis(),
+            Self::Committed(fragment) => fragment.synthesis(),
+            Self::Projected(fragment) => fragment.synthesis(),
         }
     }
 
     fn normalized_coords(self) -> &'a [i16] {
         match self {
-            Self::Committed(fragment, _) => fragment.normalized_coords(),
-            Self::Projected(fragment, _) => fragment.normalized_coords(),
+            Self::Committed(fragment) => fragment.normalized_coords(),
+            Self::Projected(fragment) => fragment.normalized_coords(),
         }
     }
 
     fn bidi_level(self) -> u8 {
         match self {
-            Self::Committed(fragment, _) => fragment.bidi_level(),
-            Self::Projected(fragment, _) => fragment.bidi_level(),
+            Self::Committed(fragment) => fragment.bidi_level(),
+            Self::Projected(fragment) => fragment.bidi_level(),
         }
     }
 
     fn script(self) -> [u8; 4] {
         match self {
-            Self::Committed(fragment, _) => fragment.script(),
-            Self::Projected(fragment, _) => fragment.script(),
+            Self::Committed(fragment) => fragment.script(),
+            Self::Projected(fragment) => fragment.script(),
         }
     }
 
     fn owns_multiple_sources(self) -> bool {
         match self {
-            Self::Committed(fragment, sources) => sources
-                .for_fragment(fragment)
+            Self::Committed(fragment) => fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .nth(1)
                 .is_some(),
-            Self::Projected(fragment, sources) => sources
-                .for_fragment(fragment)
+            Self::Projected(fragment) => fragment
+                .sources()
                 .expect("fragment belongs to source scene")
                 .nth(1)
                 .is_some(),
@@ -206,8 +184,8 @@ impl<'a> AnyFragment<'a> {
 
 #[derive(Clone)]
 enum AnyGlyphs<'a> {
-    Committed(SceneGlyphs<'a>, SceneSourceAccess<'a>),
-    Projected(ProjectedSceneGlyphs<'a>, ProjectedSceneSourceAccess<'a>),
+    Committed(SceneGlyphs<'a>),
+    Projected(ProjectedSceneGlyphs<'a>),
 }
 
 impl<'a> Iterator for AnyGlyphs<'a> {
@@ -215,53 +193,49 @@ impl<'a> Iterator for AnyGlyphs<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self {
-            Self::Committed(glyphs, sources) => glyphs
-                .next()
-                .map(|glyph| AnyGlyph::Committed(glyph, *sources)),
-            Self::Projected(glyphs, sources) => glyphs
-                .next()
-                .map(|glyph| AnyGlyph::Projected(glyph, *sources)),
+            Self::Committed(glyphs) => glyphs.next().map(AnyGlyph::Committed),
+            Self::Projected(glyphs) => glyphs.next().map(AnyGlyph::Projected),
         }
     }
 }
 
 #[derive(Clone, Copy)]
 enum AnyGlyph<'a> {
-    Committed(SceneGlyphView<'a>, SceneSourceAccess<'a>),
-    Projected(ProjectedSceneGlyphView<'a>, ProjectedSceneSourceAccess<'a>),
+    Committed(SceneGlyphView<'a>),
+    Projected(ProjectedSceneGlyphView<'a>),
 }
 
 impl AnyGlyph<'_> {
     fn id(self) -> u32 {
         match self {
-            Self::Committed(glyph, _) => glyph.id(),
-            Self::Projected(glyph, _) => glyph.id(),
+            Self::Committed(glyph) => glyph.id(),
+            Self::Projected(glyph) => glyph.id(),
         }
     }
 
     fn position(self) -> Point {
         match self {
-            Self::Committed(glyph, _) => glyph.position(),
-            Self::Projected(glyph, _) => glyph.position(),
+            Self::Committed(glyph) => glyph.position(),
+            Self::Projected(glyph) => glyph.position(),
         }
     }
 
     fn advance(self) -> Vec2 {
         match self {
-            Self::Committed(glyph, _) => glyph.advance(),
-            Self::Projected(glyph, _) => glyph.advance(),
+            Self::Committed(glyph) => glyph.advance(),
+            Self::Projected(glyph) => glyph.advance(),
         }
     }
 
     fn owns_multiple_sources(self) -> bool {
         match self {
-            Self::Committed(glyph, sources) => sources
-                .for_glyph(glyph)
+            Self::Committed(glyph) => glyph
+                .sources()
                 .expect("glyph belongs to source scene")
                 .nth(1)
                 .is_some(),
-            Self::Projected(glyph, sources) => sources
-                .for_glyph(glyph)
+            Self::Projected(glyph) => glyph
+                .sources()
                 .expect("glyph belongs to source scene")
                 .nth(1)
                 .is_some(),
@@ -458,8 +432,7 @@ pub(crate) fn record_frame(
             committed: Some(
                 document
                     .semantics()
-                    .expect("scene request includes semantics")
-                    .iter(),
+                    .expect("scene request includes semantics"),
             ),
         }
     } else {
@@ -467,10 +440,7 @@ pub(crate) fn record_frame(
     };
     record_scene(
         AnyLines::Committed(document.lines()),
-        AnyFragments::Committed(
-            document.fragments(),
-            document.sources().expect("scene request includes sources"),
-        ),
+        AnyFragments::Committed(document.fragments()),
         document.paint(),
         semantics,
         page,
@@ -495,8 +465,7 @@ pub(crate) fn record_composition_frame(
             committed: Some(
                 document
                     .semantics()
-                    .expect("scene request includes semantics")
-                    .iter(),
+                    .expect("scene request includes semantics"),
             ),
         }
     } else {
@@ -504,10 +473,7 @@ pub(crate) fn record_composition_frame(
     };
     record_scene(
         AnyLines::Projected(document.lines()),
-        AnyFragments::Projected(
-            document.fragments(),
-            document.sources().expect("scene request includes sources"),
-        ),
+        AnyFragments::Projected(document.fragments()),
         document.paint(),
         semantics,
         page,
@@ -785,21 +751,13 @@ impl<'a> TextSceneAdapter<'a> {
                 x: finite_f32(glyph.position().x),
                 y: finite_f32(glyph.position().y),
             });
-            let transform = self.placement * fragment.transform();
-            let draw = |painter: &mut Painter<'_, S>| {
-                painter
-                    .glyphs(fragment.font(), brush)
-                    .transform(transform)
-                    .glyph_transform(fragment.synthesis().skew_transform())
-                    .font_size(fragment.font_size())
-                    .normalized_coords(fragment.normalized_coords())
-                    .draw(&fill, glyphs);
-            };
-            if let Some(clip) = fragment.paint_clip() {
-                painter.with_fill_clip_transformed(clip, self.placement, draw);
-            } else {
-                draw(painter);
-            }
+            painter
+                .glyphs(fragment.font(), brush)
+                .transform(self.placement)
+                .glyph_transform(fragment.synthesis().skew_transform())
+                .font_size(fragment.font_size())
+                .normalized_coords(fragment.normalized_coords())
+                .draw(&fill, glyphs);
         }
 
         self.paint_editor_marks(painter, overlay);
@@ -935,18 +893,11 @@ impl<'a> TextSceneAdapter<'a> {
                 )
                 .transform(self.placement)
                 .draw();
-            if let Some(clip) = fragment.paint_clip() {
-                painter
-                    .stroke(clip, &Stroke::new(1.4), CORAL.with_alpha(0.9))
-                    .transform(self.placement)
-                    .draw();
-            }
         }
     }
 
     fn paint_glyph_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
         for fragment in self.fragments.clone() {
-            let transform = self.placement * fragment.transform();
             for glyph in fragment.glyphs() {
                 let origin = glyph.position();
                 let end = origin + glyph.advance();
@@ -962,18 +913,18 @@ impl<'a> TextSceneAdapter<'a> {
                         &Stroke::new(if owns_multiple_sources { 1.6 } else { 0.75 }),
                         color.with_alpha(0.72),
                     )
-                    .transform(transform)
+                    .transform(self.placement)
                     .draw();
                 painter
                     .fill(
                         Circle::new(origin, if owns_multiple_sources { 2.8 } else { 1.7 }),
                         color.with_alpha(0.92),
                     )
-                    .transform(transform)
+                    .transform(self.placement)
                     .draw();
                 painter
                     .fill(Circle::new(end, 0.9), color.with_alpha(0.52))
-                    .transform(transform)
+                    .transform(self.placement)
                     .draw();
             }
         }
@@ -1011,14 +962,13 @@ impl<'a> TextSceneAdapter<'a> {
 fn fragment_advance_envelope(fragment: AnyFragment<'_>, lines: AnyLines<'_>) -> Option<Rect> {
     let mut glyphs = fragment.glyphs();
     let first = glyphs.next()?;
-    let transform = fragment.transform();
-    let first_origin = transform * first.position();
-    let first_end = transform * (first.position() + first.advance());
+    let first_origin = first.position();
+    let first_end = first.position() + first.advance();
     let mut x0 = first_origin.x.min(first_end.x);
     let mut x1 = first_origin.x.max(first_end.x);
     for glyph in glyphs {
-        let origin = transform * glyph.position();
-        let end = transform * (glyph.position() + glyph.advance());
+        let origin = glyph.position();
+        let end = glyph.position() + glyph.advance();
         x0 = x0.min(origin.x.min(end.x));
         x1 = x1.max(origin.x.max(end.x));
     }

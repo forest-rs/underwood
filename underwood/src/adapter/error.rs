@@ -12,16 +12,12 @@ use super::*;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum PreparationErrorKind {
-    /// Required Unicode data or another capability is unavailable.
-    MissingCapability,
     /// No usable font is available for the source.
     MissingFont,
     /// Faithful source-to-paint coverage cannot be represented.
     UnsupportedPaintCoverage,
     /// Adapter output violates the owned preparation contract.
     InvalidOutput,
-    /// Work was cancelled before publication.
-    Cancelled,
 }
 
 /// Concrete paragraph-preparation error.
@@ -32,14 +28,6 @@ pub struct PreparationError {
 }
 
 impl PreparationError {
-    /// Creates an error for unavailable Unicode or shaping capabilities.
-    #[must_use]
-    pub const fn missing_capability() -> Self {
-        Self {
-            kind: PreparationErrorKind::MissingCapability,
-        }
-    }
-
     /// Creates an error for missing usable fonts.
     #[must_use]
     pub const fn missing_font() -> Self {
@@ -48,27 +36,11 @@ impl PreparationError {
         }
     }
 
-    /// Creates an error for paint coverage that cannot be represented faithfully.
-    #[must_use]
-    pub const fn unsupported_paint_coverage() -> Self {
-        Self {
-            kind: PreparationErrorKind::UnsupportedPaintCoverage,
-        }
-    }
-
     /// Creates an error for invalid backend output.
     #[must_use]
     pub const fn invalid_output() -> Self {
         Self {
             kind: PreparationErrorKind::InvalidOutput,
-        }
-    }
-
-    /// Creates an error for cancelled work.
-    #[must_use]
-    pub const fn cancelled() -> Self {
-        Self {
-            kind: PreparationErrorKind::Cancelled,
         }
     }
 
