@@ -532,6 +532,11 @@ fn western_justification_expands_only_eligible_soft_wrapped_lines() {
     let lines = justified.scene.lines();
     assert!(lines.len() >= 2);
     assert_eq!(
+        justified.scene.fragments().len(),
+        lines.len(),
+        "justification keeps the uniform Latin fixture at one paint fragment per line"
+    );
+    assert_eq!(
         lines.get(0).expect("line exists").break_reason(),
         TestLineBreakReason::Regular
     );

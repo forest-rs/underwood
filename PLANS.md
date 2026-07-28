@@ -1590,3 +1590,34 @@ The campaign completes at 15,000 lines or below with named conceptual
 deletions and all gates green. If an adversarial audit cannot find 951 honest
 lines, every rejected candidate must have a concrete correctness or measured
 product consumer and the owner must explicitly accept the shortfall.
+
+### Retention scalpel — 2026-07-28
+
+The first post-landing retention audit found that display-only prepared
+paragraphs still owned the complete grapheme interaction table even though
+their published scenes omitted every interaction sidecar. This was the
+mask-theater failure Design-0018 warned about.
+
+The correction does not introduce another sidecar owner. The existing flat
+interaction tables remain the checked representation for semantic and
+hit-testable output, but stay empty for display- and source-only preparation.
+Line advance and trailing-whitespace metrics come directly from retained
+shaping/formation facts. Western justification now consumes run script and
+glyph source facts instead of forcing display output to retain editor
+graphemes.
+
+The matched 1,000-label tunnel moves display scene residency from 1,627,000 to
+1,230,000 bytes while fully editable scene residency, the 4,834,500-byte warm
+adapter cache, and every measured editable allocation count remain unchanged.
+Keeping paint fragments run-sized adds one nullable eight-byte justification
+index per prepared paragraph; only justified paragraphs allocate its sparse
+contents. The mixed 999-display/one-editor document saves the same
+approximately 397 KB. This also makes the next target unambiguous: challenge
+the maximal warm adapter facts themselves rather than wrapping them in a more
+elaborate cache.
+
+The calibrated production tree is temporarily 15,621 lines, up from 15,466,
+because this correctness/performance correction decouples justification and
+line metrics from interaction storage. The 15,000-line epic remains open; the
+next scalpel must simplify the adapter retention model and earn back this
+source rather than compressing the new logic.

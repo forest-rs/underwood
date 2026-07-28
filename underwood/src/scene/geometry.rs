@@ -137,6 +137,13 @@ pub(super) struct CachedFragment {
 #[derive(Clone, Debug)]
 pub(super) struct PaintTopology {
     pub(super) fragments: Box<[CachedFragment]>,
+    // The outer box keeps the overwhelmingly common `None` representation to
+    // one pointer; only justified paragraphs pay the extra allocation.
+    #[expect(
+        clippy::box_collection,
+        reason = "a thin None saves 16 bytes on every non-justified paragraph"
+    )]
+    pub(super) expanded_glyphs: Option<Box<Vec<ExpandedGlyph>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -144,6 +151,29 @@ struct PaintGlyphIndex {
     line: usize,
     run: usize,
     glyph: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct ExpandedGlyph {
+    line: u32,
+    run: u32,
+    glyph: u32,
+}
+
+impl ExpandedGlyph {
+    fn try_from_index(index: PaintGlyphIndex, paragraph: ParagraphId) -> Result<Self, SceneError> {
+        Ok(Self {
+            line: u32::try_from(index.line).map_err(|_| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+            })?,
+            run: u32::try_from(index.run).map_err(|_| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+            })?,
+            glyph: u32::try_from(index.glyph).map_err(|_| {
+                SceneError::for_paragraph(SceneErrorKind::SourceCoverage, paragraph)
+            })?,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -484,7 +514,20 @@ impl CachedGeometry {
 
 impl PaintTopology {
     pub(super) fn residency_bytes(&self) -> usize {
-        size_of::<CachedFragment>().saturating_mul(self.fragments.len())
+        size_of::<CachedFragment>()
+            .saturating_mul(self.fragments.len())
+            .saturating_add(self.expanded_glyphs.as_ref().map_or(0, |glyphs| {
+                size_of::<Vec<ExpandedGlyph>>()
+                    .saturating_add(size_of::<ExpandedGlyph>().saturating_mul(glyphs.capacity()))
+            }))
+    }
+
+    pub(super) fn expands(&self, line: u32, run: u32, glyph: u32) -> bool {
+        self.expanded_glyphs.as_ref().is_some_and(|expanded| {
+            expanded
+                .binary_search(&ExpandedGlyph { line, run, glyph })
+                .is_ok()
+        })
     }
 }
 
@@ -593,51 +636,33 @@ pub(super) fn build_geometry(
             .slot()
             .map(crate::LineSlot::inline_size)
             .or_else(|| constrained_inline_size(constraint));
+        let alignment = projection.paragraph_style.alignment();
+        let opportunity_count = if alignment == TextAlignment::Justify
+            && line.break_reason() == LineBreakReason::Regular
+        {
+            western_justification_opportunity_count(
+                line,
+                projection.mapping.text(),
+                prepared.paragraph(),
+            )?
+        } else {
+            0
+        };
         let adjustment = resolve_line_adjustment(
-            projection.paragraph_style.alignment(),
+            alignment,
             prepared.resolved_direction(),
             line.break_reason(),
             line.advance(),
             line.trailing_whitespace_advance(),
-            line.western_justification_opportunities(),
+            opportunity_count,
             slot_size,
         )?;
         let inline_start = slot_start + adjustment.inline_offset;
         let current_line_top = line.slot().map_or(line_top, crate::LineSlot::block_start);
         let expansion = adjustment.opportunity_expansion;
-        let opportunity_sources: Vec<_> = if expansion > 0.0 {
-            line.western_justification_opportunity_sources().collect()
-        } else {
-            Vec::new()
-        };
-        if opportunity_sources.iter().any(|source| {
-            line.runs()
-                .flat_map(|run| run.glyphs())
-                .filter(|glyph| glyph.source() == *source)
-                .count()
-                != 1
-        }) {
-            return Err(SceneError::for_paragraph(
-                SceneErrorKind::SourceCoverage,
-                prepared.paragraph(),
-            ));
-        }
         let mut unit_x = inline_start;
         for unit in line.units() {
             let paragraph_source = unit.source();
-            if unit.is_western_justification_opportunity()
-                && projection
-                    .mapping
-                    .text()
-                    .get(paragraph_source.start as usize..paragraph_source.end as usize)
-                    != Some(" ")
-            {
-                return Err(SceneError::from_preparation_source(
-                    prepared.paragraph(),
-                    paragraph_source,
-                    PreparationErrorKind::InvalidOutput,
-                ));
-            }
             if features.has_selection() {
                 for position in [unit.left(), unit.right()] {
                     let offset = position.offset();
@@ -657,7 +682,12 @@ pub(super) fn build_geometry(
                     }
                 }
             }
-            let unit_expansion = if opportunity_sources.contains(&paragraph_source) {
+            let unit_expansion = if expansion > 0.0
+                && line_has_western_justification_opportunity(
+                    line,
+                    &paragraph_source,
+                    projection.mapping.text(),
+                ) {
                 expansion
             } else {
                 0.0
@@ -768,7 +798,7 @@ pub(super) fn build_geometry(
         }
         let adjusted_advance = line.advance()
             + expansion
-                * f64::from(u32::try_from(opportunity_sources.len()).map_err(|_| {
+                * f64::from(u32::try_from(opportunity_count).map_err(|_| {
                     SceneError::for_paragraph(SceneErrorKind::SourceCoverage, prepared.paragraph())
                 })?);
         lines.push(CachedLine {
@@ -873,6 +903,70 @@ pub(super) fn build_geometry(
     })
 }
 
+fn western_justification_opportunity_count(
+    line: PreparedLineView<'_>,
+    text: &str,
+    paragraph: ParagraphId,
+) -> Result<usize, SceneError> {
+    let trailing_start = line.trailing_whitespace_start();
+    let mut opportunities = 0_usize;
+    for run in line
+        .runs()
+        .filter(|run| matches!(&run.script(), b"Latn" | b"Grek" | b"Cyrl"))
+    {
+        for glyph in run.glyphs() {
+            let source = glyph.source();
+            let source_text = text
+                .get(source.start as usize..source.end as usize)
+                .ok_or_else(|| {
+                    SceneError::for_source(
+                        SceneErrorKind::SourceCoverage,
+                        paragraph,
+                        source.clone(),
+                    )
+                })?;
+            if source.end <= trailing_start && source_text == " " {
+                if line
+                    .runs()
+                    .flat_map(|run| run.glyphs())
+                    .filter(|glyph| glyph.source() == source)
+                    .count()
+                    != 1
+                {
+                    return Err(SceneError::for_paragraph(
+                        SceneErrorKind::SourceCoverage,
+                        paragraph,
+                    ));
+                }
+                opportunities = opportunities.saturating_add(1);
+            }
+        }
+    }
+    Ok(opportunities)
+}
+
+fn is_western_justification_opportunity(
+    source: &Range<u32>,
+    trailing_start: u32,
+    text: &str,
+) -> bool {
+    source.end <= trailing_start
+        && text.get(source.start as usize..source.end as usize) == Some(" ")
+}
+
+fn line_has_western_justification_opportunity(
+    line: PreparedLineView<'_>,
+    source: &Range<u32>,
+    text: &str,
+) -> bool {
+    is_western_justification_opportunity(source, line.trailing_whitespace_start(), text)
+        && line
+            .runs()
+            .filter(|run| matches!(&run.script(), b"Latn" | b"Grek" | b"Cyrl"))
+            .flat_map(|run| run.glyphs())
+            .any(|glyph| glyph.source() == source.clone())
+}
+
 pub(super) fn build_paint_topology(
     prepared: &PreparedParagraph,
     projection: &Projection,
@@ -893,15 +987,14 @@ fn build_paint_fragments(
         ));
     }
     let mut fragments: Vec<CachedFragment> = Vec::new();
+    let mut expanded_glyphs = Vec::new();
     for (line_index, (line, cached_line)) in prepared.lines().zip(lines).enumerate() {
         let expansion = cached_line.adjustment.opportunity_expansion;
-        let opportunity_sources: Vec<_> = if expansion > 0.0 {
-            line.western_justification_opportunity_sources().collect()
-        } else {
-            Vec::new()
-        };
+        let trailing_start = line.trailing_whitespace_start();
         let mut inline_origin = cached_line.bounds.x0;
         for (run_index, run) in line.runs().enumerate() {
+            let expands_spaces =
+                expansion > 0.0 && matches!(&run.script(), b"Latn" | b"Grek" | b"Cyrl");
             let run_source = run.source();
             let Some(source_text) = projection
                 .mapping
@@ -929,14 +1022,13 @@ fn build_paint_fragments(
                         glyph_source,
                     ));
                 }
-                let inline_advance_adjustment = if opportunity_sources
-                    .iter()
-                    .any(|source| glyph.source() == *source)
-                {
-                    expansion
-                } else {
-                    0.0
-                };
+                let expanded = expands_spaces
+                    && is_western_justification_opportunity(
+                        &glyph.source(),
+                        trailing_start,
+                        projection.mapping.text(),
+                    );
+                let inline_advance_adjustment = if expanded { expansion } else { 0.0 };
                 let source = glyph.source();
                 let paint = projection.whole_paint_slot(source.clone()).ok_or_else(|| {
                     SceneError::from_preparation_source(
@@ -945,15 +1037,20 @@ fn build_paint_fragments(
                         PreparationErrorKind::UnsupportedPaintCoverage,
                     )
                 })?;
+                let index = PaintGlyphIndex {
+                    line: line_index,
+                    run: run_index,
+                    glyph: glyph_index,
+                };
+                if expanded {
+                    expanded_glyphs
+                        .push(ExpandedGlyph::try_from_index(index, prepared.paragraph())?);
+                }
                 push_paint_fragment(
                     &mut fragments,
                     run_fragment_start,
                     prepared.paragraph(),
-                    PaintGlyphIndex {
-                        line: line_index,
-                        run: run_index,
-                        glyph: glyph_index,
-                    },
+                    index,
                     inline_origin,
                     paint,
                 )?;
@@ -1010,6 +1107,7 @@ fn build_paint_fragments(
     }
     Ok(PaintTopology {
         fragments: fragments.into_boxed_slice(),
+        expanded_glyphs: (!expanded_glyphs.is_empty()).then(|| Box::new(expanded_glyphs)),
     })
 }
 

@@ -928,6 +928,7 @@ mod tests {
             }),
             PaintTopology {
                 fragments: Box::new([]),
+                expanded_glyphs: None,
             },
             None,
         ))

@@ -519,3 +519,49 @@ workspace tests, examples, snapshots, and repository-policy gates pass. The
 matched current residency, edit, query, and churn results are recorded in
 `retained-parley-comparison-2026-07-27.md` and
 `compact-artifact-deletion-ledger-2026-07-27.md`.
+
+## Display prepared-artifact correction — 2026-07-28
+
+A fresh retention audit found one remaining capability mirage. Display-only
+scene segments omitted hit, selection, and editing records, but the canonical
+prepared paragraph behind every segment still retained the complete grapheme
+interaction-unit table. At 1,000 short labels, approximately one quarter of
+reported scene residency was therefore editor preparation hidden inside the
+display layout category.
+
+The first attempted correction boxed capability-specific tables. It reduced
+reported bytes but added exactly 3,000 cold allocations for 1,000 editable
+paragraphs. That representation was rejected. The landed shape is simpler:
+the existing checked flat tables remain in place and are empty when neither
+semantics nor hit testing is requested. Display line metrics come directly
+from retained formation and shaped-cluster facts. Justification discovers
+ordinary Western spaces from run script plus glyph source and records only the
+exceptional expanded glyphs in a sparse optional index; paint fragments remain
+run-sized. It no longer uses interaction units as accidental paragraph-layout
+storage.
+
+Matched optimized residency at 1,000 labels:
+
+| Scenario | Main baseline | Corrected | Delta |
+|---|---:|---:|---:|
+| display labels, scene cache | 1,627,000 B | 1,230,000 B | −397,000 B |
+| editable labels, scene cache | 1,909,000 B | 1,909,000 B | unchanged |
+| warm adapter facts | 4,834,500 B | 4,834,500 B | unchanged |
+| 999 display + 1 editable, scene cache | 1,627,192 B | 1,230,384 B | −396,808 B |
+
+The in-process allocation tunnel has the same call counts as main for cold
+editable preparation, stable repeat, localized edit, paint-only preparation,
+and warm retention. Keeping the optional justification index thin adds exactly
+eight bytes to each paragraph allocation: cold preparation is 16,131 calls /
+3,808,353 bytes without adapter retention and 33,256 calls / 10,475,473 bytes
+with it; the one-paragraph edited prepare likewise adds eight bytes. Stable
+repeat and paint-only preparation remain zero-allocation. Seven-sample medians
+also improve on the display-sensitive paths: Western justification churn moves
+from 1,888 to 1,575 ns per label and width churn from 2,185 to 1,769 ns;
+editable typing remains within local measurement noise.
+
+This corrects the display artifact, not the larger adapter residency story.
+An explicitly enabled warm adapter cache still retains 4.83 MB for these 1,000
+tiny paragraphs. The next retention slice must decide which analysis, shaping,
+cluster, and formed-line facts earn long-lived residency, including whether
+display paragraphs should retain any reusable adapter facts after publication.

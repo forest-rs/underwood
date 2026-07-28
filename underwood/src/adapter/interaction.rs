@@ -157,30 +157,10 @@ impl PreparedInteractionUnit {
         left: PreparedClusterSide,
         right: PreparedClusterSide,
     ) -> Result<Self, PreparationError> {
-        Self::try_new_with_justification(
-            source, bidi_level, boundary, whitespace, false, left, right,
-        )
-    }
-
-    /// Validates one interaction unit and its Western justification eligibility.
-    ///
-    /// `western_justification_opportunity` must only be set for an ordinary
-    /// space whose script context is supported by the backend's explicit
-    /// Western inter-word strategy.
-    pub fn try_new_with_justification(
-        source: Range<u32>,
-        bidi_level: u8,
-        boundary: ClusterBoundary,
-        whitespace: ClusterWhitespace,
-        western_justification_opportunity: bool,
-        left: PreparedClusterSide,
-        right: PreparedClusterSide,
-    ) -> Result<Self, PreparationError> {
         if source.start >= source.end
             || !matches!(left.offset, offset if offset == source.start || offset == source.end)
             || !matches!(right.offset, offset if offset == source.start || offset == source.end)
             || left.offset == right.offset
-            || western_justification_opportunity && whitespace != ClusterWhitespace::Space
         {
             return Err(PreparationError::invalid_output());
         }
@@ -193,9 +173,6 @@ impl PreparedInteractionUnit {
         }
         if right.affinity == TextAffinity::Upstream {
             flags |= RIGHT_IS_UPSTREAM;
-        }
-        if western_justification_opportunity {
-            flags |= WESTERN_JUSTIFICATION;
         }
         Ok(Self {
             source,
@@ -235,13 +212,6 @@ impl PreparedInteractionUnit {
     #[must_use]
     pub const fn whitespace(&self) -> ClusterWhitespace {
         self.whitespace
-    }
-
-    /// Returns whether this ordinary space is an eligible Western inter-word
-    /// justification opportunity.
-    #[must_use]
-    pub const fn is_western_justification_opportunity(&self) -> bool {
-        self.flags & WESTERN_JUSTIFICATION != 0
     }
 
     /// Returns the position reached from the visual left side.
@@ -294,7 +264,6 @@ impl PreparedInteractionUnit {
 const LEFT_IS_SOURCE_START: u8 = 1 << 0;
 const LEFT_IS_UPSTREAM: u8 = 1 << 1;
 const RIGHT_IS_UPSTREAM: u8 = 1 << 2;
-const WESTERN_JUSTIFICATION: u8 = 1 << 3;
 
 /// Exceptional retained shaping slices for one multi-slice interaction unit.
 #[derive(Debug)]
@@ -352,12 +321,6 @@ impl<'a> PreparedInteractionUnitView<'a> {
     #[must_use]
     pub const fn whitespace(self) -> ClusterWhitespace {
         self.unit.whitespace
-    }
-
-    /// Returns whether this unit is an eligible Western space.
-    #[must_use]
-    pub const fn is_western_justification_opportunity(self) -> bool {
-        self.unit.flags & WESTERN_JUSTIFICATION != 0
     }
 
     /// Returns the position reached from the visual left side.

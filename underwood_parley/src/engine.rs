@@ -27,7 +27,8 @@ use crate::interaction::{InteractionScratch, collect_analysis_units_into, lower_
 use crate::line_break::{
     FormedLine, LineFormationScratch, LineFormationWork, LogicalCluster, RunPiece,
     apply_wrap_policy, collect_logical_clusters_into, form_lines, line_run_pieces_into,
-    reorder_visual_pieces, shaped_text_accounted_bytes, update_line_metrics,
+    reorder_visual_pieces, shaped_text_accounted_bytes, trailing_whitespace_advance,
+    update_line_metrics,
 };
 use crate::lowering::{
     append_unrendered_source, index_char_starts, lower_glyphs_into, portable_synthesis,
@@ -438,11 +439,17 @@ impl ParagraphFormation for ParleyParagraphEngine {
             .len()
             .saturating_add(preparation.shaped_text.glyphs().len())
             .saturating_add(reshaped_glyph_capacity);
+        let retains_interaction =
+            input.features.has_semantics() || input.features.has_hit_testing();
         let mut data = PreparedParagraphData::with_capacity(
             formed_line_count,
             run_capacity,
             glyph_capacity,
-            preparation.interaction_units.len(),
+            if retains_interaction {
+                preparation.interaction_units.len()
+            } else {
+                0
+            },
             normalized_coord_capacity,
         );
         for formed in &preparation.formed_lines {
@@ -450,6 +457,11 @@ impl ParagraphFormation for ParleyParagraphEngine {
             let shaped_text = formed.shaping(&preparation.shaped_text);
             line_run_pieces_into(shaped_text, plan.clusters.clone(), &mut self.run_pieces);
             reorder_visual_pieces(shaped_text, &mut self.run_pieces);
+            let trailing_whitespace_advance = trailing_whitespace_advance(
+                shaped_text,
+                &self.run_pieces,
+                plan.trailing_whitespace_start,
+            )?;
             let line = PreparedLine::try_new_in_slot(
                 plan.slot,
                 source_range(&plan.source),
@@ -458,20 +470,27 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 plan.height,
                 plan.content_ascent,
                 plan.content_descent,
+            )?
+            .with_inline_metrics(
+                plan.advance,
+                plan.trailing_whitespace_start,
+                trailing_whitespace_advance,
             )?;
             let units_start = data.unit_count();
-            lower_visual_units(
-                input.text,
-                &preparation.analysis,
-                &preparation.char_starts,
-                shaped_text,
-                &self.run_pieces,
-                &preparation.interaction_units,
-                &plan.source,
-                plan.reason == LineBreakReason::Mandatory,
-                &mut self.interaction_scratch,
-                &mut data,
-            )?;
+            if retains_interaction {
+                lower_visual_units(
+                    input.text,
+                    &preparation.analysis,
+                    &preparation.char_starts,
+                    shaped_text,
+                    &self.run_pieces,
+                    &preparation.interaction_units,
+                    &plan.source,
+                    plan.reason == LineBreakReason::Mandatory,
+                    &mut self.interaction_scratch,
+                    &mut data,
+                )?;
+            }
             let runs_start = data.run_count();
             for piece in &self.run_pieces {
                 let run = shaped_text
