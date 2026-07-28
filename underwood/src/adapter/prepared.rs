@@ -97,12 +97,8 @@ impl FontSynthesis {
             .map(|degrees| Affine::skew(f64::from(libm::tanf(degrees.to_radians())), 0.0))
     }
 }
-/// Checked metadata for one source-complete formed line.
-///
-/// A [`PreparedParagraphBuilder`] accepts this metadata, then streams the
-/// line's interaction units and visual runs directly into the canonical
-/// paragraph tables.
-#[derive(Clone, Debug)]
+/// Checked metadata and table ranges for one source-complete formed line.
+#[derive(Debug)]
 pub struct PreparedLine {
     slot: Option<crate::LineSlot>,
     source: Range<u32>,
@@ -114,6 +110,9 @@ pub struct PreparedLine {
     height: f64,
     content_ascent: f64,
     content_descent: f64,
+    units: TableRange,
+    source_order: TableRange,
+    runs: TableRange,
 }
 
 impl PreparedLine {
@@ -182,6 +181,9 @@ impl PreparedLine {
             height,
             content_ascent,
             content_descent,
+            units: TableRange::EMPTY,
+            source_order: TableRange::EMPTY,
+            runs: TableRange::EMPTY,
         })
     }
 }
@@ -191,47 +193,17 @@ pub(crate) struct PreparedParagraphFacts {
     text_len: u32,
     resolved_direction: ResolvedDirection,
     features: SceneFeatures,
-    lines: Vec<PreparedLineRecord>,
-    runs: Vec<PreparedRunRecord>,
+    lines: Vec<PreparedLine>,
+    runs: Vec<PreparedRun>,
     glyphs: Vec<PreparedGlyphRecord>,
     glyph_placements: Vec<PreparedGlyphPlacement>,
     split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
     interaction_slices: Vec<PreparedInteractionSlice>,
     interaction_slice_spills: Vec<PreparedInteractionSliceSpill>,
-    interaction_units: Vec<PreparedInteractionUnitRecord>,
+    interaction_units: Vec<PreparedInteractionUnit>,
     source_order: Vec<u32>,
     normalized_coords: Vec<i16>,
     unrendered_source: Vec<Range<u32>>,
-}
-
-#[derive(Debug)]
-struct PreparedLineRecord {
-    slot: Option<crate::LineSlot>,
-    source: Range<u32>,
-    break_reason: LineBreakReason,
-    advance: f64,
-    trailing_whitespace_start: u32,
-    trailing_whitespace_advance: f64,
-    baseline: f64,
-    height: f64,
-    content_ascent: f64,
-    content_descent: f64,
-    units: TableRange,
-    source_order: TableRange,
-    runs: TableRange,
-}
-
-#[derive(Debug)]
-struct PreparedRunRecord {
-    source: Range<u32>,
-    bidi_level: u8,
-    script: [u8; 4],
-    font: FontData,
-    font_size: f32,
-    synthesis: FontSynthesis,
-    normalized_coords: TableRange,
-    unrendered_source: TableRange,
-    glyphs: TableRange,
 }
 
 #[derive(Debug)]
@@ -293,6 +265,8 @@ struct TableRange {
 }
 
 impl TableRange {
+    const EMPTY: Self = Self { start: 0, end: 0 };
+
     fn try_from_usize(range: Range<usize>) -> Result<Self, PreparationError> {
         Ok(Self {
             start: u32::try_from(range.start).map_err(|_| PreparationError::invalid_output())?,
@@ -326,6 +300,49 @@ impl PreparedParagraph {
 
     pub(crate) fn shared_facts(&self) -> Arc<PreparedParagraphFacts> {
         self.facts.clone()
+    }
+
+    /// Checks flat adapter data and publishes one canonical paragraph artifact.
+    pub fn try_from_data(
+        paragraph: ParagraphId,
+        text_len: u32,
+        resolved_direction: ResolvedDirection,
+        features: SceneFeatures,
+        data: PreparedParagraphData,
+    ) -> Result<Self, PreparationError> {
+        data.validate_topology(text_len)?;
+        let PreparedParagraphData {
+            lines,
+            runs,
+            glyphs,
+            glyph_placements,
+            split_glyph_paints,
+            interaction_slices,
+            interaction_slice_spills,
+            interaction_units,
+            source_order,
+            normalized_coords,
+            unrendered_source,
+        } = data;
+        Ok(Self {
+            paragraph,
+            facts: Arc::new(PreparedParagraphFacts {
+                text_len,
+                resolved_direction,
+                features,
+                lines,
+                runs,
+                glyphs,
+                glyph_placements,
+                split_glyph_paints,
+                interaction_slices,
+                interaction_slice_spills,
+                interaction_units,
+                source_order,
+                normalized_coords,
+                unrendered_source,
+            }),
+        })
     }
 
     /// Returns the paragraph identity.
@@ -391,184 +408,180 @@ impl PreparedParagraph {
     }
 }
 
-/// Checked streaming construction of one canonical prepared paragraph.
+/// Flat checked input tables for one prepared paragraph.
 ///
-/// Adapters write each line, interaction unit, run, and glyph directly into
-/// the final flat tables. Construction does not create a nested line/run/glyph
-/// graph and does not flatten or deep-validate that graph a second time.
-#[derive(Debug)]
-pub struct PreparedParagraphBuilder {
-    paragraph: ParagraphId,
-    text_len: u32,
-    previous_end: u32,
-    failed: bool,
-    facts: PreparedParagraphFacts,
+/// Adapters append scalar records to these tables, describe the contiguous
+/// ranges belonging to each run and line, then cross the checked boundary at
+/// [`PreparedParagraph::try_from_data`]. There is no nested builder state to
+/// finish or poison.
+#[derive(Debug, Default)]
+pub struct PreparedParagraphData {
+    lines: Vec<PreparedLine>,
+    runs: Vec<PreparedRun>,
+    glyphs: Vec<PreparedGlyphRecord>,
+    glyph_placements: Vec<PreparedGlyphPlacement>,
+    split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
+    interaction_slices: Vec<PreparedInteractionSlice>,
+    interaction_slice_spills: Vec<PreparedInteractionSliceSpill>,
+    interaction_units: Vec<PreparedInteractionUnit>,
+    source_order: Vec<u32>,
+    normalized_coords: Vec<i16>,
+    unrendered_source: Vec<Range<u32>>,
 }
 
-/// Exact common-table capacity hint for a prepared paragraph.
-///
-/// The hint changes allocation shape only; builders still validate the number
-/// and content of every record actually written. Exceptional split-paint,
-/// multi-slice, source-order, placement, and unrendered-source tables allocate
-/// only when such records occur.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PreparedParagraphCapacity {
-    lines: usize,
-    runs: usize,
-    glyphs: usize,
-    interaction_units: usize,
-    normalized_coords: usize,
-}
-
-impl PreparedParagraphCapacity {
-    /// Describes the common line, run, glyph, and interaction-unit tables.
+impl PreparedParagraphData {
+    /// Creates empty prepared paragraph tables.
     #[must_use]
-    pub const fn new(lines: usize, runs: usize, glyphs: usize, interaction_units: usize) -> Self {
+    pub const fn new() -> Self {
         Self {
-            lines,
-            runs,
-            glyphs,
-            interaction_units,
-            normalized_coords: 0,
+            lines: Vec::new(),
+            runs: Vec::new(),
+            glyphs: Vec::new(),
+            glyph_placements: Vec::new(),
+            split_glyph_paints: Vec::new(),
+            interaction_slices: Vec::new(),
+            interaction_slice_spills: Vec::new(),
+            interaction_units: Vec::new(),
+            source_order: Vec::new(),
+            normalized_coords: Vec::new(),
+            unrendered_source: Vec::new(),
         }
     }
 
-    /// Adds the exact normalized-coordinate table capacity.
+    /// Creates tables with cheap estimates for their common records.
     #[must_use]
-    pub const fn with_normalized_coords(mut self, normalized_coords: usize) -> Self {
-        self.normalized_coords = normalized_coords;
-        self
-    }
-}
-
-impl PreparedParagraphBuilder {
-    /// Starts a builder for the default editable capability set.
-    #[must_use]
-    pub fn new(
-        paragraph: ParagraphId,
-        text_len: u32,
-        resolved_direction: ResolvedDirection,
-    ) -> Self {
-        Self::with_features(
-            paragraph,
-            text_len,
-            resolved_direction,
-            SceneFeatures::EDITABLE,
-        )
-    }
-
-    /// Starts a builder for an exact normalized capability set.
-    #[must_use]
-    pub fn with_features(
-        paragraph: ParagraphId,
-        text_len: u32,
-        resolved_direction: ResolvedDirection,
-        features: SceneFeatures,
+    pub fn with_capacity(
+        lines: usize,
+        runs: usize,
+        glyphs: usize,
+        units: usize,
+        normalized_coords: usize,
     ) -> Self {
         Self {
-            paragraph,
-            text_len,
-            previous_end: 0,
-            failed: false,
-            facts: PreparedParagraphFacts::empty(text_len, resolved_direction, features),
+            lines: Vec::with_capacity(lines),
+            runs: Vec::with_capacity(runs),
+            glyphs: Vec::with_capacity(glyphs),
+            interaction_units: Vec::with_capacity(units),
+            normalized_coords: Vec::with_capacity(normalized_coords),
+            ..Self::new()
         }
     }
 
-    /// Reserves the common final tables without constructing temporary values.
-    pub fn reserve_exact(&mut self, capacity: PreparedParagraphCapacity) {
-        self.facts.lines.reserve_exact(capacity.lines);
-        self.facts.runs.reserve_exact(capacity.runs);
-        self.facts.glyphs.reserve_exact(capacity.glyphs);
-        self.facts
-            .interaction_units
-            .reserve_exact(capacity.interaction_units);
-        self.facts
-            .normalized_coords
-            .reserve_exact(capacity.normalized_coords);
+    /// Returns the number of appended lines.
+    #[must_use]
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
     }
 
-    /// Begins one source-contiguous formed line.
-    ///
-    /// Dropping the returned builder without finishing it poisons this
-    /// paragraph builder, so partial public adapter output cannot be frozen.
-    pub fn begin_line(
-        &mut self,
-        line: PreparedLine,
-    ) -> Result<PreparedLineBuilder<'_>, PreparationError> {
-        if self.failed || line.source.start != self.previous_end || line.source.end > self.text_len
-        {
-            self.failed = true;
+    /// Returns the number of appended runs.
+    #[must_use]
+    pub fn run_count(&self) -> usize {
+        self.runs.len()
+    }
+
+    /// Returns the number of appended glyphs.
+    #[must_use]
+    pub fn glyph_count(&self) -> usize {
+        self.glyphs.len()
+    }
+
+    /// Returns the number of appended interaction units.
+    #[must_use]
+    pub fn unit_count(&self) -> usize {
+        self.interaction_units.len()
+    }
+
+    /// Returns the number of appended normalized coordinates.
+    #[must_use]
+    pub fn normalized_coord_count(&self) -> usize {
+        self.normalized_coords.len()
+    }
+
+    /// Returns the number of appended unrendered source ranges.
+    #[must_use]
+    pub fn unrendered_source_count(&self) -> usize {
+        self.unrendered_source.len()
+    }
+
+    /// Appends normalized variation coordinates in font-axis order.
+    pub fn extend_normalized_coords(&mut self, coords: impl IntoIterator<Item = i16>) {
+        self.normalized_coords.extend(coords);
+    }
+
+    /// Appends one nonempty source range that intentionally emits no glyph.
+    pub fn push_unrendered_source(&mut self, source: Range<u32>) -> Result<(), PreparationError> {
+        if source.start >= source.end {
             return Err(PreparationError::invalid_output());
         }
-        let units_start = self.facts.interaction_units.len();
-        let runs_start = self.facts.runs.len();
-        Ok(PreparedLineBuilder {
-            paragraph: self,
-            line: Some(line),
-            units_start,
-            runs_start,
-            finished: false,
-        })
+        self.unrendered_source.push(source);
+        Ok(())
     }
 
-    /// Freezes the validated canonical tables.
-    pub fn finish(self) -> Result<PreparedParagraph, PreparationError> {
-        if self.failed || self.previous_end != self.text_len {
-            return Err(PreparationError::invalid_output());
+    /// Returns whether one appended glyph range covers `source`.
+    pub fn renders(
+        &self,
+        glyphs: Range<usize>,
+        source: Range<u32>,
+    ) -> Result<bool, PreparationError> {
+        Ok(self
+            .glyphs
+            .get(glyphs)
+            .ok_or_else(PreparationError::invalid_output)?
+            .iter()
+            .any(|glyph| glyph.source.start <= source.start && glyph.source.end >= source.end))
+    }
+
+    /// Compacts and appends one checked shaped glyph.
+    pub fn push_glyph(&mut self, glyph: PreparedGlyph) -> Result<(), PreparationError> {
+        let glyph_index =
+            u32::try_from(self.glyphs.len()).map_err(|_| PreparationError::invalid_output())?;
+        let (glyph, placement, paint) = PreparedGlyphRecord::try_from_glyph(glyph)?;
+        self.glyphs.push(glyph);
+        if let Some(mut placement) = placement {
+            placement.glyph = glyph_index;
+            self.glyph_placements.push(placement);
         }
-        Ok(PreparedParagraph {
-            paragraph: self.paragraph,
-            facts: Arc::new(self.facts),
-        })
+        if !paint.is_whole() {
+            self.split_glyph_paints.push(PreparedSplitGlyphPaint {
+                glyph: glyph_index,
+                coverage: paint,
+            });
+        }
+        Ok(())
     }
-}
 
-/// Streaming construction of one line inside a [`PreparedParagraphBuilder`].
-#[derive(Debug)]
-pub struct PreparedLineBuilder<'a> {
-    paragraph: &'a mut PreparedParagraphBuilder,
-    line: Option<PreparedLine>,
-    units_start: usize,
-    runs_start: usize,
-    finished: bool,
-}
-
-impl PreparedLineBuilder<'_> {
-    /// Appends one visual interaction unit and its shaping slices.
-    ///
-    /// The slices must be nonempty, source-complete, non-overlapping, and have
-    /// the same summed advance as `unit`. The common one-slice case is encoded
-    /// directly in the unit and retains no slice-table entry.
+    /// Appends one visual interaction unit and its checked shaping slices.
     pub fn push_unit(
         &mut self,
         unit: PreparedInteractionUnit,
         slices: impl IntoIterator<Item = PreparedInteractionSlice>,
     ) -> Result<(), PreparationError> {
-        let result = self.try_push_unit(unit, slices.into_iter().map(Ok));
-        if result.is_err() {
-            self.paragraph.failed = true;
-        }
-        result
+        self.push_unit_results(unit, slices.into_iter().map(Ok))
     }
 
-    /// Validates and appends one interaction unit from raw source/advance
-    /// slice pairs.
-    ///
-    /// This is the zero-temporary path for preparation backends whose shaping
-    /// records have not already been converted to [`PreparedInteractionSlice`].
+    /// Appends one visual interaction unit from raw source/advance pairs.
     pub fn push_unit_parts(
         &mut self,
         unit: PreparedInteractionUnit,
         slices: impl IntoIterator<Item = (Range<u32>, f64)>,
     ) -> Result<(), PreparationError> {
-        let result = self.try_push_unit(
+        self.push_unit_results(
             unit,
             slices
                 .into_iter()
                 .map(|(source, advance)| PreparedInteractionSlice::try_new(source, advance)),
-        );
+        )
+    }
+
+    fn push_unit_results(
+        &mut self,
+        unit: PreparedInteractionUnit,
+        slices: impl IntoIterator<Item = Result<PreparedInteractionSlice, PreparationError>>,
+    ) -> Result<(), PreparationError> {
+        let slice_checkpoint = self.interaction_slices.len();
+        let result = self.try_push_unit(unit, slices);
         if result.is_err() {
-            self.paragraph.failed = true;
+            self.interaction_slices.truncate(slice_checkpoint);
         }
         result
     }
@@ -586,38 +599,34 @@ impl PreparedLineBuilder<'_> {
             .ok_or_else(PreparationError::invalid_output)??;
         let second = slices.next().transpose()?;
         if second.is_none() {
-            let slice_source = first.source();
             let tolerance = f64::max(1.0, expected_advance.abs()) * 1.0e-6;
-            if slice_source != source || (first.advance() - expected_advance).abs() > tolerance {
+            if first.source() != source || (first.advance() - expected_advance).abs() > tolerance {
                 return Err(PreparationError::invalid_output());
             }
-            self.paragraph
-                .facts
-                .interaction_units
-                .push(PreparedInteractionUnitRecord::try_from_unit(unit)?);
+            self.interaction_units.push(unit);
             return Ok(());
         }
-        let unit_index = u32::try_from(self.paragraph.facts.interaction_units.len())
+        let unit_index = u32::try_from(self.interaction_units.len())
             .map_err(|_| PreparationError::invalid_output())?;
-
+        let spill_start = self.interaction_slices.len();
         let mut covered = 0_u32;
         let mut advance = 0.0;
-        let spill_start = self.paragraph.facts.interaction_slices.len();
-        let mut count = 0_usize;
         for slice in core::iter::once(Ok(first))
             .chain(second.map(Ok))
             .chain(slices)
         {
             let slice = slice?;
             let slice_source = slice.source();
-            if slice_source.start < source.start || slice_source.end > source.end {
+            if slice_source.start < source.start
+                || slice_source.end > source.end
+                || self.interaction_slices[spill_start..]
+                    .iter()
+                    .any(|previous| {
+                        let previous = previous.source();
+                        slice_source.start < previous.end && previous.start < slice_source.end
+                    })
+            {
                 return Err(PreparationError::invalid_output());
-            }
-            for previous in &self.paragraph.facts.interaction_slices[spill_start..] {
-                let previous = previous.source();
-                if slice_source.start < previous.end && previous.start < slice_source.end {
-                    return Err(PreparationError::invalid_output());
-                }
             }
             covered = covered
                 .checked_add(slice_source.end - slice_source.start)
@@ -626,113 +635,123 @@ impl PreparedLineBuilder<'_> {
             if !advance.is_finite() {
                 return Err(PreparationError::invalid_output());
             }
-            self.paragraph.facts.interaction_slices.push(slice);
-            count += 1;
+            self.interaction_slices.push(slice);
         }
         let tolerance = f64::max(1.0, expected_advance.abs()) * 1.0e-6;
         if covered != source.end - source.start || (advance - expected_advance).abs() > tolerance {
             return Err(PreparationError::invalid_output());
         }
-        debug_assert!(count > 1, "the direct case returned before spill encoding");
-        let spill_end = self.paragraph.facts.interaction_slices.len();
-        let spill_range = TableRange::try_from_usize(spill_start..spill_end)?;
-        self.paragraph
-            .facts
-            .interaction_slice_spills
+        let slices = TableRange::try_from_usize(spill_start..self.interaction_slices.len())?;
+        self.interaction_slice_spills
             .push(PreparedInteractionSliceSpill {
                 unit: unit_index,
-                slices: spill_range.start..spill_range.end,
+                slices: slices.start..slices.end,
             });
-        self.paragraph
-            .facts
-            .interaction_units
-            .push(PreparedInteractionUnitRecord::try_from_unit(unit)?);
+        self.interaction_units.push(unit);
         Ok(())
     }
 
-    /// Begins one visual run and streams its variable-size facts directly into
-    /// the paragraph tables.
-    pub fn begin_run(&mut self, run: PreparedRun) -> PreparedRunBuilder<'_> {
-        let normalized_coords_start = self.paragraph.facts.normalized_coords.len();
-        let unrendered_source_start = self.paragraph.facts.unrendered_source.len();
-        let glyphs_start = self.paragraph.facts.glyphs.len();
-        PreparedRunBuilder {
-            paragraph: self.paragraph,
-            run: Some(run),
-            normalized_coords_start,
-            unrendered_source_start,
-            glyphs_start,
-            finished: false,
+    /// Finishes one run by binding its previously appended table ranges.
+    pub fn push_run(
+        &mut self,
+        mut run: PreparedRun,
+        normalized_coords: Range<usize>,
+        unrendered_source: Range<usize>,
+        glyphs: Range<usize>,
+    ) -> Result<(), PreparationError> {
+        let normalized_coords =
+            checked_table_range(normalized_coords, self.normalized_coords.len())?;
+        let unrendered_source =
+            checked_table_range(unrendered_source, self.unrendered_source.len())?;
+        let glyphs = checked_table_range(glyphs, self.glyphs.len())?;
+        let unrendered = &self.unrendered_source[unrendered_source.as_usize()];
+        let glyph_records = &self.glyphs[glyphs.as_usize()];
+        if glyph_records
+            .iter()
+            .any(|glyph| glyph.source.start < run.source.start || glyph.source.end > run.source.end)
+            || unrendered.iter().enumerate().any(|(index, source)| {
+                source.start < run.source.start
+                    || source.end > run.source.end
+                    || index > 0 && unrendered[index - 1].end >= source.start
+                    || glyph_records.iter().any(|glyph| {
+                        glyph.source.start < source.end && glyph.source.end > source.start
+                    })
+            })
+        {
+            return Err(PreparationError::invalid_output());
         }
+        run.normalized_coords = normalized_coords;
+        run.unrendered_source = unrendered_source;
+        run.glyphs = glyphs;
+        self.runs.push(run);
+        Ok(())
     }
 
-    /// Finishes the line after proving exact run and interaction coverage.
-    pub fn finish(mut self) -> Result<(), PreparationError> {
-        let result = self.try_finish();
-        self.finished = true;
-        if result.is_err() {
-            self.paragraph.failed = true;
-        }
-        result
-    }
-
-    fn try_finish(&mut self) -> Result<(), PreparationError> {
-        let mut line = self
-            .line
-            .take()
-            .ok_or_else(PreparationError::invalid_output)?;
-        let unit_end = self.paragraph.facts.interaction_units.len();
-        let run_end = self.paragraph.facts.runs.len();
-        let units = &self.paragraph.facts.interaction_units[self.units_start..unit_end];
-        let runs = &self.paragraph.facts.runs[self.runs_start..run_end];
-
+    /// Finishes one line by binding its previously appended unit and run ranges.
+    pub fn push_line(
+        &mut self,
+        mut line: PreparedLine,
+        units: Range<usize>,
+        runs: Range<usize>,
+    ) -> Result<(), PreparationError> {
+        let units = checked_table_range(units, self.interaction_units.len())?;
+        let runs = checked_table_range(runs, self.runs.len())?;
+        let unit_records = &self.interaction_units[units.as_usize()];
+        let run_records = &self.runs[runs.as_usize()];
         if line.source.is_empty() {
             if line.break_reason != LineBreakReason::End
                 || line.advance != 0.0
-                || !units.is_empty()
-                || !runs.is_empty()
+                || !unit_records.is_empty()
+                || !run_records.is_empty()
             {
                 return Err(PreparationError::invalid_output());
             }
         } else {
-            validate_run_coverage(line.source.clone(), runs)?;
+            validate_run_coverage(line.source.clone(), run_records)?;
         }
 
-        let source_order_start = self.paragraph.facts.source_order.len();
-        if !units
+        let source_order_start = self.source_order.len();
+        if !unit_records
             .windows(2)
             .all(|pair| pair[0].source().end <= pair[1].source().start)
         {
-            for index in 0..units.len() {
-                self.paragraph
-                    .facts
-                    .source_order
-                    .push(u32::try_from(index).map_err(|_| PreparationError::invalid_output())?);
-            }
-            self.paragraph.facts.source_order[source_order_start..]
-                .sort_unstable_by_key(|&index| units[index as usize].source().start);
+            let unit_count = u32::try_from(unit_records.len())
+                .map_err(|_| PreparationError::invalid_output())?;
+            self.source_order.extend(0..unit_count);
+            self.source_order[source_order_start..]
+                .sort_unstable_by_key(|&index| unit_records[index as usize].source().start);
         }
-        let source_order_end = self.paragraph.facts.source_order.len();
-        let source_order = &self.paragraph.facts.source_order[source_order_start..source_order_end];
+        let source_order =
+            match TableRange::try_from_usize(source_order_start..self.source_order.len()) {
+                Ok(source_order) => source_order,
+                Err(error) => {
+                    self.source_order.truncate(source_order_start);
+                    return Err(error);
+                }
+            };
+        let ordered = &self.source_order[source_order.as_usize()];
         let mut covered = line.source.start;
-        for rank in 0..units.len() {
-            let index = source_order.get(rank).map_or(rank, |&index| index as usize);
-            let range = units[index].source();
+        for rank in 0..unit_records.len() {
+            let index = ordered.get(rank).map_or(rank, |&index| index as usize);
+            let range = unit_records[index].source();
             if range.start != covered || range.end > line.source.end {
+                self.source_order.truncate(source_order_start);
                 return Err(PreparationError::invalid_output());
             }
             covered = range.end;
         }
         if covered != line.source.end {
+            self.source_order.truncate(source_order_start);
             return Err(PreparationError::invalid_output());
         }
 
         let mut trailing_start = line.source.end;
         let mut trailing_advance = 0.0;
-        for rank in (0..units.len()).rev() {
-            let index = source_order.get(rank).map_or(rank, |&index| index as usize);
-            let unit = &units[index];
+        for rank in (0..unit_records.len()).rev() {
+            let index = ordered.get(rank).map_or(rank, |&index| index as usize);
+            let unit = &unit_records[index];
             if unit.source().end != trailing_start {
+                self.source_order.truncate(source_order_start);
                 return Err(PreparationError::invalid_output());
             }
             if unit.whitespace() == ClusterWhitespace::None {
@@ -741,187 +760,95 @@ impl PreparedLineBuilder<'_> {
             trailing_advance += unit.advance();
             trailing_start = unit.source().start;
         }
-        let unit_advance = units
+        let unit_advance = unit_records
             .iter()
-            .map(PreparedInteractionUnitRecord::advance)
+            .map(PreparedInteractionUnit::advance)
             .sum::<f64>();
         let tolerance = f64::max(1.0, line.advance.abs()) * 1.0e-6;
         if (unit_advance - line.advance).abs() > tolerance {
+            self.source_order.truncate(source_order_start);
             return Err(PreparationError::invalid_output());
         }
         line.trailing_whitespace_start = trailing_start;
         line.trailing_whitespace_advance = trailing_advance;
-        self.paragraph.facts.lines.push(PreparedLineRecord {
-            slot: line.slot,
-            source: line.source.clone(),
-            break_reason: line.break_reason,
-            advance: line.advance,
-            trailing_whitespace_start: line.trailing_whitespace_start,
-            trailing_whitespace_advance: line.trailing_whitespace_advance,
-            baseline: line.baseline,
-            height: line.height,
-            content_ascent: line.content_ascent,
-            content_descent: line.content_descent,
-            units: TableRange::try_from_usize(self.units_start..unit_end)?,
-            source_order: TableRange::try_from_usize(source_order_start..source_order_end)?,
-            runs: TableRange::try_from_usize(self.runs_start..run_end)?,
-        });
-        self.paragraph.previous_end = line.source.end;
-        Ok(())
-    }
-}
-
-impl Drop for PreparedLineBuilder<'_> {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.paragraph.failed = true;
-        }
-    }
-}
-
-/// Streaming construction of one run inside a [`PreparedLineBuilder`].
-#[derive(Debug)]
-pub struct PreparedRunBuilder<'a> {
-    paragraph: &'a mut PreparedParagraphBuilder,
-    run: Option<PreparedRun>,
-    normalized_coords_start: usize,
-    unrendered_source_start: usize,
-    glyphs_start: usize,
-    finished: bool,
-}
-
-impl PreparedRunBuilder<'_> {
-    /// Appends normalized variation coordinates in font-axis order.
-    pub fn extend_normalized_coords(&mut self, coords: impl IntoIterator<Item = i16>) {
-        self.paragraph.facts.normalized_coords.extend(coords);
-    }
-
-    /// Appends one source range that intentionally produces no glyph.
-    pub fn push_unrendered_source(&mut self, source: Range<u32>) -> Result<(), PreparationError> {
-        let run = self
-            .run
-            .as_ref()
-            .ok_or_else(PreparationError::invalid_output)?;
-        let previous = self.paragraph.facts.unrendered_source.last().filter(|_| {
-            self.paragraph.facts.unrendered_source.len() > self.unrendered_source_start
-        });
-        if source.start < run.source.start
-            || source.start >= source.end
-            || source.end > run.source.end
-            || previous.is_some_and(|previous| previous.end >= source.start)
-        {
-            self.paragraph.failed = true;
-            return Err(PreparationError::invalid_output());
-        }
-        self.paragraph.facts.unrendered_source.push(source);
+        line.units = units;
+        line.source_order = source_order;
+        line.runs = runs;
+        self.lines.push(line);
         Ok(())
     }
 
-    /// Returns whether a glyph already written to this run covers `source`.
-    #[must_use]
-    pub fn renders(&self, source: Range<u32>) -> bool {
-        self.paragraph.facts.glyphs[self.glyphs_start..]
-            .iter()
-            .any(|glyph| glyph.source.start <= source.start && glyph.source.end >= source.end)
-    }
-
-    /// Appends one checked shaped glyph.
-    pub fn push_glyph(&mut self, glyph: PreparedGlyph) -> Result<(), PreparationError> {
-        let result = self.try_push_glyph(glyph);
-        if result.is_err() {
-            self.paragraph.failed = true;
-        }
-        result
-    }
-
-    fn try_push_glyph(&mut self, glyph: PreparedGlyph) -> Result<(), PreparationError> {
-        let run = self
-            .run
-            .as_ref()
-            .ok_or_else(PreparationError::invalid_output)?;
-        if glyph.source.start < run.source.start || glyph.source.end > run.source.end {
-            self.paragraph.failed = true;
-            return Err(PreparationError::invalid_output());
-        }
-        let glyph_index = u32::try_from(self.paragraph.facts.glyphs.len())
-            .map_err(|_| PreparationError::invalid_output())?;
-        let (glyph, placement, paint) = PreparedGlyphRecord::try_from_glyph(glyph)?;
-        self.paragraph.facts.glyphs.push(glyph);
-        if let Some(mut placement) = placement {
-            placement.glyph = glyph_index;
-            self.paragraph.facts.glyph_placements.push(placement);
-        }
-        if !paint.is_whole() {
-            self.paragraph
-                .facts
-                .split_glyph_paints
-                .push(PreparedSplitGlyphPaint {
-                    glyph: glyph_index,
-                    coverage: paint,
-                });
-        }
-        Ok(())
-    }
-
-    /// Finishes the run after proving exceptional unrendered source does not
-    /// overlap any emitted glyph.
-    pub fn finish(mut self) -> Result<(), PreparationError> {
-        let result = self.try_finish();
-        self.finished = true;
-        if result.is_err() {
-            self.paragraph.failed = true;
-        }
-        result
-    }
-
-    fn try_finish(&mut self) -> Result<(), PreparationError> {
-        let run = self
-            .run
-            .take()
-            .ok_or_else(PreparationError::invalid_output)?;
-        let unrendered_end = self.paragraph.facts.unrendered_source.len();
-        let glyphs_end = self.paragraph.facts.glyphs.len();
-        let unrendered =
-            &self.paragraph.facts.unrendered_source[self.unrendered_source_start..unrendered_end];
-        let glyphs = &self.paragraph.facts.glyphs[self.glyphs_start..glyphs_end];
-        if unrendered.iter().any(|source| {
-            glyphs
+    fn validate_topology(&self, text_len: u32) -> Result<(), PreparationError> {
+        let contiguous_lines = self.lines.iter().try_fold(0_u32, |previous_end, line| {
+            (line.source.start == previous_end && line.source.end <= text_len)
+                .then_some(line.source.end)
+        }) == Some(text_len);
+        let partitions = [
+            table_partition(
+                self.lines.iter().map(|line| line.units),
+                self.interaction_units.len(),
+            ),
+            table_partition(self.lines.iter().map(|line| line.runs), self.runs.len()),
+            table_partition(
+                self.lines.iter().map(|line| line.source_order),
+                self.source_order.len(),
+            ),
+            table_partition(
+                self.runs.iter().map(|run| run.normalized_coords),
+                self.normalized_coords.len(),
+            ),
+            table_partition(
+                self.runs.iter().map(|run| run.unrendered_source),
+                self.unrendered_source.len(),
+            ),
+            table_partition(self.runs.iter().map(|run| run.glyphs), self.glyphs.len()),
+            table_partition(
+                self.interaction_slice_spills
+                    .iter()
+                    .map(|spill| TableRange {
+                        start: spill.slices.start,
+                        end: spill.slices.end,
+                    }),
+                self.interaction_slices.len(),
+            ),
+        ];
+        let spills_valid =
+            self.interaction_slice_spills
                 .iter()
-                .any(|glyph| glyph.source.start < source.end && glyph.source.end > source.start)
-        }) {
+                .enumerate()
+                .all(|(index, spill)| {
+                    usize::try_from(spill.unit)
+                        .is_ok_and(|unit| unit < self.interaction_units.len())
+                        && spill.slices.end - spill.slices.start > 1
+                        && (index == 0
+                            || self.interaction_slice_spills[index - 1].unit < spill.unit)
+                });
+        if !contiguous_lines || partitions.contains(&false) || !spills_valid {
             return Err(PreparationError::invalid_output());
         }
-        self.paragraph.facts.runs.push(PreparedRunRecord {
-            source: run.source,
-            bidi_level: run.bidi_level,
-            script: run.script,
-            font: run.font,
-            font_size: run.font_size,
-            synthesis: run.synthesis,
-            normalized_coords: TableRange::try_from_usize(
-                self.normalized_coords_start..self.paragraph.facts.normalized_coords.len(),
-            )?,
-            unrendered_source: TableRange::try_from_usize(
-                self.unrendered_source_start..unrendered_end,
-            )?,
-            glyphs: TableRange::try_from_usize(self.glyphs_start..glyphs_end)?,
-        });
         Ok(())
     }
 }
 
-impl Drop for PreparedRunBuilder<'_> {
-    fn drop(&mut self) {
-        if !self.finished {
-            self.paragraph.failed = true;
-        }
+fn checked_table_range(range: Range<usize>, len: usize) -> Result<TableRange, PreparationError> {
+    if range.start > range.end || range.end > len {
+        return Err(PreparationError::invalid_output());
     }
+    TableRange::try_from_usize(range)
 }
 
-fn validate_run_coverage(
-    source: Range<u32>,
-    runs: &[PreparedRunRecord],
-) -> Result<(), PreparationError> {
+fn table_partition(ranges: impl IntoIterator<Item = TableRange>, len: usize) -> bool {
+    let mut end = 0;
+    for range in ranges {
+        if range.start as usize != end || range.end < range.start || range.end as usize > len {
+            return false;
+        }
+        end = range.end as usize;
+    }
+    end == len
+}
+
+fn validate_run_coverage(source: Range<u32>, runs: &[PreparedRun]) -> Result<(), PreparationError> {
     let mut covered = source.start;
     let mut consumed = 0_usize;
     while covered < source.end {
@@ -941,29 +868,6 @@ fn validate_run_coverage(
 }
 
 impl PreparedParagraphFacts {
-    fn empty(
-        text_len: u32,
-        resolved_direction: ResolvedDirection,
-        features: SceneFeatures,
-    ) -> Self {
-        Self {
-            text_len,
-            resolved_direction,
-            features,
-            lines: Vec::new(),
-            runs: Vec::new(),
-            glyphs: Vec::new(),
-            glyph_placements: Vec::new(),
-            split_glyph_paints: Vec::new(),
-            interaction_slices: Vec::new(),
-            interaction_slice_spills: Vec::new(),
-            interaction_units: Vec::new(),
-            source_order: Vec::new(),
-            normalized_coords: Vec::new(),
-            unrendered_source: Vec::new(),
-        }
-    }
-
     pub(crate) const fn text_len(&self) -> u32 {
         self.text_len
     }
@@ -1009,8 +913,8 @@ impl PreparedParagraphFacts {
 
     pub(crate) fn estimated_owned_bytes(&self) -> usize {
         let mut bytes = size_of::<Self>()
-            .saturating_add(vec_bytes::<PreparedLineRecord>(self.lines.capacity()))
-            .saturating_add(vec_bytes::<PreparedRunRecord>(self.runs.capacity()))
+            .saturating_add(vec_bytes::<PreparedLine>(self.lines.capacity()))
+            .saturating_add(vec_bytes::<PreparedRun>(self.runs.capacity()))
             .saturating_add(vec_bytes::<PreparedGlyphRecord>(self.glyphs.capacity()))
             .saturating_add(vec_bytes::<PreparedGlyphPlacement>(
                 self.glyph_placements.capacity(),
@@ -1024,7 +928,7 @@ impl PreparedParagraphFacts {
             .saturating_add(vec_bytes::<PreparedInteractionSliceSpill>(
                 self.interaction_slice_spills.capacity(),
             ))
-            .saturating_add(vec_bytes::<PreparedInteractionUnitRecord>(
+            .saturating_add(vec_bytes::<PreparedInteractionUnit>(
                 self.interaction_units.capacity(),
             ))
             .saturating_add(vec_bytes::<u32>(self.source_order.capacity()))
@@ -1059,7 +963,7 @@ pub struct PreparedLineView<'a> {
 }
 
 impl<'a> PreparedLineView<'a> {
-    fn record(self) -> &'a PreparedLineRecord {
+    fn record(self) -> &'a PreparedLine {
         &self.facts.lines[self.index]
     }
 
@@ -1220,7 +1124,7 @@ pub struct PreparedRunView<'a> {
 }
 
 impl<'a> PreparedRunView<'a> {
-    fn record(self) -> &'a PreparedRunRecord {
+    fn record(self) -> &'a PreparedRun {
         &self.facts.runs[self.index]
     }
 
@@ -1382,11 +1286,8 @@ const fn vec_bytes<T>(capacity: usize) -> usize {
     size_of::<T>().saturating_mul(capacity)
 }
 
-/// Checked metadata for one shaped run with a single font instance and bidi level.
-///
-/// A [`PreparedRunBuilder`] streams coordinates, unrendered source, and glyphs
-/// directly into the canonical paragraph tables.
-#[derive(Clone, Debug)]
+/// Checked metadata and table ranges for one shaped font and bidi run.
+#[derive(Debug)]
 pub struct PreparedRun {
     source: Range<u32>,
     bidi_level: u8,
@@ -1394,6 +1295,9 @@ pub struct PreparedRun {
     font: FontData,
     font_size: f32,
     synthesis: FontSynthesis,
+    normalized_coords: TableRange,
+    unrendered_source: TableRange,
+    glyphs: TableRange,
 }
 
 impl PreparedRun {
@@ -1420,6 +1324,9 @@ impl PreparedRun {
             font,
             font_size,
             synthesis,
+            normalized_coords: TableRange::EMPTY,
+            unrendered_source: TableRange::EMPTY,
+            glyphs: TableRange::EMPTY,
         })
     }
 }

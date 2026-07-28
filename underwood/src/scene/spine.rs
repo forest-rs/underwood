@@ -916,13 +916,13 @@ mod tests {
             document,
             index: paragraph,
         };
-        let artifact = crate::adapter::PreparedParagraphBuilder::with_features(
+        let artifact = PreparedParagraph::try_from_data(
             paragraph,
             0,
             ResolvedDirection::Ltr,
             SceneFeatures::DISPLAY,
+            crate::adapter::PreparedParagraphData::new(),
         )
-        .finish()
         .expect("empty test paragraph is valid")
         .shared_facts();
         Arc::new(ParagraphSceneSegment::new(

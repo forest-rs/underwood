@@ -15,7 +15,7 @@ use crate::adapter::{
     ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphInput,
     ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedClusterSide,
     PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
-    PreparedParagraphBuilder, PreparedRun, TextAffinity,
+    PreparedParagraph, PreparedParagraphData, PreparedRun, TextAffinity,
 };
 use crate::{
     AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
@@ -47,13 +47,13 @@ impl ParagraphFormation for EchoAdapter {
         let text_len =
             u32::try_from(input.text().len()).map_err(|_| PreparationError::invalid_output())?;
         if text_len == 0 {
-            let paragraph = PreparedParagraphBuilder::with_features(
+            let paragraph = PreparedParagraph::try_from_data(
                 input.paragraph(),
                 text_len,
                 ResolvedDirection::Ltr,
                 input.features(),
-            )
-            .finish()?;
+                PreparedParagraphData::new(),
+            )?;
             return Ok(ParagraphFormationOutput::new(
                 paragraph,
                 FormationWork::new(true, true, 0, 0, 0, 0, LineShapingWork::default()),
@@ -215,16 +215,11 @@ impl ParagraphFormation for EchoAdapter {
             f64::from(font_size) * 0.75,
             f64::from(font_size) * 0.25,
         )?;
-        let mut paragraph = PreparedParagraphBuilder::with_features(
-            input.paragraph(),
-            text_len,
-            ResolvedDirection::Ltr,
-            input.features(),
-        );
-        let mut line = paragraph.begin_line(line_data)?;
+        let mut data = PreparedParagraphData::with_capacity(1, 1, glyphs.len(), units.len(), 0);
+        let units_start = data.unit_count();
         for unit in units {
             let source = unit.source();
-            line.push_unit(
+            data.push_unit(
                 unit,
                 slices.iter().copied().filter(|slice| {
                     let slice = slice.source();
@@ -232,13 +227,24 @@ impl ParagraphFormation for EchoAdapter {
                 }),
             )?;
         }
-        let mut run_builder = line.begin_run(run);
+        let runs_start = data.run_count();
+        let glyphs_start = data.glyph_count();
         for glyph in glyphs {
-            run_builder.push_glyph(glyph)?;
+            data.push_glyph(glyph)?;
         }
-        run_builder.finish()?;
-        line.finish()?;
-        let paragraph = paragraph.finish()?;
+        data.push_run(run, 0..0, 0..0, glyphs_start..data.glyph_count())?;
+        data.push_line(
+            line_data,
+            units_start..data.unit_count(),
+            runs_start..data.run_count(),
+        )?;
+        let paragraph = PreparedParagraph::try_from_data(
+            input.paragraph(),
+            text_len,
+            ResolvedDirection::Ltr,
+            input.features(),
+            data,
+        )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(
@@ -311,8 +317,13 @@ impl ParagraphFormation for MismatchedEmptyRegionAdapter {
         if !input.text().is_empty() {
             return Err(PreparationError::invalid_output());
         }
-        let paragraph =
-            PreparedParagraphBuilder::new(input.paragraph(), 0, ResolvedDirection::Ltr).finish()?;
+        let paragraph = PreparedParagraph::try_from_data(
+            input.paragraph(),
+            0,
+            ResolvedDirection::Ltr,
+            crate::SceneFeatures::EDITABLE,
+            PreparedParagraphData::new(),
+        )?;
         let flow = constraints
             .region_flow()
             .ok_or_else(PreparationError::invalid_output)?;
@@ -471,12 +482,13 @@ fn shared_hit_is_revalidated_against_the_current_projection() {
         )
         .expect("seed preparation succeeds");
 
-    let poisoned = PreparedParagraphBuilder::new(
+    let poisoned = PreparedParagraph::try_from_data(
         first.snapshot().paragraphs()[0].id,
         0,
         ResolvedDirection::Ltr,
+        crate::SceneFeatures::EDITABLE,
+        PreparedParagraphData::new(),
     )
-    .finish()
     .expect("empty prepared facts are internally valid");
     layout.replace_first_shared_facts_for_test(poisoned.shared_facts());
 

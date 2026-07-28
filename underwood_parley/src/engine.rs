@@ -17,8 +17,8 @@ use parley_engine::{Analysis, Analyzer, ShapedText, Shaper};
 use underwood::adapter::{
     FormationWork, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
     ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphFormationReuse,
-    ParagraphInput, ParagraphPreparationId, PreparationError, PreparedLine,
-    PreparedParagraphBuilder, PreparedParagraphCapacity, PreparedRun,
+    ParagraphInput, ParagraphPreparationId, PreparationError, PreparedLine, PreparedParagraph,
+    PreparedParagraphData, PreparedRun,
 };
 use underwood::{RegionAttempt, RegionTranscript, ResolvedDirection};
 
@@ -31,7 +31,7 @@ use crate::line_break::{
 };
 use crate::lowering::{
     append_unrendered_source, checked_source_range, index_char_starts, lower_glyphs_into,
-    lowered_glyph_count, portable_synthesis,
+    portable_synthesis,
 };
 use crate::shaping::{
     analyze_text_with_styles_into, prepare_inline_flow_indices,
@@ -436,19 +436,39 @@ impl ParagraphFormation for ParleyParagraphEngine {
         } else {
             ResolvedDirection::Ltr
         };
-        let mut paragraph = PreparedParagraphBuilder::with_features(
-            input.paragraph(),
-            text_len,
-            resolved_direction,
-            input.features(),
+        let formed_line_count = preparation.formed_lines.len();
+        let (run_capacity, normalized_coord_capacity, reshaped_glyph_capacity) =
+            preparation.formed_lines.iter().fold(
+                (0_usize, 0_usize, 0_usize),
+                |(run_count, coord_count, glyph_count), formed| {
+                    let (runs, coords, glyphs) =
+                        formed.prepared_table_capacity(&preparation.shaped_text);
+                    (
+                        run_count.saturating_add(runs),
+                        coord_count.saturating_add(coords),
+                        glyph_count.saturating_add(glyphs),
+                    )
+                },
+            );
+        let glyph_capacity = preparation
+            .analysis
+            .char_info()
+            .len()
+            .saturating_add(preparation.shaped_text.glyphs().len())
+            .saturating_add(reshaped_glyph_capacity);
+        let mut data = PreparedParagraphData::with_capacity(
+            formed_line_count,
+            run_capacity,
+            glyph_capacity,
+            preparation.interaction_units.len(),
+            normalized_coord_capacity,
         );
-        paragraph.reserve_exact(prepared_capacity(input.text(), preparation)?);
         for formed in &preparation.formed_lines {
             let plan = &formed.plan;
             let shaped_text = formed.shaping(&preparation.shaped_text);
             line_run_pieces_into(shaped_text, plan.clusters.clone(), &mut self.run_pieces)?;
             reorder_visual_pieces(shaped_text, &mut self.run_pieces);
-            let mut line = paragraph.begin_line(PreparedLine::try_new_in_slot(
+            let line = PreparedLine::try_new_in_slot(
                 plan.slot,
                 checked_source_range(&plan.source)?,
                 plan.reason,
@@ -457,7 +477,8 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 plan.height,
                 plan.content_ascent,
                 plan.content_descent,
-            )?)?;
+            )?;
+            let units_start = data.unit_count();
             lower_visual_units(
                 input.text(),
                 &preparation.analysis,
@@ -468,8 +489,9 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 &plan.source,
                 plan.reason == LineBreakReason::Mandatory,
                 &mut self.interaction_scratch,
-                &mut line,
+                &mut data,
             )?;
+            let runs_start = data.run_count();
             for piece in &self.run_pieces {
                 let run = shaped_text
                     .runs()
@@ -498,17 +520,19 @@ impl ParagraphFormation for ParleyParagraphEngine {
                         + usize::from(last.text_offset)
                         + usize::from(last.text_len);
                 let synthesis = portable_synthesis(font.synthesis)?;
-                let mut prepared_run = line.begin_run(PreparedRun::try_new(
+                let prepared_run = PreparedRun::try_new(
                     checked_source_range(&source)?,
                     run.bidi_level,
                     run.script.to_bytes(),
                     font.font.clone(),
                     run.font_size,
                     synthesis,
-                )?);
-                prepared_run.extend_normalized_coords(
+                )?;
+                let normalized_coords_start = data.normalized_coord_count();
+                data.extend_normalized_coords(
                     normalized_coords.iter().map(|coord| coord.to_bits()),
                 );
+                let glyphs_start = data.glyph_count();
                 lower_glyphs_into(
                     input.text(),
                     &preparation.analysis,
@@ -517,20 +541,38 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     run,
                     piece.clusters.clone(),
                     input.paint_runs(),
-                    &mut prepared_run,
+                    &mut data,
                 )?;
+                let glyphs_end = data.glyph_count();
+                let unrendered_source_start = data.unrendered_source_count();
                 append_unrendered_source(
                     input.text(),
                     &preparation.analysis,
                     &preparation.char_starts,
                     source.clone(),
-                    &mut prepared_run,
+                    glyphs_start..glyphs_end,
+                    &mut data,
                 )?;
-                prepared_run.finish()?;
+                data.push_run(
+                    prepared_run,
+                    normalized_coords_start..data.normalized_coord_count(),
+                    unrendered_source_start..data.unrendered_source_count(),
+                    glyphs_start..glyphs_end,
+                )?;
             }
-            line.finish()?;
+            data.push_line(
+                line,
+                units_start..data.unit_count(),
+                runs_start..data.run_count(),
+            )?;
         }
-        let paragraph = paragraph.finish()?;
+        let paragraph = PreparedParagraph::try_from_data(
+            input.paragraph(),
+            text_len,
+            resolved_direction,
+            input.features(),
+            data,
+        )?;
         let region_transcript = preparation.region_transcript.clone();
         match region_transcript {
             Some(transcript) => Ok(ParagraphFormationOutput::in_regions(
@@ -620,42 +662,6 @@ struct PreparationCache {
     region_transcript: Option<RegionTranscript>,
     last_used: u64,
     accounted_bytes: usize,
-}
-
-fn prepared_capacity(
-    text: &str,
-    preparation: &PreparationCache,
-) -> Result<PreparedParagraphCapacity, PreparationError> {
-    let mut runs = 0_usize;
-    let mut glyphs = 0_usize;
-    let mut normalized_coords = 0_usize;
-    for formed in &preparation.formed_lines {
-        let shaped_text = formed.shaping(&preparation.shaped_text);
-        for run in shaped_text.runs() {
-            let start = run.clusters_range.start.max(formed.plan.clusters.start);
-            let end = run.clusters_range.end.min(formed.plan.clusters.end);
-            if start < end {
-                runs = runs.saturating_add(1);
-                normalized_coords =
-                    normalized_coords.saturating_add(run.normalized_coords_range.len());
-                glyphs = glyphs.saturating_add(lowered_glyph_count(
-                    text,
-                    &preparation.analysis,
-                    &preparation.char_starts,
-                    shaped_text,
-                    run,
-                    start..end,
-                )?);
-            }
-        }
-    }
-    Ok(PreparedParagraphCapacity::new(
-        preparation.formed_lines.len(),
-        runs,
-        glyphs,
-        preparation.interaction_units.len(),
-    )
-    .with_normalized_coords(normalized_coords))
 }
 
 impl PreparationCache {

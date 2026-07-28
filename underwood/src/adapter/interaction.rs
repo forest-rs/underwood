@@ -137,13 +137,11 @@ impl PreparedInteractionSlice {
 #[derive(Clone, Debug)]
 pub struct PreparedInteractionUnit {
     source: Range<u32>,
-    advance: f64,
+    advance: f32,
     bidi_level: u8,
     boundary: ClusterBoundary,
     whitespace: ClusterWhitespace,
-    western_justification_opportunity: bool,
-    left: PreparedClusterSide,
-    right: PreparedClusterSide,
+    flags: u8,
 }
 
 impl PreparedInteractionUnit {
@@ -195,15 +193,28 @@ impl PreparedInteractionUnit {
         {
             return Err(PreparationError::invalid_output());
         }
+        let advance =
+            compact_shaping_coordinate(advance).ok_or_else(PreparationError::invalid_output)?;
+        let mut flags = 0;
+        if left.offset == source.start {
+            flags |= LEFT_IS_SOURCE_START;
+        }
+        if left.affinity == TextAffinity::Upstream {
+            flags |= LEFT_IS_UPSTREAM;
+        }
+        if right.affinity == TextAffinity::Upstream {
+            flags |= RIGHT_IS_UPSTREAM;
+        }
+        if western_justification_opportunity {
+            flags |= WESTERN_JUSTIFICATION;
+        }
         Ok(Self {
             source,
             advance,
             bidi_level,
             boundary,
             whitespace,
-            western_justification_opportunity,
-            left,
-            right,
+            flags,
         })
     }
 
@@ -215,8 +226,8 @@ impl PreparedInteractionUnit {
 
     /// Returns the visual inline advance.
     #[must_use]
-    pub const fn advance(&self) -> f64 {
-        self.advance
+    pub fn advance(&self) -> f64 {
+        f64::from(self.advance)
     }
 
     /// Returns the resolved bidi level.
@@ -241,86 +252,12 @@ impl PreparedInteractionUnit {
     /// justification opportunity.
     #[must_use]
     pub const fn is_western_justification_opportunity(&self) -> bool {
-        self.western_justification_opportunity
+        self.flags & WESTERN_JUSTIFICATION != 0
     }
 
     /// Returns the position reached from the visual left side.
     #[must_use]
     pub const fn left(&self) -> PreparedClusterSide {
-        self.left
-    }
-
-    /// Returns the position reached from the visual right side.
-    #[must_use]
-    pub const fn right(&self) -> PreparedClusterSide {
-        self.right
-    }
-}
-
-const LEFT_IS_SOURCE_START: u8 = 1 << 0;
-const LEFT_IS_UPSTREAM: u8 = 1 << 1;
-const RIGHT_IS_UPSTREAM: u8 = 1 << 2;
-const WESTERN_JUSTIFICATION: u8 = 1 << 3;
-
-/// Compact canonical form of one validated interaction unit.
-#[derive(Debug)]
-pub(crate) struct PreparedInteractionUnitRecord {
-    source: Range<u32>,
-    advance: f32,
-    bidi_level: u8,
-    boundary: ClusterBoundary,
-    whitespace: ClusterWhitespace,
-    flags: u8,
-}
-
-impl PreparedInteractionUnitRecord {
-    pub(crate) fn try_from_unit(unit: PreparedInteractionUnit) -> Result<Self, PreparationError> {
-        let advance = compact_shaping_coordinate(unit.advance)
-            .ok_or_else(PreparationError::invalid_output)?;
-        let mut flags = 0;
-        if unit.left.offset == unit.source.start {
-            flags |= LEFT_IS_SOURCE_START;
-        }
-        if unit.left.affinity == TextAffinity::Upstream {
-            flags |= LEFT_IS_UPSTREAM;
-        }
-        if unit.right.affinity == TextAffinity::Upstream {
-            flags |= RIGHT_IS_UPSTREAM;
-        }
-        if unit.western_justification_opportunity {
-            flags |= WESTERN_JUSTIFICATION;
-        }
-        Ok(Self {
-            source: unit.source,
-            advance,
-            bidi_level: unit.bidi_level,
-            boundary: unit.boundary,
-            whitespace: unit.whitespace,
-            flags,
-        })
-    }
-
-    pub(crate) fn source(&self) -> Range<u32> {
-        self.source.clone()
-    }
-
-    const fn direct_slice(&self) -> PreparedInteractionSlice {
-        PreparedInteractionSlice {
-            source_start: self.source.start,
-            source_end: self.source.end,
-            advance: self.advance,
-        }
-    }
-
-    pub(crate) fn advance(&self) -> f64 {
-        f64::from(self.advance)
-    }
-
-    pub(crate) const fn whitespace(&self) -> ClusterWhitespace {
-        self.whitespace
-    }
-
-    pub(crate) const fn left(&self) -> PreparedClusterSide {
         PreparedClusterSide::new(
             if self.flags & LEFT_IS_SOURCE_START != 0 {
                 self.source.start
@@ -335,7 +272,9 @@ impl PreparedInteractionUnitRecord {
         )
     }
 
-    pub(crate) const fn right(&self) -> PreparedClusterSide {
+    /// Returns the position reached from the visual right side.
+    #[must_use]
+    pub const fn right(&self) -> PreparedClusterSide {
         PreparedClusterSide::new(
             if self.flags & LEFT_IS_SOURCE_START != 0 {
                 self.source.end
@@ -349,7 +288,24 @@ impl PreparedInteractionUnitRecord {
             },
         )
     }
+
+    const fn direct_slice(&self) -> PreparedInteractionSlice {
+        PreparedInteractionSlice {
+            source_start: self.source.start,
+            source_end: self.source.end,
+            advance: self.advance,
+        }
+    }
+
+    fn retained_advance(&self) -> f64 {
+        f64::from(self.advance)
+    }
 }
+
+const LEFT_IS_SOURCE_START: u8 = 1 << 0;
+const LEFT_IS_UPSTREAM: u8 = 1 << 1;
+const RIGHT_IS_UPSTREAM: u8 = 1 << 2;
+const WESTERN_JUSTIFICATION: u8 = 1 << 3;
 
 /// Exceptional retained shaping slices for one multi-slice interaction unit.
 #[derive(Debug)]
@@ -361,7 +317,7 @@ pub(crate) struct PreparedInteractionSliceSpill {
 /// Borrowed interaction unit with access to its line-local shaping slices.
 #[derive(Clone, Copy, Debug)]
 pub struct PreparedInteractionUnitView<'a> {
-    unit: &'a PreparedInteractionUnitRecord,
+    unit: &'a PreparedInteractionUnit,
     spilled_slices: Option<&'a [PreparedInteractionSlice]>,
 }
 
@@ -384,7 +340,7 @@ impl<'a> PreparedInteractionUnitView<'a> {
     /// Returns the visual inline advance.
     #[must_use]
     pub fn advance(self) -> f64 {
-        self.unit.advance()
+        self.unit.retained_advance()
     }
 
     /// Returns the resolved bidi level.
@@ -503,7 +459,7 @@ impl ExactSizeIterator for PreparedInteractionSlices<'_> {}
 impl core::iter::FusedIterator for PreparedInteractionSlices<'_> {}
 
 pub(crate) fn prepared_interaction_unit_view<'a>(
-    units: &'a [PreparedInteractionUnitRecord],
+    units: &'a [PreparedInteractionUnit],
     slices: &'a [PreparedInteractionSlice],
     spills: &'a [PreparedInteractionSliceSpill],
     index: usize,

@@ -13,7 +13,7 @@ use core::ops::Range;
 use fontique::Synthesis;
 use parley_engine::{Analysis, ShapedText, shape::ClusterData};
 use underwood::adapter::{
-    FontSynthesis, GlyphPaintCoverage, PreparationError, PreparedGlyph, PreparedRunBuilder,
+    FontSynthesis, GlyphPaintCoverage, PreparationError, PreparedGlyph, PreparedParagraphData,
 };
 use underwood::{FontVariation, Tag, Vec2};
 
@@ -25,7 +25,7 @@ pub(crate) fn lower_glyphs_into(
     run: &parley_engine::ShapedRun,
     cluster_range: Range<usize>,
     paint_runs: &[underwood::adapter::PaintRun],
-    output: &mut PreparedRunBuilder<'_>,
+    output: &mut PreparedParagraphData,
 ) -> Result<(), PreparationError> {
     let clusters = shaped_text
         .clusters()
@@ -83,47 +83,6 @@ pub(crate) fn lower_glyphs_into(
     Ok(())
 }
 
-pub(crate) fn lowered_glyph_count(
-    text: &str,
-    analysis: &Analysis,
-    char_starts: &[u32],
-    shaped_text: &ShapedText,
-    run: &parley_engine::ShapedRun,
-    cluster_range: Range<usize>,
-) -> Result<usize, PreparationError> {
-    let clusters = shaped_text
-        .clusters()
-        .get(run.clusters_range.clone())
-        .ok_or_else(PreparationError::invalid_output)?;
-    let start = cluster_range
-        .start
-        .checked_sub(run.clusters_range.start)
-        .ok_or_else(PreparationError::invalid_output)?;
-    let end = cluster_range
-        .end
-        .checked_sub(run.clusters_range.start)
-        .ok_or_else(PreparationError::invalid_output)?;
-    if start >= end || end > clusters.len() {
-        return Err(PreparationError::invalid_output());
-    }
-    let mut count = 0_usize;
-    for index in start..end {
-        let cluster = &clusters[index];
-        if cluster.is_ligature_component() {
-            continue;
-        }
-        let source = cluster_source(run, clusters, index)?;
-        if source_contributes_to_shaping(text, analysis, char_starts, &source)? {
-            count = count.saturating_add(if cluster.glyph_len == u8::MAX {
-                1
-            } else {
-                usize::from(cluster.glyph_len)
-            });
-        }
-    }
-    Ok(count)
-}
-
 fn source_contributes_to_shaping(
     text: &str,
     analysis: &Analysis,
@@ -149,7 +108,8 @@ pub(crate) fn append_unrendered_source(
     analysis: &Analysis,
     char_starts: &[u32],
     source: Range<usize>,
-    output: &mut PreparedRunBuilder<'_>,
+    glyphs: Range<usize>,
+    output: &mut PreparedParagraphData,
 ) -> Result<(), PreparationError> {
     let source_text = text
         .get(source.clone())
@@ -168,7 +128,7 @@ pub(crate) fn append_unrendered_source(
             .checked_add(character.len_utf8())
             .ok_or_else(PreparationError::invalid_output)?;
         let range = checked_source_range(&(start..end))?;
-        if output.renders(range.clone()) {
+        if output.renders(glyphs.clone(), range.clone())? {
             continue;
         }
         let info = analysis

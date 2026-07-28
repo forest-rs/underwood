@@ -74,6 +74,33 @@ impl FormedLine {
         }
     }
 
+    pub(crate) fn prepared_table_capacity(
+        &self,
+        canonical_text: &ShapedText,
+    ) -> (usize, usize, usize) {
+        let shaped = self.shaping(canonical_text);
+        let runs = shaped.runs();
+        let range = match &self.shaping {
+            FormedLineShaping::Canonical => {
+                let start =
+                    runs.partition_point(|run| run.clusters_range.end <= self.plan.clusters.start);
+                let end =
+                    runs.partition_point(|run| run.clusters_range.start < self.plan.clusters.end);
+                start..end
+            }
+            FormedLineShaping::Reshaped(_) => 0..runs.len(),
+        };
+        let normalized_coords = runs[range.clone()]
+            .iter()
+            .map(|run| run.normalized_coords_range.len())
+            .sum();
+        let glyphs = match &self.shaping {
+            FormedLineShaping::Canonical => 0,
+            FormedLineShaping::Reshaped(_) => shaped.glyphs().len(),
+        };
+        (range.len(), normalized_coords, glyphs)
+    }
+
     fn into_reshaped(self) -> Option<ShapedText> {
         match self.shaping {
             FormedLineShaping::Canonical => None,

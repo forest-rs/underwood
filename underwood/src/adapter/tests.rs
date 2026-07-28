@@ -9,9 +9,8 @@ use peniko::Blob;
 use super::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, GlyphPaintCoverage, GlyphPaintSegment,
     LineBreakReason, PreparationErrorKind, PreparedClusterSide, PreparedGlyph,
-    PreparedInteractionSlice, PreparedInteractionSliceSpill, PreparedInteractionUnit,
-    PreparedInteractionUnitRecord, PreparedLine, PreparedParagraph, PreparedParagraphBuilder,
-    PreparedRun, TextAffinity,
+    PreparedInteractionSlice, PreparedInteractionSliceSpill, PreparedInteractionUnit, PreparedLine,
+    PreparedParagraph, PreparedParagraphData, PreparedRun, TextAffinity,
 };
 use crate::{
     DocumentId, FontData, FontVariation, PaintSlot, ParagraphId, Rect, ResolvedDirection, Tag, Vec2,
@@ -19,7 +18,7 @@ use crate::{
 
 #[test]
 fn ordinary_interaction_units_do_not_retain_slice_ranges() {
-    assert_eq!(size_of::<PreparedInteractionUnitRecord>(), 16);
+    assert_eq!(size_of::<PreparedInteractionUnit>(), 16);
     assert_eq!(size_of::<PreparedInteractionSliceSpill>(), 12);
 }
 
@@ -137,20 +136,19 @@ fn prepared_paragraph_rejects_a_gap_between_lines() {
 }
 
 #[test]
-fn dropping_an_unfinished_line_poisons_the_paragraph_builder() {
-    let mut paragraph =
-        PreparedParagraphBuilder::new(test_paragraph(20), 0, ResolvedDirection::Ltr);
-    {
-        let _unfinished = paragraph
-            .begin_line(
-                PreparedLine::try_new(0..0, LineBreakReason::End, 0.0, 8.0, 10.0, 8.0, 2.0)
-                    .expect("empty line metadata is valid"),
-            )
-            .expect("the line begins");
-    }
-    let error = paragraph
-        .finish()
-        .expect_err("a partially streamed line must never publish");
+fn partial_flat_data_never_publishes() {
+    let mut data = PreparedParagraphData::new();
+    let (slices, mut units) = interaction(0..1, 1.0);
+    data.push_unit(units.remove(0), slices)
+        .expect("the unit itself is valid");
+    let error = PreparedParagraph::try_from_data(
+        test_paragraph(20),
+        1,
+        ResolvedDirection::Ltr,
+        crate::SceneFeatures::EDITABLE,
+        data,
+    )
+    .expect_err("unbound flat records must never publish");
     assert_eq!(error.kind(), PreparationErrorKind::InvalidOutput);
 }
 
@@ -392,12 +390,12 @@ fn build_paragraph(
     direction: ResolvedDirection,
     lines: impl IntoIterator<Item = TestLine>,
 ) -> Result<PreparedParagraph, super::PreparationError> {
-    let mut builder = PreparedParagraphBuilder::new(paragraph, text_len, direction);
+    let mut data = PreparedParagraphData::new();
     for test_line in lines {
-        let mut line = builder.begin_line(test_line.line)?;
+        let units_start = data.unit_count();
         for unit in test_line.units {
             let source = unit.source();
-            line.push_unit(
+            data.push_unit(
                 unit,
                 test_line.slices.iter().copied().filter(|slice| {
                     let slice = slice.source();
@@ -405,18 +403,36 @@ fn build_paragraph(
                 }),
             )?;
         }
+        let runs_start = data.run_count();
         for test_run in test_line.runs {
-            let mut run = line.begin_run(test_run.run);
-            run.extend_normalized_coords(test_run.normalized_coords);
+            let normalized_coords_start = data.normalized_coord_count();
+            data.extend_normalized_coords(test_run.normalized_coords);
+            let glyphs_start = data.glyph_count();
             for glyph in test_run.glyphs {
-                run.push_glyph(glyph)?;
+                data.push_glyph(glyph)?;
             }
+            let unrendered_source_start = data.unrendered_source_count();
             for source in test_run.unrendered_source {
-                run.push_unrendered_source(source)?;
+                data.push_unrendered_source(source)?;
             }
-            run.finish()?;
+            data.push_run(
+                test_run.run,
+                normalized_coords_start..data.normalized_coord_count(),
+                unrendered_source_start..data.unrendered_source_count(),
+                glyphs_start..data.glyph_count(),
+            )?;
         }
-        line.finish()?;
+        data.push_line(
+            test_line.line,
+            units_start..data.unit_count(),
+            runs_start..data.run_count(),
+        )?;
     }
-    builder.finish()
+    PreparedParagraph::try_from_data(
+        paragraph,
+        text_len,
+        direction,
+        crate::SceneFeatures::EDITABLE,
+        data,
+    )
 }

@@ -512,9 +512,9 @@ than being mislabeled as complete conceptual simplification.
 
 ## Conceptual compaction after Design-0021
 
-**Status:** Active — Design-0022 accepted; direct scene traversal and prepared
-iterator-container deletion landed on the campaign branch; flat adapter
-construction is next
+**Status:** Active — Design-0022 accepted; direct scene traversal,
+prepared-iterator deletion, and flat checked adapter ingestion are complete on
+the campaign branch; committed/projected convergence and numeric closure remain
 
 **Beads:** `und-0re` and its dependency-ordered children. The separate
 authoring campaign is `und-oh0.18`; its golden call sites inform this work but
@@ -599,6 +599,24 @@ types whose only behavior is field access.
 6. Perform a final Alder/Cedar/Rook/Stoat audit, land the campaign, and leave a
    measured engineering ledger that distinguishes architectural deletion from
    runtime wins.
+
+### Progress
+
+- Slice 1 deleted the non-operational display/source/semantic facade taxonomy
+  and made successful capability-session acquisition O(1).
+- Slice 2 deleted the four prepared line/run/glyph/unit traversal containers
+  in favor of direct indexed views and ordinary opaque iterators.
+- Slice 3 deleted the nested paragraph/line/run construction state machines,
+  their poisoning protocol, the capacity-counting lowering pass, and the
+  separate line/run/interaction record mirrors. One flat
+  `PreparedParagraphData` now crosses one final checked ingestion boundary.
+- The affected production screen is 17,823 Rust code lines, down from 18,407.
+  The 17,000-line floor and the 16,000-line working target remain open; the
+  next deletion target is committed/projected scene-query duplication.
+- Slice 3 preserves the immediately preceding localized-edit allocation shape
+  at 15 actual calls / 2,886 bytes and keeps repeat/query operations
+  allocation-free. The final full-sample churn, latency, residency,
+  portability, and source matrix remains blocking.
 
 ### Risks and controls
 

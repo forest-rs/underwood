@@ -14,7 +14,7 @@ use parley_engine::{Analysis, Boundary, ShapedText, shape::Whitespace};
 use underwood::TextAffinity;
 use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, PreparationError, PreparedClusterSide,
-    PreparedInteractionUnit, PreparedLineBuilder,
+    PreparedInteractionUnit, PreparedParagraphData,
 };
 
 use crate::line_break::RunPiece;
@@ -98,7 +98,7 @@ pub(crate) fn lower_visual_units(
     line_source: &Range<usize>,
     mandatory_line_end: bool,
     scratch: &mut InteractionScratch,
-    output: &mut PreparedLineBuilder<'_>,
+    output: &mut PreparedParagraphData,
 ) -> Result<(), PreparationError> {
     let slice_count = pieces.iter().map(|piece| piece.clusters.len()).sum();
     let InteractionScratch {
@@ -218,7 +218,7 @@ fn lower_prepared_unit(
     source: &Range<usize>,
     slices: &[VisualInteractionSlice],
     mandatory_line_end: bool,
-    output: &mut PreparedLineBuilder<'_>,
+    output: &mut PreparedParagraphData,
 ) -> Result<(), PreparationError> {
     let logical_first = slices
         .iter()

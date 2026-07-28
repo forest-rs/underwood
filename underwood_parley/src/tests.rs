@@ -14,8 +14,7 @@ use underwood::adapter::{
     LineBreakReason as TestLineBreakReason, LineShapingWork, ParagraphConstraints,
     ParagraphFormation, ParagraphFormationCacheDiagnostics, ParagraphFormationOutput,
     PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
-    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphBuilder,
-    PreparedRun,
+    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphData, PreparedRun,
 };
 use underwood::{
     AnalysisStyle, BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId,
@@ -141,13 +140,7 @@ impl ParagraphFormation for AnalysisCursorProof {
         let unit_count = u32::try_from(units.len())
             .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
         let advance = units.len() as f64;
-        let mut paragraph = PreparedParagraphBuilder::with_features(
-            input.paragraph(),
-            source.end,
-            ResolvedDirection::Ltr,
-            input.features(),
-        );
-        let mut line = paragraph.begin_line(PreparedLine::try_new(
+        let line = PreparedLine::try_new(
             source.clone(),
             TestLineBreakReason::End,
             advance,
@@ -155,7 +148,9 @@ impl ParagraphFormation for AnalysisCursorProof {
             1.0,
             0.8,
             0.2,
-        )?)?;
+        )?;
+        let mut data = PreparedParagraphData::with_capacity(1, 1, units.len(), units.len(), 0);
+        let units_start = data.unit_count();
         for source in &units {
             let source = checked_source_range(source)?;
             let unit = PreparedInteractionUnit::try_new(
@@ -167,7 +162,7 @@ impl ParagraphFormation for AnalysisCursorProof {
                 PreparedClusterSide::new(source.start, TextAffinity::Downstream),
                 PreparedClusterSide::new(source.end, TextAffinity::Upstream),
             )?;
-            line.push_unit(unit, [PreparedInteractionSlice::try_new(source, 1.0)?])?;
+            data.push_unit(unit, [PreparedInteractionSlice::try_new(source, 1.0)?])?;
         }
         let run = PreparedRun::try_new(
             source.clone(),
@@ -177,7 +172,8 @@ impl ParagraphFormation for AnalysisCursorProof {
             16.0,
             FontSynthesis::default(),
         )?;
-        let mut run = line.begin_run(run);
+        let runs_start = data.run_count();
+        let glyphs_start = data.glyph_count();
         for (id, source) in units.iter().enumerate() {
             let source = checked_source_range(source)?;
             input
@@ -189,7 +185,7 @@ impl ParagraphFormation for AnalysisCursorProof {
                 })
                 .ok_or_else(underwood::adapter::PreparationError::invalid_output)?;
             let paint = GlyphPaintCoverage::whole();
-            run.push_glyph(PreparedGlyph::try_new(
+            data.push_glyph(PreparedGlyph::try_new(
                 u32::try_from(id).unwrap_or(u32::MAX),
                 source,
                 Vec2::new(1.0, 0.0),
@@ -197,9 +193,19 @@ impl ParagraphFormation for AnalysisCursorProof {
                 paint,
             )?)?;
         }
-        run.finish()?;
-        line.finish()?;
-        let paragraph = paragraph.finish()?;
+        data.push_run(run, 0..0, 0..0, glyphs_start..data.glyph_count())?;
+        data.push_line(
+            line,
+            units_start..data.unit_count(),
+            runs_start..data.run_count(),
+        )?;
+        let paragraph = PreparedParagraph::try_from_data(
+            input.paragraph(),
+            source.end,
+            ResolvedDirection::Ltr,
+            input.features(),
+            data,
+        )?;
         Ok(ParagraphFormationOutput::new(
             paragraph,
             FormationWork::new(
