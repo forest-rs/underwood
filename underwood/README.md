@@ -204,7 +204,7 @@ warm edits or capability upgrades opt in with
 drops that state without invalidating caller-held scenes. A later upgrade is
 then allowed to re-form only its target and reports a cold capability upgrade;
 with resident facts it reports a warm upgrade and repeats no formation work.
-`CacheDiagnostics::adapter_facts` exposes deterministic resident/peak bytes,
+`CacheDiagnostics::adapter_facts` exposes deterministic resident bytes,
 known scratch, hits, misses, evictions, and releases. Shared font blobs and
 caller-held scenes are outside that charge.
 
@@ -234,10 +234,9 @@ line height, and no text baseline.
 
 Line formation is observable independently of shaping.
 [`WorkReport::line_candidates`] counts proposed candidates,
-[`WorkReport::rejected_line_candidates`] exposes fit-changing retries, and
-[`WorkReport::line_checkpoint_restores`] records rewinds of traversal and
-provisional output. These counters are actual work from the current call;
-they are not retained paragraph preparation.
+and [`WorkReport::rejected_line_candidates`] exposes fit-changing retries.
+These counters are actual work from the current call; they are not retained
+paragraph preparation.
 
 `ComputedInlineStyle` clones share the owned family, feature, and variation
 arrays. `BlockRequest` goes further and borrows one caller-owned style, so any

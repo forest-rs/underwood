@@ -63,7 +63,6 @@ fn product_path_restores_text_after_height_rejection_and_continues_in_a_column()
         0
     );
     assert!(output.work.rejected_line_candidates >= 1);
-    assert!(output.work.line_checkpoint_restores >= 1);
     let trace = output.trace.expect("trace was requested");
     assert_eq!(trace.region_attempts, transcript.attempts().len());
     assert_eq!(trace.region_height_rejections, 1);

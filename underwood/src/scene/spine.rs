@@ -45,10 +45,8 @@ pub(super) struct SceneSummary {
     pub(super) block_extent: f64,
     pub(super) lines: usize,
     pub(super) fragments: usize,
-    pub(super) clusters: usize,
     pub(super) movements: usize,
     pub(super) texts: usize,
-    pub(super) semantics: usize,
     pub(super) min_x: f64,
     pub(super) max_x: f64,
     pub(super) min_y: f64,
@@ -77,10 +75,8 @@ impl Default for SceneSummary {
             block_extent: 0.0,
             lines: 0,
             fragments: 0,
-            clusters: 0,
             movements: 0,
             texts: 0,
-            semantics: 0,
             min_x: 0.0,
             max_x: 0.0,
             min_y: 0.0,
@@ -136,13 +132,11 @@ impl SceneSummary {
             block_extent: geometry.height,
             lines: geometry.lines.len(),
             fragments: segment.paint.fragments.len(),
-            clusters: geometry.hit_geometry.len(),
             movements: geometry.movement_count(),
             texts: geometry
                 .source_map
                 .as_ref()
                 .map_or(0, ParagraphSourceMap::leaf_count),
-            semantics: geometry.semantics.len(),
             min_x,
             max_x,
             min_y,
@@ -188,10 +182,8 @@ impl SceneSummary {
             },
             lines: left.lines.saturating_add(right.lines),
             fragments: left.fragments.saturating_add(right.fragments),
-            clusters: left.clusters.saturating_add(right.clusters),
             movements: left.movements.saturating_add(right.movements),
             texts: left.texts.saturating_add(right.texts),
-            semantics: left.semantics.saturating_add(right.semantics),
             min_x: left.min_x.min(right.min_x),
             max_x: left.max_x.max(right.max_x),
             min_y: left.min_y.min(right.min_y + right_origin),
@@ -454,10 +446,7 @@ impl SceneSpine {
 
     pub(super) fn positioned_movement(&self, index: usize) -> Option<PositionedMovement<'_>> {
         self.positioned_record(index, |summary| summary.movements)
-            .map(|(position, local)| PositionedMovement {
-                position,
-                _local: local,
-            })
+            .map(|(position, _)| PositionedMovement { position })
     }
 
     pub(super) fn positioned_text(&self, index: usize) -> Option<PositionedText<'_>> {
@@ -728,10 +717,8 @@ pub(super) struct SegmentPosition {
     pub(super) paragraph_base: usize,
     pub(super) line_base: usize,
     pub(super) fragment_base: usize,
-    pub(super) cluster_base: usize,
     pub(super) movement_base: usize,
     pub(super) text_base: usize,
-    pub(super) semantic_base: usize,
 }
 
 impl SegmentPosition {
@@ -742,10 +729,8 @@ impl SegmentPosition {
         self.paragraph_base = self.paragraph_base.saturating_add(summary.paragraphs);
         self.line_base = self.line_base.saturating_add(summary.lines);
         self.fragment_base = self.fragment_base.saturating_add(summary.fragments);
-        self.cluster_base = self.cluster_base.saturating_add(summary.clusters);
         self.movement_base = self.movement_base.saturating_add(summary.movements);
         self.text_base = self.text_base.saturating_add(summary.texts);
-        self.semantic_base = self.semantic_base.saturating_add(summary.semantics);
     }
 }
 
@@ -770,7 +755,6 @@ pub(super) struct PositionedFragment<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PositionedMovement<'a> {
     pub(super) position: PositionedSegment<'a>,
-    pub(super) _local: usize,
 }
 
 #[derive(Clone, Copy, Debug)]

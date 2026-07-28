@@ -28,12 +28,6 @@ pub struct SceneResidencyBytes {
     pub semantics: usize,
     /// Point-hit cluster and visual-slice bytes.
     pub hit_testing: usize,
-    /// Caret and selection-geometry bytes.
-    pub selection: usize,
-    /// Logical and visual movement-graph bytes.
-    pub navigation: usize,
-    /// Bytes unique to native text-input queries.
-    pub native_text_input: usize,
 }
 
 impl SceneResidencyBytes {
@@ -43,9 +37,6 @@ impl SceneResidencyBytes {
         sources: usize,
         semantics: usize,
         hit_testing: usize,
-        selection: usize,
-        navigation: usize,
-        native_text_input: usize,
     ) -> Self {
         Self {
             structure: 0,
@@ -54,9 +45,6 @@ impl SceneResidencyBytes {
             sources,
             semantics,
             hit_testing,
-            selection,
-            navigation,
-            native_text_input,
         }
     }
 
@@ -71,11 +59,6 @@ impl SceneResidencyBytes {
         self.sources = self.sources.saturating_add(other.sources);
         self.semantics = self.semantics.saturating_add(other.semantics);
         self.hit_testing = self.hit_testing.saturating_add(other.hit_testing);
-        self.selection = self.selection.saturating_add(other.selection);
-        self.navigation = self.navigation.saturating_add(other.navigation);
-        self.native_text_input = self
-            .native_text_input
-            .saturating_add(other.native_text_input);
     }
 
     /// Returns the saturating sum of every reported category.
@@ -87,9 +70,6 @@ impl SceneResidencyBytes {
             .saturating_add(self.sources)
             .saturating_add(self.semantics)
             .saturating_add(self.hit_testing)
-            .saturating_add(self.selection)
-            .saturating_add(self.navigation)
-            .saturating_add(self.native_text_input)
     }
 }
 

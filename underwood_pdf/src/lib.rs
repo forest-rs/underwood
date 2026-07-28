@@ -17,14 +17,14 @@ use std::ops::Range;
 
 use krilla::Document;
 use krilla::color::rgb;
-use krilla::geom::{PathBuilder, Point as KrillaPoint, Rect as KrillaRect, Transform};
+use krilla::geom::{Point as KrillaPoint, Transform};
 use krilla::num::NormalizedF32;
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use underwood::{
-    Affine, Brush, DocumentSnapshot, FontData, PaintSlot, Point, Rect, SceneFragmentId,
-    SceneFragmentView, SceneGlyphInstanceId, SceneGlyphView, SnapshotTextRange, TextScene, Vec2,
+    Brush, DocumentSnapshot, FontData, PaintSlot, Point, SceneFragmentId, SceneFragmentView,
+    SceneGlyphView, SnapshotTextRange, TextScene, Vec2,
 };
 
 /// Dimensions and scene origin for one exported PDF page.
@@ -194,16 +194,6 @@ pub fn to_pdf(
             let fill = solid_fill(scene, group.paint, group.fragment)?;
             surface.set_fill(Some(fill));
 
-            let clipped = if let Some(clip) = group.paint_clip {
-                let path = clip_path(clip, group.fragment)?;
-                surface.push_clip_path(&path, &FillRule::NonZero);
-                true
-            } else {
-                false
-            };
-
-            let transform = krilla_transform(group.transform, group.fragment)?;
-            surface.push_transform(&transform);
             for glyphs in group
                 .glyphs
                 .chunk_by(|first, second| first.text_carrier == second.text_carrier)
@@ -217,10 +207,6 @@ pub fn to_pdf(
                     font.clone(),
                     !glyphs[0].text_carrier,
                 )?;
-            }
-            surface.pop();
-            if clipped {
-                surface.pop();
             }
         }
     }
@@ -242,8 +228,6 @@ struct PreparedGroup {
     fragment: SceneFragmentId,
     glyphs: Vec<PreparedGlyph>,
     paint: PaintSlot,
-    transform: Affine,
-    paint_clip: Option<Rect>,
     font: FontData,
     font_size: f32,
     bidi_level: u8,
@@ -285,7 +269,6 @@ fn prepare_scene(
             .map_err(|_| PdfError::new(PdfErrorKind::MissingSourceCapability, None))?;
         let map = LineSourceMap::new(snapshot, line_sources)?;
         let mut groups: Vec<PreparedGroup> = Vec::new();
-        let mut seen_instances: Vec<SceneGlyphInstanceId> = Vec::new();
         for fragment_index in line.fragment_range() {
             let fragment = scene
                 .fragment(fragment_index)
@@ -295,13 +278,12 @@ fn prepare_scene(
             }
             let group = groups.last_mut().expect("a group was just established");
             for glyph in fragment.glyphs() {
-                let text_carrier = claim_text_carrier(&mut seen_instances, glyph.instance_id());
                 group.glyphs.push(PreparedGlyph {
                     id: glyph.id(),
                     position: glyph.position(),
                     advance: glyph.advance(),
                     text_range: map.glyph_range(glyph, fragment.id())?,
-                    text_carrier,
+                    text_carrier: true,
                 });
             }
         }
@@ -314,15 +296,6 @@ fn prepare_scene(
         });
     }
     Ok((lines, fonts))
-}
-
-fn claim_text_carrier<Identity: Copy + Eq>(seen: &mut Vec<Identity>, identity: Identity) -> bool {
-    if seen.contains(&identity) {
-        false
-    } else {
-        seen.push(identity);
-        true
-    }
 }
 
 fn validate_fragment(
@@ -354,10 +327,6 @@ fn validate_fragment(
         ));
     }
     let _ = solid_fill(scene, fragment.paint(), fragment.id())?;
-    let _ = krilla_transform(fragment.transform(), fragment.id())?;
-    if let Some(clip) = fragment.paint_clip() {
-        let _ = clip_path(clip, fragment.id())?;
-    }
     for glyph in fragment.glyphs() {
         let _ = glyph_text(snapshot, glyph, fragment.id())?;
         let _ = finite_f32(glyph.position().x, Some(fragment.id()))?;
@@ -375,8 +344,6 @@ impl PreparedGroup {
             fragment: fragment.id(),
             glyphs: Vec::new(),
             paint: fragment.paint(),
-            transform: fragment.transform(),
-            paint_clip: fragment.paint_clip(),
             font: fragment.font().clone(),
             font_size: fragment.font_size(),
             bidi_level: fragment.bidi_level(),
@@ -385,8 +352,6 @@ impl PreparedGroup {
 
     fn matches(&self, fragment: SceneFragmentView<'_>) -> bool {
         self.paint == fragment.paint()
-            && self.transform == fragment.transform()
-            && self.paint_clip == fragment.paint_clip()
             && self.font == *fragment.font()
             && self.font_size == fragment.font_size()
             && self.bidi_level == fragment.bidi_level()
@@ -483,20 +448,6 @@ impl LineSourceMap {
         .ok()?;
         Some(segment.text_range.start + start..segment.text_range.start + end)
     }
-}
-
-fn clip_path(clip: Rect, fragment: SceneFragmentId) -> Result<krilla::geom::Path, PdfError> {
-    let rect = KrillaRect::from_ltrb(
-        finite_f32(clip.x0, Some(fragment))?,
-        finite_f32(clip.y0, Some(fragment))?,
-        finite_f32(clip.x1, Some(fragment))?,
-        finite_f32(clip.y1, Some(fragment))?,
-    )
-    .ok_or_else(|| PdfError::new(PdfErrorKind::CoordinateOutOfRange, Some(fragment)))?;
-    let mut path = PathBuilder::new();
-    path.push_rect(rect);
-    path.finish()
-        .ok_or_else(|| PdfError::new(PdfErrorKind::CoordinateOutOfRange, Some(fragment)))
 }
 
 fn draw_prepared_glyphs(
@@ -617,18 +568,6 @@ fn source_text<'a>(
         .ok_or_else(|| PdfError::new(PdfErrorKind::InvalidSource, fragment))
 }
 
-fn krilla_transform(transform: Affine, fragment: SceneFragmentId) -> Result<Transform, PdfError> {
-    let [a, b, c, d, e, f] = transform.as_coeffs();
-    Ok(Transform::from_row(
-        finite_f32(a, Some(fragment))?,
-        finite_f32(b, Some(fragment))?,
-        finite_f32(c, Some(fragment))?,
-        finite_f32(d, Some(fragment))?,
-        finite_f32(e, Some(fragment))?,
-        finite_f32(f, Some(fragment))?,
-    ))
-}
-
 fn validate_snapshot(scene: &TextScene, snapshot: &DocumentSnapshot) -> Result<(), PdfError> {
     if scene.document() != snapshot.id() || scene.revision() != snapshot.revision() {
         return Err(PdfError::new(PdfErrorKind::WrongSnapshot, None));
@@ -649,7 +588,7 @@ fn finite_f32(value: f64, fragment: Option<SceneFragmentId>) -> Result<f32, PdfE
 
 #[cfg(test)]
 mod tests {
-    use super::{PdfErrorKind, PdfPage, claim_text_carrier};
+    use super::{PdfErrorKind, PdfPage};
     use underwood::Point;
 
     #[test]
@@ -668,14 +607,5 @@ mod tests {
                 .kind(),
             PdfErrorKind::InvalidPage
         );
-    }
-
-    #[test]
-    fn only_first_partial_paint_observation_carries_text() {
-        let mut seen = Vec::new();
-
-        assert!(claim_text_carrier(&mut seen, 17_u8));
-        assert!(!claim_text_carrier(&mut seen, 17_u8));
-        assert!(claim_text_carrier(&mut seen, 18_u8));
     }
 }

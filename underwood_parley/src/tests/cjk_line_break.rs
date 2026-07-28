@@ -154,7 +154,7 @@ fn public_scene_path_preserves_cjk_word_break_policy() {
             .with_analysis(AnalysisStyle::new(WordBreak::KeepAll)),
     );
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid")
     ])
     .expect("fixture catalog is valid")
     .with_system_fonts();

@@ -10,12 +10,12 @@ use super::{
     CacheBudget, LayoutEngine, append_analysis_run, append_inline_flow_run, append_shaping_run,
 };
 use crate::adapter::{
-    ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
-    GlyphPaintSegment, LineBreakReason, LineShapingWork, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationCacheDiagnostics, ParagraphFormationOutput, ParagraphInput,
-    ParagraphPreparationId, PreparationError, PreparationErrorKind, PreparedClusterSide,
-    PreparedGlyph, PreparedInteractionSlice, PreparedInteractionUnit, PreparedLine,
-    PreparedParagraph, PreparedParagraphData, PreparedRun, TextAffinity,
+    ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, LineBreakReason,
+    LineShapingWork, ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
+    ParagraphFormationOutput, ParagraphInput, ParagraphPreparationId, PreparationError,
+    PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
+    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphData, PreparedRun,
+    TextAffinity,
 };
 use crate::{
     AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
@@ -32,8 +32,6 @@ use crate::{
 #[derive(Debug)]
 struct EchoAdapter {
     split_utf8: bool,
-    split_paint: bool,
-    mismatched_paint: bool,
     glyphless: bool,
     interior_cursor: bool,
 }
@@ -71,59 +69,12 @@ impl ParagraphFormation for EchoAdapter {
         let glyphs = if self.glyphless {
             Vec::new()
         } else {
-            let paint = if self.split_paint {
-                let [first, second] = input.paint_runs else {
-                    return Err(PreparationError::invalid_output());
-                };
-                GlyphPaintCoverage::try_from_segments([
-                    GlyphPaintSegment::clipped(
-                        first.bytes(),
-                        first.slot(),
-                        Rect::new(0.0, -8.0, 5.0, 2.0),
-                    )?,
-                    GlyphPaintSegment::clipped(
-                        second.bytes(),
-                        second.slot(),
-                        Rect::new(5.0, -8.0, 10.0, 2.0),
-                    )?,
-                ])?
-            } else if self.mismatched_paint {
-                if glyph_source.end - glyph_source.start < 2 {
-                    return Err(PreparationError::invalid_output());
-                }
-                let middle = glyph_source.start + 1;
-                GlyphPaintCoverage::try_from_segments([
-                    GlyphPaintSegment::clipped(
-                        glyph_source.start..middle,
-                        PaintSlot::new(99),
-                        Rect::new(0.0, -8.0, 5.0, 2.0),
-                    )?,
-                    GlyphPaintSegment::clipped(
-                        middle..glyph_source.end,
-                        PaintSlot::new(99),
-                        Rect::new(5.0, -8.0, 10.0, 2.0),
-                    )?,
-                ])?
-            } else {
-                GlyphPaintCoverage::whole()
-            };
-            let offset = if self.split_paint {
-                Vec2::new(3.0, 4.0)
-            } else {
-                Vec2::ZERO
-            };
             vec![PreparedGlyph::try_new(
                 7,
                 glyph_source,
                 Vec2::new(10., 0.),
-                offset,
-                paint,
+                Vec2::ZERO,
             )?]
-        };
-        let synthesis = if self.split_paint {
-            FontSynthesis::try_new([], false, Some(14.0))?
-        } else {
-            FontSynthesis::default()
         };
         let run = PreparedRun::try_new(
             0..text_len,
@@ -131,7 +82,7 @@ impl ParagraphFormation for EchoAdapter {
             *b"Latn",
             FontData::new(Blob::from(vec![0_u8]), 0),
             input.shaping_styles[input.shaping_runs[0].style().index()].font_size(),
-            synthesis,
+            FontSynthesis::default(),
         )?;
         let font_size = input.shaping_styles[input.shaping_runs[0].style().index()].font_size();
         let line_height = f64::from(
@@ -150,7 +101,6 @@ impl ParagraphFormation for EchoAdapter {
                 vec![
                     PreparedInteractionUnit::try_new(
                         0..1,
-                        5.0,
                         0,
                         ClusterBoundary::None,
                         ClusterWhitespace::None,
@@ -159,39 +109,10 @@ impl ParagraphFormation for EchoAdapter {
                     )?,
                     PreparedInteractionUnit::try_new(
                         1..text_len,
-                        5.0,
                         0,
                         ClusterBoundary::None,
                         ClusterWhitespace::None,
                         PreparedClusterSide::new(1, TextAffinity::Downstream),
-                        end,
-                    )?,
-                ],
-            )
-        } else if self.split_paint {
-            let middle = input.paint_runs[0].bytes().end;
-            (
-                vec![
-                    PreparedInteractionSlice::try_new(0..middle, 5.0)?,
-                    PreparedInteractionSlice::try_new(middle..text_len, 5.0)?,
-                ],
-                vec![
-                    PreparedInteractionUnit::try_new(
-                        0..middle,
-                        5.0,
-                        0,
-                        ClusterBoundary::None,
-                        ClusterWhitespace::None,
-                        start,
-                        PreparedClusterSide::new(middle, TextAffinity::Downstream),
-                    )?,
-                    PreparedInteractionUnit::try_new(
-                        middle..text_len,
-                        5.0,
-                        0,
-                        ClusterBoundary::None,
-                        ClusterWhitespace::None,
-                        PreparedClusterSide::new(middle, TextAffinity::Upstream),
                         end,
                     )?,
                 ],
@@ -201,7 +122,6 @@ impl ParagraphFormation for EchoAdapter {
                 vec![PreparedInteractionSlice::try_new(0..text_len, 10.0)?],
                 vec![PreparedInteractionUnit::try_new(
                     0..text_len,
-                    10.0,
                     0,
                     ClusterBoundary::None,
                     ClusterWhitespace::None,
@@ -213,7 +133,6 @@ impl ParagraphFormation for EchoAdapter {
         let line_data = PreparedLine::try_new(
             0..text_len,
             LineBreakReason::End,
-            10.0,
             line_height / 2.0,
             line_height,
             f64::from(font_size) * 0.75,
@@ -265,7 +184,6 @@ impl ParagraphFormation for EchoAdapter {
                     shaped_glyphs: 5,
                     candidates: 6,
                     rejected_candidates: 1,
-                    checkpoint_restores: 2,
                 },
             },
         ))
@@ -286,8 +204,6 @@ impl ParagraphFormation for RetainingInvalidAdapter {
         self.retained = true;
         EchoAdapter {
             split_utf8: true,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         }
@@ -380,8 +296,6 @@ impl ParagraphFormation for SharedEligibilityAdapter {
         self.calls.set(self.calls.get().saturating_add(1));
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         }
@@ -586,8 +500,6 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -686,8 +598,6 @@ fn preparation_trace_distinguishes_reuse_invalidation_and_memory_classes() {
     let mut untraced = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -711,8 +621,6 @@ fn region_request_rejects_an_adapter_that_ignores_exact_slots() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -777,8 +685,6 @@ fn layout_rejects_adapter_ranges_inside_a_utf8_scalar() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: true,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -814,8 +720,6 @@ fn layout_rejects_a_cursor_inside_a_utf8_scalar() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: true,
         },
@@ -840,8 +744,6 @@ fn layout_rejects_glyphless_non_control_source() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: true,
             interior_cursor: false,
         },
@@ -865,8 +767,6 @@ fn layout_rejects_partially_unmapped_run_source() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: true,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -885,43 +785,12 @@ fn layout_rejects_partially_unmapped_run_source() {
 }
 
 #[test]
-fn layout_reports_adapter_paint_mismatch_as_invalid_preparation() {
-    let (document, styles, paint) = one_leaf_document(*b"scene-test-doc12", "ab");
-    let mut layout = LayoutEngine::new(
-        EchoAdapter {
-            split_utf8: false,
-            split_paint: false,
-            mismatched_paint: true,
-            glyphless: false,
-            interior_cursor: false,
-        },
-        CacheBudget::new(32),
-    );
-    let request = SceneRequest::new(
-        TextConstraint::Wrap(FiniteWidth::new(100.0).expect("test width is valid")),
-        &styles,
-        &paint,
-    );
-    let error = layout
-        .prepare(&document.snapshot(), &request)
-        .expect_err("adapter paint must match the projected paint run");
-    assert_eq!(error.kind(), SceneErrorKind::Preparation);
-    assert_eq!(
-        error.preparation(),
-        Some(PreparationErrorKind::InvalidOutput)
-    );
-    assert_eq!(error.source(), Some(0..1));
-}
-
-#[test]
 fn fragment_identity_is_distinct_across_documents() {
     let (first, first_styles, first_paint) = one_leaf_document(*b"scene-test-doc02", "a");
     let (second, second_styles, second_paint) = one_leaf_document(*b"scene-test-doc03", "b");
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -947,7 +816,6 @@ fn fragment_identity_is_distinct_across_documents() {
     assert_eq!(first_scene.work.line_candidates, 6);
     assert_eq!(first_scene.work.rejected_line_candidates, 1);
     assert_eq!(first_scene.work.accepted_line_candidates(), 5);
-    assert_eq!(first_scene.work.line_checkpoint_restores, 2);
     let second_request =
         SceneRequest::new(TextConstraint::Wrap(width), &second_styles, &second_paint);
     let second_scene = layout
@@ -957,15 +825,6 @@ fn fragment_identity_is_distinct_across_documents() {
         first_scene.scene.fragment(0).expect("fragment").id(),
         second_scene.scene.fragment(0).expect("fragment").id(),
         "document identity must participate in retained fragment identity"
-    );
-    assert_eq!(
-        first_scene
-            .scene
-            .fragment(0)
-            .expect("fragment")
-            .paint_clip(),
-        None,
-        "ordinary whole-glyph paint must not create a renderer clip"
     );
 }
 
@@ -978,8 +837,6 @@ fn paragraph_style_override_from_another_document_is_rejected() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1001,8 +858,6 @@ fn feature_override_from_another_document_is_rejected_on_an_exact_scene_hit() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1038,8 +893,6 @@ fn composition_whitespace_collapse_retains_complete_generated_provenance() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1115,8 +968,6 @@ fn position_index_maps_authored_boundaries_through_whitespace_collapse() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1147,7 +998,7 @@ fn position_index_maps_authored_boundaries_through_whitespace_collapse() {
 }
 
 #[test]
-fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
+fn glyph_crossing_paint_runs_is_rejected() {
     let mut document = Document::new(DocumentId::from_bytes(*b"scene-test-doc11"));
     let mut edit = document.edit();
     let paragraph = edit
@@ -1182,70 +1033,18 @@ fn explicit_split_paint_lowers_one_glyph_through_two_clipped_fragments() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: true,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
         CacheBudget::new(32),
     );
-    let output = layout
+    let error = layout
         .prepare(&document.snapshot(), &request)
-        .expect("explicitly clipped split paint must lower");
-    let mut fragments = output.scene.fragments();
-    let first = fragments.next().expect("first split fragment");
-    let second = fragments.next().expect("second split fragment");
-    assert!(fragments.next().is_none());
-
+        .expect_err("one shaped glyph cannot carry two complete paints");
+    assert_eq!(error.kind(), SceneErrorKind::Preparation);
     assert_eq!(
-        first.glyphs().first().expect("first glyph").id(),
-        second.glyphs().first().expect("second glyph").id()
-    );
-    assert_eq!(
-        first.glyphs().first().expect("first glyph").instance_id(),
-        second.glyphs().first().expect("second glyph").instance_id(),
-        "partial-paint observations must retain one shaped-glyph identity"
-    );
-    assert_eq!(
-        first.glyphs().first().expect("first glyph").position(),
-        second.glyphs().first().expect("second glyph").position(),
-        "paint splitting must not duplicate shaping or move the glyph"
-    );
-    assert_eq!(first.paint(), PaintSlot::new(0));
-    assert_eq!(second.paint(), PaintSlot::new(1));
-    assert_eq!(
-        first
-            .source()
-            .expect("fragment retains sources")
-            .expect("first source")
-            .text(),
-        first_text
-    );
-    assert_eq!(
-        second
-            .source()
-            .expect("fragment retains sources")
-            .expect("second source")
-            .text(),
-        second_text
-    );
-    assert!(first.synthesis().skew_transform().is_some());
-    let origin = first.glyphs().first().expect("first glyph").position();
-    assert_eq!(first.paint_clip().expect("first clip").x0, origin.x);
-    assert_eq!(first.paint_clip().expect("first clip").x1, origin.x + 5.0);
-    assert_eq!(first.paint_clip().expect("first clip").y0, origin.y - 8.0);
-    assert_eq!(first.paint_clip().expect("first clip").y1, origin.y + 2.0);
-    assert_eq!(second.paint_clip().expect("second clip").x0, origin.x + 5.0);
-    assert_eq!(
-        second.paint_clip().expect("second clip").x1,
-        origin.x + 10.0
-    );
-    assert_eq!(second.paint_clip().expect("second clip").y0, origin.y - 8.0);
-    assert_eq!(second.paint_clip().expect("second clip").y1, origin.y + 2.0);
-    assert_eq!(
-        output.scene.line(0).expect("line").fragment_range(),
-        0..2,
-        "the line must identify both paint fragments directly"
+        error.preparation(),
+        Some(PreparationErrorKind::UnsupportedPaintCoverage)
     );
 }
 
@@ -1377,8 +1176,6 @@ fn empty_paragraph_line_height_has_a_flow_identity() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1409,8 +1206,6 @@ fn composition_epochs_preserve_generated_provenance_and_committed_cache() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1695,8 +1490,6 @@ fn unrelated_equal_styles_use_checked_value_preflight() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1765,8 +1558,6 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -1779,30 +1570,6 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
                 .with_features(crate::SceneFeatures::DISPLAY.with_sources()),
         )
         .expect("initial scene prepares");
-    let first_target_glyph = first
-        .scene
-        .fragments()
-        .find(|fragment| {
-            fragment
-                .sources()
-                .expect("fixture retains source provenance")
-                .any(|source| source.text() == texts[1])
-        })
-        .and_then(|fragment| fragment.glyphs().next())
-        .expect("old target glyph exists")
-        .instance_id();
-    let first_after_glyph = first
-        .scene
-        .fragments()
-        .find(|fragment| {
-            fragment
-                .sources()
-                .expect("fixture retains source provenance")
-                .any(|source| source.text() == texts[2])
-        })
-        .and_then(|fragment| fragment.glyphs().next())
-        .expect("old trailing glyph exists")
-        .instance_id();
     let repainted = layout
         .prepare(
             &first_snapshot,
@@ -1870,38 +1637,6 @@ fn localized_publication_shares_scene_segments_and_binds_revisions_lazily() {
         ),
         "localized publication must replace the changed paragraph segment"
     );
-    let second_target_glyph = second
-        .scene
-        .fragments()
-        .find(|fragment| {
-            fragment
-                .sources()
-                .expect("fixture retains source provenance")
-                .any(|source| source.text() == texts[1])
-        })
-        .and_then(|fragment| fragment.glyphs().next())
-        .expect("new target glyph exists")
-        .instance_id();
-    let second_after_glyph = second
-        .scene
-        .fragments()
-        .find(|fragment| {
-            fragment
-                .sources()
-                .expect("fixture retains source provenance")
-                .any(|source| source.text() == texts[2])
-        })
-        .and_then(|fragment| fragment.glyphs().next())
-        .expect("new trailing glyph exists")
-        .instance_id();
-    assert_ne!(
-        first_target_glyph, second_target_glyph,
-        "replaced paragraph geometry must receive distinct glyph identities"
-    );
-    assert_eq!(
-        first_after_glyph, second_after_glyph,
-        "shared paragraph geometry must retain glyph identities despite changed prefixes"
-    );
     assert!(
         first.scene.fragments().all(|fragment| {
             fragment
@@ -1943,8 +1678,6 @@ fn no_op_publication_reuses_the_exact_scene_core_at_the_new_revision() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2012,8 +1745,6 @@ fn localized_style_branch_prepares_only_its_paragraph() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2086,8 +1817,6 @@ fn appended_paragraph_extends_the_persistent_scene_path() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2173,8 +1902,6 @@ fn composition_replaces_only_its_persistent_paragraph_path() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2339,8 +2066,6 @@ fn composition_residency_never_evicts_committed_geometry() {
         .with_preparation_trace();
     let adapter = || EchoAdapter {
         split_utf8: false,
-        split_paint: false,
-        mismatched_paint: false,
         glyphless: false,
         interior_cursor: false,
     };
@@ -2618,8 +2343,6 @@ fn composition_projection_rejects_a_missing_semantic_target() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2642,8 +2365,6 @@ fn display_scene_excludes_interaction_and_reports_requested_resident_capabilitie
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2729,8 +2450,6 @@ fn source_observation_is_bound_to_each_view() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2809,8 +2528,6 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     let mut layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },
@@ -2880,8 +2597,6 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     assert_eq!(display_residency.resident, crate::SceneFeatures::DISPLAY);
     assert_eq!(display_residency.bytes.sources, 0);
     assert_eq!(display_residency.bytes.hit_testing, 0);
-    assert_eq!(display_residency.bytes.selection, 0);
-    assert_eq!(display_residency.bytes.navigation, 0);
 
     let editor_residency = paragraphs
         .iter()
@@ -2892,10 +2607,7 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     assert_eq!(editor_residency.resident, crate::SceneFeatures::EDITABLE);
     assert!(editor_residency.bytes.sources > 0);
     assert!(editor_residency.bytes.hit_testing > 0);
-    assert_eq!(editor_residency.bytes.selection, 0);
-    assert_eq!(editor_residency.bytes.navigation, 0);
     assert_eq!(editor_residency.bytes.semantics, 0);
-    assert_eq!(editor_residency.bytes.native_text_input, 0);
 
     let cache_residency = layout.cache_diagnostics().scene_cache_residency;
     assert_eq!(
@@ -2910,8 +2622,6 @@ fn sparse_editable_override_does_not_promote_a_display_sibling() {
     let mut complete_layout = LayoutEngine::new(
         EchoAdapter {
             split_utf8: false,
-            split_paint: false,
-            mismatched_paint: false,
             glyphless: false,
             interior_cursor: false,
         },

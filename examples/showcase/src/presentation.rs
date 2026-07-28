@@ -124,20 +124,6 @@ impl<'a> AnyFragment<'a> {
         }
     }
 
-    fn transform(self) -> Affine {
-        match self {
-            Self::Committed(fragment) => fragment.transform(),
-            Self::Projected(fragment) => fragment.transform(),
-        }
-    }
-
-    fn paint_clip(self) -> Option<Rect> {
-        match self {
-            Self::Committed(fragment) => fragment.paint_clip(),
-            Self::Projected(fragment) => fragment.paint_clip(),
-        }
-    }
-
     fn font(self) -> &'a FontData {
         match self {
             Self::Committed(fragment) => fragment.font(),
@@ -765,21 +751,13 @@ impl<'a> TextSceneAdapter<'a> {
                 x: finite_f32(glyph.position().x),
                 y: finite_f32(glyph.position().y),
             });
-            let transform = self.placement * fragment.transform();
-            let draw = |painter: &mut Painter<'_, S>| {
-                painter
-                    .glyphs(fragment.font(), brush)
-                    .transform(transform)
-                    .glyph_transform(fragment.synthesis().skew_transform())
-                    .font_size(fragment.font_size())
-                    .normalized_coords(fragment.normalized_coords())
-                    .draw(&fill, glyphs);
-            };
-            if let Some(clip) = fragment.paint_clip() {
-                painter.with_fill_clip_transformed(clip, self.placement, draw);
-            } else {
-                draw(painter);
-            }
+            painter
+                .glyphs(fragment.font(), brush)
+                .transform(self.placement)
+                .glyph_transform(fragment.synthesis().skew_transform())
+                .font_size(fragment.font_size())
+                .normalized_coords(fragment.normalized_coords())
+                .draw(&fill, glyphs);
         }
 
         self.paint_editor_marks(painter, overlay);
@@ -915,18 +893,11 @@ impl<'a> TextSceneAdapter<'a> {
                 )
                 .transform(self.placement)
                 .draw();
-            if let Some(clip) = fragment.paint_clip() {
-                painter
-                    .stroke(clip, &Stroke::new(1.4), CORAL.with_alpha(0.9))
-                    .transform(self.placement)
-                    .draw();
-            }
         }
     }
 
     fn paint_glyph_diagnostics<S: PaintSink + ?Sized>(&self, painter: &mut Painter<'_, S>) {
         for fragment in self.fragments.clone() {
-            let transform = self.placement * fragment.transform();
             for glyph in fragment.glyphs() {
                 let origin = glyph.position();
                 let end = origin + glyph.advance();
@@ -942,18 +913,18 @@ impl<'a> TextSceneAdapter<'a> {
                         &Stroke::new(if owns_multiple_sources { 1.6 } else { 0.75 }),
                         color.with_alpha(0.72),
                     )
-                    .transform(transform)
+                    .transform(self.placement)
                     .draw();
                 painter
                     .fill(
                         Circle::new(origin, if owns_multiple_sources { 2.8 } else { 1.7 }),
                         color.with_alpha(0.92),
                     )
-                    .transform(transform)
+                    .transform(self.placement)
                     .draw();
                 painter
                     .fill(Circle::new(end, 0.9), color.with_alpha(0.52))
-                    .transform(transform)
+                    .transform(self.placement)
                     .draw();
             }
         }
@@ -991,14 +962,13 @@ impl<'a> TextSceneAdapter<'a> {
 fn fragment_advance_envelope(fragment: AnyFragment<'_>, lines: AnyLines<'_>) -> Option<Rect> {
     let mut glyphs = fragment.glyphs();
     let first = glyphs.next()?;
-    let transform = fragment.transform();
-    let first_origin = transform * first.position();
-    let first_end = transform * (first.position() + first.advance());
+    let first_origin = first.position();
+    let first_end = first.position() + first.advance();
     let mut x0 = first_origin.x.min(first_end.x);
     let mut x1 = first_origin.x.max(first_end.x);
     for glyph in glyphs {
-        let origin = transform * glyph.position();
-        let end = transform * (glyph.position() + glyph.advance());
+        let origin = glyph.position();
+        let end = glyph.position() + glyph.advance();
         x0 = x0.min(origin.x.min(end.x));
         x1 = x1.max(origin.x.max(end.x));
     }

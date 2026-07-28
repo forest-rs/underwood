@@ -37,13 +37,24 @@ fn paint_slot_change_retains_non_paint_prepared_facts() {
     let repainted = engine
         .prepare(
             &document.snapshot(),
-            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint),
+            &editable_scene_request(TextConstraint::MaxContent, &styles, &paint)
+                .with_preparation_trace(),
         )
         .expect("paint-slot change prepares");
     assert_eq!(repainted.work.analysis.paragraphs, 0);
     assert_eq!(repainted.work.font_selection.paragraphs, 0);
     assert_eq!(repainted.work.shape.paragraphs, 0);
     assert_eq!(repainted.work.flow.paragraphs, 0);
+    assert_eq!(
+        repainted
+            .trace
+            .as_ref()
+            .expect("trace was requested")
+            .reuse
+            .adapter_calls,
+        0,
+        "paint-only changes reuse the retained paint-independent artifact"
+    );
     assert!(
         repainted
             .scene
@@ -81,15 +92,10 @@ fn zero_advance_arabic_mark_uses_unclipped_whole_glyph_paint() {
         })
         .expect("Noto Kufi beh must expose its zero-advance dot glyph");
     assert_eq!(mark.paint(), PaintSlot::new(0));
-    assert_eq!(
-        mark.paint_clip(),
-        None,
-        "ordinary zero-advance marks must let the font rasterizer paint the complete glyph"
-    );
 }
 
 #[test]
-fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
+fn ordinary_glyphs_do_not_require_outline_metrics() {
     let (document, styles, paint) = fixture_document("j office ب", 1.2);
     let mut engine = fixture_engine();
     let request = editable_scene_request(
@@ -103,14 +109,6 @@ fn ordinary_glyphs_do_not_require_outline_metrics_or_paint_clips() {
     assert!(
         !output.scene.fragments().is_empty(),
         "the mixed fixture must produce renderable glyphs"
-    );
-    assert!(
-        output
-            .scene
-            .fragments()
-            .iter()
-            .all(|fragment| fragment.paint_clip().is_none()),
-        "single-paint glyphs must be complete unclipped draws"
     );
     let fragments = output.scene.fragments();
     let glyphs: usize = fragments
@@ -145,7 +143,7 @@ fn synthetic_embolden_prepares_without_outline_metrics() {
     ));
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid")
+        Font::from_bytes(ARABIC_FONT).expect("Arabic fixture font is valid")
     ])
     .expect("fixture catalog is valid");
     let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));
@@ -164,7 +162,7 @@ fn synthetic_embolden_prepares_without_outline_metrics() {
             .scene
             .fragments()
             .iter()
-            .all(|fragment| { fragment.synthesis().embolden() && fragment.paint_clip().is_none() })
+            .all(|fragment| fragment.synthesis().embolden())
     );
 }
 
@@ -188,7 +186,7 @@ fn system_font_fallback_prepares_han_without_outline_metrics() {
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid")
     ])
     .expect("fixture catalog is valid")
     .with_system_fonts();
@@ -203,14 +201,12 @@ fn system_font_fallback_prepares_han_without_outline_metrics() {
         .expect("Han source must prepare through the native fallback catalog");
 
     assert!(output.scene.fragments().iter().any(|fragment| {
-        fragment.script() == *b"Hani"
-            && fragment.font().data.as_ref() != LATIN_FONT
-            && fragment.paint_clip().is_none()
+        fragment.script() == *b"Hani" && fragment.font().data.as_ref() != LATIN_FONT
     }));
 }
 
 #[test]
-fn split_paint_ligature_without_component_geometry_fails_explicitly() {
+fn glyph_crossing_paint_runs_fails_explicitly() {
     let mut document = Document::new(DocumentId::from_bytes(*b"paint-ligature01"));
     let mut edit = document.edit();
     let paragraph = edit
@@ -243,7 +239,7 @@ fn split_paint_ligature_without_component_geometry_fails_explicitly() {
     );
     let error = fixture_engine()
         .prepare(&document.snapshot(), &request)
-        .expect_err("Roboto Flex has no GDEF ligature carets for an exact paint split");
+        .expect_err("one shaped glyph cannot carry two complete paints");
     assert_eq!(
         error.preparation(),
         Some(PreparationErrorKind::UnsupportedPaintCoverage)

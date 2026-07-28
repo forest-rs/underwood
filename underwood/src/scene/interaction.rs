@@ -1651,26 +1651,28 @@ fn cached_hit_facts(
         .expect("hit-testing capability retains source provenance");
     let semantic = cluster.prepared.map_or(cluster.semantic_id, |unit| {
         let mut inline = bounds.inline_start;
-        unit.slices()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, slice)| {
-                let mut end = inline + slice.advance();
-                if index + 1 == unit.slices().len() {
-                    end = bounds.inline_end;
-                }
-                let start = inline;
-                inline = end;
-                (start < end).then(|| {
-                    let source = SourceSpan::from(slice.source());
-                    let semantic = source_map
-                        .semantic_for_span(source)
-                        .expect("validated hit slices retain semantic ownership");
-                    (semantic, distance_to_interval(point.inline, start, end))
-                })
-            })
-            .min_by(|(_, first), (_, second)| first.total_cmp(second))
-            .map_or(cluster.semantic_id, |(semantic, _)| semantic)
+        let mut slices = unit.slices().peekable();
+        let mut closest = None;
+        while let Some(slice) = slices.next() {
+            let mut end = inline + slice.advance();
+            if slices.peek().is_none() {
+                end = bounds.inline_end;
+            }
+            let start = inline;
+            inline = end;
+            if start >= end {
+                continue;
+            }
+            let source = SourceSpan::from(slice.source());
+            let semantic = source_map
+                .semantic_for_span(source)
+                .expect("validated hit slices retain semantic ownership");
+            let distance = distance_to_interval(point.inline, start, end);
+            if closest.is_none_or(|(_, prior)| distance < prior) {
+                closest = Some((semantic, distance));
+            }
+        }
+        closest.map_or(cluster.semantic_id, |(semantic, _)| semantic)
     });
     let position = if point.inline <= midpoint {
         cluster.left

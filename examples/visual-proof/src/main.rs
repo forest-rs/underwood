@@ -118,22 +118,14 @@ impl<'a> TextSceneAdapter<'a> {
                 x: imaging_coord(glyph.position().x),
                 y: imaging_coord(glyph.position().y),
             });
-            let transform = self.placement * fragment.transform();
             let glyph_transform = fragment.synthesis().skew_transform();
-            let draw = |painter: &mut Painter<'_, S>| {
-                painter
-                    .glyphs(fragment.font(), brush)
-                    .transform(transform)
-                    .glyph_transform(glyph_transform)
-                    .font_size(fragment.font_size())
-                    .normalized_coords(fragment.normalized_coords())
-                    .draw(&fill, glyphs);
-            };
-            if let Some(clip) = fragment.paint_clip() {
-                painter.with_fill_clip_transformed(clip, self.placement, draw);
-            } else {
-                draw(painter);
-            }
+            painter
+                .glyphs(fragment.font(), brush)
+                .transform(self.placement)
+                .glyph_transform(glyph_transform)
+                .font_size(fragment.font_size())
+                .normalized_coords(fragment.normalized_coords())
+                .draw(&fill, glyphs);
         }
 
         if self.diagnostics {
@@ -262,12 +254,6 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
     assert!(
         zero_advance_glyphs > 0,
         "the hero must retain a real zero-advance Arabic glyph"
-    );
-    assert!(
-        hero.fragments()
-            .iter()
-            .all(|fragment| fragment.paint_clip().is_none()),
-        "ordinary poster glyphs must not carry outline-derived paint clips"
     );
     assert!(
         hero.fragments()
@@ -473,8 +459,8 @@ fn render_poster() -> Result<RgbaImage, AnyError> {
 fn layout_engine() -> Result<LayoutEngine, AnyError> {
     let arabic = Language::parse("ar")?;
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT_BYTES)?,
-        Font::from_bytes("arabic", ARABIC_FONT_BYTES)?,
+        Font::from_bytes(LATIN_FONT_BYTES)?,
+        Font::from_bytes(ARABIC_FONT_BYTES)?,
     ])?
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?
     .with_fallbacks(

@@ -11,15 +11,15 @@ use core::ops::Range;
 
 use crate::adapter::{
     AnalysisRun, AnalysisStyleId, FontSynthesis, FormationWork, InlineFlowRun, InlineFlowStyleId,
-    LineBreakReason, PaintRun, ParagraphConstraints, ParagraphFormation,
-    ParagraphFormationCacheDiagnostics, ParagraphFormationChange, ParagraphFormationReuse,
-    ParagraphInput, ParagraphPreparationId, PreparationErrorKind, PreparedClusterSide,
-    PreparedGlyphView, PreparedInteractionUnitView, PreparedLineView, PreparedParagraph,
-    PreparedParagraphFacts, PreparedRunView, ShapingRun, ShapingStyleId, TextAffinity,
+    LineBreakReason, ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
+    ParagraphFormationChange, ParagraphFormationReuse, ParagraphInput, ParagraphPreparationId,
+    PreparationErrorKind, PreparedClusterSide, PreparedGlyphView, PreparedInteractionUnitView,
+    PreparedLineView, PreparedParagraph, PreparedParagraphFacts, PreparedRunView, ShapingRun,
+    ShapingStyleId, TextAffinity,
 };
 use crate::document::Paragraph;
 use crate::{
-    Affine, AnalysisStyle, BaseDirection, BlockRequest, CompositionError, CompositionErrorKind,
+    AnalysisStyle, BaseDirection, BlockRequest, CompositionError, CompositionErrorKind,
     CompositionId, CompositionSession, CompositionStart, ComputedInlineStyle, DocumentRevision,
     DocumentSnapshot, FontData, InlineFlowStyle, InlineRole, MissingSceneCapability, PaintSlot,
     PaintTable, ParagraphId, ParagraphRole, ParagraphStyle, Point, ProjectedText as TextProjection,
@@ -54,8 +54,7 @@ pub use output::{
     SceneRegionTranscript, StageWork, TextMetrics, WorkReport,
 };
 pub use records::{
-    LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneGlyphInstanceId,
-    SceneSelectionRect, TextHit,
+    LineAdjustment, SceneCaret, SceneCompositionRect, SceneFragmentId, SceneSelectionRect, TextHit,
 };
 pub use residency::{ParagraphSceneResidency, SceneResidency, SceneResidencyBytes};
 pub use sessions::{
@@ -79,6 +78,23 @@ use residency::paragraph_residencies;
 use shared_cache::*;
 use source_map::*;
 use spine::*;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConstraintKey {
+    MinContent,
+    MaxContent,
+    Wrap(u64),
+}
+
+impl From<TextConstraint> for ConstraintKey {
+    fn from(constraint: TextConstraint) -> Self {
+        match constraint {
+            TextConstraint::MinContent => Self::MinContent,
+            TextConstraint::MaxContent => Self::MaxContent,
+            TextConstraint::Wrap(width) => Self::Wrap(width.0.to_bits()),
+        }
+    }
+}
 
 #[cfg(test)]
 use projection::{append_analysis_run, append_inline_flow_run, append_shaping_run};

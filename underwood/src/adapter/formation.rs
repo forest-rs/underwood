@@ -75,8 +75,6 @@ pub struct ParagraphFormationCacheDiagnostics {
     pub entries: usize,
     /// Current deterministic adapter-fact byte charge.
     pub resident_bytes: usize,
-    /// Highest observed adapter-fact byte charge.
-    pub peak_bytes: usize,
     /// Current reusable scratch byte charge.
     pub scratch_bytes: usize,
     /// Formation calls that found reusable adapter facts.
@@ -155,8 +153,6 @@ pub struct ParagraphFormationChange {
     pub break_policy: bool,
     /// Width, intrinsic, empty-line, or region constraints changed.
     pub constraints: bool,
-    /// Projected paint-slot coverage changed.
-    pub paint: bool,
 }
 
 impl ParagraphFormationChange {
@@ -170,7 +166,6 @@ impl ParagraphFormationChange {
             line_metrics: true,
             break_policy: true,
             constraints: true,
-            paint: true,
         }
     }
 }
@@ -208,11 +203,11 @@ pub struct ParagraphInput<'a> {
     pub inline_flow_styles: &'a [InlineFlowStyle],
     /// Source-ordered inline-flow metadata.
     pub inline_flow_runs: &'a [InlineFlowRun],
-    /// Source-ordered paint metadata.
-    pub paint_runs: &'a [PaintRun],
 }
 
 impl<'a> ParagraphInput<'a> {
+    // Keep construction crate-private: paragraph backends rely on LayoutEngine
+    // having proved the run-table invariants documented on this type.
     pub(crate) const fn new(
         preparation: ParagraphPreparationId,
         change: ParagraphFormationChange,
@@ -226,7 +221,6 @@ impl<'a> ParagraphInput<'a> {
         shaping_runs: &'a [ShapingRun],
         inline_flow_styles: &'a [InlineFlowStyle],
         inline_flow_runs: &'a [InlineFlowRun],
-        paint_runs: &'a [PaintRun],
     ) -> Self {
         Self {
             preparation,
@@ -241,7 +235,6 @@ impl<'a> ParagraphInput<'a> {
             shaping_runs,
             inline_flow_styles,
             inline_flow_runs,
-            paint_runs,
         }
     }
 }
@@ -427,31 +420,6 @@ impl InlineFlowRun {
     }
 }
 
-/// Paint slot over a paragraph-local UTF-8 byte range.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PaintRun {
-    bytes: Range<u32>,
-    slot: PaintSlot,
-}
-
-impl PaintRun {
-    pub(crate) const fn new(bytes: Range<u32>, slot: PaintSlot) -> Self {
-        Self { bytes, slot }
-    }
-
-    /// Returns the paragraph-local UTF-8 byte range.
-    #[must_use]
-    pub fn bytes(&self) -> Range<u32> {
-        self.bytes.clone()
-    }
-
-    /// Returns the paint slot for this range.
-    #[must_use]
-    pub const fn slot(&self) -> PaintSlot {
-        self.slot
-    }
-}
-
 /// Owned paragraph data and exact work performed to produce it.
 #[derive(Clone, Debug)]
 pub struct ParagraphFormationOutput {
@@ -554,14 +522,4 @@ pub struct LineShapingWork {
     pub candidates: u32,
     /// Candidates rejected by line-final fit checks.
     pub rejected_candidates: u32,
-    /// Restorations of traversal and provisional line output.
-    pub checkpoint_restores: u32,
-}
-
-impl LineShapingWork {
-    /// Returns candidates committed to the current line sequence.
-    #[must_use]
-    pub const fn accepted_candidates(self) -> u32 {
-        self.candidates.saturating_sub(self.rejected_candidates)
-    }
 }

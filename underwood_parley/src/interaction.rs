@@ -67,14 +67,16 @@ pub(crate) fn collect_analysis_units_into(
 #[derive(Debug, Default)]
 pub(crate) struct InteractionScratch {
     visual_slices: Vec<VisualInteractionSlice>,
-    seen: Vec<bool>,
+    unit_parts: Vec<(Range<u32>, f64)>,
 }
 
 impl InteractionScratch {
     pub(crate) fn accounted_owned_bytes(&self) -> usize {
         size_of::<VisualInteractionSlice>()
             .saturating_mul(self.visual_slices.capacity())
-            .saturating_add(self.seen.capacity().saturating_add(7) / 8)
+            .saturating_add(
+                size_of::<(Range<u32>, f64)>().saturating_mul(self.unit_parts.capacity()),
+            )
     }
 }
 
@@ -103,7 +105,7 @@ pub(crate) fn lower_visual_units(
     let slice_count = pieces.iter().map(|piece| piece.clusters.len()).sum();
     let InteractionScratch {
         visual_slices,
-        seen,
+        unit_parts,
     } = scratch;
     visual_slices.clear();
     visual_slices.reserve(slice_count);
@@ -132,8 +134,6 @@ pub(crate) fn lower_visual_units(
     {
         return Err(PreparationError::invalid_output());
     }
-    seen.clear();
-    seen.resize(expected.len(), false);
     let mut current_owner = None;
     let mut current_start = 0;
     for (index, slice) in visual_slices.iter().enumerate() {
@@ -156,13 +156,10 @@ pub(crate) fn lower_visual_units(
                 &interaction_units[previous],
                 &visual_slices[current_start..index],
                 mandatory_line_end && interaction_units[previous].end == line_source.end,
+                unit_parts,
                 output,
             )?;
         }
-        if seen[owner - expected.start] {
-            return Err(PreparationError::invalid_output());
-        }
-        seen[owner - expected.start] = true;
         current_owner = Some(owner);
         current_start = index;
     }
@@ -174,11 +171,9 @@ pub(crate) fn lower_visual_units(
             &interaction_units[owner],
             &visual_slices[current_start..],
             mandatory_line_end && interaction_units[owner].end == line_source.end,
+            unit_parts,
             output,
         )?;
-    }
-    if seen.iter().any(|seen| !seen) {
-        return Err(PreparationError::invalid_output());
     }
     Ok(())
 }
@@ -218,15 +213,13 @@ fn lower_prepared_unit(
     source: &Range<usize>,
     slices: &[VisualInteractionSlice],
     mandatory_line_end: bool,
+    unit_parts: &mut Vec<(Range<u32>, f64)>,
     output: &mut PreparedParagraphData,
 ) -> Result<(), PreparationError> {
     let logical_first = slices
         .iter()
         .min_by_key(|slice| slice.source.start)
         .ok_or_else(PreparationError::invalid_output)?;
-    if logical_first.source.start as usize != source.start {
-        return Err(PreparationError::invalid_output());
-    }
     let bidi_level =
         interaction_unit_bidi_level(analysis, char_starts, source, slices, logical_first)?;
     let boundary = logical_first.boundary;
@@ -264,16 +257,8 @@ fn lower_prepared_unit(
             PreparedClusterSide::new(source.end, TextAffinity::Upstream),
         )
     };
-    let mut advance = 0.0;
-    for slice in slices {
-        advance += slice.advance;
-        if !advance.is_finite() {
-            return Err(PreparationError::invalid_output());
-        }
-    }
     let unit = PreparedInteractionUnit::try_new_with_justification(
         source,
-        advance,
         bidi_level,
         match boundary {
             Boundary::None => ClusterBoundary::None,
@@ -292,12 +277,34 @@ fn lower_prepared_unit(
         left,
         right,
     )?;
-    output.push_unit_parts(
-        unit,
+    unit_parts.clear();
+    unit_parts.extend(
         slices
             .iter()
             .map(|slice| (slice.source.clone(), slice.advance)),
-    )
+    );
+    let source = unit.source();
+    let mut cursor = source.start;
+    while cursor < source.end {
+        if let Some(slice) = slices
+            .iter()
+            .find(|slice| slice.source.start <= cursor && cursor < slice.source.end)
+        {
+            cursor = slice.source.end;
+            continue;
+        }
+        let next = slices
+            .iter()
+            .filter_map(|slice| (slice.source.start > cursor).then_some(slice.source.start))
+            .min()
+            .unwrap_or(source.end);
+        if next <= cursor || next > source.end {
+            return Err(PreparationError::invalid_output());
+        }
+        unit_parts.push((cursor..next, 0.0));
+        cursor = next;
+    }
+    output.push_unit_parts(unit, unit_parts.drain(..))
 }
 
 /// Resolves one atomic grapheme's caret direction without requiring all shaped

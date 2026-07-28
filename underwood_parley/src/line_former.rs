@@ -96,15 +96,9 @@ pub(crate) struct LineLimits {
     pub(crate) max_height: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CandidateOverflow {
-    None,
-    Inline,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum CommitOutcome {
-    Accepted(CandidateOverflow),
+    Accepted,
     Retry(LineCandidate),
     SlotRejected,
 }
@@ -113,16 +107,10 @@ pub(crate) enum CommitOutcome {
 pub(crate) struct LineFormerWork {
     pub(crate) proposed: u32,
     pub(crate) rejected: u32,
-    pub(crate) accepted: u32,
-    pub(crate) restores: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LineFormerError {
-    Facts,
-    State,
-    Measurements,
-}
+pub(crate) struct LineFormerError;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LineCheckpoint {
@@ -155,7 +143,7 @@ impl<'a> LineFormer<'a> {
         cursor: usize,
     ) -> Result<Self, LineFormerError> {
         if cursor > clusters.len() || !valid_constraint(constraint) {
-            return Err(LineFormerError::Facts);
+            return Err(LineFormerError);
         }
         Ok(Self {
             clusters,
@@ -187,7 +175,7 @@ impl<'a> LineFormer<'a> {
         constraint: FormationConstraint,
     ) -> Result<(), LineFormerError> {
         if !valid_constraint(constraint) {
-            return Err(LineFormerError::Facts);
+            return Err(LineFormerError);
         }
         self.constraint = constraint;
         Ok(())
@@ -211,12 +199,11 @@ impl<'a> LineFormer<'a> {
             || checkpoint.cursor > self.clusters.len()
             || checkpoint.output_len > output.len()
         {
-            return Err(LineFormerError::State);
+            return Err(LineFormerError);
         }
         self.cursor = checkpoint.cursor;
         self.last_break = checkpoint.last_break;
         output.truncate(checkpoint.output_len);
-        self.work.restores = self.work.restores.saturating_add(1);
         Ok(())
     }
 
@@ -243,7 +230,7 @@ impl<'a> LineFormer<'a> {
             || !valid_limit(limits.max_advance)
             || !valid_limit(limits.max_height)
         {
-            return Err(LineFormerError::Measurements);
+            return Err(LineFormerError);
         }
 
         if limits
@@ -268,12 +255,7 @@ impl<'a> LineFormer<'a> {
 
         self.cursor = candidate.end;
         self.last_break = Some(candidate.reason);
-        self.work.accepted = self.work.accepted.saturating_add(1);
-        Ok(CommitOutcome::Accepted(if inline_overflow {
-            CandidateOverflow::Inline
-        } else {
-            CandidateOverflow::None
-        }))
+        Ok(CommitOutcome::Accepted)
     }
 
     fn retry_before(
@@ -281,7 +263,7 @@ impl<'a> LineFormer<'a> {
         candidate: LineCandidate,
     ) -> Result<Option<LineCandidate>, LineFormerError> {
         if candidate.start != self.cursor || candidate.end > self.clusters.len() {
-            return Err(LineFormerError::State);
+            return Err(LineFormerError);
         }
         let Some(end) = (candidate.start + 1..candidate.end).rev().find(|&index| {
             is_soft_boundary(&self.clusters[index])
@@ -338,7 +320,7 @@ fn choose_candidate(
     constraint: FormationConstraint,
 ) -> Result<LineCandidate, LineFormerError> {
     if start >= clusters.len() {
-        return Err(LineFormerError::State);
+        return Err(LineFormerError);
     }
     let mut index = start;
     let mut advance = 0.0_f64;
@@ -349,7 +331,7 @@ fn choose_candidate(
             || !cluster.advance.is_finite()
             || cluster.advance < 0.0
         {
-            return Err(LineFormerError::Facts);
+            return Err(LineFormerError);
         }
         if index > start {
             let soft = is_soft_boundary(cluster);

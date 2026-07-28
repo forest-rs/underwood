@@ -147,11 +147,11 @@ impl ShowcaseContent {
         let chinese = Language::parse("zh")?;
         let korean = Language::parse("ko")?;
         let fonts = FontSet::try_from_fonts([
-            Font::from_bytes("latin", LATIN_FONT_BYTES)?,
-            Font::from_bytes("arabic", ARABIC_FONT_BYTES)?,
-            Font::from_bytes("cjk-jp-proof", CJK_JP_FONT_BYTES)?,
-            Font::from_bytes("cjk-sc-proof", CJK_SC_FONT_BYTES)?,
-            Font::from_bytes("cjk-kr-proof", CJK_KR_FONT_BYTES)?,
+            Font::from_bytes(LATIN_FONT_BYTES)?,
+            Font::from_bytes(ARABIC_FONT_BYTES)?,
+            Font::from_bytes(CJK_JP_FONT_BYTES)?,
+            Font::from_bytes(CJK_SC_FONT_BYTES)?,
+            Font::from_bytes(CJK_KR_FONT_BYTES)?,
         ])?;
         let fonts = if load_system_fonts {
             fonts.with_system_fonts()
@@ -1165,7 +1165,6 @@ mod tests {
                 .glyphs()
                 .iter()
                 .any(|glyph| glyph.advance().x == 0.0)
-                && fragment.paint_clip().is_none()
         }));
         let visual_sources: Vec<_> = arabic
             .iter()

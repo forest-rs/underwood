@@ -18,42 +18,30 @@ use underwood::{GenericFamily, Language, Script};
 /// Owned validated font bytes and a face within them.
 #[derive(Clone)]
 pub struct Font {
-    diagnostic_name: Arc<str>,
-    digest: u64,
     blob: Blob<u8>,
     index: u32,
-    units_per_em: u16,
 }
 
 impl fmt::Debug for Font {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("Font")
-            .field("diagnostic_name", &self.diagnostic_name)
-            .field("digest", &self.digest)
             .field("index", &self.index)
-            .field("units_per_em", &self.units_per_em)
             .finish_non_exhaustive()
     }
 }
 
 impl Font {
     /// Copies the bytes and validates face zero in a font file or collection.
-    pub fn from_bytes(diagnostic_name: &str, bytes: &[u8]) -> Result<Self, AdapterError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, AdapterError> {
         let index = 0;
-        let units_per_em = units_per_em(bytes, index)
+        units_per_em(bytes, index)
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidFont))?;
         let blob = Blob::from(bytes.to_vec());
         let source = SourceInfo::new(SourceId::new(), SourceKind::Memory(blob.clone()));
         FontInfo::from_source(source, index)
             .ok_or_else(|| AdapterError::new(AdapterErrorKind::InvalidFont))?;
-        Ok(Self {
-            diagnostic_name: Arc::from(diagnostic_name),
-            digest: digest_bytes(bytes),
-            blob,
-            index,
-            units_per_em,
-        })
+        Ok(Self { blob, index })
     }
 }
 
@@ -256,14 +244,6 @@ pub(crate) fn read_u16(bytes: &[u8], offset: usize) -> Option<u16> {
 pub(crate) fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     let data: [u8; 4] = bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?;
     Some(u32::from_be_bytes(data))
-}
-
-fn digest_bytes(bytes: &[u8]) -> u64 {
-    let mut digest = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        digest = (digest ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    digest
 }
 
 /// Stable category for adapter construction failures.

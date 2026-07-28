@@ -127,8 +127,6 @@ pub struct CacheDiagnostics {
     pub shared_preparation_entries: usize,
     /// Current deterministic shared-preparation charge.
     pub shared_preparation_resident_bytes: usize,
-    /// Highest observed shared-preparation charge.
-    pub shared_preparation_peak_bytes: usize,
     /// Exact cross-identity prepared-fact cache hits.
     pub shared_preparation_hits: usize,
     /// Eligible shared-preparation lookups that missed.
@@ -150,7 +148,6 @@ impl CacheDiagnostics {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct CacheWork {
-    scene_cache_accounted_bytes: usize,
     peak_entries: usize,
     hits: usize,
     misses: usize,
@@ -1014,10 +1011,6 @@ impl LayoutEngine {
                     return true;
                 }
                 preparations.push(entry.preparation);
-                self.cache_work.scene_cache_accounted_bytes = self
-                    .cache_work
-                    .scene_cache_accounted_bytes
-                    .saturating_sub(entry.accounted_bytes);
                 self.cache_work.releases = self.cache_work.releases.saturating_add(1);
                 false
             });
@@ -1038,7 +1031,6 @@ impl LayoutEngine {
         self.block_styles = None;
         self.shared_preparation.clear();
         self.paragraphs.clear();
-        self.cache_work.scene_cache_accounted_bytes = 0;
     }
 
     /// Drops reusable adapter facts without invalidating retained or
@@ -1064,7 +1056,7 @@ impl LayoutEngine {
             committed_entries: self.cache.len(),
             composition_entries: self.composition_cache.len(),
             adapter_facts: self.paragraphs.retained_facts(),
-            scene_cache_accounted_bytes: self.cache_work.scene_cache_accounted_bytes,
+            scene_cache_accounted_bytes: scene_cache_residency.total(),
             scene_cache_residency,
             peak_entries: self.cache_work.peak_entries,
             hits: self.cache_work.hits,
@@ -1074,7 +1066,6 @@ impl LayoutEngine {
             shared_preparation_budget: shared.budget,
             shared_preparation_entries: shared.entries,
             shared_preparation_resident_bytes: shared.resident_bytes,
-            shared_preparation_peak_bytes: shared.peak_bytes,
             shared_preparation_hits: shared.hits,
             shared_preparation_misses: shared.misses,
             shared_preparation_evictions: shared.evictions,
@@ -1861,13 +1852,6 @@ impl LayoutEngine {
     }
 
     fn record_access(&mut self, access: &CacheAccess) {
-        if access.previous_accounted_bytes != access.current_accounted_bytes {
-            self.cache_work.scene_cache_accounted_bytes = self
-                .cache_work
-                .scene_cache_accounted_bytes
-                .saturating_sub(access.previous_accounted_bytes)
-                .saturating_add(access.current_accounted_bytes);
-        }
         if access.previous_use.is_some() {
             self.cache_work.hits += 1;
         } else {
@@ -1934,10 +1918,6 @@ impl LayoutEngine {
             };
             if let Some(entry) = removed {
                 self.paragraphs.release(entry.preparation);
-                self.cache_work.scene_cache_accounted_bytes = self
-                    .cache_work
-                    .scene_cache_accounted_bytes
-                    .saturating_sub(entry.accounted_bytes);
             }
             self.cache_work.evictions += 1;
         }
@@ -2018,8 +1998,6 @@ fn validate_paragraph_styles(
 #[derive(Clone, Debug)]
 struct CacheAccess {
     previous_use: Option<u64>,
-    previous_accounted_bytes: usize,
-    current_accounted_bytes: usize,
     region_transcript: Option<RegionTranscript>,
 }
 
@@ -2053,8 +2031,6 @@ fn reuse_paragraph_geometry(
     work.reused_paragraphs = work.reused_paragraphs.saturating_add(1);
     Some(CacheAccess {
         previous_use,
-        previous_accounted_bytes: entry.accounted_bytes,
-        current_accounted_bytes: entry.accounted_bytes,
         region_transcript: entry.segment.region_transcript.clone(),
     })
 }
@@ -2104,6 +2080,10 @@ fn prepare_paragraph_geometry(
             .preflight_key
             .adjustment_matches(&preflight_key, paragraph_id)
     });
+    let exact_geometry_matches = cache.get(&paragraph_id).is_some_and(|entry| {
+        entry.preflight_key.matches_key(&preflight_key, paragraph)
+            && entry.segment.geometry.features.contains(features)
+    });
     let retained_layout = (formation_matches && adjustment_matches).then(|| {
         Arc::clone(
             &cache
@@ -2147,13 +2127,7 @@ fn prepare_paragraph_geometry(
             reuse.paint_invalidations = reuse.paint_invalidations.saturating_add(1);
         }
     }
-    if formation_matches
-        && paint_matches
-        && adjustment_matches
-        && cache
-            .get(&paragraph_id)
-            .is_some_and(|entry| entry.segment.geometry.features.contains(features))
-    {
+    if exact_geometry_matches {
         let entry = cache
             .get_mut(&paragraph_id)
             .expect("a reusable cache entry must exist");
@@ -2168,8 +2142,6 @@ fn prepare_paragraph_geometry(
         reuse.exact_geometry_reuses = reuse.exact_geometry_reuses.saturating_add(1);
         return Ok(CacheAccess {
             previous_use,
-            previous_accounted_bytes: entry.accounted_bytes,
-            current_accounted_bytes: entry.accounted_bytes,
             region_transcript: entry.segment.region_transcript.clone(),
         });
     }
@@ -2191,7 +2163,7 @@ fn prepare_paragraph_geometry(
     let shared_hit = shared_query
         .as_ref()
         .and_then(|query| shared_preparation.lookup(query, current_use));
-    let retained_artifact = (formation_matches && paint_matches)
+    let retained_artifact = formation_matches
         .then(|| cache.get(&paragraph_id))
         .flatten()
         .filter(|entry| {
@@ -2230,76 +2202,79 @@ fn prepare_paragraph_geometry(
                     )
                 })
         });
-    let (prepared, candidate_transcript, formation_reuse) = if let Some((facts, transcript)) =
-        retained_artifact
-    {
-        (
-            PreparedParagraph::from_shared_facts(paragraph_id, facts),
-            transcript,
-            None,
-        )
-    } else if let Some(hit) = shared_hit {
-        // The shared result may represent a state the identity-bound backend
-        // never observed. Drop any older lane-local facts so a later call
-        // cannot apply a relative change record to the wrong base.
-        paragraphs.release(preparation);
-        work.shared_preparations = work.shared_preparations.saturating_add(1);
-        reuse.shared_preparation_reuses = reuse.shared_preparation_reuses.saturating_add(1);
-        let transcript = hit.region_transcript(paragraph_id, region_flow)?;
-        (
-            PreparedParagraph::from_shared_facts(paragraph_id, hit.facts),
-            transcript,
-            None,
-        )
-    } else {
-        reuse.adapter_calls = reuse.adapter_calls.saturating_add(1);
-        let constraints = match (region_flow, region_cursor) {
-            (Some(flow), Some(cursor)) => ParagraphConstraints::in_regions(
-                constraint,
-                projection.empty_line_height(),
-                flow.clone(),
-                cursor,
-            ),
-            (None, None) => ParagraphConstraints::new(constraint, projection.empty_line_height()),
-            _ => {
-                return Err(SceneError::for_paragraph(
-                    SceneErrorKind::Flow,
+    let (prepared, candidate_transcript, formation_reuse, transcript_replayed) =
+        if let Some((facts, transcript)) = retained_artifact {
+            (
+                PreparedParagraph::from_shared_facts(paragraph_id, facts),
+                transcript,
+                None,
+                true,
+            )
+        } else if let Some(hit) = shared_hit {
+            // The shared result may represent a state the identity-bound backend
+            // never observed. Drop any older lane-local facts so a later call
+            // cannot apply a relative change record to the wrong base.
+            paragraphs.release(preparation);
+            work.shared_preparations = work.shared_preparations.saturating_add(1);
+            reuse.shared_preparation_reuses = reuse.shared_preparation_reuses.saturating_add(1);
+            let transcript = hit.region_transcript(paragraph_id, region_flow)?;
+            (
+                PreparedParagraph::from_shared_facts(paragraph_id, hit.facts),
+                transcript,
+                None,
+                true,
+            )
+        } else {
+            reuse.adapter_calls = reuse.adapter_calls.saturating_add(1);
+            let constraints = match (region_flow, region_cursor) {
+                (Some(flow), Some(cursor)) => ParagraphConstraints::in_regions(
+                    constraint,
+                    projection.empty_line_height(),
+                    flow.clone(),
+                    cursor,
+                ),
+                (None, None) => {
+                    ParagraphConstraints::new(constraint, projection.empty_line_height())
+                }
+                _ => {
+                    return Err(SceneError::for_paragraph(
+                        SceneErrorKind::Flow,
+                        paragraph_id,
+                    ));
+                }
+            };
+            let output = match paragraphs.form(
+                ParagraphInput::new(
+                    preparation,
+                    formation_change,
+                    features,
                     paragraph_id,
-                ));
-            }
+                    projection.paragraph_style,
+                    projection.mapping.text(),
+                    &projection.analysis_styles,
+                    &projection.analysis_runs,
+                    &projection.shaping_styles,
+                    &projection.shaping_runs,
+                    &projection.inline_flow_styles,
+                    &projection.inline_flow_runs,
+                ),
+                constraints,
+            ) {
+                Ok(output) => output,
+                Err(error) => {
+                    paragraphs.release(preparation);
+                    return Err(SceneError::from_preparation(paragraph_id, error.kind()));
+                }
+            };
+            let formation_reuse = output.reuse();
+            record_formation_work(work, output.work());
+            (
+                output.paragraph().clone(),
+                output.region_transcript().cloned(),
+                Some(formation_reuse),
+                false,
+            )
         };
-        let output = match paragraphs.form(
-            ParagraphInput::new(
-                preparation,
-                formation_change,
-                features,
-                paragraph_id,
-                projection.paragraph_style,
-                projection.mapping.text(),
-                &projection.analysis_styles,
-                &projection.analysis_runs,
-                &projection.shaping_styles,
-                &projection.shaping_runs,
-                &projection.inline_flow_styles,
-                &projection.inline_flow_runs,
-                &projection.paint_runs,
-            ),
-            constraints,
-        ) {
-            Ok(output) => output,
-            Err(error) => {
-                paragraphs.release(preparation);
-                return Err(SceneError::from_preparation(paragraph_id, error.kind()));
-            }
-        };
-        let formation_reuse = output.reuse();
-        record_formation_work(work, output.work());
-        (
-            output.paragraph().clone(),
-            output.region_transcript().cloned(),
-            Some(formation_reuse),
-        )
-    };
     let backend_called = formation_reuse.is_some();
     if let Some(formation_reuse) = formation_reuse {
         if formation_reuse.is_hit() {
@@ -2341,7 +2316,7 @@ fn prepare_paragraph_geometry(
     let region_transcript = match (region_flow, region_cursor, candidate_transcript) {
         (Some(flow), Some(cursor), Some(transcript))
             if transcript.start() == cursor
-                && transcript.replay(flow) == Ok(transcript.end())
+                && (transcript_replayed || transcript.replay(flow) == Ok(transcript.end()))
                 && region_output_matches(&prepared, &transcript, projection) =>
         {
             Some(transcript)
@@ -2419,49 +2394,37 @@ fn prepare_paragraph_geometry(
         geometry.lines.len()
     });
     work.geometry.add_paragraph(paint.fragments.len());
-    let (previous_use, previous_accounted_bytes, current_accounted_bytes) =
-        if let Some(entry) = cache.get_mut(&paragraph_id) {
-            let previous_use = Some(entry.last_used);
-            let previous_accounted_bytes = entry.accounted_bytes;
-            entry.last_used = current_use;
-            entry.preflight_key = preflight_key;
-            entry.segment = Arc::new(ParagraphSceneSegment::new(
+    let previous_use = if let Some(entry) = cache.get_mut(&paragraph_id) {
+        let previous_use = Some(entry.last_used);
+        entry.last_used = current_use;
+        entry.preflight_key = preflight_key;
+        entry.segment = Arc::new(ParagraphSceneSegment::new(
+            paragraph_id,
+            geometry,
+            paint,
+            region_transcript.clone(),
+        ));
+        previous_use
+    } else {
+        let entry = ParagraphCache {
+            last_used: current_use,
+            preparation,
+            preflight_key,
+            segment: Arc::new(ParagraphSceneSegment::new(
                 paragraph_id,
                 geometry,
                 paint,
                 region_transcript.clone(),
-            ));
-            entry.accounted_bytes = entry.calculate_accounted_owned_bytes();
-            (
-                previous_use,
-                previous_accounted_bytes,
-                entry.accounted_bytes,
-            )
-        } else {
-            let mut entry = ParagraphCache {
-                last_used: current_use,
-                preparation,
-                preflight_key,
-                segment: Arc::new(ParagraphSceneSegment::new(
-                    paragraph_id,
-                    geometry,
-                    paint,
-                    region_transcript.clone(),
-                )),
-                accounted_bytes: 0,
-            };
-            entry.accounted_bytes = entry.calculate_accounted_owned_bytes();
-            let current_accounted_bytes = entry.accounted_bytes;
-            cache.insert(paragraph_id, entry);
-            (None, 0, current_accounted_bytes)
+            )),
         };
+        cache.insert(paragraph_id, entry);
+        None
+    };
     if backend_called {
         paragraphs.commit_preparation(preparation);
     }
     Ok(CacheAccess {
         previous_use,
-        previous_accounted_bytes,
-        current_accounted_bytes,
         region_transcript,
     })
 }
@@ -2499,19 +2462,54 @@ impl ParagraphPreflightKey {
         request: &SceneRequest<'_>,
         region_cursor: Option<RegionCursor>,
     ) -> bool {
-        let paragraph_id = paragraph.id();
-        self.version == paragraph.version()
-            && self.composition.is_none()
-            && self.constraint == ConstraintKey::from(request.constraint)
-            && self.region_cursor == region_cursor
-            && region_provenance_matches(self.region_flow.as_ref(), request.region_flow)
-            && (self.styles.shares_state_with(request.styles)
-                || (self.styles.default_style() == request.styles.default_style()
-                    && self.styles.paragraph_style_for(paragraph_id)
-                        == request.styles.paragraph_style_for(paragraph_id)
-                    && paragraph.leaves().all(|leaf| {
-                        self.styles.style_for(leaf.id()) == request.styles.style_for(leaf.id())
-                    })))
+        self.matches_state(
+            paragraph,
+            paragraph.version(),
+            None,
+            request.styles,
+            ConstraintKey::from(request.constraint),
+            request.region_flow,
+            region_cursor,
+        )
+    }
+
+    fn matches_key(&self, current: &Self, paragraph: ParagraphSource<'_>) -> bool {
+        self.matches_state(
+            paragraph,
+            current.version,
+            current.composition.as_deref(),
+            &current.styles,
+            current.constraint,
+            current.region_flow.as_ref(),
+            current.region_cursor,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one exact-reuse predicate covers both preflight and projected keys"
+    )]
+    fn matches_state(
+        &self,
+        paragraph: ParagraphSource<'_>,
+        version: u64,
+        composition: Option<&CompositionPreparationKey>,
+        styles: &StyleMap,
+        constraint: ConstraintKey,
+        region_flow: Option<&RegionFlow>,
+        region_cursor: Option<RegionCursor>,
+    ) -> bool {
+        let same_text = self.version == version && self.composition.as_deref() == composition;
+        self.adapter_change_with_text_identity(
+            paragraph,
+            styles,
+            constraint,
+            region_flow,
+            region_cursor,
+            same_text,
+        ) == ParagraphFormationChange::default()
+            && self.adjustment_matches_styles(styles, paragraph.id())
+            && self.paint_matches_styles(styles, paragraph, same_text)
     }
 
     fn adapter_change(
@@ -2520,8 +2518,11 @@ impl ParagraphPreflightKey {
         paragraph: ParagraphSource<'_>,
     ) -> ParagraphFormationChange {
         self.adapter_change_with_text_identity(
-            current,
             paragraph,
+            &current.styles,
+            current.constraint,
+            current.region_flow.as_ref(),
+            current.region_cursor,
             self.version == current.version && self.composition == current.composition,
         )
     }
@@ -2535,13 +2536,23 @@ impl ParagraphPreflightKey {
         let same_text = self.composition.as_ref().is_some_and(|composition| {
             composition.projected_text.as_ref() == current_projected_text
         });
-        self.adapter_change_with_text_identity(current, paragraph, same_text)
+        self.adapter_change_with_text_identity(
+            paragraph,
+            &current.styles,
+            current.constraint,
+            current.region_flow.as_ref(),
+            current.region_cursor,
+            same_text,
+        )
     }
 
     fn adapter_change_with_text_identity(
         &self,
-        current: &Self,
         paragraph: ParagraphSource<'_>,
+        current_styles: &StyleMap,
+        current_constraint: ConstraintKey,
+        current_region_flow: Option<&RegionFlow>,
+        current_region_cursor: Option<RegionCursor>,
         same_text: bool,
     ) -> ParagraphFormationChange {
         if !same_text {
@@ -2549,7 +2560,7 @@ impl ParagraphPreflightKey {
         }
         let paragraph_id = paragraph.id();
         let previous_paragraph = self.styles.paragraph_style_for(paragraph_id);
-        let current_paragraph = current.styles.paragraph_style_for(paragraph_id);
+        let current_paragraph = current_styles.paragraph_style_for(paragraph_id);
         if previous_paragraph.whitespace_collapse() != current_paragraph.whitespace_collapse() {
             return ParagraphFormationChange::all();
         }
@@ -2562,11 +2573,10 @@ impl ParagraphPreflightKey {
         let mut spacing = false;
         let mut line_metrics = false;
         let mut break_policy = false;
-        let mut paint = false;
         paragraph_inline_styles_match(
             paragraph,
             &self.styles,
-            &current.styles,
+            current_styles,
             |previous, current| {
                 analysis |= previous.analysis() != current.analysis();
                 font_selection |= previous.shaping() != current.shaping();
@@ -2579,14 +2589,13 @@ impl ParagraphPreflightKey {
                 line_metrics |= previous_flow.line_height() != current_flow.line_height();
                 break_policy |= previous_flow.overflow_wrap() != current_flow.overflow_wrap()
                     || previous_flow.text_wrap_mode() != current_flow.text_wrap_mode();
-                paint |= previous.paint() != current.paint();
                 true
             },
         );
         let empty = paragraph.is_empty();
-        let constraints = self.constraint != current.constraint
-            || !option_ref_eq(self.region_flow.as_ref(), current.region_flow.as_ref())
-            || self.region_cursor != current.region_cursor
+        let constraints = self.constraint != current_constraint
+            || self.region_flow.as_ref() != current_region_flow
+            || self.region_cursor != current_region_cursor
             || (empty && line_metrics);
         ParagraphFormationChange {
             analysis,
@@ -2597,7 +2606,6 @@ impl ParagraphPreflightKey {
             line_metrics,
             break_policy,
             constraints,
-            paint,
         }
     }
 
@@ -2614,17 +2622,33 @@ impl ParagraphPreflightKey {
     }
 
     fn adjustment_matches(&self, current: &Self, paragraph: ParagraphId) -> bool {
+        self.adjustment_matches_styles(&current.styles, paragraph)
+    }
+
+    fn adjustment_matches_styles(&self, current: &StyleMap, paragraph: ParagraphId) -> bool {
         self.styles.paragraph_style_for(paragraph).alignment()
-            == current.styles.paragraph_style_for(paragraph).alignment()
+            == current.paragraph_style_for(paragraph).alignment()
     }
 
     fn paint_matches(&self, current: &Self, paragraph: ParagraphSource<'_>) -> bool {
-        self.version == current.version
-            && self.composition == current.composition
+        self.paint_matches_styles(
+            &current.styles,
+            paragraph,
+            self.version == current.version && self.composition == current.composition,
+        )
+    }
+
+    fn paint_matches_styles(
+        &self,
+        current: &StyleMap,
+        paragraph: ParagraphSource<'_>,
+        same_text: bool,
+    ) -> bool {
+        same_text
             && paragraph_inline_styles_match(
                 paragraph,
                 &self.styles,
-                &current.styles,
+                current,
                 |previous, current| previous.paint() == current.paint(),
             )
     }
@@ -2659,30 +2683,12 @@ fn paragraph_inline_styles_match(
         .all(|leaf| matches(previous.style_for(leaf.id()), current.style_for(leaf.id())))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ConstraintKey {
-    MinContent,
-    MaxContent,
-    Wrap(u64),
-}
-
-impl From<TextConstraint> for ConstraintKey {
-    fn from(constraint: TextConstraint) -> Self {
-        match constraint {
-            TextConstraint::MinContent => Self::MinContent,
-            TextConstraint::MaxContent => Self::MaxContent,
-            TextConstraint::Wrap(width) => Self::Wrap(width.0.to_bits()),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 struct ParagraphCache {
     last_used: u64,
     preparation: ParagraphPreparationId,
     preflight_key: ParagraphPreflightKey,
     segment: Arc<ParagraphSceneSegment>,
-    accounted_bytes: usize,
 }
 
 #[derive(Debug, Default)]
@@ -2760,32 +2766,8 @@ impl ParagraphCacheStore {
     }
 }
 
-impl ParagraphCache {
-    fn calculate_accounted_owned_bytes(&self) -> usize {
-        size_of::<Self>()
-            .saturating_add(
-                self.segment
-                    .region_transcript
-                    .as_ref()
-                    .map_or(0, |transcript| {
-                        vec_bytes::<crate::RegionAttempt>(transcript.attempts().len())
-                    }),
-            )
-            .saturating_add(self.segment.geometry.accounted_owned_bytes())
-            .saturating_add(self.segment.paint.residency_bytes())
-    }
-}
-
 const fn vec_bytes<T>(capacity: usize) -> usize {
     size_of::<T>().saturating_mul(capacity)
-}
-
-fn option_ref_eq<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => left == right,
-        (None, None) => true,
-        _ => false,
-    }
 }
 
 fn effective_composition_features(

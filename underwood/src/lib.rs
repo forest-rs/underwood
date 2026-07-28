@@ -48,7 +48,7 @@ pub use parlance::{
 pub use peniko::{Brush, Color, FontData};
 pub use projection::{
     ProjectedText, ProjectionBuilder, ProjectionError, ProjectionErrorKind, ProjectionKind,
-    ProjectionSegment, ProjectionSegments, WhitespaceCollapse,
+    ProjectionSegment, WhitespaceCollapse,
 };
 pub use region::{
     FloatSide, FlowRegion, LineSlot, RegionAttempt, RegionAttemptOutcome, RegionCursor,
@@ -62,11 +62,10 @@ pub use scene::{
     ProjectedSceneLineView, ProjectedSceneLines, ProjectedSources, ProjectedTextPosition,
     ProjectedTextRange, ProjectedTextSource, ProjectedTextUnitView, Scene, SceneCaret,
     SceneCompositionRect, SceneEditing, SceneFragmentId, SceneFragmentView, SceneFragments,
-    SceneGlyphInstanceId, SceneGlyphView, SceneGlyphs, SceneInteraction, SceneLineView, SceneLines,
-    SceneOutput, SceneRegionTranscript, SceneResidency, SceneResidencyBytes, SceneSelection,
-    SceneSelectionRect, SceneSemantics, SemanticFragmentView, SnapshotSources,
-    SnapshotTextUnitView, StageWork, TextHit, TextMetrics, TextScene, TextSources, TextUnitView,
-    WorkReport,
+    SceneGlyphView, SceneGlyphs, SceneInteraction, SceneLineView, SceneLines, SceneOutput,
+    SceneRegionTranscript, SceneResidency, SceneResidencyBytes, SceneSelection, SceneSelectionRect,
+    SceneSemantics, SemanticFragmentView, SnapshotSources, SnapshotTextUnitView, StageWork,
+    TextHit, TextMetrics, TextScene, TextSources, TextUnitView, WorkReport,
 };
 pub use selection::{
     SnapshotTextPosition, SnapshotTextRange, SnapshotTextSelection, SnapshotTextSelectionSet,

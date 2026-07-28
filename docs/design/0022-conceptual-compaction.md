@@ -166,7 +166,6 @@ pub struct PreparedParagraphData {
     runs: Vec<PreparedRun>,
     glyphs: Vec<PreparedGlyphRecord>,
     glyph_placements: Vec<PreparedGlyphPlacement>,
-    split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
     units: Vec<PreparedInteractionUnit>,
     interaction_slices: Vec<PreparedInteractionSlice>,
     interaction_slice_spills: Vec<PreparedInteractionSliceSpill>,
@@ -198,7 +197,7 @@ That function checks:
 - unit source coverage and optional visual source-order permutation;
 - run source coverage and run-to-glyph/coordinate/unrendered ranges;
 - glyph and unrendered-source containment;
-- rare placement, paint, and slice spill indexes;
+- rare placement and slice-spill indexes;
 - feature-dependent table presence.
 
 It does not rebuild a second set of tables, sort a copy merely to compare it,
@@ -270,11 +269,15 @@ amortized growth, or one additional reserve is best.
   unit/run ranges. `PreparedLineRecord` disappears.
 - `PreparedRun` becomes the canonical retained run record by gaining compact
   glyph/coordinate/unrendered ranges. `PreparedRunRecord` disappears.
-- `PreparedInteractionUnit` stores the compact advance and side flags directly.
+- `PreparedInteractionUnit` stores compact derived advance and side flags
+  directly. `PreparedParagraphData` derives that advance from the unit's
+  retained shaping slices instead of accepting and rechecking a second value.
   `PreparedInteractionUnitRecord` disappears.
-- Glyphs retain the current common compact record plus rare placement/paint
-  spills. A transient glyph input may remain only if scalar conversion is
-  materially clearer than a direct `push_glyph` call.
+- Glyphs retain the current common compact record plus rare placement records.
+  Split-glyph paint is not retained because no production backend
+  can emit it; paint boundaries inside one glyph fail explicitly. A transient
+  glyph input may remain only if scalar conversion is materially clearer than
+  a direct `push_glyph` call.
 - `PreparedParagraphCapacity`, `PreparedLineBuilder`, and
   `PreparedRunBuilder` disappear. `PreparedParagraphBuilder` disappears rather
   than becoming a renamed wrapper around `PreparedParagraphData`.
@@ -491,6 +494,13 @@ Added or changed adapter surface:
 - `PreparedParagraphData`;
 - `PreparedParagraph::try_from_data`;
 - direct compact table append/count methods;
+- paint-independent `ParagraphInput`; paint coverage is resolved once while
+  constructing scene paint topology;
+- derived interaction-unit and line advances instead of caller-supplied
+  duplicate totals;
+- `Font::from_bytes(bytes)` without a retained debug-only name or digest;
+- current-residency and proposed/rejected work diagnostics without unread peak,
+  restore, or accepted-candidate mirrors;
 - `PreparedParagraph::{line, lines}`;
 - `PreparedLineView::{run, runs, unit, units}`;
 - `PreparedRunView::{glyph, glyphs}`;

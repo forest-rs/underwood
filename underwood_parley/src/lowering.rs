@@ -12,9 +12,7 @@ use core::ops::Range;
 
 use fontique::Synthesis;
 use parley_engine::{Analysis, ShapedText, shape::ClusterData};
-use underwood::adapter::{
-    FontSynthesis, GlyphPaintCoverage, PreparationError, PreparedGlyph, PreparedParagraphData,
-};
+use underwood::adapter::{FontSynthesis, PreparationError, PreparedGlyph, PreparedParagraphData};
 use underwood::{FontVariation, Tag, Vec2};
 
 pub(crate) fn lower_glyphs_into(
@@ -24,7 +22,6 @@ pub(crate) fn lower_glyphs_into(
     shaped_text: &ShapedText,
     run: &parley_engine::ShapedRun,
     cluster_range: Range<usize>,
-    paint_runs: &[underwood::adapter::PaintRun],
     output: &mut PreparedParagraphData,
 ) -> Result<(), PreparationError> {
     let clusters = shaped_text
@@ -61,13 +58,11 @@ pub(crate) fn lower_glyphs_into(
         }
         lower_cluster_glyphs(shaped_text, run, cluster, |glyph| {
             let advance = Vec2::new(f64::from(glyph.advance), 0.0);
-            let paint = paint_coverage(source.clone(), paint_runs)?;
             output.push_glyph(PreparedGlyph::try_new(
                 glyph.id,
                 source.clone(),
                 advance,
                 Vec2::new(f64::from(glyph.x), -f64::from(glyph.y)),
-                paint,
             )?)
         })
     };
@@ -269,24 +264,4 @@ pub(crate) fn portable_synthesis(synthesis: Synthesis) -> Result<FontSynthesis, 
         synthesis.embolden(),
         synthesis.skew(),
     )
-}
-
-pub(crate) fn paint_coverage(
-    source: Range<u32>,
-    paint_runs: &[underwood::adapter::PaintRun],
-) -> Result<GlyphPaintCoverage, PreparationError> {
-    let mut matching = paint_runs.iter().filter(|paint| {
-        let bytes = paint.bytes();
-        bytes.start < source.end && bytes.end > source.start
-    });
-    let paint = matching
-        .next()
-        .ok_or_else(PreparationError::unsupported_paint_coverage)?;
-    if matching.next().is_some()
-        || paint.bytes().start > source.start
-        || paint.bytes().end < source.end
-    {
-        return Err(PreparationError::unsupported_paint_coverage());
-    }
-    Ok(GlyphPaintCoverage::whole())
 }

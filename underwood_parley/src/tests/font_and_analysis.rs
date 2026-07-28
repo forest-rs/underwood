@@ -282,12 +282,11 @@ fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
 
 #[test]
 fn catalog_configuration_rejects_unknown_and_untracked_families() {
-    let unknown = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("fixture font is valid")
-    ])
-    .expect("fixture catalog is valid")
-    .with_generic_families(GenericFamily::SansSerif, ["Absent Family"])
-    .expect_err("generic mappings must not silently omit absent families");
+    let unknown =
+        FontSet::try_from_fonts([Font::from_bytes(LATIN_FONT).expect("fixture font is valid")])
+            .expect("fixture catalog is valid")
+            .with_generic_families(GenericFamily::SansSerif, ["Absent Family"])
+            .expect_err("generic mappings must not silently omit absent families");
     assert_eq!(
         unknown.kind(),
         AdapterErrorKind::UnknownFamily,
@@ -295,12 +294,11 @@ fn catalog_configuration_rejects_unknown_and_untracked_families() {
     );
 
     let arabic = Language::parse("ar").expect("test language is valid");
-    let unsupported = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("fixture font is valid")
-    ])
-    .expect("fixture catalog is valid")
-    .with_fallbacks(Script::from_bytes(*b"Latn"), Some(arabic), ["Roboto Flex"])
-    .expect_err("untracked script-language pairs must not disappear");
+    let unsupported =
+        FontSet::try_from_fonts([Font::from_bytes(LATIN_FONT).expect("fixture font is valid")])
+            .expect("fixture catalog is valid")
+            .with_fallbacks(Script::from_bytes(*b"Latn"), Some(arabic), ["Roboto Flex"])
+            .expect_err("untracked script-language pairs must not disappear");
     assert_eq!(
         unsupported.kind(),
         AdapterErrorKind::UnsupportedFallback,
@@ -314,8 +312,8 @@ fn font_sets_support_empty_catalogs_and_report_registered_families() {
     assert!(empty.registered_family_names().is_empty());
 
     let registered = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
-        Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid"),
+        Font::from_bytes(ARABIC_FONT).expect("Arabic fixture font is valid"),
     ])
     .expect("fixture catalog is valid");
     assert_eq!(
@@ -328,7 +326,7 @@ fn font_sets_support_empty_catalogs_and_report_registered_families() {
 #[test]
 fn font_set_clones_share_catalog_updates() {
     let mut first = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid")
     ])
     .expect("fixture catalog is valid");
     let mut clone = first.clone();
@@ -425,10 +423,9 @@ fn control_only_paragraph_emits_no_phantom_glyph() {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("fixture font is valid")
-    ])
-    .expect("fixture catalog is valid");
+    let fonts =
+        FontSet::try_from_fonts([Font::from_bytes(LATIN_FONT).expect("fixture font is valid")])
+            .expect("fixture catalog is valid");
     let paragraphs = ParleyParagraphEngine::new(fonts);
     let mut layout = LayoutEngine::new(paragraphs, CacheBudget::new(32));
     let request = editable_scene_request(

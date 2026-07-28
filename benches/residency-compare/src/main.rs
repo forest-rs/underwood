@@ -249,7 +249,7 @@ impl UnderwoodLabels {
             );
         }
         println!(
-            "retained\tengine=underwood\tscenario={scenario}\tinstances={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={lines}\tfragments={fragments}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={scene_handle_bytes}\tscene_handle_structure_bytes={scene_handle_structure_bytes}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tscene_selection_bytes={}\tscene_navigation_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
+            "retained\tengine=underwood\tscenario={scenario}\tinstances={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={lines}\tfragments={fragments}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={scene_handle_bytes}\tscene_handle_structure_bytes={scene_handle_structure_bytes}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
             self.blocks.len(),
             self.source_bytes(),
             font_blob_bytes(),
@@ -259,8 +259,6 @@ impl UnderwoodLabels {
             diagnostics.scene_cache_residency.sources,
             diagnostics.scene_cache_residency.semantics,
             diagnostics.scene_cache_residency.hit_testing,
-            diagnostics.scene_cache_residency.selection,
-            diagnostics.scene_cache_residency.navigation,
             adapter.map_or(0, |facts| facts.resident_bytes),
             adapter.map_or(0, |facts| facts.scratch_bytes),
             diagnostics.shared_preparation_resident_bytes,
@@ -340,7 +338,7 @@ impl UnderwoodDocument {
             .map(|fragment| fragment.glyphs().len())
             .sum::<usize>();
         println!(
-            "retained\tengine=underwood\tscenario={scenario}\tinstances=1\tparagraphs={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={}\tfragments={}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={}\tscene_handle_structure_bytes={}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tscene_selection_bytes={}\tscene_navigation_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
+            "retained\tengine=underwood\tscenario={scenario}\tinstances=1\tparagraphs={}\tsource_bytes={}\tfont_blob_bytes={}\tfont_blobs=2\tlines={}\tfragments={}\tglyphs={glyphs}\tscene_cache_bytes={}\tscene_handle_bytes={}\tscene_handle_structure_bytes={}\tscene_layout_bytes={}\tscene_paint_bytes={}\tscene_source_bytes={}\tscene_semantics_bytes={}\tscene_hit_bytes={}\tadapter_bytes={}\tadapter_scratch_bytes={}\tshared_preparation_bytes={}",
             scene.residency().paragraphs,
             self.source_bytes,
             font_blob_bytes(),
@@ -354,8 +352,6 @@ impl UnderwoodDocument {
             diagnostics.scene_cache_residency.sources,
             diagnostics.scene_cache_residency.semantics,
             diagnostics.scene_cache_residency.hit_testing,
-            diagnostics.scene_cache_residency.selection,
-            diagnostics.scene_cache_residency.navigation,
             adapter.map_or(0, |facts| facts.resident_bytes),
             adapter.map_or(0, |facts| facts.scratch_bytes),
             diagnostics.shared_preparation_resident_bytes,
@@ -950,8 +946,8 @@ fn paint() -> PaintTable {
 
 fn underwood_fonts() -> Result<FontSet, Error> {
     Ok(FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT)?,
-        Font::from_bytes("arabic", ARABIC_FONT)?,
+        Font::from_bytes(LATIN_FONT)?,
+        Font::from_bytes(ARABIC_FONT)?,
     ])?
     .with_fallbacks(
         underwood::Script::from_bytes(*b"Arab"),

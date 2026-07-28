@@ -292,8 +292,6 @@ pub struct WorkReport {
     pub line_candidates: u32,
     /// Line candidates rejected by final fit checks.
     pub rejected_line_candidates: u32,
-    /// Restorations of line traversal and provisional output.
-    pub line_checkpoint_restores: u32,
     /// Paragraphs reused without calling the adapter.
     pub reused_paragraphs: usize,
     /// Paragraphs whose identity-free prepared facts were shared.

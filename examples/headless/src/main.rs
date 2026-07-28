@@ -167,14 +167,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .scene
             .fragments()
             .iter()
-            .all(|fragment| fragment.paint_clip().is_none()),
-        "ordinary whole-glyph paint must not manufacture outline-derived clips"
-    );
-    assert!(
-        first_scene
-            .scene
-            .fragments()
-            .iter()
             .any(|fragment| fragment.script() == *b"Arab" && fragment.bidi_level() & 1 == 1),
         "the real scene must retain an itemized right-to-left Arabic run"
     );
@@ -199,11 +191,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(14.0),
         "the static fallback must retain Fontique's synthetic oblique evidence"
     );
-    let zero_advance_mark = first_scene
-        .scene
-        .fragments()
-        .iter()
-        .find(|fragment| {
+    assert!(
+        first_scene.scene.fragments().iter().any(|fragment| {
             fragment
                 .sources()
                 .expect("fragment belongs to source scene")
@@ -212,11 +201,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .glyphs()
                     .iter()
                     .any(|glyph| glyph.advance().x == 0.0)
-        })
-        .expect("Noto Kufi must expose a zero-advance Arabic mark");
-    assert!(
-        zero_advance_mark.paint_clip().is_none(),
-        "a zero-advance Arabic glyph must reach the renderer without an ordinary paint clip"
+        }),
+        "Noto Kufi must expose a zero-advance Arabic mark"
     );
     let arabic_visual_sources: Vec<_> = first_scene
         .scene
@@ -532,14 +518,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn font_catalog() -> Result<FontSet, Box<dyn std::error::Error>> {
     let arabic = Language::parse("ar")?;
     Ok(FontSet::try_from_fonts([
-        Font::from_bytes(
-            "latin",
-            include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"),
-        )?,
-        Font::from_bytes(
-            "arabic",
-            include_bytes!("../fonts/NotoKufiArabic-Regular.otf"),
-        )?,
+        Font::from_bytes(include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"))?,
+        Font::from_bytes(include_bytes!("../fonts/NotoKufiArabic-Regular.otf"))?,
     ])?
     .with_generic_families(GenericFamily::SansSerif, ["Roboto Flex"])?
     .with_fallbacks(
@@ -643,8 +623,8 @@ fn font_request_invalidation_proof() -> Result<(), Box<dyn std::error::Error>> {
     );
     let recovered = layout.prepare(published.snapshot(), &request)?;
     assert_eq!(
-        recovered.work.shape.paragraphs, 1,
-        "a paint-driven retry after failed shaping must rebuild invalidated retained text"
+        recovered.work.shape.paragraphs, 0,
+        "failed speculative shaping must not poison the retained published artifact used by a paint-only recovery"
     );
 
     missing_coverage_proof()?;
@@ -664,10 +644,9 @@ fn missing_coverage_proof() -> Result<(), Box<dyn std::error::Error>> {
     );
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
-    let fonts = FontSet::try_from_fonts([Font::from_bytes(
-        "latin",
-        include_bytes!("../fonts/RobotoFlex-VariableFont.ttf"),
-    )?])?;
+    let fonts = FontSet::try_from_fonts([Font::from_bytes(include_bytes!(
+        "../fonts/RobotoFlex-VariableFont.ttf"
+    ))?])?;
     let mut layout = LayoutEngine::new(
         ParleyParagraphEngine::new(fonts),
         CacheBudget::new(256).with_adapter_facts_bytes(64 * 1024 * 1024),

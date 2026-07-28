@@ -658,7 +658,7 @@ fn shared_composition_preparation_rebinds_native_identity_and_epoch() {
 }
 
 #[test]
-fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
+fn shared_key_separates_formation_inputs_but_not_paint_or_alignment() {
     let (_, styles, paint) = fixture_document("fixture", 1.2);
     let style = styles.default_style().clone();
     let alternate_paint =
@@ -713,8 +713,15 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
     let slot_output = layout
         .prepare_block(&blocks[3].snapshot(), &different_slot)
         .expect("different paint coverage prepares");
-    assert_eq!(slot_output.work.shared_preparations, 0);
-    assert_eq!(slot_output.work.shape.paragraphs, 1);
+    assert_eq!(slot_output.work.shared_preparations, 1);
+    assert_eq!(slot_output.work.shape.paragraphs, 0);
+    assert!(
+        slot_output
+            .scene
+            .fragments()
+            .all(|fragment| fragment.paint() == PaintSlot::new(1)),
+        "shared prepared facts must resolve the consuming scene's paint"
+    );
 
     let wrapped = editable_block_request(
         TextConstraint::Wrap(FiniteWidth::new(200.0).expect("width is valid")),
@@ -728,9 +735,9 @@ fn shared_key_separates_formation_inputs_but_not_brushes_or_alignment() {
     assert_eq!(width_output.work.flow.paragraphs, 1);
 
     let diagnostics = layout.cache_diagnostics();
-    assert_eq!(diagnostics.shared_preparation_hits, 2);
-    assert_eq!(diagnostics.shared_preparation_misses, 3);
-    assert_eq!(diagnostics.shared_preparation_entries, 3);
+    assert_eq!(diagnostics.shared_preparation_hits, 3);
+    assert_eq!(diagnostics.shared_preparation_misses, 2);
+    assert_eq!(diagnostics.shared_preparation_entries, 2);
 }
 
 #[test]
@@ -975,7 +982,7 @@ fn shared_preparation_budget_is_byte_bounded_lru_and_oversized_safe() {
 fn failed_first_preparation_releases_untracked_backend_state() {
     let (document, styles, paint) = fixture_document("中文", 1.2);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid")
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid")
     ])
     .expect("fixture catalog is valid");
     let mut engine = LayoutEngine::new(ParleyParagraphEngine::new(fonts), CacheBudget::new(32));

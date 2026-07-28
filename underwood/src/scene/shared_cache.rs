@@ -15,7 +15,6 @@ pub(super) struct SharedPreparationDiagnostics {
     pub(super) budget: usize,
     pub(super) entries: usize,
     pub(super) resident_bytes: usize,
-    pub(super) peak_bytes: usize,
     pub(super) hits: usize,
     pub(super) misses: usize,
     pub(super) evictions: usize,
@@ -132,7 +131,6 @@ impl SharedPreparationCache {
             });
         self.entries = self.entries.saturating_add(1);
         self.resident_bytes = self.resident_bytes.saturating_add(weight);
-        self.work.peak_bytes = self.work.peak_bytes.max(self.resident_bytes);
     }
 
     pub(super) fn clear(&mut self) {
@@ -145,7 +143,6 @@ impl SharedPreparationCache {
             budget: self.budget,
             entries: self.entries,
             resident_bytes: self.resident_bytes,
-            peak_bytes: self.work.peak_bytes,
             hits: self.work.hits,
             misses: self.work.misses,
             evictions: self.work.evictions,
@@ -249,7 +246,6 @@ struct SharedPreparationEntry {
 
 #[derive(Debug, Default)]
 struct SharedPreparationWork {
-    peak_bytes: usize,
     hits: usize,
     misses: usize,
     evictions: usize,
@@ -258,7 +254,6 @@ struct SharedPreparationWork {
 
 #[derive(Clone, Debug, PartialEq)]
 struct SharedPreparationKey {
-    epoch: u64,
     text: alloc::string::String,
     analysis_styles: Vec<AnalysisStyle>,
     analysis_runs: Vec<AnalysisRun>,
@@ -268,18 +263,16 @@ struct SharedPreparationKey {
     inline_flow_runs: Vec<InlineFlowRun>,
     base_direction: BaseDirection,
     whitespace_collapse: crate::WhitespaceCollapse,
-    constraint: SharedConstraintKey,
+    constraint: ConstraintKey,
     region_flow: Option<RegionFlow>,
     region_cursor: Option<RegionCursor>,
     empty_line_height: u64,
-    paint_runs: Vec<PaintRun>,
 }
 
 impl SharedPreparationKey {
     fn from_query(query: &SharedPreparationQuery<'_>) -> Self {
         let projection = query.projection;
         Self {
-            epoch: query.epoch,
             text: alloc::string::String::from(projection.mapping.text()),
             analysis_styles: projection.analysis_styles.clone(),
             analysis_runs: projection.analysis_runs.clone(),
@@ -289,18 +282,16 @@ impl SharedPreparationKey {
             inline_flow_runs: projection.inline_flow_runs.clone(),
             base_direction: projection.paragraph_style.base_direction(),
             whitespace_collapse: projection.paragraph_style.whitespace_collapse(),
-            constraint: SharedConstraintKey::from(query.constraint),
+            constraint: ConstraintKey::from(query.constraint),
             region_flow: query.region_flow.cloned(),
             region_cursor: query.region_cursor,
             empty_line_height: empty_line_height_key(projection),
-            paint_runs: projection.paint_runs.clone(),
         }
     }
 
     fn matches(&self, query: &SharedPreparationQuery<'_>) -> bool {
         let projection = query.projection;
-        self.epoch == query.epoch
-            && self.text == projection.mapping.text()
+        self.text == projection.mapping.text()
             && self.analysis_styles == projection.analysis_styles
             && self.analysis_runs == projection.analysis_runs
             && self.shaping_styles == projection.shaping_styles
@@ -309,11 +300,10 @@ impl SharedPreparationKey {
             && self.inline_flow_runs == projection.inline_flow_runs
             && self.base_direction == projection.paragraph_style.base_direction()
             && self.whitespace_collapse == projection.paragraph_style.whitespace_collapse()
-            && self.constraint == SharedConstraintKey::from(query.constraint)
-            && option_ref_eq(self.region_flow.as_ref(), query.region_flow)
+            && self.constraint == ConstraintKey::from(query.constraint)
+            && self.region_flow.as_ref() == query.region_flow
             && self.region_cursor == query.region_cursor
             && self.empty_line_height == empty_line_height_key(projection)
-            && self.paint_runs == projection.paint_runs
     }
 
     fn estimated_owned_bytes(&self) -> usize {
@@ -327,24 +317,6 @@ impl SharedPreparationKey {
                 self.inline_flow_styles.capacity(),
             ))
             .saturating_add(vec_bytes::<InlineFlowRun>(self.inline_flow_runs.capacity()))
-            .saturating_add(vec_bytes::<PaintRun>(self.paint_runs.capacity()))
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SharedConstraintKey {
-    MinContent,
-    MaxContent,
-    Wrap(u64),
-}
-
-impl From<TextConstraint> for SharedConstraintKey {
-    fn from(constraint: TextConstraint) -> Self {
-        match constraint {
-            TextConstraint::MinContent => Self::MinContent,
-            TextConstraint::MaxContent => Self::MaxContent,
-            TextConstraint::Wrap(width) => Self::Wrap(width.0.to_bits()),
-        }
     }
 }
 
@@ -412,14 +384,6 @@ fn empty_line_height_key(projection: &Projection) -> u64 {
         projection.empty_line_height_key()
     } else {
         0
-    }
-}
-
-fn option_ref_eq<T: PartialEq>(left: Option<&T>, right: Option<&T>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => left == right,
-        (None, None) => true,
-        _ => false,
     }
 }
 

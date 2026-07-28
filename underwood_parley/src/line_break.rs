@@ -185,7 +185,6 @@ pub(crate) struct LineFormationWork {
     pub(crate) shaped_glyphs: u32,
     pub(crate) candidates: u32,
     pub(crate) rejected_candidates: u32,
-    pub(crate) checkpoint_restores: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -199,6 +198,7 @@ pub(crate) fn form_lines(
     text: &str,
     canonical_text: &ShapedText,
     clusters: &[LogicalCluster],
+    interaction_units: &[Range<usize>],
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
     constraints: &ParagraphConstraints,
@@ -267,6 +267,7 @@ pub(crate) fn form_lines(
             text,
             canonical_text,
             clusters,
+            interaction_units,
             inline_flow_styles,
             inline_flow_runs,
             constraints,
@@ -308,7 +309,7 @@ pub(crate) fn form_lines(
             )
             .map_err(map_former_error)?
         {
-            CommitOutcome::Accepted(_) => {}
+            CommitOutcome::Accepted => {}
             CommitOutcome::Retry(_) | CommitOutcome::SlotRejected => {
                 return Err(PreparationError::invalid_output());
             }
@@ -352,6 +353,7 @@ pub(crate) fn form_lines(
                 );
                 work.shaped_glyphs = work.shaped_glyphs.saturating_add(shaped_glyphs);
                 collect_logical_clusters_into(text, &scratch.shaped_text, &mut scratch.clusters)?;
+                cover_interaction_units(&mut scratch.clusters, interaction_units)?;
                 if scratch.clusters.first().map(|cluster| cluster.source.start)
                     != Some(source.start)
                     || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
@@ -382,7 +384,7 @@ pub(crate) fn form_lines(
                 )
                 .map_err(map_former_error)?
             {
-                CommitOutcome::Accepted(_) => {
+                CommitOutcome::Accepted => {
                     if uses_canonical {
                         lines.push(FormedLine::canonical(plan));
                     } else {
@@ -437,9 +439,12 @@ fn candidate_uses_canonical(candidate: LineCandidate, clusters: &[LogicalCluster
 fn break_preserves_shaping(boundary: usize, clusters: &[LogicalCluster]) -> bool {
     boundary == 0
         || boundary == clusters.len()
-        || clusters
-            .get(boundary - 1)
-            .is_some_and(|cluster| cluster.whitespace != Whitespace::None)
+        || clusters.get(boundary - 1).is_some_and(|cluster| {
+            cluster.whitespace != Whitespace::None
+                && clusters
+                    .get(boundary)
+                    .is_none_or(|next| !next.ligature_component)
+        })
 }
 
 #[expect(
@@ -451,6 +456,7 @@ fn form_region_lines(
     text: &str,
     canonical_text: &ShapedText,
     clusters: &[LogicalCluster],
+    interaction_units: &[Range<usize>],
     inline_flow_styles: &[InlineFlowStyle],
     inline_flow_runs: &[InlineFlowRun],
     constraints: &ParagraphConstraints,
@@ -513,6 +519,7 @@ fn form_region_lines(
             }
             if !uses_canonical {
                 collect_logical_clusters_into(text, &scratch.shaped_text, &mut scratch.clusters)?;
+                cover_interaction_units(&mut scratch.clusters, interaction_units)?;
                 if scratch.clusters.first().map(|cluster| cluster.source.start)
                     != Some(source.start)
                     || scratch.clusters.last().map(|cluster| cluster.source.end) != Some(source.end)
@@ -560,7 +567,7 @@ fn form_region_lines(
                 )
                 .map_err(map_former_error)?
             {
-                CommitOutcome::Accepted(_) => {
+                CommitOutcome::Accepted => {
                     attempts.push(
                         RegionAttempt::try_new(
                             paragraph,
@@ -716,7 +723,6 @@ fn validate_candidate(candidate: LineCandidate) -> Result<(), PreparationError> 
 fn record_former_work(work: &mut LineFormationWork, former: LineFormerWork) {
     work.candidates = former.proposed;
     work.rejected_candidates = former.rejected;
-    work.checkpoint_restores = former.restores;
 }
 
 #[cfg(test)]
@@ -825,8 +831,43 @@ pub(crate) fn collect_logical_clusters_into(
             });
         }
     }
+    clusters.sort_unstable_by_key(|cluster| (cluster.source.start, cluster.index));
     if !text.is_empty() && clusters.is_empty() {
         return Err(PreparationError::invalid_output());
+    }
+    Ok(())
+}
+
+pub(crate) fn cover_interaction_units(
+    clusters: &mut [LogicalCluster],
+    interaction_units: &[Range<usize>],
+) -> Result<(), PreparationError> {
+    let mut cluster_start = 0_usize;
+    let mut previous_unit_end = 0_usize;
+    for unit in interaction_units {
+        if unit.start < previous_unit_end || unit.start >= unit.end {
+            return Err(PreparationError::invalid_output());
+        }
+        previous_unit_end = unit.end;
+        cluster_start = cluster_start.saturating_add(
+            clusters[cluster_start..].partition_point(|cluster| cluster.source.end <= unit.start),
+        );
+        let cluster_end = cluster_start.saturating_add(
+            clusters[cluster_start..].partition_point(|cluster| cluster.source.start < unit.end),
+        );
+        let Some(covered) = clusters.get_mut(cluster_start..cluster_end) else {
+            return Err(PreparationError::invalid_output());
+        };
+        let Some((first, rest)) = covered.split_first_mut() else {
+            continue;
+        };
+        if first.source.start > unit.start {
+            first.source.start = unit.start;
+        }
+        let last = rest.last_mut().unwrap_or(first);
+        if last.source.end < unit.end {
+            last.source.end = unit.end;
+        }
     }
     Ok(())
 }

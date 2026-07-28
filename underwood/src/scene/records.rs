@@ -54,19 +54,6 @@ impl LineAdjustment {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SceneFragmentId(pub(super) u64);
 
-/// Opaque identity of one shaped glyph instance in a prepared scene.
-///
-/// A glyph can occur in more than one paint fragment when style boundaries
-/// divide its visible area. Those observations retain one shared identity.
-/// Structurally shared paragraph geometry retains its glyph identities across
-/// corresponding scene preparations. Compare identities only while at least
-/// one such scene remains alive; they are not persistent document identifiers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SceneGlyphInstanceId {
-    pub(super) geometry: usize,
-    pub(super) glyph: usize,
-}
-
 /// Result of scene-space hit testing.
 #[derive(Clone, Debug)]
 pub struct TextHit<Source = SnapshotTextUnit, Position = SnapshotTextPosition> {

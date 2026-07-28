@@ -423,21 +423,7 @@ impl<'a, T> SceneFragmentView<'a, T> {
     }
 
     fn source_reference(self, glyph: usize) -> SourceReference {
-        let source = if self.local().segment == WHOLE_GLYPH_PAINT {
-            self.prepared_glyph(glyph).source()
-        } else {
-            self.prepared_glyph(glyph)
-                .paint()
-                .split_segments()
-                .expect("split fragment retains split glyph coverage")
-                [self.local().segment as usize]
-                .source()
-        };
-        SourceReference::Projected(source.into())
-    }
-
-    fn instance(self, glyph: usize) -> usize {
-        self.local().instance_start + glyph - self.local().glyphs.start as usize
+        SourceReference::Projected(self.prepared_glyph(glyph).source().into())
     }
 
     fn inline_advance_adjustment(self, glyph: PreparedGlyphView<'_>) -> f64 {
@@ -509,18 +495,6 @@ impl<'a, T> SceneFragmentView<'a, T> {
     #[must_use]
     pub fn paint(self) -> PaintSlot {
         self.local().paint
-    }
-
-    /// Returns the fragment transform.
-    #[must_use]
-    pub fn transform(self) -> Affine {
-        Affine::IDENTITY
-    }
-
-    /// Returns an explicit scene-space partial-paint clip.
-    #[must_use]
-    pub fn paint_clip(self) -> Option<Rect> {
-        self.local().paint_clip.map(|clip| clip + self.translate())
     }
 
     /// Returns exact font bytes and face index.
@@ -722,15 +696,6 @@ impl<'a, T> SceneGlyphView<'a, T> {
         self.fragment.prepared_glyph(self.local)
     }
 
-    /// Returns the identity shared by split-paint observations.
-    #[must_use]
-    pub fn instance_id(self) -> SceneGlyphInstanceId {
-        SceneGlyphInstanceId {
-            geometry: Arc::as_ptr(&self.fragment.positioned.position.segment.geometry) as usize,
-            glyph: self.fragment.instance(self.local),
-        }
-    }
-
     /// Returns the backend glyph identifier.
     #[must_use]
     pub fn id(self) -> u32 {
@@ -816,8 +781,6 @@ impl<'a, T> TextSources<'a, T> {
                     run: fragment.prepared_run(),
                     start: glyphs.start as usize,
                     end: glyphs.end as usize,
-                    segment: (fragment.local().segment != WHOLE_GLYPH_PAINT)
-                        .then_some(fragment.local().segment as usize),
                 },
             ),
             source: PhantomData,
@@ -974,7 +937,6 @@ enum SourceReferences<'a> {
         run: PreparedRunView<'a>,
         start: usize,
         end: usize,
-        segment: Option<usize>,
     },
 }
 
@@ -989,22 +951,13 @@ impl SourceReferences<'_> {
     fn get(self, index: usize) -> Option<SourceReference> {
         match self {
             Self::One(source) => (index == 0).then_some(source),
-            Self::Glyphs {
-                run,
-                start,
-                end,
-                segment,
-            } => {
+            Self::Glyphs { run, start, end } => {
                 let index = start.checked_add(index)?;
                 if index >= end {
                     return None;
                 }
                 let glyph = run.glyph(index)?;
-                let source = match segment {
-                    Some(segment) => glyph.paint().split_segments()?.get(segment)?.source(),
-                    None => glyph.source(),
-                };
-                Some(SourceReference::Projected(source.into()))
+                Some(SourceReference::Projected(glyph.source().into()))
             }
         }
     }

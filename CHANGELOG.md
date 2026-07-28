@@ -24,21 +24,31 @@ Underwood does not yet make compatibility promises.
   instead of exposing only their first slice. `PreparedRun::try_new` now also
   receives explicit unrendered source ranges for controls and format characters;
   adapters must account for every scalar without manufacturing phantom glyphs.
-- Replaced advance-sized, character-proportional, and mandatory outline-derived
-  glyph clips with explicit source-to-paint ownership. Ordinary whole glyphs
-  now render without a clip, so missing outline metrics and synthetic
-  emboldening no longer fail preparation. Adapter callers that put a paint
-  boundary inside one shaped glyph must still handle
-  `PreparationErrorKind::UnsupportedPaintCoverage` until they can provide
-  exact component geometry. `SceneFragment::clip` is replaced by optional
-  `SceneFragment::paint_clip`; renderer adapters must draw directly for `None`
-  and clip only explicit partial-paint segments. Paragraph adapters replace
-  `GlyphPaintSegment::new` and `local_clip` with
-  `GlyphPaintCoverage::whole` for ordinary paint or
-  `GlyphPaintSegment::clipped` and optional `clip` for a validated split.
-  Explicit clips are post-synthesis glyph-local geometry; adapters account for
-  skew/emboldening and renderers translate the rectangle without applying
-  synthesis to it again.
+- Removed outline-derived glyph clips and unreachable split-glyph paint
+  vocabulary. Ordinary glyphs render whole without outline metrics, and scene
+  paint fragments coalesce at run scale. A paint boundary inside one shaped
+  glyph fails explicitly with `UnsupportedPaintCoverage`; adapters must split
+  shaping or reject it rather than presenting unproducible component geometry.
+  Paint runs no longer cross `ParagraphInput`; prepared facts are
+  paint-independent and current paint coverage is checked once during scene
+  paint construction. Renderer adapters no longer handle fragment paint clips,
+  constant identity transforms, or per-glyph instance identities.
+- `PreparedInteractionUnit` and `PreparedLine` no longer accept caller-supplied
+  advances. `PreparedParagraphData` derives unit advances from their complete
+  slice coverage and line advances from their complete unit coverage. Adapter
+  migrations remove those two arguments rather than computing duplicate
+  totals.
+- Compacted adapter failure and work diagnostics to states that can occur or
+  guide policy. Removed the never-produced `MissingCapability` and `Cancelled`
+  preparation errors, adapter/shared-cache peak-byte fields,
+  `checkpoint_restores`, and `accepted_candidates`; callers use current
+  residency plus `candidates`/`rejected_candidates`. `Font::from_bytes` now
+  accepts only the font bytes because diagnostic names, digests, and stored
+  units-per-em were debug-only state.
+- Compacted scene residency diagnostics to categories that can actually retain
+  bytes. The permanently zero `selection`, `navigation`, and
+  `native_text_input` fields are removed; those operations derive from shared
+  interaction data without separate storage.
 - Added `FontSynthesis::skew_transform` as the canonical `no_std` affine used
   by coverage adapters and renderers. Existing callers may replace local
   degree-to-shear math with this method; `skew_degrees` remains available.

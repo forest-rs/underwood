@@ -120,7 +120,6 @@ impl PreparedLine {
     pub fn try_new(
         source: Range<u32>,
         break_reason: LineBreakReason,
-        advance: f64,
         baseline: f64,
         height: f64,
         content_ascent: f64,
@@ -130,7 +129,6 @@ impl PreparedLine {
             None,
             source,
             break_reason,
-            advance,
             baseline,
             height,
             content_ascent,
@@ -139,23 +137,16 @@ impl PreparedLine {
     }
 
     /// Validates metadata for one line accepted into an exact region slot.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "mirrors complete portable line data"
-    )]
     pub fn try_new_in_slot(
         slot: Option<crate::LineSlot>,
         source: Range<u32>,
         break_reason: LineBreakReason,
-        advance: f64,
         baseline: f64,
         height: f64,
         content_ascent: f64,
         content_descent: f64,
     ) -> Result<Self, PreparationError> {
         if source.start > source.end
-            || !advance.is_finite()
-            || advance < 0.0
             || !baseline.is_finite()
             || baseline < 0.0
             || !height.is_finite()
@@ -165,7 +156,6 @@ impl PreparedLine {
             || content_ascent < 0.0
             || !content_descent.is_finite()
             || content_descent < 0.0
-            || slot.is_some_and(|slot| height > slot.block_size())
         {
             return Err(PreparationError::invalid_output());
         }
@@ -174,7 +164,7 @@ impl PreparedLine {
             slot,
             source,
             break_reason,
-            advance,
+            advance: 0.0,
             trailing_whitespace_start: source_end,
             trailing_whitespace_advance: 0.0,
             baseline,
@@ -197,7 +187,6 @@ pub(crate) struct PreparedParagraphFacts {
     runs: Vec<PreparedRun>,
     glyphs: Vec<PreparedGlyphRecord>,
     glyph_placements: Vec<PreparedGlyphPlacement>,
-    split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
     interaction_slices: Vec<PreparedInteractionSlice>,
     interaction_slice_spills: Vec<PreparedInteractionSliceSpill>,
     interaction_units: Vec<PreparedInteractionUnit>,
@@ -223,7 +212,7 @@ struct PreparedGlyphPlacement {
 impl PreparedGlyphRecord {
     fn try_from_glyph(
         glyph: PreparedGlyph,
-    ) -> Result<(Self, Option<PreparedGlyphPlacement>, GlyphPaintCoverage), PreparationError> {
+    ) -> Result<(Self, Option<PreparedGlyphPlacement>), PreparationError> {
         let inline_advance = compact_shaping_coordinate(glyph.advance.x)
             .ok_or_else(PreparationError::invalid_output)?;
         let block_advance = compact_shaping_coordinate(glyph.advance.y)
@@ -247,15 +236,8 @@ impl PreparedGlyphRecord {
                 inline_advance,
             },
             placement,
-            glyph.paint,
         ))
     }
-}
-
-#[derive(Debug)]
-struct PreparedSplitGlyphPaint {
-    glyph: u32,
-    coverage: GlyphPaintCoverage,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -316,7 +298,6 @@ impl PreparedParagraph {
             runs,
             glyphs,
             glyph_placements,
-            split_glyph_paints,
             interaction_slices,
             interaction_slice_spills,
             interaction_units,
@@ -334,7 +315,6 @@ impl PreparedParagraph {
                 runs,
                 glyphs,
                 glyph_placements,
-                split_glyph_paints,
                 interaction_slices,
                 interaction_slice_spills,
                 interaction_units,
@@ -420,7 +400,6 @@ pub struct PreparedParagraphData {
     runs: Vec<PreparedRun>,
     glyphs: Vec<PreparedGlyphRecord>,
     glyph_placements: Vec<PreparedGlyphPlacement>,
-    split_glyph_paints: Vec<PreparedSplitGlyphPaint>,
     interaction_slices: Vec<PreparedInteractionSlice>,
     interaction_slice_spills: Vec<PreparedInteractionSliceSpill>,
     interaction_units: Vec<PreparedInteractionUnit>,
@@ -438,7 +417,6 @@ impl PreparedParagraphData {
             runs: Vec::new(),
             glyphs: Vec::new(),
             glyph_placements: Vec::new(),
-            split_glyph_paints: Vec::new(),
             interaction_slices: Vec::new(),
             interaction_slice_spills: Vec::new(),
             interaction_units: Vec::new(),
@@ -535,17 +513,11 @@ impl PreparedParagraphData {
     pub fn push_glyph(&mut self, glyph: PreparedGlyph) -> Result<(), PreparationError> {
         let glyph_index =
             u32::try_from(self.glyphs.len()).map_err(|_| PreparationError::invalid_output())?;
-        let (glyph, placement, paint) = PreparedGlyphRecord::try_from_glyph(glyph)?;
+        let (glyph, placement) = PreparedGlyphRecord::try_from_glyph(glyph)?;
         self.glyphs.push(glyph);
         if let Some(mut placement) = placement {
             placement.glyph = glyph_index;
             self.glyph_placements.push(placement);
-        }
-        if !paint.is_whole() {
-            self.split_glyph_paints.push(PreparedSplitGlyphPaint {
-                glyph: glyph_index,
-                coverage: paint,
-            });
         }
         Ok(())
     }
@@ -588,21 +560,20 @@ impl PreparedParagraphData {
 
     fn try_push_unit(
         &mut self,
-        unit: PreparedInteractionUnit,
+        mut unit: PreparedInteractionUnit,
         slices: impl IntoIterator<Item = Result<PreparedInteractionSlice, PreparationError>>,
     ) -> Result<(), PreparationError> {
         let source = unit.source();
-        let expected_advance = unit.advance();
         let mut slices = slices.into_iter();
         let first = slices
             .next()
             .ok_or_else(PreparationError::invalid_output)??;
         let second = slices.next().transpose()?;
         if second.is_none() {
-            let tolerance = f64::max(1.0, expected_advance.abs()) * 1.0e-6;
-            if first.source() != source || (first.advance() - expected_advance).abs() > tolerance {
+            if first.source() != source {
                 return Err(PreparationError::invalid_output());
             }
+            unit.bind_advance(first.advance())?;
             self.interaction_units.push(unit);
             return Ok(());
         }
@@ -637,10 +608,10 @@ impl PreparedParagraphData {
             }
             self.interaction_slices.push(slice);
         }
-        let tolerance = f64::max(1.0, expected_advance.abs()) * 1.0e-6;
-        if covered != source.end - source.start || (advance - expected_advance).abs() > tolerance {
+        if covered != source.end - source.start {
             return Err(PreparationError::invalid_output());
         }
+        unit.bind_advance(advance)?;
         let slices = TableRange::try_from_usize(spill_start..self.interaction_slices.len())?;
         self.interaction_slice_spills
             .push(PreparedInteractionSliceSpill {
@@ -688,6 +659,9 @@ impl PreparedParagraphData {
     }
 
     /// Finishes one line by binding its previously appended unit and run ranges.
+    ///
+    /// Interaction units cover the complete source. Shaping runs may leave
+    /// gaps for source that intentionally contributes no shaping record.
     pub fn push_line(
         &mut self,
         mut line: PreparedLine,
@@ -707,7 +681,7 @@ impl PreparedParagraphData {
                 return Err(PreparationError::invalid_output());
             }
         } else {
-            validate_run_coverage(line.source.clone(), run_records)?;
+            validate_run_sources(line.source.clone(), run_records)?;
         }
 
         let source_order_start = self.source_order.len();
@@ -757,18 +731,13 @@ impl PreparedParagraphData {
             if unit.whitespace() == ClusterWhitespace::None {
                 break;
             }
-            trailing_advance += unit.advance();
+            trailing_advance += unit.retained_advance();
             trailing_start = unit.source().start;
         }
-        let unit_advance = unit_records
+        line.advance = unit_records
             .iter()
-            .map(PreparedInteractionUnit::advance)
+            .map(PreparedInteractionUnit::retained_advance)
             .sum::<f64>();
-        let tolerance = f64::max(1.0, line.advance.abs()) * 1.0e-6;
-        if (unit_advance - line.advance).abs() > tolerance {
-            self.source_order.truncate(source_order_start);
-            return Err(PreparationError::invalid_output());
-        }
         line.trailing_whitespace_start = trailing_start;
         line.trailing_whitespace_advance = trailing_advance;
         line.units = units;
@@ -848,23 +817,18 @@ fn table_partition(ranges: impl IntoIterator<Item = TableRange>, len: usize) -> 
     end == len
 }
 
-fn validate_run_coverage(source: Range<u32>, runs: &[PreparedRun]) -> Result<(), PreparationError> {
-    let mut covered = source.start;
-    let mut consumed = 0_usize;
-    while covered < source.end {
-        let mut matching = runs.iter().filter(|run| run.source.start == covered);
-        let run = matching
-            .next()
-            .ok_or_else(PreparationError::invalid_output)?;
-        if matching.next().is_some() || run.source.end > source.end {
+fn validate_run_sources(source: Range<u32>, runs: &[PreparedRun]) -> Result<(), PreparationError> {
+    for (index, run) in runs.iter().enumerate() {
+        if run.source.start < source.start
+            || run.source.end > source.end
+            || runs[..index].iter().any(|previous| {
+                run.source.start < previous.source.end && previous.source.start < run.source.end
+            })
+        {
             return Err(PreparationError::invalid_output());
         }
-        covered = run.source.end;
-        consumed = consumed.saturating_add(1);
     }
-    (covered == source.end && consumed == runs.len())
-        .then_some(())
-        .ok_or_else(PreparationError::invalid_output)
+    Ok(())
 }
 
 impl PreparedParagraphFacts {
@@ -919,9 +883,6 @@ impl PreparedParagraphFacts {
             .saturating_add(vec_bytes::<PreparedGlyphPlacement>(
                 self.glyph_placements.capacity(),
             ))
-            .saturating_add(vec_bytes::<PreparedSplitGlyphPaint>(
-                self.split_glyph_paints.capacity(),
-            ))
             .saturating_add(vec_bytes::<PreparedInteractionSlice>(
                 self.interaction_slices.capacity(),
             ))
@@ -940,16 +901,6 @@ impl PreparedParagraphFacts {
                     .saturating_add(size_of::<FontSynthesisEvidence>())
                     .saturating_add(vec_bytes::<FontVariation>(evidence.variations.capacity()));
             }
-        }
-        for split in &self.split_glyph_paints {
-            bytes = bytes.saturating_add(
-                size_of::<GlyphPaintSegment>().saturating_mul(
-                    split
-                        .coverage
-                        .split_segments()
-                        .map_or(0, <[GlyphPaintSegment]>::len),
-                ),
-            );
         }
         bytes
     }
@@ -1262,24 +1213,6 @@ impl<'a> PreparedGlyphView<'a> {
             )
         })
     }
-
-    /// Returns exceptional split-paint coverage.
-    ///
-    /// Whole glyphs share one zero-payload marker. Only exceptional split
-    /// glyphs retain out-of-line clipped coverage.
-    #[must_use]
-    pub fn paint(self) -> &'a GlyphPaintCoverage {
-        let index =
-            u32::try_from(self.index).expect("canonical glyph indexes were validated as u32");
-        self.facts
-            .split_glyph_paints
-            .binary_search_by_key(&index, |split| split.glyph)
-            .ok()
-            .map_or_else(
-                || whole_glyph_paint(),
-                |index| &self.facts.split_glyph_paints[index].coverage,
-            )
-    }
 }
 
 const fn vec_bytes<T>(capacity: usize) -> usize {
@@ -1331,14 +1264,13 @@ impl PreparedRun {
     }
 }
 
-/// One shaped glyph with paragraph source and exceptional split-paint coverage.
+/// One shaped glyph with paragraph source.
 #[derive(Clone, Debug)]
 pub struct PreparedGlyph {
     id: u32,
     source: Range<u32>,
     advance: Vec2,
     offset: Vec2,
-    paint: GlyphPaintCoverage,
 }
 
 impl PreparedGlyph {
@@ -1348,21 +1280,12 @@ impl PreparedGlyph {
         source: Range<u32>,
         advance: Vec2,
         offset: Vec2,
-        paint: GlyphPaintCoverage,
     ) -> Result<Self, PreparationError> {
         if source.start >= source.end
             || !advance.x.is_finite()
             || !advance.y.is_finite()
             || !offset.x.is_finite()
             || !offset.y.is_finite()
-            || paint.split_segments().is_some_and(|segments| {
-                segments.first().is_none_or(|segment| {
-                    segment.source().start != source.start
-                        || segments
-                            .last()
-                            .is_none_or(|last| last.source().end != source.end)
-                })
-            })
         {
             return Err(PreparationError::invalid_output());
         }
@@ -1371,7 +1294,6 @@ impl PreparedGlyph {
             source,
             advance,
             offset,
-            paint,
         })
     }
 
@@ -1397,14 +1319,5 @@ impl PreparedGlyph {
     #[must_use]
     pub const fn offset(&self) -> Vec2 {
         self.offset
-    }
-
-    /// Returns exceptional split-paint coverage.
-    ///
-    /// Whole glyphs carry no slot or source copy; core binds their existing
-    /// source range to the authoritative paragraph paint runs.
-    #[must_use]
-    pub const fn paint(&self) -> &GlyphPaintCoverage {
-        &self.paint
     }
 }

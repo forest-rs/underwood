@@ -200,7 +200,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             cache.base_cluster_advances.clear();
             cache.base_glyph_advances.clear();
             cache.logical_clusters.clear();
-            cache.shaped_glyphs = 0;
             cache.region_transcript = None;
         }
 
@@ -212,6 +211,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
         let break_policy_changed = !retained || change.break_policy;
         let shaped = font_queried || ligature_policy_changed;
         let mut selected_clusters = 0_u32;
+        let mut shaped_glyphs = 0_u32;
         if shaped {
             let cache = self
                 .cache
@@ -248,7 +248,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 )?;
                 mem::swap(&mut cache.shaped_text, &mut self.reshape_scratch);
             }
-            cache.shaped_glyphs = shaped_glyph_count(&cache.shaped_text);
+            shaped_glyphs = shaped_glyph_count(&cache.shaped_text);
             capture_base_advances(
                 &cache.shaped_text,
                 &mut cache.base_cluster_advances,
@@ -289,6 +289,10 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 input.text,
                 &cache.shaped_text,
                 &mut cache.logical_clusters,
+            )?;
+            crate::line_break::cover_interaction_units(
+                &mut cache.logical_clusters,
+                &cache.interaction_units,
             )?;
             cache.region_transcript = None;
         }
@@ -343,6 +347,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     input.text,
                     canonical_text,
                     logical_clusters,
+                    interaction_units,
                     input.inline_flow_styles,
                     input.inline_flow_runs,
                     &constraints,
@@ -389,7 +394,7 @@ impl ParagraphFormation for ParleyParagraphEngine {
             } else {
                 0
             },
-            shaped_glyphs: if shaped { preparation.shaped_glyphs } else { 0 },
+            shaped_glyphs,
             formed_lines: if needs_formation {
                 u32::try_from(preparation.formed_lines.len()).unwrap_or(u32::MAX)
             } else {
@@ -403,7 +408,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     shaped_glyphs: line_work.shaped_glyphs,
                     candidates: line_work.candidates,
                     rejected_candidates: line_work.rejected_candidates,
-                    checkpoint_restores: line_work.checkpoint_restores,
                 }
             } else {
                 LineShapingWork::default()
@@ -450,7 +454,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 plan.slot,
                 checked_source_range(&plan.source)?,
                 plan.reason,
-                plan.advance,
                 plan.baseline,
                 plan.height,
                 plan.content_ascent,
@@ -518,7 +521,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                     shaped_text,
                     run,
                     piece.clusters.clone(),
-                    input.paint_runs,
                     &mut data,
                 )?;
                 let glyphs_end = data.glyph_count();
@@ -597,10 +599,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
                 .resident_bytes
                 .saturating_add(cache.accounted_bytes);
         }
-        self.retention_work.peak_bytes = self
-            .retention_work
-            .peak_bytes
-            .max(self.retention_work.resident_bytes);
         self.enforce_retention_budget();
     }
 
@@ -613,7 +611,6 @@ impl ParagraphFormation for ParleyParagraphEngine {
             budget_bytes: self.retention_budget,
             entries: self.cache.len(),
             resident_bytes: self.retention_work.resident_bytes,
-            peak_bytes: self.retention_work.peak_bytes,
             scratch_bytes: self.scratch_accounted_bytes(),
             hits: self.retention_work.hits,
             misses: self.retention_work.misses,
@@ -635,7 +632,6 @@ struct PreparationCache {
     base_cluster_advances: Vec<f32>,
     base_glyph_advances: Vec<f32>,
     logical_clusters: Vec<LogicalCluster>,
-    shaped_glyphs: u32,
     formed_lines: Vec<FormedLine>,
     region_transcript: Option<RegionTranscript>,
     last_used: u64,
@@ -655,7 +651,6 @@ impl PreparationCache {
             base_cluster_advances: Vec::new(),
             base_glyph_advances: Vec::new(),
             logical_clusters: Vec::new(),
-            shaped_glyphs: 0,
             formed_lines: Vec::new(),
             region_transcript: None,
             last_used: 0,
@@ -694,7 +689,6 @@ impl PreparationCache {
 #[derive(Clone, Copy, Debug, Default)]
 struct RetentionWork {
     resident_bytes: usize,
-    peak_bytes: usize,
     hits: usize,
     misses: usize,
     evictions: usize,

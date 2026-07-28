@@ -3,7 +3,7 @@
 - **Campaign:** `und-0re`
 - **Design:** Design-0022
 - **Baseline commit:** `3fe34114acafa630c58151e29d795359e00154b7`
-- **Status:** implementation complete; external scalpel review recommended
+- **Status:** complete; reviewed landing artifact in PR #33
 
 This is an external engineering ledger for a text framework, not runtime proof
 state. It records complete concepts deleted, API migrations, source movement,
@@ -319,6 +319,151 @@ compress meaningful algorithms.
   source completeness, bidi interaction, regions, PDF, showcase, and visual
   snapshots remain covered by the unchanged executable suites.
 
+## Slice 5: unreachable presentation and duplicate-value deletion
+
+An external line-by-line scalpel review found a presentation path that looked
+supported in the adapter contract but could not be produced by the only
+production backend. Underwood Parley rejects a paint boundary inside one
+shaped glyph as `UnsupportedPaintCoverage`; only hand-built test adapters
+could populate split-glyph paint records.
+
+This slice deletes that mirage end to end:
+
+- `GlyphPaintCoverage`, `GlyphPaintSegment`, and the split-paint table;
+- fragment paint clips and the scene/PDF/rendering split branch;
+- per-glyph scene instance identity used only to deduplicate that split path;
+- the constant identity fragment transform;
+- the complete `adapter/paint.rs` module and split-only test adapters.
+
+Ordinary paint is now the only successful contract: one glyph has one paint
+slot and run-sized scene fragments. A paint boundary inside one glyph still
+fails explicitly instead of being approximated.
+
+The same pass deletes values that were computed or retained without a product
+consumer:
+
+- `PreparationErrorKind::{Cancelled, MissingCapability}`;
+- font diagnostic names, a full-file FNV digest, and stored units-per-em used
+  only by `Debug`;
+- adapter peak-byte, checkpoint-restore, and accepted-candidate counters;
+- the line-former overflow payload and error taxonomy that collapsed at its
+  only match;
+- a shaped-glyph “cache” field that never survived one call;
+- the paint invalidation facet, whose only effect was to select a validation
+  that is now simply performed where required;
+- named forwarding containers for projection segments and prepared
+  interaction slices.
+
+A second scene/cache pass removes:
+
+- per-key backend epochs from a cache that is emptied whenever the epoch
+  changes;
+- unused cluster/semantic spine offsets and the summary counters that existed
+  only to advance them;
+- zero-valued selection, navigation, and native-input residency categories
+  after those operations became allocation-free derivations;
+- incremental scene-cache byte accounting beside the existing recomputed
+  category accounting;
+- duplicate constraint-key types and option-comparison helpers;
+- a second exact-reuse predicate, so preflight and post-projection reuse now
+  consume the same facet decision;
+- a second region-transcript replay for retained and shared preparations.
+
+Paint runs no longer cross the paragraph-formation seam or participate in
+shared-preparation identity. Prepared facts contain no paint data; scene paint
+topology is the single place that resolves current paint slots and rejects a
+paint boundary through one glyph.
+
+Two duplicate-value contracts also disappear. The Parley producer no longer
+builds a coverage bitmap for units that the public final-ingestion boundary
+must check for third-party adapters anyway. More importantly,
+`PreparedInteractionUnit` and `PreparedLine` no longer accept advances that
+their builders immediately recompute and compare with tolerances. The
+canonical builder derives unit advance from retained shaping slices and line
+advance from retained units exactly once.
+
+The review's three explicit non-targets remain:
+
+- `validate_topology` is the final defense of panic-free borrowed views;
+- run validation protects a subsequent hard shaping index;
+- `reshape_scratch` preserves rejected-candidate correctness, not merely
+  allocation capacity.
+
+Region fit is checked by the public `RegionAttempt` transcript record and
+matched back to prepared lines when a scene consumes adapter output. The
+duplicate height comparison in `PreparedLine` is gone.
+
+### Public migration
+
+```rust,ignore
+// Advances are derived from the retained parts.
+let unit = PreparedInteractionUnit::try_new(
+    source,
+    bidi_level,
+    boundary,
+    whitespace,
+    left,
+    right,
+)?;
+data.push_unit_parts(unit, slices)?;
+
+let line = PreparedLine::try_new(
+    source,
+    reason,
+    baseline,
+    block_extent,
+    content_ascent,
+    content_descent,
+)?;
+data.push_line(line, units, runs)?;
+
+// Font construction no longer computes or retains a diagnostic-only digest.
+let font = Font::from_bytes(bytes)?;
+```
+
+`PreparedGlyph::try_new` no longer accepts paint coverage. Fragment
+`paint_clip`, constant `transform`, and glyph `instance_id` observations are
+removed. `ProjectionSegments` and `PreparedInteractionSlices` are replaced by
+opaque exact-size iterators with ordinary iterator operations.
+`ParagraphInput` no longer exposes paint runs. `SceneResidencyBytes` reports
+only categories that can retain bytes.
+
+### Source ratchet
+
+| State | Physical lines | Rust code lines |
+|---|---:|---:|
+| Baseline | 21,366 | 18,407 |
+| After slice 4 | 18,849 | 16,486 |
+| After slice 5 | 18,203 | 15,951 |
+| Deleted since baseline | 3,163 | 2,456 |
+
+`tokei` and `scc` agree on the 15,951 Rust-code result. Three production
+modules have disappeared from the calibrated tree. The result is 1,049 lines
+below the required gate, 549 below the stretch gate, and 49 below the aspirational
+16,000-line target, without replacing the deleted features with compressed
+generic machinery.
+
+### Correctness checkpoint
+
+- all workspace tests and doc-tests pass;
+- all workspace targets and features compile;
+- no production dependency or `unsafe` was added;
+- `CR/LF + combining mark` and `SPACE + ZWJ + Arabic` regressions found by the
+  external conformance ledger are pinned as product tests; logical line source
+  now covers non-shaping bytes in complete UAX #29 interaction units;
+- cross-script and mixed-level graphemes, source-complete units, bidi
+  interaction, region flow, CJK, PDF, showcase, and both CPU snapshots remain
+  covered by executable tests.
+
+The `TextBlock` style memo is the review's one challenged survivor. Removing
+it added 62 allocation calls and 9,240 requested bytes across 64 cold
+identical labels—almost exactly one allocation per label and an 8.3% call
+regression. It remains as measured label-path machinery rather than an
+unexplained cache.
+
+Strict lint, portability, allocation, latency, and live-residency gates are
+rerun below before this slice can land.
+
 ## Closure: measured product result
 
 The compaction closes with the same product behavior and a materially smaller
@@ -333,14 +478,14 @@ Seven matched release samples produced these medians:
 
 | Scale | Operation | Underwood | Parley | Ratio |
 |---:|---|---:|---:|---:|
-| 64 | exact repeat | 77 ns | 186 ns | 0.41× |
-| 64 | localized edit | 5,533 ns | 2,987 ns | 1.85× |
-| 64 | warm localized edit | 5,483 ns | — | — |
-| 64 | churn | 9,710 ns | 6,327 ns | 1.53× |
-| 1,000 | exact repeat | 120 ns | 186 ns | 0.65× |
-| 1,000 | localized edit | 5,677 ns | 3,043 ns | 1.87× |
-| 1,000 | warm localized edit | 5,657 ns | — | — |
-| 1,000 | churn | 8,449 ns | 4,706 ns | 1.80× |
+| 64 | exact repeat | 71 ns | 185 ns | 0.38× |
+| 64 | localized edit | 5,528 ns | 2,885 ns | 1.92× |
+| 64 | warm localized edit | 5,562 ns | — | — |
+| 64 | churn | 9,743 ns | 6,389 ns | 1.52× |
+| 1,000 | exact repeat | 117 ns | 186 ns | 0.63× |
+| 1,000 | localized edit | 5,877 ns | 2,974 ns | 1.98× |
+| 1,000 | warm localized edit | 5,810 ns | — | — |
+| 1,000 | churn | 8,338 ns | 4,601 ns | 1.81× |
 
 The edit and churn gates pass at both scales. Exact repeat remains faster than
 the matched Parley path.
@@ -351,9 +496,9 @@ ran 31 samples of 100,000 operations under the same conditions:
 
 | 64-unit Underwood query | Baseline | Compacted |
 |---|---:|---:|
-| exact hit | 70 ns | 72 ns |
-| closest hit | 110 ns | 106 ns |
-| represented byte position | 92 ns | 71 ns |
+| exact hit | 66 ns | 69 ns |
+| closest hit | 105 ns | 102 ns |
+| represented byte position | 89 ns | 67 ns |
 
 Exact hit is unchanged within nanosecond-scale noise; closest hit and
 represented-position lookup improve. At 1,000 units, the seven-sample current
@@ -367,13 +512,13 @@ The optional counting allocator reports:
 
 - stable repeat: zero calls;
 - edit publication: 2 calls / 104 requested bytes;
-- edited preparation: 16 calls / 3,200 requested bytes, with 13 calls /
-  2,784 bytes peak-live growth;
+- edited preparation: 16 calls / 2,888 requested bytes, with 13 calls /
+  2,664 bytes peak-live growth;
 - paint-only preparation: zero calls.
 
 The result exactly meets both parts of the counting-allocator gate. The
 matched `malloc_history` tunnel, which excludes the counting allocator's own
-instrumentation effect, records 15 calls / 2,886 bytes for the same edited
+instrumentation effect, records 15 calls / 2,758 bytes for the same edited
 preparation. Exact repeat, exact hit, closest hit, and represented-position
 lookup allocate nothing in that profiler.
 
@@ -386,19 +531,17 @@ Three macOS live-heap samples were byte-identical:
 
 | 1,000 retained labels | Bytes above own font baseline | Parley ratio |
 |---|---:|---:|
-| Underwood display | 3,360,096 | 0.995× |
-| Underwood editable | 3,704,096 | 1.097× |
+| Underwood display | 3,139,344 | 0.929× |
+| Underwood editable | 3,483,344 | 1.031× |
 | Parley | 3,378,240 | 1.000× |
 
-Bounded churn retains 319,184 bytes above Underwood's font baseline versus
-291,008 bytes for Parley, or 1.097×. All are below the 1.25× gate.
+Bounded churn retains 303,072 bytes above Underwood's font baseline versus
+291,008 bytes for Parley, or 1.041×. All are below the 1.25× gate.
 
-The display and editable deltas are 60,000 bytes above the campaign baseline.
-That is not hidden as an unexplained regression: deleting the exact
-capacity-counting lowering pass intentionally leaves roughly 32 bytes of
-ordinary amortized flat-table capacity per paragraph, with allocator size
-classes accounting for the observed process delta. It removes a full glyph
-and cluster traversal in exchange for a small bounded cold-output reserve.
+The display and editable deltas are 160,752 bytes below the campaign baseline.
+The external audit's unreachable split-paint deletion more than recovers the
+small ordinary amortized flat-table reserve introduced when the exact
+capacity-counting lowering pass disappeared.
 
 ### Correctness and portability
 
@@ -425,11 +568,32 @@ composition remain executable behavior rather than architecture prose.
 
 **Mirage retired:** the old facade taxonomy, foreign-scene defense, nested
 poisoning protocol, exact-capacity proof pass, adapter validation replay, and
-iterator-container vocabulary no longer exist under replacement names.
+iterator-container vocabulary no longer exist under replacement names. The
+follow-up Parley scalpel audit also deletes the unreachable split-paint
+vertical, debug-only font identity work, permanently zero residency categories,
+duplicate advance and slot proofs, pseudo-cache fields, and unread accounting.
 
-**Remaining risk:** Underwood can still mistake a sophisticated retained
-representation for a necessary one. A follow-up comparison should review each
-table, sidecar, cache layer, and diagnostic against Parley's smaller model and
-classify it as delete, replace, upstream, or keep. That review should be
-deletion-first and measurement-backed; this campaign's green gates are a
-floor, not a defense of the remaining architecture.
+**Remaining risk:** `PreparationErrorKind::InvalidOutput` remains a coarse
+third-party-adapter diagnostic even though malformed-table tests isolate every
+current cross-table invariant. Improving error location should not add retained
+proof records or restore staged builders. More broadly, this result proves the
+remaining representation meets current behavior and product gates; it does not
+declare every surviving table permanently necessary.
+
+### Final architecture and API audits
+
+- **Alder:** the fence remains intact. `underwood_parley` owns Parley analysis,
+  shaping, and line formation; `underwood` owns one backend-neutral checked
+  artifact, scene placement, paint/source binding, sparse capabilities, and
+  document interaction. No Parley type enters the core contract.
+- **Cedar:** every workspace call site uses the direct scene and flat adapter
+  surfaces. The design and changelog enumerate the breaking migration,
+  including paint-independent inputs, derived advances, removed diagnostics,
+  and `Font::from_bytes(bytes)`. Workspace rustdoc is warning-free.
+- **Stoat:** the final matched measurements above preserve every latency,
+  allocation, and residency gate. The audit caught and replaced one generic
+  iterator formulation that was shorter but measurably slower.
+- **Rook/Lynx:** no deleted state machine, facade, split-paint sidecar, or
+  iterator container survives under a renamed wrapper. The two final review
+  corrections make paint-only artifact reuse genuinely adapter-free and give
+  equal-source logical clusters a deterministic order.

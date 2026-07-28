@@ -366,6 +366,26 @@ fn mixed_level_grapheme_uses_its_first_shaping_scalar_for_caret_sides() {
 }
 
 #[test]
+fn mandatory_break_followed_by_a_combining_mark_retains_both_graphemes() {
+    for (text, boundaries) in [
+        ("\r\u{0308}", [0, 1, 3].as_slice()),
+        ("\n\u{0308}", [0, 1, 3].as_slice()),
+    ] {
+        assert_editable_boundaries(*b"break-mark-test1", text, boundaries);
+    }
+}
+
+#[test]
+fn space_zwj_before_arabic_retains_uax29_boundaries() {
+    for (text, boundaries) in [
+        (" \u{200d}", [0, 4].as_slice()),
+        (" \u{200d}ن", [0, 4, 6].as_slice()),
+    ] {
+        assert_editable_boundaries(*b"space-zwj-test01", text, boundaries);
+    }
+}
+
+#[test]
 fn exact_interaction_uses_ligature_components_not_glyph_ink() {
     let (document, styles, paint) = fixture_document("office", 1.2);
     let mut engine = fixture_engine();
@@ -414,6 +434,34 @@ fn exact_interaction_uses_ligature_components_not_glyph_ink() {
             .bounds,
         "caret geometry must come from the prepared stop, not the query x coordinate"
     );
+}
+
+fn assert_editable_boundaries(id: [u8; 16], text: &str, boundaries: &[u32]) {
+    let block = TextBlock::plain(DocumentId::from_bytes(id), text).expect("fixture block is valid");
+    let snapshot = block.snapshot();
+    let text_id = snapshot.text_id();
+    let style = ComputedInlineStyle::new(
+        ShapingStyle::new(FontFamily::named("Roboto Flex"), 20.0)
+            .expect("fixture shaping style is valid"),
+        InlineFlowStyle::default(),
+        PaintSlot::new(0),
+    );
+    let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
+    let output = fixture_engine()
+        .prepare_block(
+            &snapshot,
+            &editable_block_request(TextConstraint::MaxContent, &style, &paint),
+        )
+        .expect("the UAX #29 boundary fixture must prepare");
+    let editing = output.scene.editing().expect("fixture is editable");
+    let observed: Vec<_> = (0..=text.len())
+        .filter(|&byte| text.is_char_boundary(byte))
+        .filter_map(|byte| {
+            let byte = u32::try_from(byte).expect("fixture is short");
+            editing.position_at(text_id, byte).map(|_| byte)
+        })
+        .collect();
+    assert_eq!(observed, boundaries, "represented boundaries for {text:?}");
 }
 
 #[test]

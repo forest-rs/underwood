@@ -654,7 +654,7 @@ fn legal_zero_width_break_reshapes_an_arabic_join() {
         .expect("fixture range fits");
     let (document, styles, paint) = fixture_document(text, 1.2);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid")
+        Font::from_bytes(ARABIC_FONT).expect("Arabic fixture font is valid")
     ])
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])

@@ -15,6 +15,26 @@ mod styles;
 
 use styles::project_style_runs;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PaintRun {
+    bytes: Range<u32>,
+    slot: PaintSlot,
+}
+
+impl PaintRun {
+    const fn new(bytes: Range<u32>, slot: PaintSlot) -> Self {
+        Self { bytes, slot }
+    }
+
+    fn bytes(&self) -> Range<u32> {
+        self.bytes.clone()
+    }
+
+    const fn slot(&self) -> PaintSlot {
+        self.slot
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ParagraphSource<'a> {
     Document(&'a Paragraph),
@@ -580,53 +600,6 @@ impl Projection {
             .then(|| paint.slot())
     }
 
-    pub(super) fn validate_source_range(&self, paragraph: Range<u32>) -> Result<(), SceneError> {
-        let source = self.mapping.source_range(paragraph.clone()).map_err(|_| {
-            SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph.clone(),
-            )
-        })?;
-        if source.is_empty() {
-            let span = span_for_position(&self.spans, source.start, TextAffinity::Upstream)
-                .ok_or_else(|| {
-                    SceneError::for_source(
-                        SceneErrorKind::SourceCoverage,
-                        self.paragraph,
-                        paragraph.clone(),
-                    )
-                })?;
-            let _ = span;
-            return Ok(());
-        }
-
-        let mut covered = source.start;
-        for span in &self.spans {
-            let start = source.start.max(span.paragraph.start);
-            let end = source.end.min(span.paragraph.end);
-            if start >= end {
-                continue;
-            }
-            if start != covered {
-                return Err(SceneError::for_source(
-                    SceneErrorKind::SourceCoverage,
-                    self.paragraph,
-                    paragraph.clone(),
-                ));
-            }
-            covered = end;
-        }
-        if covered != source.end {
-            return Err(SceneError::for_source(
-                SceneErrorKind::SourceCoverage,
-                self.paragraph,
-                paragraph,
-            ));
-        }
-        Ok(())
-    }
-
     pub(super) fn source_position(
         &self,
         paragraph_offset: u32,
@@ -996,7 +969,4 @@ pub(super) fn record_formation_work(report: &mut WorkReport, work: FormationWork
     report.rejected_line_candidates = report
         .rejected_line_candidates
         .saturating_add(work.line_shaping.rejected_candidates);
-    report.line_checkpoint_restores = report
-        .line_checkpoint_restores
-        .saturating_add(work.line_shaping.checkpoint_restores);
 }

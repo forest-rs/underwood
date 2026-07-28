@@ -10,7 +10,7 @@ use fontique::{Blob, Synthesis};
 use parley_engine::{FontInstance, ShapeOptions, ShapedText, Shaper};
 
 use underwood::adapter::{
-    ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, GlyphPaintCoverage,
+    ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork,
     LineBreakReason as TestLineBreakReason, LineShapingWork, ParagraphConstraints,
     ParagraphFormation, ParagraphFormationCacheDiagnostics, ParagraphFormationOutput,
     PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
@@ -139,23 +139,14 @@ impl ParagraphFormation for AnalysisCursorProof {
             .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
         let unit_count = u32::try_from(units.len())
             .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
-        let advance = units.len() as f64;
-        let line = PreparedLine::try_new(
-            source.clone(),
-            TestLineBreakReason::End,
-            advance,
-            0.8,
-            1.0,
-            0.8,
-            0.2,
-        )?;
+        let line =
+            PreparedLine::try_new(source.clone(), TestLineBreakReason::End, 0.8, 1.0, 0.8, 0.2)?;
         let mut data = PreparedParagraphData::with_capacity(1, 1, units.len(), units.len(), 0);
         let units_start = data.unit_count();
         for source in &units {
             let source = checked_source_range(source)?;
             let unit = PreparedInteractionUnit::try_new(
                 source.clone(),
-                1.0,
                 0,
                 ClusterBoundary::None,
                 ClusterWhitespace::None,
@@ -176,21 +167,11 @@ impl ParagraphFormation for AnalysisCursorProof {
         let glyphs_start = data.glyph_count();
         for (id, source) in units.iter().enumerate() {
             let source = checked_source_range(source)?;
-            input
-                .paint_runs
-                .iter()
-                .find(|run| {
-                    let bytes = run.bytes();
-                    bytes.start <= source.start && source.end <= bytes.end
-                })
-                .ok_or_else(underwood::adapter::PreparationError::invalid_output)?;
-            let paint = GlyphPaintCoverage::whole();
             data.push_glyph(PreparedGlyph::try_new(
                 u32::try_from(id).unwrap_or(u32::MAX),
                 source,
                 Vec2::new(1.0, 0.0),
                 Vec2::ZERO,
-                paint,
             )?)?;
         }
         data.push_run(run, 0..0, 0..0, glyphs_start..data.glyph_count())?;
@@ -336,9 +317,9 @@ fn fixture_engine_with_budgets(budget: usize, shared_preparation_bytes: usize) -
 
 fn fixture_paragraph_engine() -> ParleyParagraphEngine {
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT).expect("Latin fixture font is valid"),
-        Font::from_bytes("arabic", ARABIC_FONT).expect("Arabic fixture font is valid"),
-        Font::from_bytes("devanagari", DEVANAGARI_FONT).expect("Devanagari fixture font is valid"),
+        Font::from_bytes(LATIN_FONT).expect("Latin fixture font is valid"),
+        Font::from_bytes(ARABIC_FONT).expect("Arabic fixture font is valid"),
+        Font::from_bytes(DEVANAGARI_FONT).expect("Devanagari fixture font is valid"),
     ])
     .expect("fixture catalog is valid")
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])
@@ -409,10 +390,6 @@ fn cursor_derivation_adds_no_adapter_graph_during_warm_editable_upgrade() {
         .expect("the fixture contains one paragraph");
     assert_eq!(paragraph.requested, SceneFeatures::DISPLAY);
     assert_eq!(paragraph.resident, SceneFeatures::EDITABLE);
-    assert_eq!(
-        paragraph.bytes.navigation, 0,
-        "derived navigation retains no per-position graph"
-    );
 }
 
 #[test]

@@ -608,14 +608,12 @@ fn signal_profile_ready() -> Result<(), Box<dyn std::error::Error>> {
 
 fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {
     Ok(FontSet::try_from_fonts([
-        Font::from_bytes(
-            "latin",
-            include_bytes!("../../../examples/headless/fonts/RobotoFlex-VariableFont.ttf"),
-        )?,
-        Font::from_bytes(
-            "arabic",
-            include_bytes!("../../../examples/headless/fonts/NotoKufiArabic-Regular.otf"),
-        )?,
+        Font::from_bytes(include_bytes!(
+            "../../../examples/headless/fonts/RobotoFlex-VariableFont.ttf"
+        ))?,
+        Font::from_bytes(include_bytes!(
+            "../../../examples/headless/fonts/NotoKufiArabic-Regular.otf"
+        ))?,
     ])?
     .with_fallbacks(
         underwood::Script::from_bytes(*b"Arab"),

@@ -251,8 +251,8 @@ fn fixture() -> Result<Fixture, AnyError> {
     let styles = StyleMap::new(style);
     let paint = PaintTable::from_brushes([Brush::Solid(Color::BLACK)]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin", LATIN_FONT)?,
-        Font::from_bytes("arabic", ARABIC_FONT)?,
+        Font::from_bytes(LATIN_FONT)?,
+        Font::from_bytes(ARABIC_FONT)?,
     ])?
     .with_fallbacks(Script::from_bytes(*b"Arab"), None, ["Noto Kufi Arabic"])?;
     let layout = LayoutEngine::new(

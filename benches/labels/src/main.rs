@@ -726,12 +726,11 @@ fn profile_shared_hit(
     if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
         let cache = layout.cache_diagnostics();
         println!(
-            "shared-hit_work\toperations={operations}\thits={}\tmisses={}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
+            "shared-hit_work\toperations={operations}\thits={}\tmisses={}\tresident_entries={}\tresident_bytes={}",
             cache.shared_preparation_hits,
             cache.shared_preparation_misses,
             cache.shared_preparation_entries,
-            cache.shared_preparation_resident_bytes,
-            cache.shared_preparation_peak_bytes
+            cache.shared_preparation_resident_bytes
         );
     }
     Ok(())
@@ -1434,10 +1433,8 @@ fn profile_cross_identity(
     if std::env::var_os("UNDERWOOD_PROFILE_QUIET").is_none() {
         let cache = layout.cache_diagnostics();
         println!(
-            "{name}_work\toperations={operations}\tanalyzed={analyzed}\tshaped={shaped}\tformed={formed}\tshared={shared}\tresident_entries={}\tresident_bytes={}\tpeak_bytes={}",
-            cache.shared_preparation_entries,
-            cache.shared_preparation_resident_bytes,
-            cache.shared_preparation_peak_bytes
+            "{name}_work\toperations={operations}\tanalyzed={analyzed}\tshaped={shaped}\tformed={formed}\tshared={shared}\tresident_entries={}\tresident_bytes={}",
+            cache.shared_preparation_entries, cache.shared_preparation_resident_bytes
         );
     }
     Ok(())
@@ -1997,7 +1994,7 @@ fn report_residency(name: &str, bytes: SceneResidencyBytes, paragraphs: usize) {
         return;
     }
     println!(
-        "{name}_residency\tparagraphs={paragraphs}\ttotal={}\tstructure={}\tlayout={}\tpaint={}\tsources={}\tsemantics={}\thit_testing={}\tselection={}\tnavigation={}\tnative_text_input={}",
+        "{name}_residency\tparagraphs={paragraphs}\ttotal={}\tstructure={}\tlayout={}\tpaint={}\tsources={}\tsemantics={}\thit_testing={}",
         bytes.total(),
         bytes.structure,
         bytes.layout,
@@ -2005,9 +2002,6 @@ fn report_residency(name: &str, bytes: SceneResidencyBytes, paragraphs: usize) {
         bytes.sources,
         bytes.semantics,
         bytes.hit_testing,
-        bytes.selection,
-        bytes.navigation,
-        bytes.native_text_input,
     );
 }
 
@@ -2163,14 +2157,6 @@ fn assert_mixed_residency(
                 paragraph.bytes.hit_testing > 0,
                 "the editor must retain hit-testing facts"
             );
-            assert_eq!(
-                paragraph.bytes.selection, 0,
-                "selection must derive from the shared interaction artifact"
-            );
-            assert_eq!(
-                paragraph.bytes.navigation, 0,
-                "navigation must derive from the shared interaction artifact"
-            );
             scene
                 .selection()
                 .expect("the editable request must expose selection");
@@ -2197,14 +2183,6 @@ fn assert_mixed_residency(
                 paragraph.bytes.hit_testing, 0,
                 "display siblings must omit hit testing"
             );
-            assert_eq!(
-                paragraph.bytes.selection, 0,
-                "display siblings must omit selection"
-            );
-            assert_eq!(
-                paragraph.bytes.navigation, 0,
-                "display siblings must omit navigation"
-            );
         }
     }
     assert_eq!(
@@ -2227,14 +2205,12 @@ fn identity(namespace: u64, index: usize) -> DocumentId {
 
 fn fonts() -> Result<FontSet, Box<dyn std::error::Error>> {
     Ok(FontSet::try_from_fonts([
-        Font::from_bytes(
-            "latin",
-            include_bytes!("../../../examples/headless/fonts/RobotoFlex-VariableFont.ttf"),
-        )?,
-        Font::from_bytes(
-            "arabic",
-            include_bytes!("../../../examples/headless/fonts/NotoKufiArabic-Regular.otf"),
-        )?,
+        Font::from_bytes(include_bytes!(
+            "../../../examples/headless/fonts/RobotoFlex-VariableFont.ttf"
+        ))?,
+        Font::from_bytes(include_bytes!(
+            "../../../examples/headless/fonts/NotoKufiArabic-Regular.otf"
+        ))?,
     ])?
     .with_fallbacks(
         underwood::Script::from_bytes(*b"Arab"),

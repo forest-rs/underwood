@@ -193,8 +193,8 @@ fn prepare_specimen() -> Result<(DocumentSnapshot, TextScene), AnyError> {
         Brush::Solid(Color::from_rgb8(0x6c, 0x78, 0x89)),
     ]);
     let fonts = FontSet::try_from_fonts([
-        Font::from_bytes("latin-default", LATIN_FONT_BYTES)?,
-        Font::from_bytes("arabic-static", ARABIC_FONT_BYTES)?,
+        Font::from_bytes(LATIN_FONT_BYTES)?,
+        Font::from_bytes(ARABIC_FONT_BYTES)?,
     ])?
     .with_generic_families(GenericFamily::SansSerif, ["Roboto Flex"])?
     .with_fallbacks(
