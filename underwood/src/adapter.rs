@@ -46,8 +46,8 @@ pub use interaction::{
 pub(crate) use interaction::{PreparedInteractionSliceSpill, prepared_interaction_unit_view};
 pub(crate) use prepared::PreparedParagraphFacts;
 pub use prepared::{
-    FontSynthesis, PreparedGlyph, PreparedGlyphView, PreparedLine, PreparedLineView,
-    PreparedParagraph, PreparedParagraphData, PreparedRun, PreparedRunView,
+    FontSynthesis, PreparedGlyphView, PreparedLine, PreparedLineView, PreparedParagraph,
+    PreparedParagraphData, PreparedRun, PreparedRunView,
 };
 
 #[cfg(test)]

@@ -98,8 +98,7 @@ pub struct PreparedInteractionSlice {
 }
 
 impl PreparedInteractionSlice {
-    /// Validates one nonempty shaping-record source and its visual advance.
-    pub fn try_new(source: Range<u32>, advance: f64) -> Result<Self, PreparationError> {
+    pub(crate) fn try_new(source: Range<u32>, advance: f64) -> Result<Self, PreparationError> {
         let compact_advance = compact_shaping_coordinate(advance);
         if source.start >= source.end
             || !advance.is_finite()

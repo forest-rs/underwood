@@ -13,9 +13,8 @@ use crate::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork, LineBreakReason,
     LineShapingWork, ParagraphConstraints, ParagraphFormation, ParagraphFormationCacheDiagnostics,
     ParagraphFormationOutput, ParagraphInput, ParagraphPreparationId, PreparationError,
-    PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
-    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphData, PreparedRun,
-    TextAffinity,
+    PreparationErrorKind, PreparedClusterSide, PreparedInteractionSlice, PreparedInteractionUnit,
+    PreparedLine, PreparedParagraph, PreparedParagraphData, PreparedRun, TextAffinity,
 };
 use crate::{
     AnalysisStyle, BaseDirection, Brush, Color, CompositionClause, CompositionClauseKind,
@@ -69,12 +68,7 @@ impl ParagraphFormation for EchoAdapter {
         let glyphs = if self.glyphless {
             Vec::new()
         } else {
-            vec![PreparedGlyph::try_new(
-                7,
-                glyph_source,
-                Vec2::new(10., 0.),
-                Vec2::ZERO,
-            )?]
+            vec![(7, glyph_source, Vec2::new(10., 0.), Vec2::ZERO)]
         };
         let run = PreparedRun::try_new(
             0..text_len,
@@ -144,16 +138,20 @@ impl ParagraphFormation for EchoAdapter {
             let source = unit.source();
             data.push_unit(
                 unit,
-                slices.iter().copied().filter(|slice| {
-                    let slice = slice.source();
-                    source.start <= slice.start && slice.end <= source.end
-                }),
+                slices
+                    .iter()
+                    .copied()
+                    .filter(|slice| {
+                        let slice = slice.source();
+                        source.start <= slice.start && slice.end <= source.end
+                    })
+                    .map(|slice| (slice.source(), slice.advance())),
             )?;
         }
         let runs_start = data.run_count();
         let glyphs_start = data.glyph_count();
-        for glyph in glyphs {
-            data.push_glyph(glyph)?;
+        for (id, source, advance, offset) in glyphs {
+            data.push_glyph(id, source, advance, offset)?;
         }
         data.push_run(run, 0..0, 0..0, glyphs_start..data.glyph_count())?;
         data.push_line(

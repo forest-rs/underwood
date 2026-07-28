@@ -180,8 +180,7 @@ fn analysis_units_lock_extended_grapheme_trap_corpus() {
             BaseDirection::Auto,
         );
         assert_eq!(
-            collect_analysis_units(text, &analysis)
-                .expect("Parley analysis must expose complete grapheme units"),
+            collect_analysis_units(text, &analysis),
             expected,
             "{name} must remain one interaction unit"
         );
@@ -200,8 +199,7 @@ fn unbundled_grapheme_corpus_drives_complete_movements_and_transactions() {
             text,
             BaseDirection::Auto,
         );
-        let units = collect_analysis_units(text, &analysis)
-            .expect("Parley analysis must expose complete grapheme units");
+        let units = collect_analysis_units(text, &analysis);
         assert_eq!(units.len(), 1, "{name} must remain one interaction unit");
         let mut document = Document::new(DocumentId::from_bytes(*b"unbundled-egc-01"));
         let mut edit = document.edit();

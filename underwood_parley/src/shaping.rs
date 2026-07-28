@@ -34,8 +34,7 @@ pub(crate) fn analyze_text(
     base_direction: BaseDirection,
 ) -> Analysis {
     let mut analysis = Analysis::new();
-    analyze_text_with_styles_into(analyzer, text, base_direction, &[], &[], &mut analysis)
-        .expect("empty analysis-style runs are valid");
+    analyze_text_with_styles_into(analyzer, text, base_direction, &[], &[], &mut analysis);
     analysis
 }
 
@@ -46,10 +45,10 @@ pub(crate) fn analyze_text_with_styles(
     base_direction: BaseDirection,
     styles: &[AnalysisStyle],
     runs: &[AnalysisRun],
-) -> Result<Analysis, PreparationError> {
+) -> Analysis {
     let mut analysis = Analysis::new();
-    analyze_text_with_styles_into(analyzer, text, base_direction, styles, runs, &mut analysis)?;
-    Ok(analysis)
+    analyze_text_with_styles_into(analyzer, text, base_direction, styles, runs, &mut analysis);
+    analysis
 }
 
 pub(crate) fn analyze_text_with_styles_into(
@@ -59,12 +58,10 @@ pub(crate) fn analyze_text_with_styles_into(
     styles: &[AnalysisStyle],
     runs: &[AnalysisRun],
     analysis: &mut Analysis,
-) -> Result<(), PreparationError> {
+) {
     let mut word_break: Vec<(Range<usize>, WordBreak)> = Vec::new();
     for run in runs {
-        let style = styles
-            .get(run.style().index())
-            .ok_or_else(PreparationError::invalid_output)?;
+        let style = styles[run.style().index()];
         if style.word_break() == WordBreak::Normal {
             continue;
         }
@@ -88,7 +85,6 @@ pub(crate) fn analyze_text_with_styles_into(
         },
         analysis,
     );
-    Ok(())
 }
 
 pub(crate) fn shape_paragraph(
@@ -111,7 +107,7 @@ pub(crate) fn shape_paragraph(
         inline_flow_runs,
         style_indices,
         inline_flow_indices,
-    )?;
+    );
     shape_range(
         shaper,
         analysis,
@@ -150,7 +146,7 @@ pub(crate) fn reshape_paragraph_with_retained_fonts(
         inline_flow_runs,
         style_indices,
         inline_flow_indices,
-    )?;
+    );
     shape_range(
         shaper,
         analysis,
@@ -203,46 +199,32 @@ fn prepare_style_indices(
     inline_flow_runs: &[InlineFlowRun],
     shaping: &mut Vec<u16>,
     inline_flow: &mut Vec<u16>,
-) -> Result<(), PreparationError> {
+) {
     shaping.clear();
     let characters = text.chars().count();
     shaping.reserve(characters);
     for run in shaping_runs {
-        let index =
-            u16::try_from(run.style().index()).map_err(|_| PreparationError::invalid_output())?;
+        let index = u16::try_from(run.style().index()).expect("style IDs are backed by u16");
         let range = run.bytes();
-        let run_text = text
-            .get(range.start as usize..range.end as usize)
-            .ok_or_else(PreparationError::invalid_output)?;
+        let run_text = &text[range.start as usize..range.end as usize];
         shaping.extend(core::iter::repeat_n(index, run_text.chars().count()));
     }
-    prepare_inline_flow_indices(text, inline_flow_runs, inline_flow)?;
-    if shaping.len() != characters || inline_flow.len() != characters {
-        return Err(PreparationError::invalid_output());
-    }
-    Ok(())
+    prepare_inline_flow_indices(text, inline_flow_runs, inline_flow);
 }
 
 pub(crate) fn prepare_inline_flow_indices(
     text: &str,
     runs: &[InlineFlowRun],
     indices: &mut Vec<u16>,
-) -> Result<(), PreparationError> {
+) {
     indices.clear();
     indices.reserve(text.chars().count());
     for run in runs {
-        let index =
-            u16::try_from(run.style().index()).map_err(|_| PreparationError::invalid_output())?;
+        let index = u16::try_from(run.style().index()).expect("style IDs are backed by u16");
         let range = run.bytes();
-        let run_text = text
-            .get(range.start as usize..range.end as usize)
-            .ok_or_else(PreparationError::invalid_output)?;
+        let run_text = &text[range.start as usize..range.end as usize];
         indices.extend(core::iter::repeat_n(index, run_text.chars().count()));
     }
-    if indices.len() != text.chars().count() {
-        return Err(PreparationError::invalid_output());
-    }
-    Ok(())
 }
 
 fn spacing_features(

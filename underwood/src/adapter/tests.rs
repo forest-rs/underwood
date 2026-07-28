@@ -8,7 +8,7 @@ use peniko::Blob;
 
 use super::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, LineBreakReason, PreparationErrorKind,
-    PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice, PreparedInteractionSliceSpill,
+    PreparedClusterSide, PreparedInteractionSlice, PreparedInteractionSliceSpill,
     PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphData, PreparedRun,
     TextAffinity,
 };
@@ -84,8 +84,13 @@ fn prepared_paragraph_rejects_a_gap_between_lines() {
 fn partial_flat_data_never_publishes() {
     let mut data = PreparedParagraphData::new();
     let (slices, mut units) = interaction(0..1, 1.0);
-    data.push_unit(units.remove(0), slices)
-        .expect("the unit itself is valid");
+    data.push_unit(
+        units.remove(0),
+        slices
+            .into_iter()
+            .map(|slice| (slice.source(), slice.advance())),
+    )
+    .expect("the unit itself is valid");
     let error = PreparedParagraph::try_from_data(
         test_paragraph(20),
         1,
@@ -266,10 +271,8 @@ fn prepared_run_accepts_control_only_source_without_a_phantom_glyph() {
 }
 
 fn run(source: core::ops::Range<u32>) -> TestRun {
-    let glyph = PreparedGlyph::try_new(1, source.clone(), Vec2::new(1., 0.), Vec2::ZERO)
-        .expect("test glyph is valid");
     let run = PreparedRun::try_new(
-        source,
+        source.clone(),
         0,
         *b"Latn",
         FontData::new(Blob::from(vec![0_u8]), 0),
@@ -281,15 +284,17 @@ fn run(source: core::ops::Range<u32>) -> TestRun {
         run,
         normalized_coords: Vec::new(),
         unrendered_source: Vec::new(),
-        glyphs: vec![glyph],
+        glyphs: vec![(1, source, Vec2::new(1., 0.), Vec2::ZERO)],
     }
 }
+
+type TestGlyph = (u32, core::ops::Range<u32>, Vec2, Vec2);
 
 struct TestRun {
     run: PreparedRun,
     normalized_coords: Vec<i16>,
     unrendered_source: Vec<core::ops::Range<u32>>,
-    glyphs: Vec<PreparedGlyph>,
+    glyphs: Vec<TestGlyph>,
 }
 
 struct TestLine {
@@ -334,10 +339,15 @@ fn build_paragraph(
             let source = unit.source();
             data.push_unit(
                 unit,
-                test_line.slices.iter().copied().filter(|slice| {
-                    let slice = slice.source();
-                    source.start <= slice.start && slice.end <= source.end
-                }),
+                test_line
+                    .slices
+                    .iter()
+                    .copied()
+                    .filter(|slice| {
+                        let slice = slice.source();
+                        source.start <= slice.start && slice.end <= source.end
+                    })
+                    .map(|slice| (slice.source(), slice.advance())),
             )?;
         }
         let runs_start = data.run_count();
@@ -345,8 +355,8 @@ fn build_paragraph(
             let normalized_coords_start = data.normalized_coord_count();
             data.extend_normalized_coords(test_run.normalized_coords);
             let glyphs_start = data.glyph_count();
-            for glyph in test_run.glyphs {
-                data.push_glyph(glyph)?;
+            for (id, source, advance, offset) in test_run.glyphs {
+                data.push_glyph(id, source, advance, offset)?;
             }
             let unrendered_source_start = data.unrendered_source_count();
             for source in test_run.unrendered_source {

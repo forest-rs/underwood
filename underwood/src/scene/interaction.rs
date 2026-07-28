@@ -431,12 +431,6 @@ impl Scene {
         ))
     }
 
-    /// Returns an empty selection set bound to this scene revision.
-    #[must_use]
-    pub(crate) fn empty_selection_set(&self) -> SnapshotTextSelectionSet {
-        SnapshotTextSelectionSet::new(self.document, self.revision, Vec::new())
-    }
-
     /// Creates one collapsed selection at an exact scene position.
     pub(crate) fn collapsed_selection(
         &self,

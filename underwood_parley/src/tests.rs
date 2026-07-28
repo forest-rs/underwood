@@ -13,8 +13,8 @@ use underwood::adapter::{
     ClusterBoundary, ClusterWhitespace, FontSynthesis, FormationWork,
     LineBreakReason as TestLineBreakReason, LineShapingWork, ParagraphConstraints,
     ParagraphFormation, ParagraphFormationCacheDiagnostics, ParagraphFormationOutput,
-    PreparationErrorKind, PreparedClusterSide, PreparedGlyph, PreparedInteractionSlice,
-    PreparedInteractionUnit, PreparedLine, PreparedParagraph, PreparedParagraphData, PreparedRun,
+    PreparationErrorKind, PreparedClusterSide, PreparedInteractionUnit, PreparedLine,
+    PreparedParagraph, PreparedParagraphData, PreparedRun,
 };
 use underwood::{
     AnalysisStyle, BaseDirection, BlockRequest, Brush, CacheBudget, Color, CompositionId,
@@ -33,7 +33,7 @@ use super::{AdapterErrorKind, Font, FontSet, ParleyParagraphEngine};
 use crate::font::{read_u16, read_u32};
 use crate::interaction::collect_analysis_units;
 use crate::line_break::{choose_line, collect_logical_clusters};
-use crate::lowering::checked_source_range;
+use crate::lowering::source_range;
 use crate::shaping::{analyze_text, analyze_text_with_styles, split_item_after};
 
 mod alignment;
@@ -133,8 +133,8 @@ impl ParagraphFormation for AnalysisCursorProof {
             input.paragraph_style.base_direction(),
             input.analysis_styles,
             input.analysis_runs,
-        )?;
-        let units = collect_analysis_units(input.text, &analysis)?;
+        );
+        let units = collect_analysis_units(input.text, &analysis);
         let source = 0..u32::try_from(input.text.len())
             .map_err(|_| underwood::adapter::PreparationError::invalid_output())?;
         let unit_count = u32::try_from(units.len())
@@ -144,7 +144,7 @@ impl ParagraphFormation for AnalysisCursorProof {
         let mut data = PreparedParagraphData::with_capacity(1, 1, units.len(), units.len(), 0);
         let units_start = data.unit_count();
         for source in &units {
-            let source = checked_source_range(source)?;
+            let source = source_range(source);
             let unit = PreparedInteractionUnit::try_new(
                 source.clone(),
                 0,
@@ -153,7 +153,7 @@ impl ParagraphFormation for AnalysisCursorProof {
                 PreparedClusterSide::new(source.start, TextAffinity::Downstream),
                 PreparedClusterSide::new(source.end, TextAffinity::Upstream),
             )?;
-            data.push_unit(unit, [PreparedInteractionSlice::try_new(source, 1.0)?])?;
+            data.push_unit(unit, [(source, 1.0)])?;
         }
         let run = PreparedRun::try_new(
             source.clone(),
@@ -166,13 +166,13 @@ impl ParagraphFormation for AnalysisCursorProof {
         let runs_start = data.run_count();
         let glyphs_start = data.glyph_count();
         for (id, source) in units.iter().enumerate() {
-            let source = checked_source_range(source)?;
-            data.push_glyph(PreparedGlyph::try_new(
+            let source = source_range(source);
+            data.push_glyph(
                 u32::try_from(id).unwrap_or(u32::MAX),
                 source,
                 Vec2::new(1.0, 0.0),
                 Vec2::ZERO,
-            )?)?;
+            )?;
         }
         data.push_run(run, 0..0, 0..0, glyphs_start..data.glyph_count())?;
         data.push_line(

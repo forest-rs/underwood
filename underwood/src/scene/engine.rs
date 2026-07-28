@@ -413,32 +413,114 @@ impl LayoutEngine {
         })
     }
 
-    /// Prepares an immutable scene without publishing partial results on failure.
-    pub fn prepare(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments are the complete retained-scene publication boundary"
+    )]
+    fn finish_published_scene(
         &mut self,
         snapshot: &DocumentSnapshot,
         request: &SceneRequest<'_>,
+        required_paint_slots: usize,
+        spine: SceneSpine,
+        previous_spine: Option<&SceneSpine>,
+        region_start: Option<RegionCursor>,
+        region_end: Option<RegionCursor>,
+        retained_core: Option<Arc<SceneCore>>,
+        work: WorkReport,
+        reuse: PreparationReuse,
+        trace_start: Option<(CacheDiagnostics, usize)>,
     ) -> Result<SceneOutput, SceneError> {
-        validate_feature_policy(snapshot, &request.features)?;
-        if let Some(output) = self.reuse_published_scene(snapshot, request) {
-            return Ok(output);
-        }
-        if let Some(output) = self.prepare_appended_scene(snapshot, request)? {
-            return Ok(output);
-        }
-        if let Some(output) = self.prepare_localized_normal_flow(snapshot, request)? {
-            return Ok(output);
-        }
-        if let Some(output) = self.prepare_localized_region_flow(snapshot, request)? {
-            return Ok(output);
-        }
-        let required_paint_slots = validate_styles(snapshot, request)?;
-        let previous_spine = self.reusable_scene_spine(snapshot, request);
+        let FinishedScene {
+            core,
+            work,
+            trace,
+            region_attempts,
+            region_height_rejections,
+        } = self.finish_scene(
+            snapshot.paragraphs().len(),
+            spine,
+            previous_spine,
+            request,
+            region_start,
+            region_end,
+            request.features.default_features(),
+            retained_core,
+            work,
+            reuse,
+            trace_start,
+        )?;
+        let output = SceneOutput {
+            scene: TextScene::new(
+                snapshot.id(),
+                snapshot.revision(),
+                request.paint.clone(),
+                request.features.clone(),
+                Arc::clone(&core),
+                (),
+            ),
+            work,
+            trace,
+        };
+        self.publish_scene(
+            snapshot,
+            request,
+            required_paint_slots,
+            core,
+            region_attempts,
+            region_height_rejections,
+        );
+        Ok(output)
+    }
+
+    fn prepare_committed_geometry(
+        &mut self,
+        paragraph: ParagraphSource<'_>,
+        request: &SceneRequest<'_>,
+        region_cursor: Option<RegionCursor>,
+        work: &mut WorkReport,
+        reuse: &mut PreparationReuse,
+    ) -> Result<CacheAccess, SceneError> {
+        let paragraph_id = paragraph.id();
+        let projection = Projection::new_in(paragraph, request, &mut self.scratch.projection)?;
+        let preflight_key = ParagraphPreflightKey::new(paragraph, None, request, region_cursor);
+        let result = prepare_paragraph_geometry(
+            self.paragraphs.as_mut(),
+            &mut self.cache,
+            self.composition_cache.get(&paragraph_id),
+            CacheKind::Committed,
+            paragraph,
+            &projection,
+            request.features.features_for(paragraph_id),
+            preflight_key,
+            request.constraint,
+            request.region_flow,
+            region_cursor,
+            self.clock,
+            &mut self.shared_preparation,
+            work,
+            reuse,
+        );
+        projection.recycle_into(&mut self.scratch.projection);
+        result
+    }
+
+    fn prepare_document_scene(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+        composition: Option<(&CompositionSession, ParagraphId)>,
+        default_features: SceneFeatures,
+    ) -> Result<FinishedScene, SceneError> {
+        let previous_spine = if composition.is_some() {
+            self.reusable_composition_spine(snapshot, request)
+        } else {
+            self.reusable_scene_spine(snapshot, request)
+        };
         let mut spine = previous_spine.clone();
         let mut initial_segments = spine
             .is_none()
             .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
-
         let trace_start = self.trace_start(request.trace);
         self.scratch.region_segments.clear();
         let mut work = WorkReport::default();
@@ -447,37 +529,37 @@ impl LayoutEngine {
         let mut region_cursor = region_start;
 
         for (paragraph_index, paragraph) in snapshot.paragraphs().iter().enumerate() {
+            let transient = composition.is_some_and(|(_, target)| paragraph.id == target);
             self.clock = self.clock.saturating_add(1);
-            let access = if let Some(access) = reuse_paragraph_geometry(
-                &mut self.cache,
-                ParagraphSource::document(paragraph),
-                request,
-                region_cursor,
-                self.clock,
-                &mut work,
-                &mut reuse,
-            ) {
-                access
-            } else {
-                let projection = Projection::new_in(
+            let (kind, access) = if transient {
+                let (composition, _) =
+                    composition.expect("a transient paragraph has a composition");
+                let projection = Projection::with_composition_in(
                     ParagraphSource::document(paragraph),
                     request,
+                    composition,
                     &mut self.scratch.projection,
                 )?;
                 let preflight_key = ParagraphPreflightKey::new(
                     ParagraphSource::document(paragraph),
-                    None,
+                    Some(Arc::new(CompositionPreparationKey::new(
+                        composition.id(),
+                        projection.mapping.text(),
+                    ))),
                     request,
                     region_cursor,
                 );
                 let result = prepare_paragraph_geometry(
                     self.paragraphs.as_mut(),
-                    &mut self.cache,
-                    self.composition_cache.get(&paragraph.id),
-                    CacheKind::Committed,
+                    &mut self.composition_cache,
+                    self.cache.get(&paragraph.id),
+                    CacheKind::Composition,
                     ParagraphSource::document(paragraph),
                     &projection,
-                    request.features.features_for(paragraph.id),
+                    request
+                        .features
+                        .features_for(paragraph.id)
+                        .with_native_text_input(),
                     preflight_key,
                     request.constraint,
                     request.region_flow,
@@ -488,22 +570,46 @@ impl LayoutEngine {
                     &mut reuse,
                 );
                 projection.recycle_into(&mut self.scratch.projection);
-                result?
+                (CacheKind::Composition, result?)
+            } else if let Some(access) = reuse_paragraph_geometry(
+                &mut self.cache,
+                ParagraphSource::document(paragraph),
+                request,
+                region_cursor,
+                self.clock,
+                &mut work,
+                &mut reuse,
+            ) {
+                (CacheKind::Committed, access)
+            } else {
+                (
+                    CacheKind::Committed,
+                    self.prepare_committed_geometry(
+                        ParagraphSource::document(paragraph),
+                        request,
+                        region_cursor,
+                        &mut work,
+                        &mut reuse,
+                    )?,
+                )
             };
             self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
                 region_cursor = Some(transcript.end());
             }
+            let cache = match kind {
+                CacheKind::Committed => &self.cache,
+                CacheKind::Composition => &self.composition_cache,
+            };
             let segment = Arc::clone(
-                &self
-                    .cache
+                &cache
                     .get(&paragraph.id)
-                    .expect("prepared committed geometry must remain resident")
+                    .expect("prepared geometry must remain resident")
                     .segment,
             );
             debug_assert_eq!(
                 segment.paragraph, paragraph.id,
-                "the committed scene segment must retain its paragraph identity"
+                "the scene segment must retain its paragraph identity"
             );
             if let Some(segments) = &mut initial_segments {
                 segments.push(Arc::clone(&segment));
@@ -532,18 +638,46 @@ impl LayoutEngine {
             paragraphs: snapshot.paragraphs().len(),
             records: summary.fragments,
         };
-        let finished = self.finish_scene(
+        self.finish_scene(
             snapshot.paragraphs().len(),
             spine,
             previous_spine.as_ref(),
             request,
             region_start,
             region_cursor,
-            request.features.default_features(),
+            default_features,
             None,
             work,
             reuse,
             trace_start,
+        )
+    }
+
+    /// Prepares an immutable scene without publishing partial results on failure.
+    pub fn prepare(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        request: &SceneRequest<'_>,
+    ) -> Result<SceneOutput, SceneError> {
+        validate_feature_policy(snapshot, &request.features)?;
+        if let Some(output) = self.reuse_published_scene(snapshot, request) {
+            return Ok(output);
+        }
+        if let Some(output) = self.prepare_appended_scene(snapshot, request)? {
+            return Ok(output);
+        }
+        if let Some(output) = self.prepare_localized_normal_flow(snapshot, request)? {
+            return Ok(output);
+        }
+        if let Some(output) = self.prepare_localized_region_flow(snapshot, request)? {
+            return Ok(output);
+        }
+        let required_paint_slots = validate_styles(snapshot, request)?;
+        let finished = self.prepare_document_scene(
+            snapshot,
+            request,
+            None,
+            request.features.default_features(),
         )?;
         let FinishedScene {
             core,
@@ -654,27 +788,13 @@ impl LayoutEngine {
         let region_start = request.region_flow.map(RegionFlow::cursor);
 
         self.clock = self.clock.saturating_add(1);
-        let projection = Projection::new_in(paragraph, request, &mut self.scratch.projection)?;
-        let preflight_key = ParagraphPreflightKey::new(paragraph, None, request, region_start);
-        let result = prepare_paragraph_geometry(
-            self.paragraphs.as_mut(),
-            &mut self.cache,
-            self.composition_cache.get(&paragraph_id),
-            CacheKind::Committed,
+        let access = self.prepare_committed_geometry(
             paragraph,
-            &projection,
-            request.features.features_for(paragraph_id),
-            preflight_key,
-            request.constraint,
-            request.region_flow,
+            request,
             region_start,
-            self.clock,
-            &mut self.shared_preparation,
             &mut work,
             &mut reuse,
-        );
-        projection.recycle_into(&mut self.scratch.projection);
-        let access = result?;
+        )?;
         self.record_access(&access);
         let region_end = access.region_transcript.as_ref().map(RegionTranscript::end);
         let segment = Arc::clone(
@@ -778,159 +898,6 @@ impl LayoutEngine {
             .ok_or_else(|| {
                 SceneError::for_document(SceneErrorKind::InvalidComposition, snapshot.id())
             })?;
-        let previous_spine = self.reusable_composition_spine(snapshot, request);
-        let mut spine = previous_spine.clone();
-        let mut initial_segments = spine
-            .is_none()
-            .then(|| Vec::with_capacity(snapshot.paragraphs().len()));
-
-        let trace_start = self.trace_start(request.trace);
-        self.scratch.region_segments.clear();
-        let mut work = WorkReport::default();
-        let mut reuse = PreparationReuse::default();
-        let region_start = request.region_flow.map(RegionFlow::cursor);
-        let mut region_cursor = region_start;
-
-        for (paragraph_index, paragraph) in snapshot.paragraphs().iter().enumerate() {
-            let transient = paragraph.id == target_paragraph;
-            self.clock = self.clock.saturating_add(1);
-            let (kind, access) = if !transient
-                && let Some(access) = reuse_paragraph_geometry(
-                    &mut self.cache,
-                    ParagraphSource::document(paragraph),
-                    request,
-                    region_cursor,
-                    self.clock,
-                    &mut work,
-                    &mut reuse,
-                ) {
-                (CacheKind::Committed, access)
-            } else {
-                let projection = if transient {
-                    Projection::with_composition_in(
-                        ParagraphSource::document(paragraph),
-                        request,
-                        composition,
-                        &mut self.scratch.projection,
-                    )?
-                } else {
-                    Projection::new_in(
-                        ParagraphSource::document(paragraph),
-                        request,
-                        &mut self.scratch.projection,
-                    )?
-                };
-                let preflight_key = ParagraphPreflightKey::new(
-                    ParagraphSource::document(paragraph),
-                    transient.then(|| {
-                        Arc::new(CompositionPreparationKey::new(
-                            composition.id(),
-                            projection.mapping.text(),
-                        ))
-                    }),
-                    request,
-                    region_cursor,
-                );
-                let result = if transient {
-                    (
-                        CacheKind::Composition,
-                        prepare_paragraph_geometry(
-                            self.paragraphs.as_mut(),
-                            &mut self.composition_cache,
-                            self.cache.get(&paragraph.id),
-                            CacheKind::Composition,
-                            ParagraphSource::document(paragraph),
-                            &projection,
-                            request
-                                .features
-                                .features_for(paragraph.id)
-                                .with_native_text_input(),
-                            preflight_key,
-                            request.constraint,
-                            request.region_flow,
-                            region_cursor,
-                            self.clock,
-                            &mut self.shared_preparation,
-                            &mut work,
-                            &mut reuse,
-                        ),
-                    )
-                } else {
-                    (
-                        CacheKind::Committed,
-                        prepare_paragraph_geometry(
-                            self.paragraphs.as_mut(),
-                            &mut self.cache,
-                            self.composition_cache.get(&paragraph.id),
-                            CacheKind::Committed,
-                            ParagraphSource::document(paragraph),
-                            &projection,
-                            request.features.features_for(paragraph.id),
-                            preflight_key,
-                            request.constraint,
-                            request.region_flow,
-                            region_cursor,
-                            self.clock,
-                            &mut self.shared_preparation,
-                            &mut work,
-                            &mut reuse,
-                        ),
-                    )
-                };
-                projection.recycle_into(&mut self.scratch.projection);
-                (result.0, result.1?)
-            };
-            self.record_access(&access);
-            if let Some(transcript) = &access.region_transcript {
-                region_cursor = Some(transcript.end());
-            }
-            let segment = match kind {
-                CacheKind::Committed => Arc::clone(
-                    &self
-                        .cache
-                        .get(&paragraph.id)
-                        .expect("prepared committed geometry must remain resident")
-                        .segment,
-                ),
-                CacheKind::Composition => Arc::clone(
-                    &self
-                        .composition_cache
-                        .get(&paragraph.id)
-                        .expect("prepared composition geometry must remain resident")
-                        .segment,
-                ),
-            };
-            debug_assert_eq!(
-                segment.paragraph, paragraph.id,
-                "the projected scene segment must retain its paragraph identity"
-            );
-            if let Some(segments) = &mut initial_segments {
-                segments.push(Arc::clone(&segment));
-            } else if !spine
-                .as_ref()
-                .and_then(|spine| spine.segment(paragraph_index))
-                .is_some_and(|retained| Arc::ptr_eq(retained, &segment))
-            {
-                spine = Some(
-                    spine
-                        .as_ref()
-                        .expect("a reused composition spine remains present")
-                        .replace(paragraph_index, Arc::clone(&segment))
-                        .expect("a reused composition spine has matching paragraph count"),
-                );
-            }
-            self.enforce_budget();
-        }
-
-        let spine = initial_segments.map_or_else(
-            || spine.unwrap_or_else(|| SceneSpine::empty(request.region_flow.is_none())),
-            |segments| SceneSpine::from_segments(&segments, request.region_flow.is_none()),
-        );
-        let summary = spine.summary();
-        work.paint = StageWork {
-            paragraphs: snapshot.paragraphs().len(),
-            records: summary.fragments,
-        };
         let effective_features = request.features.clone().with_paragraph(
             target_paragraph,
             request
@@ -944,18 +911,11 @@ impl LayoutEngine {
             trace,
             region_attempts,
             region_height_rejections,
-        } = self.finish_scene(
-            snapshot.paragraphs().len(),
-            spine,
-            previous_spine.as_ref(),
+        } = self.prepare_document_scene(
+            snapshot,
             request,
-            region_start,
-            region_cursor,
+            Some((composition, target_paragraph)),
             effective_features.default_features(),
-            None,
-            work,
-            reuse,
-            trace_start,
         )?;
         let output = CompositionSceneOutput {
             scene: CompositionScene::new(
@@ -1271,36 +1231,13 @@ impl LayoutEngine {
                 request.paint,
             )?);
             self.clock = self.clock.saturating_add(1);
-            let projection = Projection::new_in(
+            let access = self.prepare_committed_geometry(
                 ParagraphSource::document(paragraph),
                 request,
-                &mut self.scratch.projection,
-            )?;
-            let preflight_key = ParagraphPreflightKey::new(
-                ParagraphSource::document(paragraph),
                 None,
-                request,
-                None,
-            );
-            let access = prepare_paragraph_geometry(
-                self.paragraphs.as_mut(),
-                &mut self.cache,
-                self.composition_cache.get(&paragraph.id),
-                CacheKind::Committed,
-                ParagraphSource::document(paragraph),
-                &projection,
-                request.features.features_for(paragraph.id),
-                preflight_key,
-                request.constraint,
-                None,
-                None,
-                self.clock,
-                &mut self.shared_preparation,
                 &mut work,
                 &mut reuse,
-            );
-            projection.recycle_into(&mut self.scratch.projection);
-            let access = access?;
+            )?;
             self.record_access(&access);
             let segment = Arc::clone(
                 &self
@@ -1327,34 +1264,19 @@ impl LayoutEngine {
             paragraphs: changed_count,
             records: paint_records,
         };
-        let FinishedScene {
-            core, work, trace, ..
-        } = self.finish_scene(
-            paragraph_count,
+        let output = self.finish_published_scene(
+            snapshot,
+            request,
+            required_paint_slots,
             spine,
             Some(&previous_core.spine),
-            request,
             None,
             None,
-            request.features.default_features(),
             (changed_count == 0).then(|| Arc::clone(&previous_core)),
             work,
             reuse,
             trace_start,
         )?;
-        let output = SceneOutput {
-            scene: TextScene::new(
-                snapshot.id(),
-                snapshot.revision(),
-                request.paint.clone(),
-                request.features.clone(),
-                Arc::clone(&core),
-                (),
-            ),
-            work,
-            trace,
-        };
-        self.publish_scene(snapshot, request, required_paint_slots, core, 0, 0);
         Ok(Some(output))
     }
 
@@ -1427,36 +1349,13 @@ impl LayoutEngine {
                 request.paint,
             )?);
             self.clock = self.clock.saturating_add(1);
-            let projection = Projection::new_in(
+            let access = self.prepare_committed_geometry(
                 ParagraphSource::document(paragraph),
                 request,
-                &mut self.scratch.projection,
-            )?;
-            let preflight_key = ParagraphPreflightKey::new(
-                ParagraphSource::document(paragraph),
-                None,
-                request,
                 region_cursor,
-            );
-            let access = prepare_paragraph_geometry(
-                self.paragraphs.as_mut(),
-                &mut self.cache,
-                self.composition_cache.get(&paragraph.id),
-                CacheKind::Committed,
-                ParagraphSource::document(paragraph),
-                &projection,
-                request.features.features_for(paragraph.id),
-                preflight_key,
-                request.constraint,
-                request.region_flow,
-                region_cursor,
-                self.clock,
-                &mut self.shared_preparation,
                 &mut work,
                 &mut reuse,
-            );
-            projection.recycle_into(&mut self.scratch.projection);
-            let access = access?;
+            )?;
             self.record_access(&access);
             if let Some(transcript) = &access.region_transcript {
                 region_cursor = Some(transcript.end());
@@ -1477,45 +1376,19 @@ impl LayoutEngine {
             paragraphs: appended.len(),
             records: paint_records,
         };
-        let FinishedScene {
-            core,
-            work,
-            trace,
-            region_attempts,
-            region_height_rejections,
-        } = self.finish_scene(
-            snapshot.paragraphs().len(),
+        let output = self.finish_published_scene(
+            snapshot,
+            request,
+            required_paint_slots,
             spine,
             Some(&previous_core.spine),
-            request,
             region_start,
             region_cursor,
-            request.features.default_features(),
             None,
             work,
             reuse,
             trace_start,
         )?;
-        let output = SceneOutput {
-            scene: TextScene::new(
-                snapshot.id(),
-                snapshot.revision(),
-                request.paint.clone(),
-                request.features.clone(),
-                Arc::clone(&core),
-                (),
-            ),
-            work,
-            trace,
-        };
-        self.publish_scene(
-            snapshot,
-            request,
-            required_paint_slots,
-            core,
-            region_attempts,
-            region_height_rejections,
-        );
         Ok(Some(output))
     }
 
@@ -1628,36 +1501,13 @@ impl LayoutEngine {
                 }
 
                 self.clock = self.clock.saturating_add(1);
-                let projection = Projection::new_in(
+                let access = self.prepare_committed_geometry(
                     ParagraphSource::document(paragraph),
                     request,
-                    &mut self.scratch.projection,
-                )?;
-                let preflight_key = ParagraphPreflightKey::new(
-                    ParagraphSource::document(paragraph),
-                    None,
-                    request,
                     Some(region_cursor),
-                );
-                let access = prepare_paragraph_geometry(
-                    self.paragraphs.as_mut(),
-                    &mut self.cache,
-                    self.composition_cache.get(&paragraph.id),
-                    CacheKind::Committed,
-                    ParagraphSource::document(paragraph),
-                    &projection,
-                    request.features.features_for(paragraph.id),
-                    preflight_key,
-                    request.constraint,
-                    Some(region_flow),
-                    Some(region_cursor),
-                    self.clock,
-                    &mut self.shared_preparation,
                     &mut work,
                     &mut reuse,
-                );
-                projection.recycle_into(&mut self.scratch.projection);
-                let access = access?;
+                )?;
                 self.record_access(&access);
                 region_cursor = access
                     .region_transcript
@@ -1702,45 +1552,19 @@ impl LayoutEngine {
         } else {
             summary.region_end
         };
-        let FinishedScene {
-            core,
-            work,
-            trace,
-            region_attempts,
-            region_height_rejections,
-        } = self.finish_scene(
-            paragraph_count,
+        let output = self.finish_published_scene(
+            snapshot,
+            request,
+            required_paint_slots,
             spine,
             Some(&previous_core.spine),
-            request,
             Some(region_flow.cursor()),
             region_end,
-            request.features.default_features(),
             (processed == 0).then(|| Arc::clone(&previous_core)),
             work,
             reuse,
             trace_start,
         )?;
-        let output = SceneOutput {
-            scene: TextScene::new(
-                snapshot.id(),
-                snapshot.revision(),
-                request.paint.clone(),
-                request.features.clone(),
-                Arc::clone(&core),
-                (),
-            ),
-            work,
-            trace,
-        };
-        self.publish_scene(
-            snapshot,
-            request,
-            required_paint_slots,
-            core,
-            region_attempts,
-            region_height_rejections,
-        );
         Ok(Some(output))
     }
 
@@ -2277,7 +2101,7 @@ fn prepare_paragraph_geometry(
         };
     let backend_called = formation_reuse.is_some();
     if let Some(formation_reuse) = formation_reuse {
-        if formation_reuse.is_hit() {
+        if formation_reuse == ParagraphFormationReuse::RetainedFacts {
             reuse.adapter_fact_hits = reuse.adapter_fact_hits.saturating_add(1);
         } else {
             reuse.adapter_fact_misses = reuse.adapter_fact_misses.saturating_add(1);

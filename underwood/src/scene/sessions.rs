@@ -43,12 +43,6 @@ impl<'a> SceneSelection<'a> {
         }
     }
 
-    /// Returns an empty set bound to this scene revision.
-    #[must_use]
-    pub fn empty_set(self) -> SnapshotTextSelectionSet {
-        self.interaction.scene.empty_selection_set()
-    }
-
     /// Creates one collapsed selection at a represented caret.
     pub fn collapsed(
         self,

@@ -1529,3 +1529,64 @@ semantic or generated-source boundaries—must move and delete atomically while
 OpenType ligature components remain independently reachable. The old
 interaction approximations must be gone and every local, remote, portability,
 API, and proof gate must be green.
+
+## Fifteen-thousand-line scalpel
+
+**Status:** Active
+
+**Bead:** `und-7eo`
+
+### Goal
+
+Re-audit the 15,951-line calibrated production tree from landed commit
+`baef9b9`. Reach at most 15,000 Rust code lines by deleting more accidental
+concepts, duplicated state, redundant validation, and unreachable capability
+machinery—not by compressing syntax or hiding policy in generic abstractions.
+
+### Non-goals
+
+- No behavior deletion merely to satisfy the source ratchet.
+- No compatibility shims, framework abstractions, dependency additions, or
+  `unsafe`.
+- No weakening of the checked third-party adapter boundary or panic-free
+  borrowed views without replacing the concrete safety consumer.
+- No optimization claim without rerunning the affected allocation, latency,
+  query, or residency tunnel.
+
+### Steps
+
+1. Reproduce the 15,951-line baseline and inventory the largest modules,
+   retained tables, validation passes, cache keys, diagnostics, and public
+   forwarding surfaces.
+2. Perform independent systematic and random-file Rook passes. For every
+   candidate, name the capability consumer, source/residency impact, and
+   deletion boundary; explicitly record deletion traps.
+3. Rank whole-concept cuts. Prefer independently green slices that remove an
+   owner, state machine, table, traversal, or policy branch across all
+   producers and consumers.
+4. Implement the highest-confidence cuts with migration notes and focused
+   correctness tests. Measure any runtime-sensitive cut before retaining it.
+5. Run the complete Rust 1.88, `no_std`, workspace, policy, latency,
+   allocation, query, and residency matrix; perform final Alder/Lynx/Rook
+   review; land coherent protected changes.
+
+### Risks and controls
+
+- **Line-count theater:** count only the same calibrated production files and
+  reject dense rewrites or renamed replacement layers.
+- **Reviewer familiarity:** sample code from random entry points and challenge
+  every retained concept with an independent consumer trace.
+- **Deleting external defenses:** keep validation whose absence permits
+  malformed adapters to create panicking views; remove duplicate internal
+  proof only after identifying the authoritative boundary.
+- **Performance by recomputation:** cheap recomputation is allowed, but
+  workload measurements decide whether retained state or recalculation wins.
+- **Stale capability claims:** examples, PDF, showcase, and public migration
+  notes change in the same slice as their underlying contract.
+
+### Completion
+
+The campaign completes at 15,000 lines or below with named conceptual
+deletions and all gates green. If an adversarial audit cannot find 951 honest
+lines, every rejected candidate must have a concrete correctness or measured
+product consumer and the owner must explicitly accept the shortfall.

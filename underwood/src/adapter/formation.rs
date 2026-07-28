@@ -97,14 +97,6 @@ pub enum ParagraphFormationReuse {
     RetainedFacts,
 }
 
-impl ParagraphFormationReuse {
-    /// Returns whether the output used any retained adapter facts.
-    #[must_use]
-    pub const fn is_hit(self) -> bool {
-        matches!(self, Self::RetainedFacts)
-    }
-}
-
 /// Opaque identity of one retained paragraph-preparation lane.
 ///
 /// A committed paragraph and a transient composition over that paragraph have
@@ -120,12 +112,6 @@ pub struct ParagraphPreparationId {
 impl ParagraphPreparationId {
     pub(crate) const fn new(paragraph: ParagraphId, lane: u8) -> Self {
         Self { paragraph, lane }
-    }
-
-    /// Returns the semantic paragraph whose projected preparation this key owns.
-    #[must_use]
-    pub const fn paragraph(self) -> ParagraphId {
-        self.paragraph
     }
 }
 

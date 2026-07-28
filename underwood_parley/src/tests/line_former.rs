@@ -37,47 +37,31 @@ fn checkpoint_restores_traversal_and_provisional_output_together() {
         cluster(3, Boundary::None, ' '),
         cluster(4, Boundary::Line, 'c'),
     ];
-    let mut former = LineFormer::new(&clusters, FormationConstraint::Wrap(5.0))
-        .expect("fixture facts are valid");
+    let mut former = LineFormer::new(&clusters, FormationConstraint::Wrap(5.0));
     let mut output = vec!["earlier"];
     let checkpoint = former.checkpoint(output.len());
-    let candidate = former
-        .candidate()
-        .expect("candidate selection succeeds")
-        .expect("candidate exists");
+    let candidate = former.candidate().expect("candidate exists");
     assert_eq!(candidate.clusters(), 0..2);
     assert_eq!(candidate.source(), 0..2);
-    assert_eq!(candidate.trailing_whitespace_clusters(), 1..2);
-    assert_eq!(candidate.trailing_whitespace_advance(), 2.0);
     assert_eq!(
-        former
-            .commit(
-                candidate,
-                LineMeasurements {
-                    advance: 4.0,
-                    height: 10.0,
-                },
-                LineLimits {
-                    max_advance: Some(5.0),
-                    max_height: Some(12.0),
-                },
-            )
-            .expect("candidate commit succeeds"),
+        former.commit(
+            candidate,
+            LineMeasurements {
+                advance: 4.0,
+                height: 10.0,
+            },
+            LineLimits {
+                max_advance: Some(5.0),
+                max_height: Some(12.0),
+            },
+        ),
         CommitOutcome::Accepted
     );
     output.push("provisional");
 
-    former
-        .restore(checkpoint, &mut output)
-        .expect("checkpoint restores");
+    former.restore(checkpoint, &mut output);
     assert_eq!(output, ["earlier"]);
-    assert_eq!(
-        former
-            .candidate()
-            .expect("candidate selection succeeds")
-            .expect("candidate exists"),
-        candidate
-    );
+    assert_eq!(former.candidate().expect("candidate exists"), candidate);
 }
 
 #[test]
@@ -89,45 +73,36 @@ fn line_final_expansion_retries_the_previous_legal_boundary() {
         cluster(3, Boundary::None, ' '),
         cluster(4, Boundary::Line, 'c'),
     ];
-    let mut former = LineFormer::new(&clusters, FormationConstraint::Wrap(9.0))
-        .expect("fixture facts are valid");
-    let candidate = former
-        .candidate()
-        .expect("candidate selection succeeds")
-        .expect("candidate exists");
+    let mut former = LineFormer::new(&clusters, FormationConstraint::Wrap(9.0));
+    let candidate = former.candidate().expect("candidate exists");
     assert_eq!(candidate.clusters(), 0..4);
-    let retry = match former
-        .commit(
-            candidate,
+    let retry = match former.commit(
+        candidate,
+        LineMeasurements {
+            advance: 10.0,
+            height: 10.0,
+        },
+        LineLimits {
+            max_advance: Some(9.0),
+            max_height: Some(12.0),
+        },
+    ) {
+        CommitOutcome::Retry(retry) => retry,
+        outcome => panic!("expected retry, got {outcome:?}"),
+    };
+    assert_eq!(retry.clusters(), 0..2);
+    assert_eq!(
+        former.commit(
+            retry,
             LineMeasurements {
-                advance: 10.0,
+                advance: 4.0,
                 height: 10.0,
             },
             LineLimits {
                 max_advance: Some(9.0),
                 max_height: Some(12.0),
             },
-        )
-        .expect("fit evaluation succeeds")
-    {
-        CommitOutcome::Retry(retry) => retry,
-        outcome => panic!("expected retry, got {outcome:?}"),
-    };
-    assert_eq!(retry.clusters(), 0..2);
-    assert_eq!(
-        former
-            .commit(
-                retry,
-                LineMeasurements {
-                    advance: 4.0,
-                    height: 10.0,
-                },
-                LineLimits {
-                    max_advance: Some(9.0),
-                    max_height: Some(12.0),
-                },
-            )
-            .expect("retry commit succeeds"),
+        ),
         CommitOutcome::Accepted
     );
     assert_eq!(
@@ -142,26 +117,20 @@ fn line_final_expansion_retries_the_previous_legal_boundary() {
 #[test]
 fn a_too_short_slot_rejects_without_advancing() {
     let clusters = [cluster(0, Boundary::None, 'a')];
-    let mut former = LineFormer::new(&clusters, FormationConstraint::MaxContent)
-        .expect("fixture facts are valid");
-    let candidate = former
-        .candidate()
-        .expect("candidate selection succeeds")
-        .expect("candidate exists");
+    let mut former = LineFormer::new(&clusters, FormationConstraint::MaxContent);
+    let candidate = former.candidate().expect("candidate exists");
     assert_eq!(
-        former
-            .commit(
-                candidate,
-                LineMeasurements {
-                    advance: 2.0,
-                    height: 13.0,
-                },
-                LineLimits {
-                    max_advance: None,
-                    max_height: Some(12.0),
-                },
-            )
-            .expect("fit evaluation succeeds"),
+        former.commit(
+            candidate,
+            LineMeasurements {
+                advance: 2.0,
+                height: 13.0,
+            },
+            LineLimits {
+                max_advance: None,
+                max_height: Some(12.0),
+            },
+        ),
         CommitOutcome::SlotRejected
     );
     assert!(!former.is_done());
@@ -185,63 +154,48 @@ fn height_rejection_retries_the_same_text_in_the_next_region_slot() {
     let mut former = LineFormer::new(
         &clusters,
         FormationConstraint::Wrap(first_slot.inline_size()),
-    )
-    .expect("fixture facts are valid");
+    );
     let mut output = vec!["earlier"];
     let checkpoint = former.checkpoint(output.len());
-    let candidate = former
-        .candidate()
-        .expect("candidate selection succeeds")
-        .expect("candidate exists");
+    let candidate = former.candidate().expect("candidate exists");
     output.push("provisional");
     assert_eq!(
-        former
-            .commit(
-                candidate,
-                LineMeasurements {
-                    advance: 6.0,
-                    height: 10.0,
-                },
-                LineLimits {
-                    max_advance: Some(first_slot.inline_size()),
-                    max_height: Some(first_slot.block_size()),
-                },
-            )
-            .expect("height evaluation succeeds"),
+        former.commit(
+            candidate,
+            LineMeasurements {
+                advance: 6.0,
+                height: 10.0,
+            },
+            LineLimits {
+                max_advance: Some(first_slot.inline_size()),
+                max_height: Some(first_slot.block_size()),
+            },
+        ),
         CommitOutcome::SlotRejected
     );
-    former
-        .restore(checkpoint, &mut output)
-        .expect("text and provisional output restore together");
+    former.restore(checkpoint, &mut output);
     cursor = flow
         .reject(cursor, first_slot)
         .expect("rejected slot advances region geometry");
 
     let second_slot = flow.slot(cursor).expect("second slot exists");
-    former
-        .set_constraint(FormationConstraint::Wrap(second_slot.inline_size()))
-        .expect("slot width is a valid constraint");
+    former.set_constraint(FormationConstraint::Wrap(second_slot.inline_size()));
     assert_eq!(
-        former
-            .candidate()
-            .expect("retry selection succeeds")
-            .expect("retry candidate exists"),
+        former.candidate().expect("retry candidate exists"),
         candidate
     );
     assert_eq!(
-        former
-            .commit(
-                candidate,
-                LineMeasurements {
-                    advance: 6.0,
-                    height: 10.0,
-                },
-                LineLimits {
-                    max_advance: Some(second_slot.inline_size()),
-                    max_height: Some(second_slot.block_size()),
-                },
-            )
-            .expect("retry evaluation succeeds"),
+        former.commit(
+            candidate,
+            LineMeasurements {
+                advance: 6.0,
+                height: 10.0,
+            },
+            LineLimits {
+                max_advance: Some(second_slot.inline_size()),
+                max_height: Some(second_slot.block_size()),
+            },
+        ),
         CommitOutcome::Accepted
     );
     assert_eq!(output, ["earlier"]);
@@ -258,14 +212,9 @@ fn wrap_policy_distinguishes_soft_emergency_and_intrinsic_breaks() {
     for cluster in &mut no_wrap {
         cluster.allows_soft_wrap = false;
     }
-    let mut former =
-        LineFormer::new(&no_wrap, FormationConstraint::Wrap(3.0)).expect("no-wrap facts are valid");
+    let mut former = LineFormer::new(&no_wrap, FormationConstraint::Wrap(3.0));
     assert_eq!(
-        former
-            .candidate()
-            .expect("candidate selection succeeds")
-            .expect("candidate exists")
-            .clusters(),
+        former.candidate().expect("candidate exists").clusters(),
         0..3
     );
 
@@ -278,38 +227,23 @@ fn wrap_policy_distinguishes_soft_emergency_and_intrinsic_breaks() {
         cluster.allows_emergency_wrap = true;
         cluster.emergency_affects_min_content = true;
     }
-    let mut former = LineFormer::new(&anywhere, FormationConstraint::Wrap(3.0))
-        .expect("emergency-wrap facts are valid");
+    let mut former = LineFormer::new(&anywhere, FormationConstraint::Wrap(3.0));
     assert_eq!(
-        former
-            .candidate()
-            .expect("candidate selection succeeds")
-            .expect("candidate exists")
-            .clusters(),
+        former.candidate().expect("candidate exists").clusters(),
         0..1
     );
-    let mut former = LineFormer::new(&anywhere, FormationConstraint::MinContent)
-        .expect("anywhere min-content facts are valid");
+    let mut former = LineFormer::new(&anywhere, FormationConstraint::MinContent);
     assert_eq!(
-        former
-            .candidate()
-            .expect("candidate selection succeeds")
-            .expect("candidate exists")
-            .clusters(),
+        former.candidate().expect("candidate exists").clusters(),
         0..1
     );
 
     for cluster in &mut anywhere {
         cluster.emergency_affects_min_content = false;
     }
-    let mut former = LineFormer::new(&anywhere, FormationConstraint::MinContent)
-        .expect("break-word min-content facts are valid");
+    let mut former = LineFormer::new(&anywhere, FormationConstraint::MinContent);
     assert_eq!(
-        former
-            .candidate()
-            .expect("candidate selection succeeds")
-            .expect("candidate exists")
-            .clusters(),
+        former.candidate().expect("candidate exists").clusters(),
         0..3
     );
 }
@@ -320,28 +254,20 @@ fn crlf_is_one_mandatory_candidate_and_requests_an_empty_terminal_line() {
         cluster(0, Boundary::None, '\r'),
         cluster(1, Boundary::Mandatory, '\n'),
     ];
-    let mut former = LineFormer::new(&clusters, FormationConstraint::MaxContent)
-        .expect("fixture facts are valid");
-    let candidate = former
-        .candidate()
-        .expect("candidate selection succeeds")
-        .expect("candidate exists");
+    let mut former = LineFormer::new(&clusters, FormationConstraint::MaxContent);
+    let candidate = former.candidate().expect("candidate exists");
     assert_eq!(candidate.clusters(), 0..2);
     assert_eq!(candidate.source(), 0..2);
     assert_eq!(candidate.reason(), CandidateBreak::Mandatory);
-    assert_eq!(candidate.trailing_whitespace_clusters(), 0..2);
-    assert_eq!(candidate.trailing_whitespace_advance(), 4.0);
     assert_eq!(
-        former
-            .commit(
-                candidate,
-                LineMeasurements {
-                    advance: 4.0,
-                    height: 10.0,
-                },
-                LineLimits::default(),
-            )
-            .expect("candidate commit succeeds"),
+        former.commit(
+            candidate,
+            LineMeasurements {
+                advance: 4.0,
+                height: 10.0,
+            },
+            LineLimits::default(),
+        ),
         CommitOutcome::Accepted
     );
     assert!(former.needs_terminal_empty_line());

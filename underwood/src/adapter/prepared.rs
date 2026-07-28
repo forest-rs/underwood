@@ -210,18 +210,22 @@ struct PreparedGlyphPlacement {
 }
 
 impl PreparedGlyphRecord {
-    fn try_from_glyph(
-        glyph: PreparedGlyph,
+    fn try_new(
+        id: u32,
+        source: Range<u32>,
+        advance: Vec2,
+        offset: Vec2,
     ) -> Result<(Self, Option<PreparedGlyphPlacement>), PreparationError> {
-        let inline_advance = compact_shaping_coordinate(glyph.advance.x)
-            .ok_or_else(PreparationError::invalid_output)?;
-        let block_advance = compact_shaping_coordinate(glyph.advance.y)
-            .ok_or_else(PreparationError::invalid_output)?;
+        if source.start >= source.end {
+            return Err(PreparationError::invalid_output());
+        }
+        let inline_advance =
+            compact_shaping_coordinate(advance.x).ok_or_else(PreparationError::invalid_output)?;
+        let block_advance =
+            compact_shaping_coordinate(advance.y).ok_or_else(PreparationError::invalid_output)?;
         let offset = [
-            compact_shaping_coordinate(glyph.offset.x)
-                .ok_or_else(PreparationError::invalid_output)?,
-            compact_shaping_coordinate(glyph.offset.y)
-                .ok_or_else(PreparationError::invalid_output)?,
+            compact_shaping_coordinate(offset.x).ok_or_else(PreparationError::invalid_output)?,
+            compact_shaping_coordinate(offset.y).ok_or_else(PreparationError::invalid_output)?,
         ];
         let placement =
             (block_advance != 0.0 || offset != [0.0, 0.0]).then_some(PreparedGlyphPlacement {
@@ -231,8 +235,8 @@ impl PreparedGlyphRecord {
             });
         Ok((
             Self {
-                id: glyph.id,
-                source: glyph.source,
+                id,
+                source,
                 inline_advance,
             },
             placement,
@@ -380,12 +384,6 @@ impl PreparedParagraph {
     pub fn accounted_owned_bytes(&self) -> usize {
         self.facts.estimated_owned_bytes()
     }
-
-    /// Returns whether both paragraph envelopes share one canonical artifact.
-    #[must_use]
-    pub fn shares_facts_with(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.facts, &other.facts)
-    }
 }
 
 /// Flat checked input tables for one prepared paragraph.
@@ -509,11 +507,17 @@ impl PreparedParagraphData {
             .any(|glyph| glyph.source.start <= source.start && glyph.source.end >= source.end))
     }
 
-    /// Compacts and appends one checked shaped glyph.
-    pub fn push_glyph(&mut self, glyph: PreparedGlyph) -> Result<(), PreparationError> {
+    /// Validates, compacts, and appends one shaped glyph.
+    pub fn push_glyph(
+        &mut self,
+        id: u32,
+        source: Range<u32>,
+        advance: Vec2,
+        offset: Vec2,
+    ) -> Result<(), PreparationError> {
         let glyph_index =
             u32::try_from(self.glyphs.len()).map_err(|_| PreparationError::invalid_output())?;
-        let (glyph, placement) = PreparedGlyphRecord::try_from_glyph(glyph)?;
+        let (glyph, placement) = PreparedGlyphRecord::try_new(id, source, advance, offset)?;
         self.glyphs.push(glyph);
         if let Some(mut placement) = placement {
             placement.glyph = glyph_index;
@@ -522,36 +526,14 @@ impl PreparedParagraphData {
         Ok(())
     }
 
-    /// Appends one visual interaction unit and its checked shaping slices.
+    /// Validates and appends one visual interaction unit's shaping slices.
     pub fn push_unit(
-        &mut self,
-        unit: PreparedInteractionUnit,
-        slices: impl IntoIterator<Item = PreparedInteractionSlice>,
-    ) -> Result<(), PreparationError> {
-        self.push_unit_results(unit, slices.into_iter().map(Ok))
-    }
-
-    /// Appends one visual interaction unit from raw source/advance pairs.
-    pub fn push_unit_parts(
         &mut self,
         unit: PreparedInteractionUnit,
         slices: impl IntoIterator<Item = (Range<u32>, f64)>,
     ) -> Result<(), PreparationError> {
-        self.push_unit_results(
-            unit,
-            slices
-                .into_iter()
-                .map(|(source, advance)| PreparedInteractionSlice::try_new(source, advance)),
-        )
-    }
-
-    fn push_unit_results(
-        &mut self,
-        unit: PreparedInteractionUnit,
-        slices: impl IntoIterator<Item = Result<PreparedInteractionSlice, PreparationError>>,
-    ) -> Result<(), PreparationError> {
         let slice_checkpoint = self.interaction_slices.len();
-        let result = self.try_push_unit(unit, slices);
+        let result = self.try_push_unit(unit, slices.into_iter());
         if result.is_err() {
             self.interaction_slices.truncate(slice_checkpoint);
         }
@@ -561,14 +543,16 @@ impl PreparedParagraphData {
     fn try_push_unit(
         &mut self,
         mut unit: PreparedInteractionUnit,
-        slices: impl IntoIterator<Item = Result<PreparedInteractionSlice, PreparationError>>,
+        mut slices: impl Iterator<Item = (Range<u32>, f64)>,
     ) -> Result<(), PreparationError> {
         let source = unit.source();
-        let mut slices = slices.into_iter();
-        let first = slices
+        let (first_source, first_advance) =
+            slices.next().ok_or_else(PreparationError::invalid_output)?;
+        let first = PreparedInteractionSlice::try_new(first_source, first_advance)?;
+        let second = slices
             .next()
-            .ok_or_else(PreparationError::invalid_output)??;
-        let second = slices.next().transpose()?;
+            .map(|(source, advance)| PreparedInteractionSlice::try_new(source, advance))
+            .transpose()?;
         if second.is_none() {
             if first.source() != source {
                 return Err(PreparationError::invalid_output());
@@ -582,10 +566,9 @@ impl PreparedParagraphData {
         let spill_start = self.interaction_slices.len();
         let mut covered = 0_u32;
         let mut advance = 0.0;
-        for slice in core::iter::once(Ok(first))
-            .chain(second.map(Ok))
-            .chain(slices)
-        {
+        for slice in core::iter::once(Ok(first)).chain(second.map(Ok)).chain(
+            slices.map(|(source, advance)| PreparedInteractionSlice::try_new(source, advance)),
+        ) {
             let slice = slice?;
             let slice_source = slice.source();
             if slice_source.start < source.start
@@ -1261,63 +1244,5 @@ impl PreparedRun {
             unrendered_source: TableRange::EMPTY,
             glyphs: TableRange::EMPTY,
         })
-    }
-}
-
-/// One shaped glyph with paragraph source.
-#[derive(Clone, Debug)]
-pub struct PreparedGlyph {
-    id: u32,
-    source: Range<u32>,
-    advance: Vec2,
-    offset: Vec2,
-}
-
-impl PreparedGlyph {
-    /// Validates one shaped glyph.
-    pub fn try_new(
-        id: u32,
-        source: Range<u32>,
-        advance: Vec2,
-        offset: Vec2,
-    ) -> Result<Self, PreparationError> {
-        if source.start >= source.end
-            || !advance.x.is_finite()
-            || !advance.y.is_finite()
-            || !offset.x.is_finite()
-            || !offset.y.is_finite()
-        {
-            return Err(PreparationError::invalid_output());
-        }
-        Ok(Self {
-            id,
-            source,
-            advance,
-            offset,
-        })
-    }
-
-    /// Returns the backend glyph identifier.
-    #[must_use]
-    pub const fn id(&self) -> u32 {
-        self.id
-    }
-
-    /// Returns the paragraph-local source range.
-    #[must_use]
-    pub fn source(&self) -> Range<u32> {
-        self.source.clone()
-    }
-
-    /// Returns the shaped advance.
-    #[must_use]
-    pub const fn advance(&self) -> Vec2 {
-        self.advance
-    }
-
-    /// Returns the shaped glyph offset.
-    #[must_use]
-    pub const fn offset(&self) -> Vec2 {
-        self.offset
     }
 }
