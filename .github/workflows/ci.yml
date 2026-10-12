@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: install stable Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, pinned 2026-07-21
         with:
           toolchain: ${{ env.RUST_STABLE_VER }}
           components: rustfmt
@@ -68,7 +68,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: install stable Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, pinned 2026-07-21
         with:
           toolchain: ${{ env.RUST_STABLE_VER }}
           components: clippy
@@ -87,7 +87,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: install stable Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, pinned 2026-07-21
         with:
           toolchain: ${{ env.RUST_STABLE_VER }}
 
@@ -105,7 +105,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: install MSRV
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, pinned 2026-07-21
         with:
           toolchain: ${{ env.RUST_MIN_VER }}
 
@@ -127,7 +127,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: install stable Rust
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, pinned 2026-07-21
         with:
           toolchain: ${{ env.RUST_STABLE_VER }}
 
@@ -144,7 +144,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: install stable Rust and no_std targets
-        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master, pinned 2026-07-21
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master, pinned 2026-07-21
         with:
           # Match the repository override exactly so targets are installed into
           # the toolchain Cargo will invoke.
